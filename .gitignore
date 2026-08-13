@@ -1,0 +1,14 @@
+build/
+bin/
+obj/
+*.elf
+*.bin
+*.hex
+*.map
+*.log
+tron_telemetry*.log
+tron_snapshot_dataset*.csv
+.vscode/
+.settings/
+.project
+.cproject
