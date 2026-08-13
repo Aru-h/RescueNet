@@ -59,6 +59,35 @@
 #ifndef BOARD_TICK_DELAY_MS
 #define BOARD_TICK_DELAY_MS 0u
 #endif
+/* Cadence for draining the snapshot ring (platform/board/snapshot.c)
+ * out over USART1. Every tick is too eager: at BOARD_TICK_DELAY_MS=0
+ * (flat-out, the expected bring-up setting) that would call into
+ * tm_putchar-based UART writes far more often than the ring can
+ * possibly need it, for no benefit -- there's no live consumer this
+ * needs to be near-real-time for yet, and it would just add UART
+ * contention with tm_printf debug lines on every single tick. Every-
+ * N-ticks is simpler to reason about than a fill-threshold trigger
+ * (no need to call board_snapshot_ring_pending() every tick just to
+ * decide whether to drain) and, combined with the per-call cap in
+ * board_snapshot_ring_drain() (see BOARD_SNAPSHOT_DRAIN_MAX_FRAMES_
+ * PER_CALL in snapshot.c), keeps the ring from ever holding much more
+ * than one interval's worth of undrained entries in steady state.
+ * 50 ticks is a starting point, not a measured value -- revisit once
+ * there's a real receiver to check actual undrained-backlog / gap
+ * behavior against. */
+#ifndef BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL
+#define BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL 50u
+#endif
+
+/*
+ * Not part of snapshot.h's public interface (core/ never calls
+ * this) -- same status as board_snapshot_ring_pending(), which is
+ * also forward-declared at its one call site rather than added to
+ * snapshot.h, since both are board-platform-internal telemetry
+ * plumbing, not part of the portable core/snapshot.h contract other
+ * platforms implement. Defined in platform/board/snapshot.c.
+ */
+extern uint32_t board_snapshot_ring_drain(void);
 
 LOCAL void sim_task(INT stacd, void *exinf);
 LOCAL ID sim_tskid;
@@ -112,10 +141,25 @@ LOCAL void sim_task(INT stacd, void *exinf)
         {
             sim_tick();
 
+            if((tick % BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL) == 0u)
+            {
+                (void)board_snapshot_ring_drain();
+            }
+
 #if BOARD_TICK_DELAY_MS > 0
             tk_dly_tsk(BOARD_TICK_DELAY_MS);
 #endif
         }
+
+        /* Final drain: flush whatever the last partial interval left
+         * pending so a run's last few events aren't stuck in the
+         * ring until the next seed's ticks happen to drain them (or
+         * lost if this was the last seed). One call is enough as
+         * long as BOARD_SNAPSHOT_DRAIN_MAX_FRAMES_PER_CALL >=
+         * BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL's worth of typical
+         * per-tick snapshot_record() volume; if that assumption ever
+         * stops holding, this would need a loop instead of one call. */
+        (void)board_snapshot_ring_drain();
 
         sim_end_seed();
         tm_printf((UB*)"tron: seed %lu done\n", (unsigned long)seed);

@@ -40,7 +40,6 @@ static void clear_stale_equipment_cache_requests(void);
 void reopen_future_queued_incidents(void);
 static uint8_t find_nearest_safe_zone(const TeamState_t *team);
 static IncidentState_t *find_free_incident_slot(void);
-static IncidentState_t *find_free_system_task_slot(void);
 static void apply_incident_archetype(IncidentState_t *incident, IncidentType_t type);
 
 static uint8_t find_best_gateway(const SafeZone_t *safezone);
@@ -1373,6 +1372,33 @@ static IncidentState_t *find_free_system_task_slot(void)
     return NULL;
 }
 
+/* Used only when the system task pool (NUM_SYSTEM_TASKS, shared by
+ * UNSEARCHED_SECTOR sweeps, EQUIPMENT_CACHE, and RETURN_TO_SAFE_ZONE)
+ * is completely full and a team urgently needs to be routed to a safe
+ * zone to recover. Without this, a full pool of low-priority sweep
+ * tasks permanently starves RETURN_TO_SAFE_ZONE task creation, and a
+ * team's equipment/stamina never recovers. A discretionary area sweep
+ * must never outrank a team's own recovery, so this reclaims the
+ * first still-OPEN (not yet claimed) UNSEARCHED_SECTOR slot - it
+ * simply regenerates next tick if still needed. */
+static IncidentState_t *find_reclaimable_system_task_slot(void)
+{
+    for(uint8_t i = 0; i < NUM_SYSTEM_TASKS; i++)
+    {
+        IncidentState_t *task = &g_system_tasks[i];
+
+        if(task->slot_occupied &&
+           task->incident_type == INCIDENT_UNSEARCHED_SECTOR &&
+           task->status == INC_OPEN)
+        {
+            clear_task_slot(TASK_POOL_SYSTEM, task);
+            task->slot_occupied = 1;
+            return task;
+        }
+    }
+
+    return NULL;
+}
 // removed: select_generated_incident_type
 
 static void populate_generated_incident_model(IncidentState_t *incident)
@@ -2022,45 +2048,3 @@ void abandon_task_for_recovery(TeamState_t *team)
     }
 }
 
-
-static IncidentState_t *find_free_system_task_slot(void)
-{
-    for(uint8_t i = 0; i < NUM_SYSTEM_TASKS; i++)
-    {
-        if(!g_system_tasks[i].slot_occupied)
-        {
-            g_system_tasks[i].slot_occupied = 1;
-            return &g_system_tasks[i];
-        }
-    }
-
-    return NULL;
-}
-
-/* Used only when the system task pool (NUM_SYSTEM_TASKS, shared by
- * UNSEARCHED_SECTOR sweeps, EQUIPMENT_CACHE, and RETURN_TO_SAFE_ZONE)
- * is completely full and a team urgently needs to be routed to a safe
- * zone to recover. Without this, a full pool of low-priority sweep
- * tasks permanently starves RETURN_TO_SAFE_ZONE task creation, and a
- * team's equipment/stamina never recovers. A discretionary area sweep
- * must never outrank a team's own recovery, so this reclaims the
- * first still-OPEN (not yet claimed) UNSEARCHED_SECTOR slot - it
- * simply regenerates next tick if still needed. */
-static IncidentState_t *find_reclaimable_system_task_slot(void)
-{
-    for(uint8_t i = 0; i < NUM_SYSTEM_TASKS; i++)
-    {
-        IncidentState_t *task = &g_system_tasks[i];
-
-        if(task->slot_occupied &&
-           task->incident_type == INCIDENT_UNSEARCHED_SECTOR &&
-           task->status == INC_OPEN)
-        {
-            clear_task_slot(TASK_POOL_SYSTEM, task);
-            task->slot_occupied = 1;
-            return task;
-        }
-    }
-
-    return NULL;
-}
