@@ -1227,8 +1227,7 @@ void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
              * instantly, regardless of stamina/equipment recovery progress). */
             if(team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE)
             {
-                recovery_clear_assignment_only(team);
-                team->status = STATUS_AVAILABLE;
+                abandon_task_for_recovery(team);
             }
             break;
     }

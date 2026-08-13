@@ -1,0 +1,36 @@
+[
+  {
+    "timestamp": "2026-08-13 10:49:59",
+    "seed": 1,
+    "seed_count": 1,
+    "ticks": 2000,
+    "fault_profile": "none",
+    "elapsed_seconds": 323.43,
+    "returncode": 0,
+    "summary": {
+      "safezone_fallback_count": 0,
+      "discarded_signal_count": 95911
+    },
+    "rest_cycle_count": 156,
+    "rest_cycles_interrupted_1tick": 16,
+    "rest_cycles_sustained_10plus": 113,
+    "csv_rows": 1677
+  },
+  {
+    "timestamp": "2026-08-13 09:07:11",
+    "seed": 1,
+    "seed_count": 1,
+    "ticks": 2000,
+    "fault_profile": "none",
+    "elapsed_seconds": 320.89,
+    "returncode": 0,
+    "summary": {
+      "safezone_fallback_count": 1569,
+      "discarded_signal_count": 95182
+    },
+    "rest_cycle_count": 119,
+    "rest_cycles_interrupted_1tick": 0,
+    "rest_cycles_sustained_10plus": 102,
+    "csv_rows": 2015
+  }
+]

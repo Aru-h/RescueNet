@@ -140,7 +140,7 @@ typedef enum {
 
 #define NUM_TEAMS     10
 #define MIN_NUM_INCIDENTS 4
-#define NUM_INCIDENTS 15
+#define NUM_INCIDENTS 20
 #define NUM_SYSTEM_TASKS 10
 #define CBBA_MAX_BUNDLE_SIZE 3
 #define CBBA_COMMITMENT_LIMIT 3

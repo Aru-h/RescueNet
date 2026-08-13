@@ -24,6 +24,8 @@ uint32_t g_diag_in_progress_entries = 0;
 uint32_t g_diag_ticks_resting[NUM_TEAMS] = {0};
 uint32_t g_diag_ticks_working[NUM_TEAMS] = {0};
 uint32_t g_diag_ticks_available[NUM_TEAMS] = {0};
+static IncidentState_t *find_free_system_task_slot(void);
+static IncidentState_t *find_reclaimable_system_task_slot(void);
 
 
 
@@ -572,6 +574,8 @@ int create_return_to_safe_zone_task(TeamState_t *team) //incident
 
     IncidentState_t *task = find_free_system_task_slot();
     if(task == NULL)
+        task = find_reclaimable_system_task_slot();
+    if(task == NULL)
         return NO_ASSIGNMENT;
 
     task->incident_id = allocate_incident_id();
@@ -605,6 +609,8 @@ int create_return_to_safe_zone_task(TeamState_t *team) //incident
 int create_equipment_cache_incident(TeamState_t *team) //incident
 {
     IncidentState_t *task = find_free_system_task_slot();
+    if(task == NULL)
+        task = find_reclaimable_system_task_slot();
     if(task == NULL)
         return NO_ASSIGNMENT;
 
@@ -2014,4 +2020,47 @@ void abandon_task_for_recovery(TeamState_t *team)
         g_diag_safezone_fallback_count++;
         team_set_available(team);
     }
+}
+
+
+static IncidentState_t *find_free_system_task_slot(void)
+{
+    for(uint8_t i = 0; i < NUM_SYSTEM_TASKS; i++)
+    {
+        if(!g_system_tasks[i].slot_occupied)
+        {
+            g_system_tasks[i].slot_occupied = 1;
+            return &g_system_tasks[i];
+        }
+    }
+
+    return NULL;
+}
+
+/* Used only when the system task pool (NUM_SYSTEM_TASKS, shared by
+ * UNSEARCHED_SECTOR sweeps, EQUIPMENT_CACHE, and RETURN_TO_SAFE_ZONE)
+ * is completely full and a team urgently needs to be routed to a safe
+ * zone to recover. Without this, a full pool of low-priority sweep
+ * tasks permanently starves RETURN_TO_SAFE_ZONE task creation, and a
+ * team's equipment/stamina never recovers. A discretionary area sweep
+ * must never outrank a team's own recovery, so this reclaims the
+ * first still-OPEN (not yet claimed) UNSEARCHED_SECTOR slot - it
+ * simply regenerates next tick if still needed. */
+static IncidentState_t *find_reclaimable_system_task_slot(void)
+{
+    for(uint8_t i = 0; i < NUM_SYSTEM_TASKS; i++)
+    {
+        IncidentState_t *task = &g_system_tasks[i];
+
+        if(task->slot_occupied &&
+           task->incident_type == INCIDENT_UNSEARCHED_SECTOR &&
+           task->status == INC_OPEN)
+        {
+            clear_task_slot(TASK_POOL_SYSTEM, task);
+            task->slot_occupied = 1;
+            return task;
+        }
+    }
+
+    return NULL;
 }
