@@ -312,6 +312,7 @@ any source file or prior doc:
   `TODO(usb)` markers throughout `platform/board/`, not just
   unimplemented but undesigned (ring-buffer overflow policy,
   overwrite-vs-backpressure, wire format).
+  :resolved on 13th aug 6pm
 
 ## Historical Bugs That Shaped Current Design
 
