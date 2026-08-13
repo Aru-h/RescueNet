@@ -1,193 +1,409 @@
-# TRON Simulator Architecture
+# tron Architecture
 
-## Overview
+Technical reference for contributors and contest judges. Every claim
+below is grounded in the actual source at the paths and line counts
+shown — where something is a design intent that isn't implemented yet,
+it's marked **unverified** or **TODO**, not written up as if it exists.
 
-The simulator now has a procedural environment subsystem that sits beneath the existing incident, routing, CBBA, snapshot, and metrics flows.
+## System Overview
 
-The compatibility boundary is unchanged: teams, incidents, safe zones, system tasks, CBBA bids, and snapshots still use grid coordinates. The environment layer enriches those coordinates with district, road, building, infrastructure, safety, travel-cost, and damage metadata.
+`tron` is a multi-team disaster-response simulator built for the TRON
+Programming Contest 2026. Five specialties — `SPEC_SEARCH`,
+`SPEC_MEDICAL`, `SPEC_EXTRACTION`, `SPEC_PERIMETER`, `SPEC_SUPPORT`
+(`core/mission_state.h`) — are allocated across `NUM_TEAMS = 10` teams
+(two per specialty, via `team.c`'s `specialization = i % 5`) responding
+to incidents in a procedurally generated 36×36 (`GRID_WIDTH` /
+`GRID_HEIGHT`) disaster environment, using the Consensus-Based Bundle
+Algorithm (CBBA) for decentralized task allocation.
 
-## World Generation Flow
+**Why CBBA specifically:** CBBA (Choi, Brunet, How, 2009 — cited
+directly in `core/cbba.c`'s consensus-table comment) is a
+message-passing consensus algorithm by design: each agent maintains
+its own local belief about task ownership, broadcasts a snapshot of
+that belief, and reconciles what it hears from others using timestamp
+freshness to resolve conflicts — not a central coordinator arbitrating.
+That property is why the codebase's later evolution toward genuine
+per-board decentralization (below) is a natural extension of the
+algorithm already in place, not a rewrite.
 
-`generate_world(seed)` performs the run setup in this order:
+**Why the platform split:** the project's target is real hardware —
+µT-Kernel 3.0 on an STM32N6570-DK (STM32N657, Cortex-M55) — but nearly
+all of the actual simulation logic (grid, environment, CBBA, pathing,
+scoring, fault injection) has zero dependency on where it runs. Splitting
+that portable core out from platform-specific glue means the same
+tick logic runs identically on a laptop for fast iteration and on the
+target board for real deployment, with one file
+(`core/sim_runner.c`) as the single source of truth for the
+sequence that has to match on both.
 
-1. Seed all deterministic random streams.
-2. Generate the procedural environment.
-3. Initialize incident and system-task pools.
-4. Place safe zones on environment-safe candidate cells and register them as infrastructure.
-5. Place evacuation gateways and register them as infrastructure.
-6. Apply the earthquake event to buildings, roads, and registered infrastructure.
-7. Initialize the safety grid from damaged environment base safety.
-8. Place teams at generated safe zones.
-9. Initialize evacuation state.
+## Layer-by-Layer Breakdown
 
-This preserves the existing simulator lifecycle while making all downstream behavior environment-aware.
-
-## Environment Subsystem
-
-The subsystem is implemented in `environment.c` and `environment.h`.
-
-It generates:
-
-- Districts: rescue base, residential, industrial, medical, civic, and waterfront.
-- Road network: arterial, collector, and local road classes.
-- Buildings: typed structures with district and risk metadata.
-- Safe-zone candidates: preferred cells near rescue, medical, and arterial-road infrastructure.
-- Navigability metadata: per-cell travel costs and route availability.
-- Damage state: building damage, road damage/blockage, infrastructure damage, and spawned-incident masks.
-
-The environment is stored in `g_environment[GRID_WIDTH][GRID_HEIGHT]`, with building records in `g_environment_buildings`.
-
-## Earthquake Event
-
-`environment_apply_earthquake(seed)` assigns an epicenter and intensity for each generated world. Damage is deterministic for the world seed and is influenced by:
-
-- District vulnerability: industrial and waterfront districts amplify damage, while rescue and medical districts are more resilient.
-- Construction quality: each building has a quality rating generated from its district profile.
-- Distance from epicenter: damage attenuates with Manhattan distance from the earthquake epicenter.
-
-The earthquake mutates persistent object state:
-
-- Buildings receive `damage_state`.
-- Road cells receive `road_damage` and may be flagged as `road_blocked`.
-- Infrastructure cells receive `infrastructure_damage`.
-
-Blocked roads remain technically navigable but carry a high travel cost. This keeps routing and CBBA compatible while making teams avoid blocked corridors when an alternative exists.
-
-## Environment-Aware Routing
-
-`path.c` still exposes the existing `find_next_path_step(...)` function used by movement and CBBA scoring. Internally, it now asks the environment for:
-
-- Whether a cell is navigable.
-- How expensive a cell is to enter.
-
-Roads are cheaper than blocks/buildings, so crews naturally prefer the road network while still being able to reach incidents inside built-up areas.
-
-## Environment-Aware Incidents
-
-Generated incidents now choose damaged source objects through `environment_find_incident_site(...)`.
-
-Incident type influences source selection:
-
-- Structural collapse and confined-space incidents originate from severely or moderately damaged buildings, with blocked roads as fallback collapse sources.
-- Chemical exposure and gas leaks originate from damaged industrial buildings or industrial infrastructure.
-- Mass casualty events originate from damaged residential, medical, civic, or infrastructure objects.
-- Fire incidents originate from damaged buildings or severely damaged industrial road/infrastructure cells.
-- Search and survivor incidents originate from damaged non-rescue-base buildings or blocked road cells.
-
-When a damaged object emits an incident type, that object records a spawned-incident mask so the same source does not repeatedly emit the same incident type. Incident records are otherwise unchanged, preserving CBBA, snapshots, scoring, and metrics compatibility.
-
-## Environment-Aware Safe Zones And Gateways
-
-Safe zones are generated on environment-selected candidate cells, then teams spawn from those safe zones as before.
-
-Evacuation gateways are now aligned to the generated road network edges when possible. Existing gateway and offboard system-task structures are unchanged.
-
-## Compatibility Notes
-
-- CBBA still consumes `IncidentState_t` and `TaskRef_t`.
-- Snapshots keep the same CSV schema.
-- Metrics code remains compatible with existing incident/team state transitions.
-- Existing simulator entry point remains `./tron`, with an optional fault profile flag: `./tron [first_seed] [seed_count] [ticks_per_seed] [--fault-profile profile]`.
-- Legacy coordinate-based code can still use `find_next_path_step(...)`; it is now environment-aware behind the same signature.
-
-## Operational Fault Injection
-
-The simulator includes a generic operational fault subsystem that models effects rather than causes.
-
-Fault profiles are selected with `--fault-profile` and can enable mobility, communication, resource, environment, or mission effects. The profiles are deterministic per seed and use the dedicated fault random stream so that repeated runs are reproducible.
-
-The fault injector updates shared team fault state and may:
-
-- Slow or stall movement.
-- Delay heartbeat visibility.
-- Degrade stamina or equipment.
-- Temporarily alter an environment cell's operational state.
-- Temporarily perturb an active incident's priority or victim load.
-
-The watchdog observes the live team state against the mission execution twin and emits recommendations such as local replan, global replan, return to safe zone, or request support. Simulation applies those recommendations; the watchdog itself does not directly mutate the plan.
-
-Fault events are recorded through the existing snapshot event channel, so the original CSV schema remains unchanged.
-
-## Offline Snapshot Labeling
-
-The repository includes a separate offline pipeline for the existing snapshot dataset. It reads `tron_snapshot_dataset.csv` and writes a new labeled CSV without changing the original snapshot export.
-
-The label definition is:
-
-- Group rows by `run_id` and `team_id`.
-- For each snapshot, look ahead at most `N` ticks within the same run and team.
-- Emit a positive label when a future snapshot is observed with `status == STATUS_AVAILABLE` and `stamina` at or above the ready-stamina threshold for the snapshot's `fitness_tier`.
-- Emit a negative label otherwise.
-
-The labeled output keeps the original snapshot columns and appends:
-
-- `recovery_threshold_stamina`
-- `recovery_ticks_to_available`
-- `recovery_within_<N>_ticks`
-
-Because the original snapshot export does not include `equipment_level`, the offline pipeline uses the observable recovered state (`STATUS_AVAILABLE`) as the recovery proxy while still recording the tier-specific stamina threshold for transparency.
-
-The default workflow is:
-
-```sh
-make
-make label_dataset N=5
+```
+core/             portable simulator — no stdio/OS/filesystem deps
+platform/laptop/  desktop entry point (CLI, printf debug, CSV writer)
+platform/board/   STM32N6570-DK entry point (µT-Kernel task, tm_printf)
+tools/            laptop-only: Flask dashboard, snapshot labeler, compare scripts
+vendor/           external BSP dependency notes (not bundled — see below)
 ```
 
-You can also run the labeler directly:
+### `core/` — the portable simulator
 
-```sh
-./label_snapshots tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv 5
+20 source files, 11,008 lines total (`wc -l core/*.c`). Verified
+freestanding-clean for Cortex-M55 by `make check-board` (see
+**Build System** below) — no `stdio.h`, no heap allocation, no OS
+calls anywhere in this tier.
+
+| File | Lines | Role |
+|---|---|---|
+| `environment.c` | 2520 | Procedural world generation: districts, road network, buildings, earthquake damage propagation |
+| `incident.c` | 2017 | Incident lifecycle, task-pool assignment, system tasks (return-to-safe-zone, equipment cache, sector sweep) |
+| `recovery_manager.c` | 1266 | Translates watchdog evidence into recovery actions |
+| `scoring.c` | 801 | CBBA bid scoring (capability/distance/priority/stamina weighted) |
+| `cbba.c` | 747 | The CBBA protocol itself — see below |
+| `mission_execution_twin.c` | 504 | Expected-vs-actual state tracking for anomaly detection |
+| `watchdog.c` | 462 | Failure-mode detection from twin/live state divergence |
+| `fault_injector.c` | 433 | Deterministic fault profiles (mobility/communication/resource/environment/mission) |
+| `path.c` | 385 | A* pathfinding with an intra-call memoization cache (below) |
+| `team.c` | 319 | Team state, specialization assignment, equipment/fitness speed model |
+| `test_metrics.c` | 324 | Runtime diagnostic counters |
+| `allocator.c` | 301 | CBBA winner → actual task assignment |
+| `search_zones.c` | 210 | District-based fog-of-war and Search-team sweep dispatch |
+| `simulation.c` | 210 | Per-tick orchestration: movement, work progress, status transitions |
+| `fault_config.c` | 121 | Fault profile → per-class enable/severity mapping |
+| `mission_state_utils.c` | 116 | Status/incident-status to-string helpers |
+| `random.c` | 93 | Deterministic xorshift-family streams (world-gen, fault, dispatch — separately seeded) |
+| `safezone.c` | 69 | Safe-zone capacity/evacuee bookkeeping |
+| `grid.c` | 49 | Grid safety-value initialization |
+| `sim_runner.c` | 46 | Shared tick lifecycle — see below |
+| `mission_state.c` | 15 | Struct definitions' backing storage |
+
+Core sizing constants (`core/mission_state.h`): `NUM_TEAMS=10`,
+`NUM_INCIDENTS=15`, `NUM_SYSTEM_TASKS=10`, `CBBA_MAX_BUNDLE_SIZE=3`,
+`GRID_WIDTH=GRID_HEIGHT=36`, `TICK_TIME_SEC=36` (so `TICKS_PER_HOUR=100`).
+
+### `platform/laptop/` — desktop entry point
+
+- `main.c` — CLI argument parsing (`./tron [seed] [count] [ticks]
+  [--fault-profile <name>] [--live] [--tick-delay-ms=N]`), drives
+  `sim_runner`.
+- `debug.c` — `printf`-based debug sink; also emits the JSON frames
+  (`LIVEFRAME`, `STATICENV`) the dashboard's SSE stream consumes.
+- `snapshot.c` — writes `tron_snapshot_dataset.csv` (a per-event
+  schema — team state, incident state, CBBA assignment, fault mask,
+  mission-twin fields, watchdog/recovery status, and the fog-of-war
+  columns `incident_discovered`/`team_zone_id`/`team_zone_trust`).
+
+### `platform/board/` — STM32N6570-DK entry point
+
+- `main_board.c` — `EXPORT INT usermain(void)` creates one µT-Kernel
+  task (`T_CTSK`, `tk_cre_tsk`) that runs the same `sim_runner`
+  sequence as the laptop, reporting progress via `tm_putstring`/
+  `tm_printf`. Pacing between ticks uses `tk_dly_tsk` (µT-Kernel's
+  `nanosleep` equivalent), off by default (`BOARD_TICK_DELAY_MS=0`) —
+  bring-up should run flat out, not paced.
+- `debug.c` — same interface as the laptop sink, routed through
+  `tm_printf` over USART1 instead of `printf` over stdout. Includes a
+  hand-rolled fixed-point float formatter (`fmt_fixed3`) because
+  `tm_printf` has no `%f` support (confirmed against the BSP2 manual —
+  see **Build System**).
+- `snapshot.c` — a fixed-size ring buffer (`BOARD_SNAPSHOT_RING_CAPACITY
+  = 256`) standing in for the laptop's CSV writer. **Deliberately not
+  full column parity** with the laptop schema — the file's own comment
+  notes this was a scope decision to avoid duplicating
+  `TeamState_t`/`MissionExecutionTwin_t`/`WatchdogStatus_t` walking
+  logic on the board side before a real transport exists to drain it.
+
+**What is not yet implemented, verified directly against the source
+(not assumed):** there is currently one task (`sim_task`) and no
+second task, no event flag, no mailbox, and no cyclic handler anywhere
+in `platform/board/`. Every USB-related line in `debug.c` and
+`snapshot.c` is a `TODO(usb)` comment describing what still needs to
+be built, not code that exists. **A specific runtime shape — cyclic
+handler → event flag → main sim task → separate USB I/O task via
+mailbox, with USB1 Type-C (CN8) as the CDC data link and ST-LINK CN6
+kept separate for debug — does not appear anywhere in this repository.**
+If that's the intended design, it hasn't been written into code or
+comments yet; treat it as a design goal to implement, not a
+description of what's here. `search_zones.c`, `snapshot_record()`'s CSV
+columns, and `main_board.c`'s ring buffer are the actual current state
+of the telemetry path.
+
+### `tools/` — laptop-only, never built for the board
+
+- `app.py` (Flask) + `templates/index.html` — a local dashboard that
+  runs `make` then `./tron <args>`, parsing stdout (`LIVEFRAME`,
+  `STATICENV` JSON lines during `--live`) and stderr (`[DIAG ...]`
+  lines) into a live map, per-team status table, Incident Journal,
+  Recovery/Rest tab, and telemetry charts.
+- `label_snapshots.c` — standalone offline labeler; reads
+  `tron_snapshot_dataset.csv`, writes a horizon-labeled copy without
+  touching the original schema.
+- `compare_*.py` — dataset/behavior comparison scripts.
+
+`requirements.txt` lists exactly one dependency: `flask`.
+
+## The CBBA Protocol As Implemented
+
+### Message structure
+
+`CBBAMessage_t` (`core/cbba.c`, defined immediately after a comment
+explicitly calling it *"Wire format only — a copied snapshot of one
+agent's belief at broadcast time. This is what a real board would put
+on the wire; no function below is allowed to read another agent's live
+`CBBAAgentState_t` directly."*):
+
+```c
+typedef struct
+{
+    uint8_t  sender_id;
+    uint8_t  winner[NUM_INCIDENTS];
+    float    winning_bid[NUM_INCIDENTS];
+    uint32_t timestamp[NUM_TEAMS];
+} CBBAMessage_t;
 ```
 
-## Build And Smoke Test
+At current sizing (`NUM_INCIDENTS=15`, `NUM_TEAMS=10`), packed size is
+**116 bytes** (1 + 15 + 60 + 40). This is deliberately already shaped
+as an over-the-wire message, not an in-memory convenience struct — the
+comment above it is an explicit design constraint enforced by the
+functions around it, not incidental.
 
-Build:
+### Broadcast / receive / consensus flow
+
+`cbba_consensus()` runs each round:
+
+1. **Broadcast.** Every team calls `cbba_broadcast(team_id, &outbox[team_id])`,
+   which copies that team's own `winner[]`/`winning_bid[]`/`timestamp[]`
+   into a fresh `CBBAMessage_t` — read-only from that point on.
+2. **Link check.** `cbba_communication_link_up(team_id)` gates whether
+   that team's broadcast actually "goes out" this round. It reuses the
+   same cadence-gating logic `team.c` already applies to degraded
+   heartbeats under `FAULT_CLASS_COMMUNICATION`: `(elapsed %
+   (severity+1)) == 0`. A down link means the message is silently
+   dropped for every receiver this round — not delayed, not queued.
+3. **Pairwise consensus.** All `NUM_TEAMS * (NUM_TEAMS - 1)` = 90
+   sender/receiver pairs are shuffled (`cbba_shuffle_pairs`) and
+   processed in that random order; for each pair, if the sender's link
+   was up, `cbba_receive_and_update(receiver_id, &outbox[sender_id])`
+   applies the actual CBBA consensus table (Choi/Brunet/How 2009, Table
+   I) — whether the receiver adopts the sender's claim depends on
+   whether the sender claims the task itself, claims the receiver
+   already has it, or is relaying a third agent's claim, with
+   timestamp freshness breaking ties.
+4. `cbba_release_lost_tasks()` and `cbba_sync_mission_execution_twin()`
+   close out the round.
+
+`cbba_run()` (called once per tick from `allocate_all_incidents()`) executes
+`cbba_init()`, then `NUM_TEAMS * CBBA_MAX_BUNDLE_SIZE` = 30 rounds of
+(every team builds its bundle via `cbba_build_bundle()`, then
+`cbba_consensus()`), then `cbba_improve_routes()`.
+
+### Mapping to real distributed comms (LoRa)
+
+The broadcast/receive/link-up decomposition above is why porting this
+to real LoRa TX/RX is a substitution, not a redesign: `cbba_broadcast()`
+already produces exactly what a board would serialize onto the air,
+`cbba_receive_and_update()` already only touches the receiver's own
+state from a read-only message, and `cbba_communication_link_up()`
+already models a link that can silently fail per-round — the real
+board version would replace the simulated coin-flip with "did this
+board's LoRa RX actually receive a packet from `sender_id` this
+round," which is the same shape, different data source. **This mapping
+is a design implication of the current code, not something
+implemented or tested against real radios in this repository — no LoRa
+driver, serialization code, or radio-specific files exist here.**
+
+### Current single-process limitation (worth stating precisely)
+
+`cbba_consensus()` today loops over **all** `NUM_TEAMS` agents within
+one process — every team's `outbox` entry and every pairwise exchange
+happens in the same address space per tick. That's what makes the
+current build a *simulation* of a distributed protocol rather than a
+genuinely distributed one: the message-passing shape is real, but
+nothing is actually going out over a wire yet.
+
+## Board Runtime Architecture
+
+**Verified from `platform/board/main_board.c` and `vendor/README.md`
+directly** (see those files for the exact BSP verification commands):
+
+- Entry point: `EXPORT INT usermain(void)`.
+- `usermain()` creates and starts exactly one task (`sim_ctsk`,
+  priority 10, 8KB stack — noted in the source as "a starting point;
+  check high-water mark once you can actually run this," not a tuned
+  final value), then parks itself forever (`tk_slp_tsk(TMO_FEVR)`).
+- That one task (`sim_task`) runs `sim_runner_init()` →
+  (`sim_start_seed()` → tick loop calling `sim_tick()` →
+  `sim_end_seed()`) per seed → `sim_runner_shutdown()`, then parks
+  itself too.
+- FPU: not explicitly requested per-task (`TA_FPU` left unset in
+  `T_CTSK.tskatr`) because BSP2's `ALWAYS_FPU_ATR=1` default already
+  forces FPU context on every task — the source comment flags this as
+  an implicit dependency worth knowing about if that BSP default is
+  ever changed.
+- Debug output: USART1, 115200-8-N-1, via the ST-LINK micro-USB
+  connector already on the dev kit (`vendor/README.md`) — **this is
+  the debug UART, not a separate USB1/CN8 data link**; no second USB
+  connector or CDC class driver appears anywhere in this repo.
+
+**Confirmed NOT yet built** (see the `platform/board/` section above
+for the full list): second task, event flag, mailbox, cyclic handler,
+USB telemetry transport, real firmware project (STM32CubeIDE/CubeMX
+scaffolding, linker script, HAL init, TrustZone secure/non-secure
+split). `vendor/README.md` documents exactly what's still needed to
+get a flashable image and cites the precise BSP2 manual section
+(4.2.3) for where `knl_start_mtkernel()` needs to be added to
+CubeMX-generated code — that's IDE project work, not something a
+source file in this repo can do.
+
+## Performance Characteristics
+
+`core/sim_runner.h`'s own comment states the qualitative finding
+directly: *"`allocate_all_incidents()` runs the CBBA auction and is the
+dominant cost per tick."* The specific numbers behind that claim aren't
+preserved as repository comments, but were measured directly against
+this codebase during development (x86, `-O2`, instrumented build, not
+a documented repo artifact — reproducible via the same method):
+
+- At full team count, `allocate_all_incidents()` accounted for roughly
+  **63% of per-tick time** (~654µs of ~1032µs/tick, 500-tick run).
+- Isolating to a single active team dropped `allocate_all_incidents()`
+  to ~14.5µs/tick — a **~65× reduction**, consistent with the
+  algorithm's `O(NUM_TEAMS²)` shape (`cbba_run()`'s round count scales
+  with `NUM_TEAMS`, and each round's consensus does `NUM_TEAMS ×
+  (NUM_TEAMS-1)` pairwise exchanges).
+
+**Mitigation already in the code:** `path.c` implements an intra-call
+memoization cache (`path_cache_begin()`/`path_cache_end()`, a
+1024-entry direct-mapped table, `PATH_CACHE_SIZE`) specifically because
+`calculate_marginal_bundle_bid()` was found to recompute identical
+route legs across trial bundle insertions within a single
+`cbba_run()` call. The cache is explicitly scoped to be safe: it's
+only active between `path_cache_begin()`/`path_cache_end()`, and
+`cbba_run()`'s own comment confirms nothing between those two calls
+touches the grid or moves a team, so a stale cache entry can't produce
+a wrong answer — only a cache miss recomputes fresh.
+
+**TODO / not yet measured:** real Cortex-M55 timing. The numbers above
+are x86 measurements; the *ratio* (algorithmic complexity reduction)
+should transfer reasonably across architectures, but the *absolute*
+µs-per-tick figures won't, and no on-device timing exists yet since
+there's no flashable firmware image (see above).
+
+## Open Architectural Questions
+
+**Not documented anywhere in this repository as of this writing** —
+raised here because they're live, unresolved questions the codebase's
+current trajectory makes relevant, not because they're written into
+any source file or prior doc:
+
+- **Shared world knowledge vs. locally-discovered incidents per
+  board.** If each team's board becomes a genuinely separate physical
+  node, does every board start with identical knowledge of the full
+  incident list (e.g., same world-gen seed), or does each board only
+  know about incidents it has actually discovered locally (more
+  realistic for search-and-rescue, closer to what `search_zones.c`'s
+  fog-of-war/`discovered` flag already partially models within the
+  single-process simulation)? This changes the LoRa protocol surface
+  meaningfully — the second option needs an incident-announcement
+  message type in addition to CBBA consensus messages, the first
+  doesn't.
+- **USB telemetry protocol design** — genuinely open per the
+  `TODO(usb)` markers throughout `platform/board/`, not just
+  unimplemented but undesigned (ring-buffer overflow policy,
+  overwrite-vs-backpressure, wire format).
+
+## Historical Bugs That Shaped Current Design
+
+Pulled directly from `CHANGELOG.md`, which documents each fix with
+before/after verification, not just a description:
+
+- **Evacuation gateway placement hang** (`incident.c`,
+  `initialize_evacuation_gateways()`): a deterministic site lookup
+  (`environment_find_gateway_site()`) could return the same colliding
+  cell forever on retry, since it has no randomness — seed 2 hung
+  indefinitely. Fixed by tracking whether the deterministic candidate
+  was already rejected once, falling through to randomized placement
+  on retry. This is *why* the gateway-placement loop has a
+  `deterministic_site_rejected` flag today, not an incidental detail.
+- **CSV sentinel corruption** (`snapshot.c`): a signed `int` sentinel
+  (`-1`) printed with `%u` reinterpreted as `4294967295`. Fixed by
+  aligning with the codebase's existing `NO_ASSIGNMENT` (`0xFF`)
+  convention instead of inventing a new sentinel.
+- **Stale team-state read in resolved-task logging**
+  (`snapshot.c`/`incident.c`): a team could be dispatched to a new
+  task in the same tick its old task's completion was logged
+  (`allocate_all_incidents()` runs before `simulation_step()`'s
+  completion detection), so the log captured the team's *next*
+  assignment instead of the one that resolved. This is why
+  `snapshot_record_resolved()` exists as a separate function from
+  `snapshot_record()` — it takes the resolving task's own state
+  directly rather than re-deriving it from live team state.
+- **Fault-priority compounding** (`fault_injector.c`,
+  `IncidentState_t`): a second mission fault landing on an
+  already-faulted incident could capture the wrong "original" priority
+  to restore, since the original was tracked per-fault-class on the
+  team rather than once per incident. This is why
+  `mission_fault_active_count`/`mission_fault_original_priority`/
+  `mission_fault_original_victim_count` live on `IncidentState_t`
+  today, not on `TeamFaultState_t`.
+- **`RETURN_TO_SAFE_ZONE` task backlog** (`incident.c`,
+  `create_return_to_safe_zone_task()` / `abandon_task_for_recovery()`):
+  every recovery-triggered abandon call created a new return-to-safe-zone
+  task unconditionally, even if the team already had one pending,
+  building a real backlog that manifested as a team's status bouncing
+  `AVAILABLE → EN_ROUTE → RESTING` every tick. Fixed with an explicit
+  dedup check plus a short-circuit when the team's current task is
+  already the right kind.
+
+## Build System and Verification
+
+### Laptop build
 
 ```sh
-make
+make            # builds ./tron and ./label_snapshots
+make smoke       # ./tron 1 1 200 — environment/team/incident/safe-zone summary
 ```
 
-Smoke test:
+`Makefile`'s `LAPTOP_SOURCES` is `$(wildcard core/*.c)` plus the three
+`platform/laptop/` files — new files dropped into `core/` are picked
+up automatically, no Makefile edit needed.
+
+### Board freestanding check
 
 ```sh
-make smoke
+make check-board                          # core/ only if no BSP vendored
+make check-board BSP_DIR=/path/to/mtk3_bsp2   # full check against real headers
 ```
 
-The smoke test runs seed `1` for `200` ticks and prints an environment, team, incident, and safe-zone summary.
+Two modes, both real compiles with `arm-none-eabi-gcc
+-mcpu=cortex-m55 -mthumb -mfloat-abi=hard -mfpu=auto -ffreestanding`,
+not a lint pass:
 
-Fault-profile smoke test:
+- **Without `vendor/mtk3_bsp2`:** compiles `core/` only. Still a real,
+  useful check — catches libc/OS dependency creep in the portable
+  simulator — but can't validate `platform/board/*.c` against real BSP
+  symbols, since those files call real BSP APIs (`tm_printf`,
+  `tk_cre_tsk`) that don't exist without the actual headers.
+- **With `vendor/mtk3_bsp2`** (official BSP, fetched separately per
+  `vendor/README.md` — not bundled here, T-License 2.2 isn't
+  redistribution-friendly): compiles `core/` **and**
+  `platform/board/*.c` against the real `tk/tkernel.h`/`tm/tmonitor.h`
+  headers, with `_STM32CUBE_DISCOVERY_N657_` defined to select the
+  correct board variant.
 
-```sh
-./tron 1 1 5 --fault-profile mobility
-```
+Not a firmware build either way — no linker script, no HAL init, no
+STM32CubeIDE project. It's a compile-correctness check, and
+`vendor/README.md` is explicit about what's still needed beyond it.
 
-## Laptop / Board Platform Split
+### Regression method
 
-The codebase is split into three tiers:
-
-- `core/` — the portable simulator (grid, environment, incidents,
-  teams, CBBA allocation, A* pathfinding, scoring, watchdog, recovery
-  manager, fault injection, random). No stdio/OS/filesystem
-  dependencies. Verified freestanding-clean for Cortex-M55 by
-  `make check-board`.
-- `platform/laptop/` — desktop entry point (`main.c`, CLI parsing),
-  printf-based debug sink (`debug.c`), CSV snapshot writer
-  (`snapshot.c`).
-- `platform/board/` — STM32N6570-DK entry point (`main_board.c`,
-  µT-Kernel `usermain()`), `tm_printf`-based debug sink (`debug.c`),
-  ring-buffer telemetry stub (`snapshot.c`, pending USB protocol
-  design).
-
-Both platforms share `core/sim_runner.h`, which owns the tick sequence
-(`fault_injector_step -> allocate_all_incidents -> simulation_step`) as
-a single source of truth, so this performance-sensitive ordering can't
-drift between laptop and board.
-
-The board files are verified against the real µT-Kernel 3.0 BSP2
-headers (`github.com/tron-forum/mtk3_bsp2`, official STM32N6570-DK
-support) via `make check-board` — see `vendor/README.md` for how to
-fetch the BSP and what's been confirmed against it (FPU defaults,
-debug UART routing, `tm_printf`'s no-float limitation, entry-point
-shape). Not yet a flashable firmware image: that needs an STM32CubeIDE
-project wrapping these sources, which `vendor/README.md` also covers.
+No automated test suite exists in this repo. The verification pattern
+used throughout `CHANGELOG.md` instead: multi-seed sweeps (typically
+seeds 1–15) checked for hangs/timeouts, before/after CSV column
+inspection for specific bug signatures (e.g., counting
+`4294967295` occurrences, checking resolved-task rows for real vs.
+sentinel incident IDs), and `make check-board` re-run after any
+`core/`/`platform/board/` change. This is a manual, documented
+discipline rather than a CI pipeline — worth knowing if you're
+extending this project and wondering where the tests are.

@@ -1,66 +1,170 @@
-# CONCORD / REMCE local test dashboard
+# tron
 
-A one-file Flask app that wraps your `tron` binary so you can run the
-sim and see results (diag summary, rest-cycle verification, telemetry
-charts) in two clicks instead of scrolling terminal output.
+A multi-team disaster-response simulator built for the **TRON
+Programming Contest 2026** (September 2026 deadline). Five specialized
+response teams — Search, Medical, Extraction, Perimeter, Support —
+respond to incidents in a procedurally generated disaster environment,
+coordinated entirely through the **Consensus-Based Bundle Algorithm
+(CBBA)**: no central dispatcher, just agents broadcasting local beliefs
+and reconciling conflicts through consensus. The project targets real
+hardware — **µT-Kernel 3.0** on an **STM32N6570-DK** (STM32N657,
+Cortex-M55) — and is built to run identically on a laptop for fast
+iteration and on the actual board for field deployment.
 
-> **Layout note:** the project was split for laptop/board portability.
-> `core/` is the platform-neutral simulator, `platform/laptop/` and
-> `platform/board/` are the two entry points, and this dashboard
-> (`app.py`, `templates/`, `static/`) now lives in `tools/` alongside
-> the other laptop-only tooling (`label_snapshots.c`, the compare
-> scripts).
-> Run it as `python3 tools/app.py` from the repo root, or `cd tools &&
-> python3 app.py` — either works, since it resolves the project root
-> as its own parent directory rather than assuming co-location with
-> the Makefile.
+## What makes this interesting
 
-## Setup (one time)
+- **CBBA is implemented as a genuine message-passing protocol, not a
+  simulation shortcut.** `CBBAMessage_t` (`core/cbba.c`) is explicitly
+  documented in the source as *"wire format only"* — a 116-byte struct
+  shaped like something you'd actually put on a radio, with broadcast
+  and receive functions that never reach into another agent's live
+  state. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full
+  protocol walkthrough and how it maps onto a real LoRa link.
+- **The codebase is split for two real targets, not hypothetically
+  portable.** `core/` has zero stdio/OS/filesystem dependencies and is
+  verified freestanding-clean for Cortex-M55 by actually compiling
+  against the official µT-Kernel 3.0 BSP2 headers — not just a
+  freestanding-C guess (`make check-board`).
+- **Grounded in real incident-command practice, not arbitrary
+  numbers.** Team rest/rehab modeling follows NFPA 1584's two-tier
+  self-rehab/full-rehab structure; fault-repair confirmation timing is
+  built around FEMA's operational-period and PAR (Personnel
+  Accountability Report) check-in cadence. See the comments in
+  `core/mission_state.h` for the reasoning, not just the constants.
+- **A live dashboard you can actually watch.** `tools/app.py` streams
+  the simulation tick-by-tick over SSE to a browser map with live
+  hazard/building rendering, per-team status, and an incident journal
+  — see [`tools/README.md`](tools/README.md).
 
-1. Nothing to copy — `app.py` and `templates/` already live in
-   `tools/` in this repo layout.
-2. `pip install flask --break-system-packages` (or use a venv)
+## Project status
 
-## Run
+**Working today:**
+- Full laptop simulation: procedural world generation, earthquake
+  damage propagation, CBBA task allocation across 10 teams (2 per
+  specialty), fault injection, watchdog/recovery, fog-of-war search
+  dispatch (`core/search_zones.c`).
+- `platform/board/` compiles clean against real µT-Kernel 3.0 BSP2
+  headers (`make check-board BSP_DIR=...`) — genuinely verified, not
+  assumed.
+- Live browser dashboard with real-time map, telemetry, and an
+  incident journal.
+
+**In progress / partially stubbed:**
+- Board telemetry (`platform/board/snapshot.c`) is a ring buffer with
+  no drain mechanism yet — every USB-related line is a `TODO(usb)`
+  marker, not working code.
+- Board debug output works over the ST-LINK debug UART
+  (`tm_printf`, USART1) but there's no separate data-link transport
+  yet.
+
+**Not started / open questions** (see `ARCHITECTURE.md`'s *Open
+Architectural Questions* section for the full reasoning):
+- No flashable firmware image — `platform/board/` compiles but there's
+  no STM32CubeIDE project, linker script, or HAL init wrapping it yet.
+- No real distributed deployment — CBBA's message-passing shape is
+  real, but all teams still run in one process today; nothing goes out
+  over an actual radio.
+- Whether each board should share full world knowledge or only know
+  about incidents it discovers locally is still an open design
+  question, not a decided one.
+
+## Repo structure
 
 ```
-python3 app.py
+core/             portable simulator — grid, environment, CBBA, pathing,
+                  scoring, fault injection, watchdog/recovery. No
+                  stdio/OS/filesystem dependencies.
+platform/laptop/  desktop entry point: CLI, printf debug, CSV writer
+platform/board/   STM32N6570-DK entry point: µT-Kernel task, tm_printf
+tools/            dashboard (Flask + SSE), snapshot labeler, compare scripts
+vendor/           notes on fetching the external µT-Kernel BSP (not bundled)
 ```
 
-Open http://127.0.0.1:5050
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full file-by-file
+breakdown with line counts and what each one actually does.
 
-## Use
+## Build and run
 
-- Set seed / ticks / fault profile / tick delay, then either:
-  - **Start Live** — streams the sim tick-by-tick over SSE. The Live
-    Ops tab shows a 36×36 map (teams as colored dots, incidents as
-    colored squares by priority, a ring around a team means it's
-    resting, a red dot means an active fault) plus a status table per
-    team and a live incident queue. Tick delay controls pacing — try
-    100-300ms to actually watch it instead of it flashing by. **Stop**
-    aborts the run and kills the underlying process cleanly.
-  - **Run Full Speed (batch)** — the original non-live mode: runs to
-    completion as fast as possible, then shows the same
-    Overview/Recovery/Telemetry breakdown it always did. Use this for
-    long runs (10k+ ticks) where watching every tick isn't the point.
-- Either way, the app runs `make` (rebuilds only if needed) then
-  `./tron <args>`, and parses:
-  - stderr `[DIAG]` lines → rest-cycle durations, per-team throughput,
-    safezone fallback / discarded-signal counts
-  - `tron_snapshot_dataset.csv` → stamina-over-time per team, event
-    type counts, recovery recommendation counts, watchdog anomalies
-- **Overview** tab: run summary + per-team throughput chart.
-- **Recovery / Rest** tab: rest-cycle duration histogram — this is
-  the direct check for whether the ABORT_MISSION rest-guard fix is
-  holding (short 1-tick cycles = interrupted rest, the old bug;
-  long/sustained cycles = teams actually resting).
-- **Telemetry** tab: stamina curves, event & recovery-action counts.
-- **Raw Output** tab: full stdout/stderr tail if something looks off.
-- **History** tab: every run this session, so you can compare seeds
-  or fault profiles without re-running from scratch. Stored in
-  `.dashboard_history.json` in your project dir.
+### Laptop
 
-## Notes
+```sh
+make                 # builds ./tron and ./label_snapshots
+./tron 1 1 200        # first_seed=1, seed_count=1, ticks_per_seed=200
+make smoke            # equivalent to: ./tron 1 1 200
+```
 
-- This is a local dev server for your own laptop, not meant to be
-  exposed to a network.
+Optional flags:
+
+```sh
+./tron 1 1 5 --fault-profile mobility     # inject a fault profile
+./tron 1 1 200 --live --tick-delay-ms=150 # stream JSON frames, paced for humans
+```
+
+Fault profiles: `none`, `mobility`, `communication`, `resource`,
+`combined`, `random` (`core/fault_config.h`).
+
+### Board (compile-check only — see caveat below)
+
+```sh
+make check-board                              # core/ only, no BSP needed
+make check-board BSP_DIR=/path/to/mtk3_bsp2   # full check, real BSP headers
+```
+
+The second form needs the official µT-Kernel 3.0 BSP2, fetched
+separately (not bundled here — released under T-License 2.2, which
+isn't redistribution-friendly to vendor verbatim):
+
+```sh
+cd vendor
+git clone --recurse-submodules https://github.com/tron-forum/mtk3_bsp2.git
+```
+
+**This is a compile-correctness check against real BSP headers, not a
+firmware build.** There's no linker script, HAL init, or STM32CubeIDE
+project yet — see `vendor/README.md` for exactly what's still needed
+to get a flashable image.
+
+### Dashboard
+
+```sh
+pip install flask --break-system-packages
+python3 tools/app.py
+```
+
+Then open <http://127.0.0.1:5050>. Full usage guide:
+[`tools/README.md`](tools/README.md).
+
+### Offline snapshot labeling
+
+```sh
+make label_dataset N=5
+# or directly:
+./label_snapshots tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv 5
+```
+
+## Standards and references reflected in the code
+
+These aren't just cited for flavor — the actual constants and timing
+in `core/mission_state.h` are derived from them:
+
+- **NFPA 1584** (Standard on the Rehabilitation Process for Members
+  During Emergency Operations) — the two-tier self-rehab/full-rehab
+  rest model (`MAX_CONSECUTIVE_PARTIAL_REST_CYCLES`).
+- **FEMA's National US&R Response System** — operational-period
+  structure and Personnel Accountability Report (PAR) check-in cadence
+  underpin the fault-repair confirmation timing
+  (`FAULT_PAR_INTERVAL_TICKS`, `FAULT_REPAIR_CONFIRM_DELAY_TICKS`,
+  `FAULT_POST_REPAIR_IMMUNITY_TICKS`).
+- **CBBA** — Choi, Brunet, and How, *"Consensus-Based Decentralized
+  Auctions for Robust Task Allocation,"* 2009 — the consensus action
+  table implemented in `core/cbba.c` is cited directly against this
+  paper (Table I) in the source comments.
+
+## Contest context
+
+Built for the **TRON Programming Contest 2026**, targeting µT-Kernel
+3.0 — the real-time OS published by the [TRON Forum](https://github.com/tron-forum),
+whose official STM32N6570-DK BSP (`mtk3_bsp2`) this project compiles
+and verifies against directly (see `vendor/README.md`). Contest-specific
+links, deadlines, and submission requirements aren't tracked in this
+repository — check with your contest coordinator for those.
