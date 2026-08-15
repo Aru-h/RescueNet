@@ -85,8 +85,8 @@ all: main-build
 main-build: tron_board_Appli.elf secondary-outputs
 
 # Tool invocations
-tron_board_Appli.elf tron_board_Appli.map: $(OBJS) $(USER_OBJS) /Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/STM32N657X0HXQ_LRUN.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "tron_board_Appli.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m55 -T"/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/STM32N657X0HXQ_LRUN.ld" --specs=nosys.specs -Wl,-Map="tron_board_Appli.map" -Wl,--gc-sections -static -Wl,--cmse-implib -Wl,--out-implib=./secure_nsclib.o --specs=nano.specs -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+tron_board_Appli.elf tron_board_Appli.map: $(OBJS) $(USER_OBJS) /Users/harushsgtemkar/Downloads/tron_merged-board-2/tron_board/Appli/STM32N657X0HXQ_LRUN.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "tron_board_Appli.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m55 -T"/Users/harushsgtemkar/Downloads/tron_merged-board-2/tron_board/Appli/STM32N657X0HXQ_LRUN.ld" --specs=nosys.specs -Wl,-Map="tron_board_Appli.map" -Wl,--gc-sections -static -Wl,--cmse-implib -Wl,--out-implib=./secure_nsclib.o --specs=nano.specs -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

@@ -5,7 +5,7 @@
 
 # Add inputs and outputs from these tool invocations to the build variables 
 C_SRCS += \
-/Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/mtkernel/device/adc/adc.c 
+/Users/harushsgtemkar/Downloads/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/device/adc/adc.c 
 
 OBJS += \
 ./bsp2_src/mtkernel/device/adc/adc.o 
@@ -15,8 +15,8 @@ C_DEPS += \
 
 
 # Each subdirectory must supply rules for building sources it contributes
-bsp2_src/mtkernel/device/adc/adc.o: /Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/mtkernel/device/adc/adc.c bsp2_src/mtkernel/device/adc/subdir.mk
-	arm-none-eabi-gcc "$<" -mcpu=cortex-m55 -std=gnu11 -g3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32N657xx -D_STM32CUBE_DISCOVERY_N657_ -c -I../Core/Inc -I../../Secure_nsclib -I../../Drivers/STM32N6xx_HAL_Driver/Inc -I../../Drivers/CMSIS/Device/ST/STM32N6xx/Include -I../../Drivers/STM32N6xx_HAL_Driver/Inc/Legacy -I../../Drivers/CMSIS/Include -I/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../core -I/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../platform/board -I/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/include -I/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/config -I/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/mtkernel -I/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2 -I/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/mtkernel/kernel/knlinc -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -mcmse -MMD -MP -MF"$(@:%.o=%.d)" -MT"$@" --specs=nano.specs -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb -o "$@"
+bsp2_src/mtkernel/device/adc/adc.o: /Users/harushsgtemkar/Downloads/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/device/adc/adc.c bsp2_src/mtkernel/device/adc/subdir.mk
+	arm-none-eabi-gcc "$<" -mcpu=cortex-m55 -std=gnu11 -g3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32N657xx -D_STM32CUBE_DISCOVERY_N657_ -c -I../Core/Inc -I../../Secure_nsclib -I../../Drivers/STM32N6xx_HAL_Driver/Inc -I../../Drivers/CMSIS/Device/ST/STM32N6xx/Include -I../../Drivers/STM32N6xx_HAL_Driver/Inc/Legacy -I../../Drivers/CMSIS/Include -I/Users/harushsgtemkar/Downloads/tron_merged-board-2/tron_board/Appli/../../core -I/Users/harushsgtemkar/Downloads/tron_merged-board-2/tron_board/Appli/../../platform/board -I/Users/harushsgtemkar/Downloads/tron_merged-board-2/tron_board/Appli/../../vendor/mtk3_bsp2/include -I/Users/harushsgtemkar/Downloads/tron_merged-board-2/tron_board/Appli/../../vendor/mtk3_bsp2/config -I/Users/harushsgtemkar/Downloads/tron_merged-board-2/tron_board/Appli/../../vendor/mtk3_bsp2/mtkernel -I/Users/harushsgtemkar/Downloads/tron_merged-board-2/tron_board/Appli/../../vendor/mtk3_bsp2 -I/Users/harushsgtemkar/Downloads/tron_merged-board-2/tron_board/Appli/../../vendor/mtk3_bsp2/mtkernel/kernel/knlinc -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -fcyclomatic-complexity -mcmse -MMD -MP -MF"$(@:%.o=%.d)" -MT"$@" --specs=nano.specs -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb -o "$@"
 
 clean: clean-bsp2_src-2f-mtkernel-2f-device-2f-adc
 

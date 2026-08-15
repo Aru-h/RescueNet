@@ -1,5 +1,5 @@
-/Users/harushsgtemkar/Downloads/tron-4/core/sim_runner.c:10:5:sim_runner_init	2
-/Users/harushsgtemkar/Downloads/tron-4/core/sim_runner.c:22:6:sim_start_seed	1
-/Users/harushsgtemkar/Downloads/tron-4/core/sim_runner.c:31:6:sim_tick	1
-/Users/harushsgtemkar/Downloads/tron-4/core/sim_runner.c:38:6:sim_end_seed	1
-/Users/harushsgtemkar/Downloads/tron-4/core/sim_runner.c:43:6:sim_runner_shutdown	1
+/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/sim_runner.c:10:5:sim_runner_init	2
+/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/sim_runner.c:22:6:sim_start_seed	1
+/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/sim_runner.c:31:6:sim_tick	1
+/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/sim_runner.c:38:6:sim_end_seed	1
+/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/sim_runner.c:43:6:sim_runner_shutdown	1
