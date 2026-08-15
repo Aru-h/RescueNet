@@ -1,0 +1,3 @@
+/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/include/tk/sysdepend/stm32_cube/cpu/core/armv8m/syslib.h:75:13:out_w	16	static
+/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/include/tk/sysdepend/stm32_cube/cpu/core/armv8m/syslib.h:92:11:in_w	16	static
+/Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/sys_start.c:47:13:knl_start_mtkernel	24	static,ignoring_inline_asm

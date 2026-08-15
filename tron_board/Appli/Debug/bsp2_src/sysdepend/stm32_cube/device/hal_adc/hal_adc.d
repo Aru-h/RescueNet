@@ -1,0 +1,10 @@
+bsp2_src/sysdepend/stm32_cube/device/hal_adc/hal_adc.o: \
+ /Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/sysdepend/stm32_cube/device/hal_adc/hal_adc.c \
+ /Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/include/sys/machine.h \
+ /Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/include/sys/sysdepend/stm32_cube/discovery_stm32n657/machine.h \
+ /Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/include/sys/sysdepend/stm32_cube/cpu/core/armv8m/machine.h \
+ /Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/config/config_bsp/stm32_cube/config_bsp.h
+/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/include/sys/machine.h:
+/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/include/sys/sysdepend/stm32_cube/discovery_stm32n657/machine.h:
+/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/include/sys/sysdepend/stm32_cube/cpu/core/armv8m/machine.h:
+/Users/harushsgtemkar/Downloads/tron-4/tron_board/Appli/../../vendor/mtk3_bsp2/config/config_bsp/stm32_cube/config_bsp.h:

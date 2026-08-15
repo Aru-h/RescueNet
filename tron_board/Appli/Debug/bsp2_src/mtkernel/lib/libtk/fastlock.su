@@ -1,0 +1,6 @@
+/Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/mtkernel/lib/libtk/fastlock.c:32:12:Inc	24	static
+/Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/mtkernel/lib/libtk/fastlock.c:41:12:Dec	24	static
+/Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/mtkernel/lib/libtk/fastlock.c:54:13:Lock	16	static
+/Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/mtkernel/lib/libtk/fastlock.c:64:13:Unlock	16	static
+/Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/mtkernel/lib/libtk/fastlock.c:74:11:CreateLock	48	static
+/Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/mtkernel/lib/libtk/fastlock.c:99:13:DeleteLock	16	static

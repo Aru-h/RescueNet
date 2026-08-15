@@ -51,6 +51,7 @@
 #ifndef BOARD_FAULT_PROFILE
 #define BOARD_FAULT_PROFILE FAULT_PROFILE_NONE
 #endif
+
 /* Tick pacing via tk_dly_tsk, the µT-Kernel equivalent of the
  * laptop's nanosleep-based --tick-delay-ms. 0 = run flat out, which
  * is almost certainly what you want for real bring-up (the sim
@@ -59,6 +60,7 @@
 #ifndef BOARD_TICK_DELAY_MS
 #define BOARD_TICK_DELAY_MS 0u
 #endif
+
 /* Cadence for draining the snapshot ring (platform/board/snapshot.c)
  * out over USART1. Every tick is too eager: at BOARD_TICK_DELAY_MS=0
  * (flat-out, the expected bring-up setting) that would call into

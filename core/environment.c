@@ -1384,6 +1384,24 @@ static uint8_t road_reachable_map(uint8_t reachable[GRID_WIDTH][GRID_HEIGHT])
     return 1;
 }
 
+/*
+ * Note on a -Wpedantic warning at this function's two call sites in
+ * stage_validate_and_build_navigation(): "invalid use of pointers to
+ * arrays with different qualifiers in ISO C before C2X". The caller's
+ * `reachable` is a plain (non-const) uint8_t[GRID_WIDTH][GRID_HEIGHT];
+ * this function takes it as const for the pointer/read-only version.
+ * That's a benign qualifier mismatch, not a wrong-array-decay bug:
+ * both decay to the same address with the same row stride regardless
+ * of the const qualifier on the element type (const is compile-time
+ * only here, not part of the runtime representation), and GCC's own
+ * wording ("before C2X") confirms this exact conversion was simply
+ * missing from ISO C's implicit-conversion rules prior to C23, which
+ * added it - see C23's changes to 6.5.16.1/6.3.2.3 for qualified
+ * array-pointer conversions. Left as-is rather than dropping the
+ * `const` here (which would silence the warning but lose the
+ * documentation that this function only reads the reachability map)
+ * or duplicating a non-const overload just for this.
+ */
 static uint8_t lot_reachable(const uint8_t reachable[GRID_WIDTH][GRID_HEIGHT], int x, int y)
 {
     static const int dx[4] = {1, -1, 0, 0};

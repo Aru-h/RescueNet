@@ -15,6 +15,47 @@
     margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
     background: var(--bg); color: var(--text);
   }
+  
+  /* --- STARTUP GATE CSS --- */
+  .app-screen { display: none; }
+  .app-screen.active { display: block; animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  
+  #startup-screen {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .startup-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    width: 100%;
+    max-width: 420px;
+    margin-bottom: 20px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  }
+  .startup-card h2 { margin: 0 0 16px; font-size: 16px; color: var(--text); }
+  .startup-card p { color: var(--muted); font-size: 13px; margin-bottom: 20px; line-height: 1.5; }
+  .startup-field { margin-bottom: 14px; display: flex; flex-direction: column; gap: 6px; }
+  .startup-field label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .startup-field input {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    padding: 10px; border-radius: 6px; font-size: 14px; width: 100%;
+  }
+  .startup-btn {
+    width: 100%; background: var(--accent); border: none; color: #04150a; font-weight: 600;
+    padding: 12px; border-radius: 6px; cursor: pointer; font-size: 14px; margin-top: 10px;
+  }
+  .startup-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .startup-btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+  .error-msg { color: var(--bad); font-size: 13px; margin-top: 12px; text-align: center; display: none; }
+  /* ------------------------ */
+
   header {
     padding: 16px 24px; border-bottom: 1px solid var(--border);
     display: flex; align-items: center; justify-content: space-between;
@@ -106,200 +147,303 @@
 </head>
 <body>
 
-<header>
-  <div>
-    <h1>CONCORD / REMCE — Local Test Dashboard</h1>
-    <div class="sub" id="statusLine">checking project…</div>
+<!-- ==========================================
+     SCREEN 1: STARTUP / CONNECTION GATE
+     ========================================== -->
+<div id="startup-screen" class="app-screen active">
+  <div style="text-align: center; margin-bottom: 24px;">
+    <h1 style="margin: 0; font-size: 24px; font-weight: 700;">CONCORD / REMCE</h1>
+    <p style="color: var(--muted); margin-top: 6px; font-size: 14px;">Mission Control & Test Harness</p>
   </div>
-  <div class="sub" id="lastRunLine"></div>
-</header>
-
-<div class="layout">
-  <nav>
-    <button class="tab-btn active" data-tab="live">Live Ops</button>
-    <button class="tab-btn" data-tab="overview">Overview</button>
-    <button class="tab-btn" data-tab="journal">Incident Journal</button>
-    <button class="tab-btn" data-tab="recovery">Recovery / Rest</button>
-    <button class="tab-btn" data-tab="telemetry">Telemetry</button>
-    <button class="tab-btn" data-tab="raw">Raw Output</button>
-    <button class="tab-btn" data-tab="history">Run History</button>
-  </nav>
-
-  <main>
-    <div class="panel">
-      <h2>Run Simulation</h2>
-      <div class="run-form">
-        <div class="field"><label>Seed</label><input id="seed" type="number" value="1"></div>
-        <div class="field"><label>Seed count</label><input id="seedCount" type="number" value="1"></div>
-        <div class="field"><label>Ticks</label><input id="ticks" type="number" value="2000"></div>
-        <div class="field">
-          <label>Fault profile</label>
-          <select id="faultProfile">
-            <option value="none">none</option>
-            <option value="mobility">mobility</option>
-            <option value="communication">communication</option>
-            <option value="resource">resource</option>
-            <option value="combined">combined</option>
-            <option value="random">random</option>
-          </select>
-        </div>
-        <div class="field"><label>Tick delay (ms)</label><input id="tickDelay" type="number" value="150"></div>
-        <button id="liveBtn" onclick="runLive()">Start Live</button>
-        <button id="runBtn" onclick="runSimulation()" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);">Run Full Speed (batch)</button>
-        <button id="stopLiveBtn" onclick="stopLive()" class="hidden" style="background:var(--bad);color:#fff;">Stop</button>
-      </div>
+  
+  <div class="startup-card">
+    <h2>🔌 Connect Hardware Board</h2>
+    <p>Establish a live USB serial telemetry uplink with the target board.</p>
+    <div class="startup-field">
+      <label>USB Serial Port</label>
+      <input type="text" id="startPort" value="/dev/ttyACM0">
     </div>
+    <div class="startup-field">
+      <label>Baud Rate</label>
+      <input type="number" id="startBaud" value="115200">
+    </div>
+    <button type="button" id="connectBtn" class="startup-btn" onclick="connectHardware()">Connect to Board</button>
+    <div id="connectError" class="error-msg"></div>
+  </div>
 
-    <!-- LIVE OPS TAB -->
-    <div class="tab-content" id="tab-live">
-      <div class="grid2" style="align-items:start;">
-        <div class="panel">
-          <h2>Region Map (36×36)</h2>
-          <div id="liveTickLabel" class="sub" style="color:var(--muted);font-size:12px;margin-bottom:8px;">no run yet</div>
-          <canvas id="mapCanvas" width="560" height="560" style="width:100%;max-width:560px;background:#05080c;border-radius:6px;cursor:pointer;"></canvas>
-          <div id="mapInspector" style="margin-top:10px;padding:10px 12px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-size:12.5px;line-height:1.7;min-height:20px;">
-            <span style="color:var(--muted);">click a marker to inspect it</span>
+  <div class="startup-card" style="text-align: center;">
+    <h2>💻 Local Simulation</h2>
+    <p style="margin-bottom: 12px;">Run the algorithmic harness locally without connecting to physical hardware.</p>
+    <!-- Explicit type="button" prevents accidental page reloads -->
+    <button type="button" class="startup-btn secondary" onclick="enterSimulationMode()">Bypass & Enter Dashboard</button>
+  </div>
+</div>
+
+
+<!-- ==========================================
+     SCREEN 2: MAIN DASHBOARD
+     ========================================== -->
+<div id="main-dashboard" class="app-screen">
+  <header>
+    <div>
+      <h1>CONCORD / REMCE — Local Test Dashboard</h1>
+      <div class="sub" id="statusLine">checking project…</div>
+    </div>
+    <div style="text-align: right;">
+      <div class="sub" id="lastRunLine"></div>
+      <button type="button" onclick="exitDashboard()" style="background: none; border: none; color: var(--bad); cursor: pointer; font-size: 12px; margin-top: 4px; padding: 0;">Disconnect / Exit</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav>
+      <button type="button" class="tab-btn active" data-tab="live">Live Ops</button>
+      <button type="button" class="tab-btn" data-tab="overview">Overview</button>
+      <button type="button" class="tab-btn" data-tab="journal">Incident Journal</button>
+      <button type="button" class="tab-btn" data-tab="recovery">Recovery / Rest</button>
+      <button type="button" class="tab-btn" data-tab="telemetry">Telemetry</button>
+      <button type="button" class="tab-btn" data-tab="raw">Raw Output</button>
+      <button type="button" class="tab-btn" data-tab="history">Run History</button>
+    </nav>
+
+    <main>
+      <div class="panel">
+        <h2>Run Simulation</h2>
+        <div class="run-form">
+          <div class="field"><label>Seed</label><input id="seed" type="number" value="1"></div>
+          <div class="field"><label>Seed count</label><input id="seedCount" type="number" value="1"></div>
+          <div class="field"><label>Ticks</label><input id="ticks" type="number" value="2000"></div>
+          <div class="field">
+            <label>Fault profile</label>
+            <select id="faultProfile">
+              <option value="none">none</option>
+              <option value="mobility">mobility</option>
+              <option value="communication">communication</option>
+              <option value="resource">resource</option>
+              <option value="combined">combined</option>
+              <option value="random">random</option>
+            </select>
           </div>
-          <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--muted);">
-            <span><span style="display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span> Critical incident</span>
-            <span><span style="display:inline-block;width:9px;height:9px;background:#8b98a5;vertical-align:-1px;"></span> Lower priority</span>
-            <span style="margin-left:10px;">◎ ring = resting</span>
-            <span style="margin-left:10px;"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;vertical-align:-1px;"></span> Safe zone</span>
-            <span style="margin-left:10px;">🔥 fire &nbsp; ☢ gas leak</span>
-            <span style="margin-left:10px;"><span style="display:inline-block;width:9px;height:9px;background:rgba(248,81,73,.3);vertical-align:-1px;"></span> damaged building</span>
-            <span style="margin-left:10px;"><span style="display:inline-block;width:9px;height:9px;background:rgba(248,81,73,.28);vertical-align:-1px;"></span> blocked road</span>
-            <span style="margin-left:10px;">- - epicenter</span>
-            <span style="margin-left:10px;">click a team or incident marker for details, drag a team onto an incident to propose reassignment</span>
+          <div class="field"><label>Tick delay (ms)</label><input id="tickDelay" type="number" value="150"></div>
+          <button type="button" id="liveBtn" onclick="runLive()">Start Live</button>
+          <button type="button" id="runBtn" onclick="runSimulation()" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);">Run Full Speed (batch)</button>
+          <button type="button" id="stopLiveBtn" onclick="stopLive()" class="hidden" style="background:var(--bad);color:#fff;">Stop</button>
+        </div>
+      </div>
+
+      <!-- LIVE OPS TAB -->
+      <div class="tab-content" id="tab-live">
+        <div class="grid2" style="align-items:start;">
+          <div class="panel">
+            <h2>Region Map (36×36)</h2>
+            <div id="liveTickLabel" class="sub" style="color:var(--muted);font-size:12px;margin-bottom:8px;">no run yet</div>
+            <canvas id="mapCanvas" width="560" height="560" style="width:100%;max-width:560px;background:#05080c;border-radius:6px;cursor:pointer;"></canvas>
+            <div id="mapInspector" style="margin-top:10px;padding:10px 12px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-size:12.5px;line-height:1.7;min-height:20px;">
+              <span style="color:var(--muted);">click a marker to inspect it</span>
+            </div>
+            <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--muted);">
+              <span><span style="display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span> Critical incident</span>
+              <span><span style="display:inline-block;width:9px;height:9px;background:#8b98a5;vertical-align:-1px;"></span> Lower priority</span>
+              <span style="margin-left:10px;">◎ ring = resting</span>
+              <span style="margin-left:10px;"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;vertical-align:-1px;"></span> Safe zone</span>
+              <span style="margin-left:10px;">🔥 fire &nbsp; ☢ gas leak</span>
+              <span style="margin-left:10px;"><span style="display:inline-block;width:9px;height:9px;background:rgba(248,81,73,.3);vertical-align:-1px;"></span> damaged building</span>
+              <span style="margin-left:10px;"><span style="display:inline-block;width:9px;height:9px;background:rgba(248,81,73,.28);vertical-align:-1px;"></span> blocked road</span>
+              <span style="margin-left:10px;">- - epicenter</span>
+              <span style="margin-left:10px;">click a team or incident marker for details, drag a team onto an incident to propose reassignment</span>
+            </div>
+          </div>
+          <div class="panel">
+            <h2>Team Status</h2>
+            <table id="liveTeamTable">
+              <thead><tr><th>Team</th><th>Status</th><th>Stamina</th><th>Pos</th><th>Fault</th><th>Hours</th><th title="Ticks since status last changed">PAR</th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <h2 style="margin-top:18px;">Active Incidents (<span id="liveIncidentCount">0</span>)</h2>
+            <div style="max-height:260px;overflow-y:auto;">
+              <table id="liveIncidentTable">
+                <thead><tr><th>ID</th><th>Priority</th><th>Pos</th><th>Status</th><th>Assigned</th><th>Victims</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div id="liveStatsRow" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);"></div>
           </div>
         </div>
+        <div class="panel" style="margin-top:14px;">
+          <h2>Live Throughput (updates as the run happens — cumulative, sim-authoritative counters)</h2>
+          <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
+            Streamed from every tick, not the end-of-run summary. Reconciled against the final
+            diagnostics when the run completes — a mismatch there is shown, not hidden.
+          </p>
+          <div class="chart-wrap"><canvas id="liveThroughputChart"></canvas></div>
+        </div>
+      </div>
+
+      <!-- OVERVIEW TAB -->
+      <div class="tab-content hidden" id="tab-overview">
+        <div class="cards" id="overviewCards"><div class="empty">Run a simulation to see results.</div></div>
         <div class="panel">
-          <h2>Team Status</h2>
-          <table id="liveTeamTable">
-            <thead><tr><th>Team</th><th>Status</th><th>Stamina</th><th>Pos</th><th>Fault</th><th>Hours</th><th title="Ticks since status last changed">PAR</th></tr></thead>
-            <tbody></tbody>
-          </table>
-          <h2 style="margin-top:18px;">Active Incidents (<span id="liveIncidentCount">0</span>)</h2>
-          <div style="max-height:260px;overflow-y:auto;">
-            <table id="liveIncidentTable">
-              <thead><tr><th>ID</th><th>Priority</th><th>Pos</th><th>Status</th><th>Assigned</th><th>Victims</th></tr></thead>
+          <h2>Team Throughput (final resolutions vs. total stage completions, resting/working/available ticks)</h2>
+          <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
+            "Final resolutions" only credits the team that closed out a multi-stage incident's last leg.
+            "Stage completions" counts every leg any team handed off (e.g. Perimeter clearing a structural
+            collapse before Medical takes over) — use this one to see who's actually doing work.
+          </p>
+          <div class="chart-wrap"><canvas id="throughputChart"></canvas></div>
+        </div>
+      </div>
+
+      <!-- INCIDENT JOURNAL TAB -->
+      <div class="tab-content hidden" id="tab-journal">
+        <div class="panel">
+          <h2>Incident Journal</h2>
+          <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
+            A chronological log of every status change and rest cycle this run — team status transitions,
+            rests, and recovery-manager actions, in the order they happened. Built from the same data the
+            Recovery/Rest and Telemetry tabs use, assembled into one timeline a shift handoff could actually read.
+          </p>
+          <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;">
+            <label style="font-size:12px;color:var(--muted);">Filter:</label>
+            <select id="journalFilter" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;">
+              <option value="all">All events</option>
+              <option value="status">Status changes only</option>
+              <option value="rest">Rest cycles only</option>
+            </select>
+            <span id="journalCount" style="font-size:11px;color:var(--muted);margin-left:auto;"></span>
+          </div>
+          <div style="max-height:520px;overflow-y:auto;">
+            <table id="journalTable">
+              <thead><tr><th>Tick</th><th>Team</th><th>Event</th><th>Detail</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
-          <div id="liveStatsRow" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);"></div>
         </div>
       </div>
-      <div class="panel" style="margin-top:14px;">
-        <h2>Live Throughput (updates as the run happens — cumulative, sim-authoritative counters)</h2>
-        <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
-          Streamed from every tick, not the end-of-run summary. Reconciled against the final
-          diagnostics when the run completes — a mismatch there is shown, not hidden.
-        </p>
-        <div class="chart-wrap"><canvas id="liveThroughputChart"></canvas></div>
-      </div>
-    </div>
 
-    <!-- OVERVIEW TAB -->
-    <div class="tab-content hidden" id="tab-overview">
-      <div class="cards" id="overviewCards"><div class="empty">Run a simulation to see results.</div></div>
-      <div class="panel">
-        <h2>Team Throughput (final resolutions vs. total stage completions, resting/working/available ticks)</h2>
-        <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
-          "Final resolutions" only credits the team that closed out a multi-stage incident's last leg.
-          "Stage completions" counts every leg any team handed off (e.g. Perimeter clearing a structural
-          collapse before Medical takes over) — use this one to see who's actually doing work.
-        </p>
-        <div class="chart-wrap"><canvas id="throughputChart"></canvas></div>
-      </div>
-    </div>
-
-    <!-- INCIDENT JOURNAL TAB -->
-    <div class="tab-content hidden" id="tab-journal">
-      <div class="panel">
-        <h2>Incident Journal</h2>
-        <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
-          A chronological log of every status change and rest cycle this run — team status transitions,
-          rests, and recovery-manager actions, in the order they happened. Built from the same data the
-          Recovery/Rest and Telemetry tabs use, assembled into one timeline a shift handoff could actually read.
-        </p>
-        <div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;">
-          <label style="font-size:12px;color:var(--muted);">Filter:</label>
-          <select id="journalFilter" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;">
-            <option value="all">All events</option>
-            <option value="status">Status changes only</option>
-            <option value="rest">Rest cycles only</option>
-          </select>
-          <span id="journalCount" style="font-size:11px;color:var(--muted);margin-left:auto;"></span>
+      <!-- RECOVERY TAB -->
+      <div class="tab-content hidden" id="tab-recovery">
+        <div class="cards" id="recoveryCards"></div>
+        <div class="panel">
+          <h2>Rest Cycle Duration Distribution</h2>
+          <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
+            Short (1-tick) rest cycles are the signature of the old ABORT_MISSION interrupt bug.
+            Long, sustained cycles mean teams are actually completing their rest.
+          </p>
+          <div class="chart-wrap"><canvas id="restHistChart"></canvas></div>
         </div>
-        <div style="max-height:520px;overflow-y:auto;">
-          <table id="journalTable">
-            <thead><tr><th>Tick</th><th>Team</th><th>Event</th><th>Detail</th></tr></thead>
+        <div class="panel">
+          <h2>Longest Rest Events</h2>
+          <table id="restedTable"><thead><tr><th>Tick</th><th>Team</th><th>Duration (ticks)</th><th>Stamina Before → After</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+
+      <!-- TELEMETRY TAB -->
+      <div class="tab-content hidden" id="tab-telemetry">
+        <div class="panel">
+          <h2>Stamina Over Time (per team)</h2>
+          <div class="chart-wrap"><canvas id="staminaChart"></canvas></div>
+        </div>
+        <div class="grid2">
+          <div class="panel">
+            <h2>Event Type Counts</h2>
+            <div class="chart-wrap" style="height:260px;"><canvas id="eventChart"></canvas></div>
+          </div>
+          <div class="panel">
+            <h2>Recovery Recommendation Counts</h2>
+            <div class="chart-wrap" style="height:260px;"><canvas id="recoveryChart"></canvas></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RAW TAB -->
+      <div class="tab-content hidden" id="tab-raw">
+        <div class="panel">
+          <h2>stdout (tail)</h2>
+          <pre id="stdoutBox">—</pre>
+        </div>
+        <div class="panel">
+          <h2>stderr / diag (tail)</h2>
+          <pre id="stderrBox">—</pre>
+        </div>
+      </div>
+
+      <!-- HISTORY TAB -->
+      <div class="tab-content hidden" id="tab-history">
+        <div class="panel">
+          <h2>Recent Runs</h2>
+          <table id="historyTable">
+            <thead><tr><th>Time</th><th>Seed</th><th>Seeds</th><th>Ticks</th><th>Faults</th><th>Rest cycles</th><th>1-tick interrupts</th><th>Sustained (10+)</th><th>Discarded signals</th><th>Elapsed</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
       </div>
-    </div>
-
-    <!-- RECOVERY TAB -->
-    <div class="tab-content hidden" id="tab-recovery">
-      <div class="cards" id="recoveryCards"></div>
-      <div class="panel">
-        <h2>Rest Cycle Duration Distribution</h2>
-        <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
-          Short (1-tick) rest cycles are the signature of the old ABORT_MISSION interrupt bug.
-          Long, sustained cycles mean teams are actually completing their rest.
-        </p>
-        <div class="chart-wrap"><canvas id="restHistChart"></canvas></div>
-      </div>
-      <div class="panel">
-        <h2>Longest Rest Events</h2>
-        <table id="restedTable"><thead><tr><th>Tick</th><th>Team</th><th>Duration (ticks)</th><th>Stamina Before → After</th></tr></thead><tbody></tbody></table>
-      </div>
-    </div>
-
-    <!-- TELEMETRY TAB -->
-    <div class="tab-content hidden" id="tab-telemetry">
-      <div class="panel">
-        <h2>Stamina Over Time (per team)</h2>
-        <div class="chart-wrap"><canvas id="staminaChart"></canvas></div>
-      </div>
-      <div class="grid2">
-        <div class="panel">
-          <h2>Event Type Counts</h2>
-          <div class="chart-wrap" style="height:260px;"><canvas id="eventChart"></canvas></div>
-        </div>
-        <div class="panel">
-          <h2>Recovery Recommendation Counts</h2>
-          <div class="chart-wrap" style="height:260px;"><canvas id="recoveryChart"></canvas></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- RAW TAB -->
-    <div class="tab-content hidden" id="tab-raw">
-      <div class="panel">
-        <h2>stdout (tail)</h2>
-        <pre id="stdoutBox">—</pre>
-      </div>
-      <div class="panel">
-        <h2>stderr / diag (tail)</h2>
-        <pre id="stderrBox">—</pre>
-      </div>
-    </div>
-
-    <!-- HISTORY TAB -->
-    <div class="tab-content hidden" id="tab-history">
-      <div class="panel">
-        <h2>Recent Runs</h2>
-        <table id="historyTable">
-          <thead><tr><th>Time</th><th>Seed</th><th>Seeds</th><th>Ticks</th><th>Faults</th><th>Rest cycles</th><th>1-tick interrupts</th><th>Sustained (10+)</th><th>Discarded signals</th><th>Elapsed</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-  </main>
+    </main>
+  </div>
 </div>
 
 <script>
+/* --- STARTUP GATE LOGIC --- */
+function showScreen(screenId) {
+  document.querySelectorAll('.app-screen').forEach(el => el.classList.remove('active'));
+  document.getElementById(screenId).classList.add('active');
+}
+
+async function connectHardware() {
+  const btn = document.getElementById('connectBtn');
+  const err = document.getElementById('connectError');
+  const port = document.getElementById('startPort').value;
+  const baudrate = document.getElementById('startBaud').value;
+  
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Connecting...';
+  err.style.display = 'none';
+
+  try {
+    const res = await fetch('/api/board/connect', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({port, baudrate})
+    });
+    const data = await res.json();
+    
+    if (data.status === 'success') {
+      document.getElementById('statusLine').innerHTML = `<span style="color:var(--accent);">Connected to ${port}</span>`;
+      showScreen('main-dashboard');
+      checkStatus().catch(console.error);
+      loadHistory().catch(console.error);
+      drawGrid();
+    } else {
+      err.innerText = data.message || "Connection failed. Check USB port.";
+      err.style.display = 'block';
+    }
+  } catch(e) {
+    err.innerText = "Network error. Is the Flask backend running?";
+    err.style.display = 'block';
+  }
+  btn.disabled = false;
+  btn.innerHTML = 'Connect to Board';
+}
+
+function enterSimulationMode() {
+  try {
+    document.getElementById('statusLine').innerText = "Local Simulation Mode (Hardware Bypassed)";
+    showScreen('main-dashboard');
+    checkStatus().catch(console.error);
+    loadHistory().catch(console.error);
+    drawGrid();
+  } catch(e) {
+    console.error("Failed transitioning to dashboard:", e);
+  }
+}
+
+async function exitDashboard() {
+  await fetch('/api/board/disconnect', {method: 'POST'}).catch(()=>console.log("Disconnected locally"));
+  stopLive();
+  showScreen('startup-screen');
+}
+/* ------------------------- */
+
+
 let charts = {};
 const TEAM_COLORS = ["#f85149", "#58a6ff", "#3fb950", "#d29922", "#bc8cff"];
 
@@ -313,11 +457,6 @@ if (typeof Chart === "undefined") {
 
 function destroyChart(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
 
-/* ---- Telemetry store (single source of truth for the live dashboard) ----
-   Per the architecture: SSE frames are the live source of truth; the CSV
-   and final [DIAG] output are the post-run source of truth. This store
-   incrementally builds live history from frames as they arrive. Charts
-   read from this store only - they never touch raw frames directly. */
 function createSimulationTelemetry() {
   return {
     running: false,
@@ -325,10 +464,7 @@ function createSimulationTelemetry() {
     lastProcessedTick: -1,
     gapCount: 0,
     duplicateCount: 0,
-
     latest: { teams: [], incidents: [], safezones: [] },
-
-    // cumulative, monotonic totals as of the latest frame (sim-authoritative)
     cumulative: {
       incidents_resolved: 0,
       stage_completions: 0,
@@ -337,38 +473,23 @@ function createSimulationTelemetry() {
       safezone_fallback_count: 0,
       discarded_signal_count: 0,
     },
-
-    // time series, one point per processed tick
     history: {
-      incidents_resolved: [],   // [{tick, value}]
+      incidents_resolved: [],   
       stage_completions: [],
-      teamStamina: {},          // {teamIdx: [{tick, value}]}
-      teamStatus: {},           // {teamIdx: [{tick, value}]}
+      teamStamina: {},          
+      teamStatus: {},           
     },
-
-    // events derived from status transitions (per spec point 5 - only
-    // derived when the sim doesn't already expose an explicit counter)
     events: {
-      rests: [],       // completed rest cycles: [{team, startTick, endTick, duration}]
-      recoveries: [],  // RESTING -> non-RESTING transitions
+      rests: [],       
+      recoveries: [],  
     },
-
-    // PAR-style accountability: "ticks since this team's status last
-    // changed". A team that's stuck (bugged, or genuinely unable to
-    // progress) looks identical to one working normally unless something
-    // is watching for "hasn't changed in a while", same operational gap
-    // PAR timers close in real incident command tools.
     par: {
-      lastChangeTick: {},   // {teamIdx: tick}
-      staleThreshold: 60,   // ticks with no status change before flagging stale
+      lastChangeTick: {},   
+      staleThreshold: 60,   
     },
-
-    // in-progress rest cycles, keyed by team index, so we can close them
-    // out into events.rests when the team leaves RESTING
     _openRests: {},
     _prevStatus: {},
-
-    final: null, // set once the "done" event's authoritative diag/telemetry arrives
+    final: null, 
   };
 }
 
@@ -378,12 +499,9 @@ function telemetryReset() {
   simTelemetry = createSimulationTelemetry();
   simTelemetry.running = true;
   staticEnvironment = null;
-  destroyChart("liveThroughputChart"); // force a fresh chart for the new run, not update() against a stale one
+  destroyChart("liveThroughputChart");
 }
 
-/* Processes one LIVEFRAME. Idempotent on tick per spec point 8: frames at
-   or below the last-processed tick are dropped; a jump of more than 1
-   tick is recorded as a gap (not reconstructed, just tracked). */
 function telemetryProcessFrame(frame) {
   const t = simTelemetry;
 
@@ -401,8 +519,6 @@ function telemetryProcessFrame(frame) {
   t.latest.incidents = frame.incidents;
   t.latest.safezones = frame.safezones || [];
 
-  // cumulative counters: trust the sim's own totals directly, never
-  // reconstruct them from status transitions (spec point 5)
   t.cumulative.incidents_resolved = frame.incidents_resolved ?? t.cumulative.incidents_resolved;
   t.cumulative.stage_completions = frame.stage_completions ?? t.cumulative.stage_completions;
   t.cumulative.work_progress_calls = frame.work_progress_calls ?? t.cumulative.work_progress_calls;
@@ -419,19 +535,8 @@ function telemetryProcessFrame(frame) {
     t.history.teamStamina[i].push({ tick: frame.tick, value: team.stamina });
     t.history.teamStatus[i].push({ tick: frame.tick, value: team.status });
 
-    // PAR-style accountability, First Due's countdown-against-a-policy
-    // model (per the incident-command research): "how long since this
-    // team's status last actually changed" - not hours_worked, which is
-    // cumulative work time and wouldn't distinguish a team that's
-    // legitimately been working steadily from one that's gone silent.
-    // Derived purely from data already streamed - no C-side change
-    // needed, since status is already sent every tick.
     if (t.par.lastChangeTick[i] === undefined) t.par.lastChangeTick[i] = frame.tick;
 
-    // derive rest-cycle events from RESTING transitions (spec point 6) -
-    // status 3 = RESTING (STATUS_NAMES index), not explicitly counted by
-    // the sim as discrete cycles, so this is exactly the "UI-level event"
-    // case the architecture calls out as fine to derive client-side
     const prev = t._prevStatus[i];
     if (prev !== undefined && team.status !== prev) {
       t.par.lastChangeTick[i] = frame.tick;
@@ -452,11 +557,6 @@ function telemetryProcessFrame(frame) {
   return true;
 }
 
-/* Reconciliation on "done" (spec point 9): compare live-accumulated
-   cumulative totals against the authoritative end-of-run [DIAG] output.
-   A mismatch is real diagnostic information, not necessarily a bug in
-   either side - e.g. it can reveal an off-by-one in which tick a frame
-   was emitted on relative to when a counter incremented. */
 function telemetryFinalize(finalDiag) {
   const t = simTelemetry;
   t.running = false;
@@ -464,7 +564,6 @@ function telemetryFinalize(finalDiag) {
   if (finalDiag && finalDiag.summary) {
     const liveIR = t.cumulative.incidents_resolved;
     const liveSC = t.cumulative.stage_completions;
-    // final diag throughput is per-team; sum for a comparable total
     const finalIR = (finalDiag.throughput || []).reduce((s, r) => s + (r.incidents_resolved || 0), 0);
     const finalSC = (finalDiag.throughput || []).reduce((s, r) => s + (r.stage_completions || 0), 0);
     if (liveIR !== finalIR) mismatches.push(`incidents_resolved: live=${liveIR} final=${finalIR}`);
@@ -485,17 +584,23 @@ async function checkStatus() {
   try {
     const r = await fetch("/api/status");
     const d = await r.json();
-    document.getElementById("statusLine").textContent =
-      `${d.project_dir}  ·  Makefile: ${d.makefile_found ? "found" : "NOT FOUND — move app.py/templates next to your Makefile"}  ·  binary: ${d.binary_exists ? "built" : "not built yet"}  ·  csv: ${d.csv_exists ? "present" : "none yet"}`;
+    let currentStatus = document.getElementById("statusLine").innerHTML;
+    // Don't overwrite the connection status if we are hardware connected
+    if (!currentStatus.includes("Connected to")) {
+      document.getElementById("statusLine").textContent =
+        `${d.project_dir}  ·  Makefile: ${d.makefile_found ? "found" : "NOT FOUND"}  ·  binary: ${d.binary_exists ? "built" : "not built yet"}`;
+    }
   } catch (e) {
-    document.getElementById("statusLine").textContent = "backend unreachable";
+    console.error("Backend check failed.");
   }
 }
 
 async function loadHistory() {
-  const r = await fetch("/api/history");
-  const rows = await r.json();
-  renderHistory(rows);
+  try {
+    const r = await fetch("/api/history");
+    const rows = await r.json();
+    renderHistory(rows);
+  } catch (e) { }
 }
 
 function renderHistory(rows) {
@@ -541,7 +646,6 @@ async function runSimulation() {
   } finally {
     btn.disabled = false;
     btn.textContent = "Run";
-    checkStatus();
   }
 }
 
@@ -555,12 +659,6 @@ function renderLiveCharts() {
   const completionsData = t.history.stage_completions.map(p => p.value);
 
   if (charts.liveThroughputChart) {
-    /* Update in place instead of destroying and rebuilding the canvas
-     * every ~75ms - a full destroy/recreate forces Chart.js to redo
-     * layout on every call, which changes the element's rendered size
-     * continuously for the whole run and fights the user's scroll
-     * position. update('none') applies new data with zero animation
-     * and no layout thrash. */
     const chart = charts.liveThroughputChart;
     chart.data.labels = labels;
     chart.data.datasets[0].data = resolvedData;
@@ -611,7 +709,6 @@ function renderRun(data) {
   const summary = diag.summary || {};
   const work = diag.work || {};
 
-  // Overview cards
   const cards = document.getElementById("overviewCards");
   cards.innerHTML = "";
   const addCard = (label, value, cls) => {
@@ -628,7 +725,6 @@ function renderRun(data) {
   addCard("Work progress calls", work.work_progress_calls ?? "–");
   addCard("CSV rows generated", (data.telemetry && data.telemetry.total_rows) ?? 0);
 
-  // Throughput chart
   const throughput = diag.throughput || [];
   destroyChart("throughputChart");
   charts.throughputChart = new Chart(document.getElementById("throughputChart"), {
@@ -652,13 +748,6 @@ function renderRun(data) {
 }
 
 function renderJournalTab(diag) {
-  // Merges transitions_sample (every status change) and rested_events
-  // (completed rest cycles) into one chronological timeline - the two
-  // things every real incident-command tool's log/journal covers
-  // (WebEOC's Significant Events board, Veoci's SitLog, Tablet
-  // Command's auto-logged timestamped actions). Both are data app.py
-  // already parses from the C binary's [DIAG] output; transitions_sample
-  // specifically was already in the payload and unused until now.
   const STATUS_LABEL = ["AVAILABLE", "EN_ROUTE", "ON_SCENE", "RESTING"];
   const events = [];
 
@@ -682,7 +771,7 @@ function renderJournalTab(diag) {
   });
 
   events.sort((a, b) => a.tick - b.tick);
-  window._journalEvents = events; // cached so the filter dropdown can re-render without recomputing
+  window._journalEvents = events;
 
   document.getElementById("journalFilter").onchange = () => renderJournalRows();
   renderJournalRows();
@@ -727,7 +816,6 @@ function renderRecoveryTab(diag) {
   addCard("1-tick interrupted cycles", interrupted + ` (${interruptedPct}%)`, interrupted / Math.max(total,1) > 0.3 ? "bad" : "good");
   addCard("Sustained cycles (10+ ticks)", sustained, sustained > 0 ? "good" : "warn");
 
-  // duration histogram buckets
   const rested = diag.rested_events || [];
   const buckets = { "1": 0, "2-5": 0, "6-10": 0, "11-30": 0, "31-100": 0, "100+": 0 };
   rested.forEach(r => {
@@ -805,7 +893,7 @@ function renderTelemetryTab(telemetry) {
 const GRID_N = 36;
 const mapCanvas = document.getElementById("mapCanvas");
 const mapCtx = mapCanvas.getContext("2d");
-const CELL = mapCanvas.width / GRID_N;
+const CELL = 560 / GRID_N; 
 let liveAbortController = null;
 let liveIncidentsById = {};
 
@@ -815,35 +903,30 @@ const PRIORITY_COLORS = { 1: "#f85149", 2: "#d29922", 3: "#58a6ff", 4: "#8b98a5"
 const INCIDENT_STATUS_NAMES = ["OPEN", "ASSIGNED", "IN_PROGRESS", "RESOLVED"];
 
 function drawGrid() {
+  if(!mapCtx) return;
   mapCtx.strokeStyle = "#182028";
   mapCtx.lineWidth = 1;
   for (let i = 0; i <= GRID_N; i++) {
-    mapCtx.beginPath(); mapCtx.moveTo(i * CELL, 0); mapCtx.lineTo(i * CELL, mapCanvas.height); mapCtx.stroke();
-    mapCtx.beginPath(); mapCtx.moveTo(0, i * CELL); mapCtx.lineTo(mapCanvas.width, i * CELL); mapCtx.stroke();
+    mapCtx.beginPath(); mapCtx.moveTo(i * CELL, 0); mapCtx.lineTo(i * CELL, 560); mapCtx.stroke();
+    mapCtx.beginPath(); mapCtx.moveTo(0, i * CELL); mapCtx.lineTo(560, i * CELL); mapCtx.stroke();
   }
 }
 
-let mapHitTargets = []; // rebuilt every drawFrame call: [{type,x,y,r,data}]
-let selectedMarker = null; // {type:"team"|"incident", id}
-let staticEnvironment = null; // {buildings:[...], epicenter:{...}} - sent once per run, not per frame
+let mapHitTargets = []; 
+let selectedMarker = null; 
+let staticEnvironment = null; 
 
 function drawFrame(frame, skipInspector) {
-  window._lastFrame = frame; // cached so the drag overlay can redraw the base frame without waiting on the next real tick
-  mapCtx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
+  window._lastFrame = frame; 
+  mapCtx.clearRect(0, 0, 560, 560);
   drawGrid();
   mapHitTargets = [];
 
-  // buildings: static footprint outline, shaded by damage state. Drawn
-  // first as background context (per the SOC-dashboard research: mapping
-  // an event to its physical/geospatial context gives immediate
-  // understanding a text list can't) - not clickable, deliberately, to
-  // avoid competing with the actual actionable markers (teams/incidents).
   if (staticEnvironment && staticEnvironment.buildings) {
     staticEnvironment.buildings.forEach(b => {
       const w = Math.max(1, b.w) * CELL * 0.9;
       const h = Math.max(1, b.h) * CELL * 0.9;
       const damageFrac = Math.min(1, b.damage / 255);
-      // undamaged: faint gray outline. Damaged: fills in red, proportional to severity.
       mapCtx.fillStyle = damageFrac > 0.15 ? `rgba(248,81,73,${0.08 + damageFrac * 0.35})` : "rgba(139,152,165,0.06)";
       mapCtx.strokeStyle = damageFrac > 0.5 ? "rgba(248,81,73,0.55)" : "rgba(139,152,165,0.18)";
       mapCtx.lineWidth = 1;
@@ -862,11 +945,6 @@ function drawFrame(frame, skipInspector) {
     }
   }
 
-  // road/infrastructure hazard cells: subtle background tint, not
-  // individual markers - there are often hundreds of these after an
-  // earthquake, and per the "reduce cognitive strain, don't overwhelm"
-  // dashboard-design research, a density tint reads faster than a field
-  // of small icons would.
   (frame.hazard_cells || []).forEach(c => {
     if (c.blocked) {
       mapCtx.fillStyle = "rgba(248,81,73,0.28)";
@@ -878,9 +956,8 @@ function drawFrame(frame, skipInspector) {
     mapCtx.fillRect(c.x * CELL - CELL / 2, c.y * CELL - CELL / 2, CELL, CELL);
   });
 
-  // safe zones as green squares, drawn first so markers sit on top
   (frame.safezones || []).forEach(sz => {
-    if (sz.capacity === 0) return; // unused slot
+    if (sz.capacity === 0) return; 
     const half = CELL * 0.42;
     mapCtx.strokeStyle = "#3fb950";
     mapCtx.lineWidth = 1.5;
@@ -888,17 +965,13 @@ function drawFrame(frame, skipInspector) {
     mapHitTargets.push({ type: "safezone", x: sz.x, y: sz.y, r: CELL * 0.5, data: sz });
   });
 
-  // incidents as squares, color by priority, size hints victim count.
-  // ACTIVE_FIRE (type 7) and GAS_LEAK (type 6) get a distinct glyph on
-  // top - "what kind of incident is this" matters as much as "how bad"
-  // at a glance, and a uniform colored square doesn't say that.
-  const INCIDENT_ICONS = { 6: "\u2622", 7: "\uD83D\uDD25" }; // gas leak, fire
+  const INCIDENT_ICONS = { 6: "\u2622", 7: "\uD83D\uDD25" }; 
   frame.incidents.forEach(inc => {
-    if (inc.status === 3) return; // resolved, don't clutter the map
+    if (inc.status === 3) return; 
     const color = PRIORITY_COLORS[inc.priority] || "#8b98a5";
     const size = Math.min(CELL * 0.8, CELL * 0.35 + inc.victims * 0.8);
     mapCtx.fillStyle = color;
-    mapCtx.globalAlpha = inc.status === 0 ? 1 : 0.55; // dimmer once assigned/working
+    mapCtx.globalAlpha = inc.status === 0 ? 1 : 0.55; 
     mapCtx.fillRect(inc.x * CELL - size / 2, inc.y * CELL - size / 2, size, size);
     mapCtx.globalAlpha = 1;
     const icon = INCIDENT_ICONS[inc.type];
@@ -916,10 +989,8 @@ function drawFrame(frame, skipInspector) {
     mapHitTargets.push({ type: "incident", x: inc.x, y: inc.y, r: Math.max(size / 2, CELL * 0.4), data: inc });
   });
 
-  // teams as circles
   frame.teams.forEach((t, i) => {
     const color = TEAM_COLORS[i % TEAM_COLORS.length];
-    // faint line to destination, if this team is actively headed somewhere
     if (t.has_dest && (t.dest_x !== t.x || t.dest_y !== t.y)) {
       mapCtx.beginPath();
       mapCtx.moveTo(t.x * CELL, t.y * CELL);
@@ -936,14 +1007,14 @@ function drawFrame(frame, skipInspector) {
     mapCtx.arc(t.x * CELL, t.y * CELL, CELL * 0.32, 0, Math.PI * 2);
     mapCtx.fillStyle = color;
     mapCtx.fill();
-    if (t.status === 3) { // resting ring
+    if (t.status === 3) { 
       mapCtx.beginPath();
       mapCtx.arc(t.x * CELL, t.y * CELL, CELL * 0.55, 0, Math.PI * 2);
       mapCtx.strokeStyle = color;
       mapCtx.lineWidth = 1.5;
       mapCtx.stroke();
     }
-    if (t.fault_mask) { // fault indicator
+    if (t.fault_mask) { 
       mapCtx.beginPath();
       mapCtx.arc(t.x * CELL + CELL * 0.35, t.y * CELL - CELL * 0.35, 3, 0, Math.PI * 2);
       mapCtx.fillStyle = "#f85149";
@@ -1022,11 +1093,10 @@ function renderInspector() {
 
 function handleMapClick(evt) {
   const rect = mapCanvas.getBoundingClientRect();
-  const scaleX = mapCanvas.width / rect.width;
-  const scaleY = mapCanvas.height / rect.height;
+  const scaleX = 560 / rect.width;
+  const scaleY = 560 / rect.height;
   const px = (evt.clientX - rect.left) * scaleX;
   const py = (evt.clientY - rect.top) * scaleY;
-  // search topmost-drawn-first (teams were drawn last, so reverse for click priority)
   let best = null, bestDist = Infinity;
   for (const hit of mapHitTargets) {
     const dx = hit.x * CELL - px, dy = hit.y * CELL - py;
@@ -1041,25 +1111,14 @@ function handleMapClick(evt) {
   renderInspector();
 }
 
-/* ---- Drag-to-reassign override (frontend-only preview) ----
- * Deliberately scoped: this shows what a manual reassignment WOULD do -
- * it never talks to the running simulation. There is currently no input
- * channel into the live tron process (main.c's live loop only ever
- * writes to stdout), so an override can't actually be applied to a live
- * run yet - that's real, separate work (a control channel into the C
- * tick loop, plus deciding how CBBA's next allocation cycle respects an
- * operator override instead of silently reassigning over it). Building
- * that before the interaction itself existed would be backwards -
- * this is the part worth seeing and validating first.
- */
-let dragState = null; // {teamHit, startPx, startPy, curPx, curPy}
-let pendingOverride = null; // {team, from: {x,y}, to: {type,id,x,y}}
+let dragState = null; 
+let pendingOverride = null; 
 
 function mapCanvasCoords(evt) {
   const rect = mapCanvas.getBoundingClientRect();
   return {
-    px: (evt.clientX - rect.left) * (mapCanvas.width / rect.width),
-    py: (evt.clientY - rect.top) * (mapCanvas.height / rect.height),
+    px: (evt.clientX - rect.left) * (560 / rect.width),
+    py: (evt.clientY - rect.top) * (560 / rect.height),
   };
 }
 
@@ -1077,7 +1136,7 @@ function hitTestAt(px, py, typeFilter) {
 function handleMapMouseDown(evt) {
   const { px, py } = mapCanvasCoords(evt);
   const hit = hitTestAt(px, py, "team");
-  if (!hit) return; // only teams are draggable - incidents/safezones are drop targets, not sources
+  if (!hit) return; 
   dragState = { teamHit: hit, startPx: px, startPy: py, curPx: px, curPy: py };
   mapCanvas.style.cursor = "grabbing";
 }
@@ -1113,22 +1172,16 @@ function handleMapMouseUp(evt) {
 mapCanvas.addEventListener("click", handleMapClick);
 mapCanvas.addEventListener("mousedown", handleMapMouseDown);
 mapCanvas.addEventListener("mousemove", handleMapMouseMove);
-window.addEventListener("mouseup", handleMapMouseUp); // window, not canvas - catches release outside the canvas too
+window.addEventListener("mouseup", handleMapMouseUp); 
 
 function drawDragOverlay() {
-  // Redraws the last frame directly (not via drawFrame(), which would
-  // call back into this function whenever dragState is set - that
-  // mutual recursion is exactly what caused the "Maximum call stack
-  // size exceeded" error). skipInspector=true here too: the inspector
-  // is showing drag-target info in real time (handled separately below)
-  // and shouldn't be reset every mousemove.
   if (!window._lastFrame || !dragState) return;
   drawFrame(window._lastFrame, true);
 
   mapCtx.beginPath();
   mapCtx.moveTo(dragState.startPx, dragState.startPy);
   mapCtx.lineTo(dragState.curPx, dragState.curPy);
-  mapCtx.strokeStyle = "#d29922"; // matches CSS var(--warn) - same color as the override card border
+  mapCtx.strokeStyle = "#d29922"; 
   mapCtx.lineWidth = 2;
   mapCtx.setLineDash([5, 4]);
   mapCtx.stroke();
@@ -1144,11 +1197,6 @@ function drawDragOverlay() {
 }
 
 function confirmPendingOverride() {
-  // Deliberately a dead end for now - see the comment above dragState.
-  // This is where a real /api/override call would go once a live
-  // control channel into the C process exists. Shown inline in the
-  // card's own styling rather than a native alert() so it doesn't jar
-  // against the rest of the dashboard's look.
   const el = document.getElementById("mapInspector");
   el.innerHTML = `
     <div class="override-card">
@@ -1178,7 +1226,6 @@ function updateLiveTables(frame) {
   frame.teams.forEach((t, i) => {
     const tr = document.createElement("tr");
     const statusName = STATUS_NAMES[t.status] || t.status;
-    const statusCls = t.status === 3 ? "warn" : (t.status === 0 ? "" : "good");
     const lastChange = simTelemetry.par.lastChangeTick[i];
     const ticksSince = lastChange !== undefined ? frame.tick - lastChange : 0;
     const isStale = ticksSince >= simTelemetry.par.staleThreshold;
@@ -1230,7 +1277,7 @@ async function runLive() {
   liveAbortController = new AbortController();
   telemetryReset();
   let lastChartRenderMs = 0;
-  const CHART_RENDER_INTERVAL_MS = 75; // ~13Hz cap on chart re-render, per spec point 10
+  const CHART_RENDER_INTERVAL_MS = 75; 
 
   try {
     const resp = await fetch("/api/run-live", {
@@ -1256,7 +1303,7 @@ async function runLive() {
           staticEnvironment = msg.env;
         } else if (msg.type === "frame") {
           const accepted = telemetryProcessFrame(msg.frame);
-          drawFrame(msg.frame); // map stays every-frame, per spec point 10
+          drawFrame(msg.frame); 
           updateLiveTables(msg.frame);
           if (accepted) {
             const now = performance.now();
@@ -1266,7 +1313,7 @@ async function runLive() {
             }
           }
         } else if (msg.type === "done") {
-          renderLiveCharts(); // final flush so the last few ticks aren't dropped by throttling
+          renderLiveCharts(); 
           const mismatches = telemetryFinalize(msg.diag);
           renderRun({
             elapsed_seconds: msg.elapsed_seconds, returncode: 0,
@@ -1289,17 +1336,12 @@ async function runLive() {
   } finally {
     liveBtn.disabled = false;
     stopBtn.classList.add("hidden");
-    checkStatus();
   }
 }
 
 function stopLive() {
   if (liveAbortController) liveAbortController.abort();
 }
-
-drawGrid();
-checkStatus();
-loadHistory();
 </script>
 </body>
 </html>

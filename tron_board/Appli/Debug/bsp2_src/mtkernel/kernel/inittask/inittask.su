@@ -1,0 +1,3 @@
+/Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/mtkernel/kernel/inittask/inittask.c:54:10:start_system	16	static
+/Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/mtkernel/kernel/inittask/inittask.c:81:12:shutdown_system	16	static
+/Users/harushsgtemkar/Downloads/tron-4/vendor/mtk3_bsp2/mtkernel/kernel/inittask/inittask.c:110:12:init_task_main	16	static

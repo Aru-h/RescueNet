@@ -1,0 +1,8 @@
+/Users/harushsgtemkar/Downloads/tron-4/core/search_zones.c:7:6:search_zones_init	24	static
+/Users/harushsgtemkar/Downloads/tron-4/core/search_zones.c:24:9:zone_id_for_location	16	static
+/Users/harushsgtemkar/Downloads/tron-4/core/search_zones.c:34:9:search_zone_trust	32	static
+/Users/harushsgtemkar/Downloads/tron-4/core/search_zones.c:59:6:search_zone_mark_cell_covered	24	static
+/Users/harushsgtemkar/Downloads/tron-4/core/search_zones.c:79:9:search_zone_coverage_percent	40	static
+/Users/harushsgtemkar/Downloads/tron-4/core/search_zones.c:105:9:search_zone_check_cycle_completion	24	static
+/Users/harushsgtemkar/Downloads/tron-4/core/search_zones.c:143:9:search_zone_pick_next_target	32	static
+/Users/harushsgtemkar/Downloads/tron-4/core/search_zones.c:166:9:search_zone_pick_frontier_cell	64	static

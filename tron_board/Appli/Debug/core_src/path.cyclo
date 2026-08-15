@@ -1,0 +1,13 @@
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:7:16:path_in_bounds	5
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:33:6:path_cache_begin	1
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:39:6:path_cache_end	1
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:44:17:path_cache_hash	1
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:54:16:path_cache_lookup	8
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:76:13:path_cache_store	2
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:106:12:get_movement_cost	3
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:119:16:can_traverse_cell	2
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:129:17:get_heuristic	1
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:134:5:find_next_path_step_with_equipment	35
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:347:5:find_next_path_step	1
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:360:10:find_path_cost_with_equipment	2
+/Users/harushsgtemkar/Downloads/tron-4/core/path.c:382:10:find_path_cost	1
