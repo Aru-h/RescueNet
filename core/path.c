@@ -181,7 +181,7 @@ int find_next_path_step_with_equipment(
         }
     }
 
-    PathNode_t nodes[GRID_WIDTH][GRID_HEIGHT];
+    static PathNode_t nodes[GRID_WIDTH][GRID_HEIGHT];
 
     for(int x = 0; x < GRID_WIDTH; x++)
     {
@@ -193,14 +193,23 @@ int find_next_path_step_with_equipment(
             nodes[x][y].state = PATH_UNVISITED;
         }
     }
-
+    /* NOTE: g_cost is uint16_t (max 65,535). Under normal conditions this
+    * is safe -- per-cell travel_cost is clamped to <=25 by generation/
+    * hazard code, so a worst-case full-grid path (1,296 cells) tops out
+    * around 32,400. However, fault_injector.c's environment fault path
+    * (inject_environment_fault -> environment_set_cell_operational_state)
+    * adds severity on top of travel_cost and casts back to uint8_t WITHOUT
+    * re-clamping, so a cell's cost can wrap up toward 255 under active
+    * faults. Worst theoretical case: 1,296 cells x 255 = 330,480, which
+    * overflows uint16_t. Not hit in practice yet, but if path costs ever
+    * look wrong during heavy fault-injection testing, check here first. */
     nodes[start_x][start_y].g_cost = 0;
     nodes[start_x][start_y].parent_x = (uint8_t)start_x;
     nodes[start_x][start_y].parent_y = (uint8_t)start_y;
     nodes[start_x][start_y].state = PATH_OPEN;
 
-    int open_list_x[GRID_WIDTH * GRID_HEIGHT];
-    int open_list_y[GRID_WIDTH * GRID_HEIGHT];
+    static int open_list_x[GRID_WIDTH * GRID_HEIGHT];
+    static int open_list_y[GRID_WIDTH * GRID_HEIGHT];
     int open_count = 0;
 
     open_list_x[open_count] = start_x;

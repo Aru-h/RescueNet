@@ -95,12 +95,12 @@ LOCAL void sim_task(INT stacd, void *exinf);
 LOCAL ID sim_tskid;
 LOCAL T_CTSK sim_ctsk = {
     .itskpri = 10,
-    .stksz   = 8192,          /* core/ uses static globals, not stack,
+    .stksz   = 24576,          /* core/ uses static globals, not stack,
                                 * for all sim state (grid, teams,
                                 * incidents) -- this only needs to
                                 * cover call-depth locals (A* search
                                 * frames, CBBA bundle evaluation),
-                                * not sim data. 8KB is a starting
+                                * not sim data. 8KB(now added to 24kb after a stack overflow) is a starting
                                 * point; check high-water mark once
                                 * you can actually run this and tune
                                 * from there rather than guessing
