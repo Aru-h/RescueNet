@@ -14,6 +14,16 @@
 #include "scoring.h"
 
 uint32_t g_diag_incidents_resolved[NUM_TEAMS] = {0};
+uint32_t g_diag_discovered_by_type[NUM_INCIDENT_TYPES] = {0};
+uint32_t g_diag_resolved_by_type[NUM_INCIDENT_TYPES] = {0};
+uint32_t g_diag_spawned_by_type[NUM_INCIDENT_TYPES] = {0};
+uint32_t g_diag_undiscovered_at_end_by_type[NUM_INCIDENT_TYPES] = {0};
+uint32_t g_diag_search_team_ticks = 0;
+uint32_t g_diag_onscene_reveal_ticks = 0;
+uint32_t g_diag_sweep_abandoned_for_recovery = 0;
+uint32_t g_diag_sweep_reclaimed_for_safezone = 0;
+uint32_t g_diag_sweep_duplicate_while_in_progress = 0;
+uint32_t g_diag_sweep_retargets = 0;
 /* Every stage a team hands off, including intermediate multi-stage legs
    (e.g. PERIMETER->MEDICAL on a STRUCTURAL_COLLAPSE). Distinct from
    g_diag_incidents_resolved, which only counts the team that completed
@@ -316,11 +326,21 @@ void search_generate_sweep_tasks(uint32_t current_tick)
     uint16_t districts_with_task_in_flight = 0;
     uint8_t search_teams_available_for_new_task = 0;
 
+    /* A district counts as "in flight" for OPEN, ASSIGNED, *and*
+     * IN_PROGRESS sweep tasks. Originally this only checked OPEN/
+     * ASSIGNED, which left a gap the instant a team actually arrived
+     * on-scene and move_team() flipped the task to IN_PROGRESS: this
+     * function would then see "nothing in flight for this district"
+     * and hand a second Search team a brand-new task for the exact
+     * same district while the first one was still actively sweeping
+     * it - confirmed happening (g_diag_sweep_duplicate_while_in_progress)
+     * before this fix. */
     for(uint16_t i = 0; i < NUM_SYSTEM_TASKS; i++)
     {
         IncidentState_t *task = &g_system_tasks[i];
         if(task->slot_occupied && task->incident_type == INCIDENT_UNSEARCHED_SECTOR &&
-           (task->status == INC_OPEN || task->status == INC_ASSIGNED))
+           (task->status == INC_OPEN || task->status == INC_ASSIGNED ||
+            task->status == INC_IN_PROGRESS))
         {
             uint8_t district_id = zone_id_for_location(task->loc_x, task->loc_y);
             if(district_id < NUM_SEARCH_ZONES)
@@ -348,6 +368,17 @@ void search_generate_sweep_tasks(uint32_t current_tick)
         uint8_t district_id = search_zone_pick_next_target(current_tick, districts_with_task_in_flight);
         if(district_id == NO_ASSIGNMENT)
             break;  /* every district already has a task in flight */
+
+        /* Skip a district still in its post-reclaim cooldown - see
+         * ZONE_SWEEP_RECLAIM_COOLDOWN_TICKS. Excluding it and trying
+         * the next-stalest candidate (rather than just breaking) keeps
+         * other districts' sweeps flowing normally while this one
+         * waits out the cooldown. */
+        if(current_tick - g_search_zones[district_id].reclaimed_at_tick < ZONE_SWEEP_RECLAIM_COOLDOWN_TICKS)
+        {
+            districts_with_task_in_flight |= (uint16_t)(1u << district_id);
+            continue;
+        }
 
         /* Must happen BEFORE the frontier pick, not after - the frontier
          * pick needs a correct cycle_started_tick to know what's already
@@ -390,6 +421,8 @@ void search_generate_sweep_tasks(uint32_t current_tick)
         task->work_remaining = 0;  /* not worked in the usual sense - see move_team()'s arrival special-case */
 
         districts_with_task_in_flight |= (uint16_t)(1u << district_id);
+        extern uint32_t g_diag_sweep_tasks_created[NUM_SEARCH_ZONES];
+        g_diag_sweep_tasks_created[district_id]++;
     }
 }
 
@@ -449,7 +482,18 @@ void search_sweep_step(uint32_t current_tick)
             continue;
 
         uint8_t district_id = zone_id_for_location(task->loc_x, task->loc_y);
-        g_search_zones[district_id].active_sweep_ticks++;
+
+        /* Only count ticks toward the stall cap while the team is
+         * actually ON_SCENE covering ground - the header comment above
+         * says this counter should only grow "while actively sweeping,
+         * so interruptions don't count against the stall cap", but this
+         * previously incremented unconditionally, including every tick
+         * spent just traveling to the frontier cell. For a distant
+         * target that ate a large chunk of the 150-tick budget before
+         * the team ever started covering anything, making the stall
+         * timeout trigger far earlier than intended. */
+        if(team->status == STATUS_ON_SCENE)
+            g_search_zones[district_id].active_sweep_ticks++;
 
         if(search_zone_check_cycle_completion(district_id, current_tick))
         {
@@ -457,6 +501,36 @@ void search_sweep_step(uint32_t current_tick)
             team->assigned_task_pool = TASK_POOL_NONE;
             team->assigned_task_slot = NO_ASSIGNMENT;
             team->status = STATUS_AVAILABLE;
+        }
+        else if(team->status == STATUS_ON_SCENE)
+        {
+            /* Patrol: the district isn't done and this team is sitting
+             * still. The task comment upstream claims move_team()'s
+             * arrival special-case "keeps retargeting it as coverage
+             * expands" - that retargeting never actually existed
+             * anywhere in the codebase, so a team parked at its first
+             * frontier cell covered exactly one static radius circle
+             * for its entire attempt and then either genuinely finished
+             * (only possible for a district small enough to fit in one
+             * circle) or sat there wasting ticks until the stall cap
+             * released it. This is the actual retarget: once the
+             * current cell stops yielding new ground (checked via the
+             * same frontier search used to pick the very first target),
+             * walk the team to the next-nearest uncovered cell in the
+             * district instead of leaving it planted. Re-uses
+             * move_team()'s existing EN_ROUTE pathing - no new movement
+             * code needed, just point the task at a new destination and
+             * let the normal travel flow take it there. */
+            int16_t next_x, next_y;
+            if(search_zone_pick_frontier_cell(district_id, task->loc_x, task->loc_y, &next_x, &next_y) &&
+               (next_x != task->loc_x || next_y != task->loc_y))
+            {
+                task->loc_x = next_x;
+                task->loc_y = next_y;
+                team->status = STATUS_EN_ROUTE;
+                extern uint32_t g_diag_sweep_retargets;
+                g_diag_sweep_retargets++;
+            }
         }
     }
 
@@ -525,6 +599,8 @@ void search_sweep_step(uint32_t current_tick)
             if(dx * dx + dy * dy <= radius * radius)
             {
                 incident->discovered = 1;
+                extern uint32_t g_diag_discovered_by_type[NUM_INCIDENT_TYPES];
+                g_diag_discovered_by_type[incident->incident_type]++;
                 break;
             }
         }
@@ -742,6 +818,7 @@ void complete_return_to_safe_zone_task(TeamState_t *team, IncidentState_t *task)
 static void update_incident_work(IncidentState_t *incident) //incident
 {
     if(incident->status!=INC_IN_PROGRESS) return;
+    if(incident->incident_type == INCIDENT_UNSEARCHED_SECTOR) return;
     if(!is_valid_team_id(incident->assigned_team)) return;
     if(g_teams[incident->assigned_team].status!=STATUS_ON_SCENE) return;
     if(g_teams[incident->assigned_team].equipment_level == 0) return;
@@ -750,9 +827,9 @@ static void update_incident_work(IncidentState_t *incident) //incident
     g_diag_work_progress_calls++;
 
 
-    uint8_t work_rate=random_range_stream(STREAM_WORK_RATE,1,5);
+    uint8_t work_rate=random_range_stream(STREAM_WORK_RATE,WORK_RATE_MIN,WORK_RATE_MAX);
     if(is_valid_team_id(incident->support_team) && g_teams[incident->support_team].status==STATUS_ON_SCENE)
-        work_rate+=random_range_stream(STREAM_WORK_RATE,1,5);
+        work_rate+=random_range_stream(STREAM_WORK_RATE,WORK_RATE_MIN,WORK_RATE_MAX);
     if(incident->work_remaining<=work_rate)
     {
         incident->work_remaining=0;
@@ -935,6 +1012,11 @@ static void complete_task(TaskPool_t pool, IncidentState_t *task)
         extern uint32_t g_diag_incidents_resolved[NUM_TEAMS];
         g_diag_incidents_resolved[task->assigned_team]++;
     }
+    if(pool == TASK_POOL_INCIDENT)
+    {
+        extern uint32_t g_diag_resolved_by_type[NUM_INCIDENT_TYPES];
+        g_diag_resolved_by_type[task->incident_type]++;
+    }
 
     /* Log every resolved task, including system tasks. Uses task's own
      * state directly rather than snapshot_record()'s live team lookup -
@@ -1087,6 +1169,33 @@ void complete_incident_stage(IncidentState_t *incident) //incident
                 complete_task(TASK_POOL_SYSTEM, incident);
 
                 return;
+            }
+
+            /* General rescue completion (not EVACUEE_OFFBOARD, which is
+             * the separate zone->gateway outflow above): the incident's
+             * victim_count has been rescued but never had anywhere to
+             * go - deliver them to the nearest safe zone, clamped to its
+             * remaining capacity so this can't push evacuee_count past
+             * what the zone can actually hold. This is the missing
+             * inflow half of the evacuee_count pipeline; the outflow
+             * half (safe zone -> gateway) already existed above. */
+            {
+                uint8_t safezone_id =
+                    find_nearest_safe_zone(&g_teams[incident->assigned_team]);
+
+                if(safezone_id != NO_SAFE_ZONE)
+                {
+                    SafeZone_t *safezone = &g_safezones[safezone_id];
+                    uint8_t room =
+                        (safezone->capacity > safezone->evacuee_count)
+                            ? (uint8_t)(safezone->capacity - safezone->evacuee_count)
+                            : 0u;
+                    uint8_t delivered =
+                        (incident->victim_count < room) ? incident->victim_count : room;
+
+                    safezone->evacuee_count =
+                        (uint8_t)(safezone->evacuee_count + delivered);
+                }
             }
 
             complete_task(TASK_POOL_INCIDENT, incident);
@@ -1391,6 +1500,21 @@ static IncidentState_t *find_reclaimable_system_task_slot(void)
            task->incident_type == INCIDENT_UNSEARCHED_SECTOR &&
            task->status == INC_OPEN)
         {
+            extern uint32_t g_diag_sweep_reclaimed_for_safezone;
+            g_diag_sweep_reclaimed_for_safezone++;
+
+            /* Start this district's reclaim cooldown before clearing
+             * the task - clear_task_slot() doesn't touch loc_x/loc_y,
+             * but read it here for clarity/safety rather than relying
+             * on that. Without this cooldown, search_generate_sweep_
+             * tasks() just re-nominates the same still-stalest
+             * district on its very next call and gets evicted again,
+             * every tick, for as long as the safe-zone pressure lasts -
+             * see ZONE_SWEEP_RECLAIM_COOLDOWN_TICKS. */
+            uint8_t district_id = zone_id_for_location(task->loc_x, task->loc_y);
+            if(district_id < NUM_SEARCH_ZONES)
+                g_search_zones[district_id].reclaimed_at_tick = g_current_tick;
+
             clear_task_slot(TASK_POOL_SYSTEM, task);
             task->slot_occupied = 1;
             return task;
@@ -1731,6 +1855,8 @@ static int generate_incident_at(IncidentType_t type, int16_t loc_x, int16_t loc_
     incident->discovered = 0;  /* fog-of-war: hidden until Search/other teams' radius finds it */
     populate_generated_incident_model(incident);
     apply_incident_grid_degradation(incident);
+    extern uint32_t g_diag_spawned_by_type[NUM_INCIDENT_TYPES];
+    g_diag_spawned_by_type[type]++;
     return 1;
 }
 
@@ -2032,6 +2158,11 @@ void abandon_task_for_recovery(TeamState_t *team)
     {
         task->assigned_team = NO_ASSIGNMENT;
         task->status = INC_OPEN;
+        if(task->incident_type == INCIDENT_UNSEARCHED_SECTOR)
+        {
+            extern uint32_t g_diag_sweep_abandoned_for_recovery;
+            g_diag_sweep_abandoned_for_recovery++;
+        }
     }
     else if(task->support_team == team->team_id)
     {
@@ -2047,4 +2178,3 @@ void abandon_task_for_recovery(TeamState_t *team)
         team_set_available(team);
     }
 }
-

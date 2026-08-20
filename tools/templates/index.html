@@ -235,7 +235,13 @@
       <div class="tab-content" id="tab-live">
         <div class="grid2" style="align-items:start;">
           <div class="panel">
-            <h2>Region Map (36×36)</h2>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+              <h2 style="margin:0;">Region Map (36×36)</h2>
+              <button type="button" id="fogToggleBtn" onclick="toggleFogView()"
+                      style="background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:5px 10px;font-size:11.5px;cursor:pointer;">
+                🔍 God mode (all tasks visible)
+              </button>
+            </div>
             <div id="liveTickLabel" class="sub" style="color:var(--muted);font-size:12px;margin-bottom:8px;">no run yet</div>
             <canvas id="mapCanvas" width="560" height="560" style="width:100%;max-width:560px;background:#05080c;border-radius:6px;cursor:pointer;"></canvas>
             <div id="mapInspector" style="margin-top:10px;padding:10px 12px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-size:12.5px;line-height:1.7;min-height:20px;">
@@ -456,6 +462,29 @@ if (typeof Chart === "undefined") {
 }
 
 function destroyChart(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
+// Fog-of-war view toggle: "god" shows every task regardless of discovery
+// state (useful for debugging/testing), "operator" hides anything the
+// system itself hasn't discovered yet, matching what a real operator
+// would see. Defaults to god mode since that's the more useful default
+// while testing.
+let fogViewMode = "god"; // "god" | "operator"
+function toggleFogView() {
+  fogViewMode = (fogViewMode === "god") ? "operator" : "god";
+  const btn = document.getElementById("fogToggleBtn");
+  if (fogViewMode === "operator") {
+    btn.textContent = "🕶️ Operator view (undiscovered hidden)";
+    btn.style.background = "#1f6feb";
+    btn.style.borderColor = "#388bfd";
+  } else {
+    btn.textContent = "🔍 God mode (all tasks visible)";
+    btn.style.background = "#21262d";
+    btn.style.borderColor = "#30363d";
+  }
+  // Redraw immediately with the last frame rather than waiting for the
+  // next tick, so toggling feels instant.
+  if (window._lastFrame) drawFrame(window._lastFrame, true);
+}
 
 function createSimulationTelemetry() {
   return {
@@ -968,6 +997,14 @@ function drawFrame(frame, skipInspector) {
   const INCIDENT_ICONS = { 6: "\u2622", 7: "\uD83D\uDD25" }; 
   frame.incidents.forEach(inc => {
     if (inc.status === 3) return; 
+    // Operator view: hide anything the system itself hasn't discovered
+    // yet (mirrors team_can_accept_incident()'s fog-of-war gate in the
+    // allocator - an operator watching this board in real life would
+    // have no way to see a task before some team's sweep/on-scene radius
+    // reveals it). "discovered" defaults to 1 for tasks that were never
+    // part of fog-of-war (system tasks), so this only ever hides real
+    // undiscovered incidents.
+    if (fogViewMode === "operator" && inc.discovered === 0) return;
     const color = PRIORITY_COLORS[inc.priority] || "#8b98a5";
     const size = Math.min(CELL * 0.8, CELL * 0.35 + inc.victims * 0.8);
     mapCtx.fillStyle = color;
@@ -1050,7 +1087,7 @@ function renderInspector() {
         <div style="font-size:11.5px;color:var(--muted);">
           (${p.from.x}, ${p.from.y}) &nbsp;→&nbsp; (${p.to.x}, ${p.to.y})
         </div>
-        <div class="override-note">Not yet sent to the simulation — there's no live control channel into a running run yet.</div>
+        <div class="override-note">Requires a connected, ready board (USART1) - confirming sends this straight to the board's mission-link layer.</div>
         <div class="override-actions">
           <button id="overrideConfirmBtn" class="override-btn confirm">Confirm</button>
           <button id="overrideCancelBtn" class="override-btn cancel">Cancel</button>
@@ -1198,19 +1235,65 @@ function drawDragOverlay() {
 
 function confirmPendingOverride() {
   const el = document.getElementById("mapInspector");
+  const p = pendingOverride;
+  if (!p) return;
+
+  const teamId = p.team.id;
+  const incidentId = p.to.id;
+
+  // Show a "sending" state immediately - fetch() below is
+  // asynchronous, and the previous stub's "was shown, not sent"
+  // message is exactly what this replaces: a real POST to the route
+  // core/mission_link_override.h's pipeline doc describes (step 1-2),
+  // which packs a MissionLinkOverride_t and writes it to the board's
+  // USART1 line - see tools/app.py's /api/board/override.
   el.innerHTML = `
     <div class="override-card">
-      <div class="override-title">⚠ Preview Only</div>
-      <div style="font-size:12.5px;">This dashboard doesn't yet have a live control channel into a running simulation — this override was shown, not sent.</div>
-      <div class="override-actions" style="margin-top:10px;">
-        <button id="overrideAckBtn" class="override-btn cancel">OK</button>
-      </div>
+      <div class="override-title">Sending override…</div>
+      <div style="font-size:12.5px;color:var(--muted);">Team ${teamId} → Incident ${incidentId}</div>
     </div>`;
-  document.getElementById("overrideAckBtn").addEventListener("click", () => {
-    pendingOverride = null;
-    selectedMarker = null;
-    renderInspector();
-  });
+
+  fetch("/api/board/override", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ team_id: teamId, incident_id: incidentId }),
+  })
+    .then((resp) => resp.json().then((body) => ({ ok: resp.ok, body })))
+    .then(({ ok, body }) => {
+      const title = ok ? "✓ Override Sent" : "⚠ Override Failed";
+      const detail = ok
+        ? `Team ${teamId} → Incident ${incidentId} sent to the board. It'll show up in ` +
+          `<code>g_incidents[].assigned_team</code> on the next tick once the board applies it.`
+        : (body && body.message) || "Unknown error";
+      el.innerHTML = `
+        <div class="override-card">
+          <div class="override-title">${title}</div>
+          <div style="font-size:12.5px;">${detail}</div>
+          <div class="override-actions" style="margin-top:10px;">
+            <button id="overrideAckBtn" class="override-btn cancel">OK</button>
+          </div>
+        </div>`;
+      document.getElementById("overrideAckBtn").addEventListener("click", () => {
+        pendingOverride = null;
+        selectedMarker = null;
+        renderInspector();
+      });
+    })
+    .catch((err) => {
+      el.innerHTML = `
+        <div class="override-card">
+          <div class="override-title">⚠ Override Failed</div>
+          <div style="font-size:12.5px;">Request error: ${err}</div>
+          <div class="override-actions" style="margin-top:10px;">
+            <button id="overrideAckBtn" class="override-btn cancel">OK</button>
+          </div>
+        </div>`;
+      document.getElementById("overrideAckBtn").addEventListener("click", () => {
+        pendingOverride = null;
+        selectedMarker = null;
+        renderInspector();
+      });
+    });
 }
 
 function cancelPendingOverride() {
@@ -1243,7 +1326,8 @@ function updateLiveTables(frame) {
     tbody.appendChild(tr);
   });
 
-  const activeIncidents = frame.incidents.filter(inc => inc.status !== 3);
+  const activeIncidents = frame.incidents.filter(inc =>
+    inc.status !== 3 && !(fogViewMode === "operator" && inc.discovered === 0));
   document.getElementById("liveIncidentCount").textContent = activeIncidents.length;
   const itbody = document.querySelector("#liveIncidentTable tbody");
   itbody.innerHTML = "";

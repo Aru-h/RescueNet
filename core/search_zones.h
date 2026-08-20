@@ -41,6 +41,14 @@
  * real room for frontier-based inefficiency before calling it stalled. */
 #define ZONE_SWEEP_ACTIVE_TICK_CAP 150
 
+/* Cooldown after a sweep task for a district gets reclaimed for a
+ * higher-priority safe-zone/equipment task, before that district is
+ * eligible to be nominated for a new sweep task again. Short relative
+ * to ZONE_TRUST_DECAY_CAP_TICKS - just long enough to let the pool
+ * pressure that caused the eviction clear, not so long it meaningfully
+ * delays a real sweep. */
+#define ZONE_SWEEP_RECLAIM_COOLDOWN_TICKS 30
+
 /* Search's continuous full-radius sweep. Other teams use a smaller
  * radius, only while ON_SCENE - see the reveal-writer functions. */
 #define SEARCH_SWEEP_RADIUS 3
@@ -65,6 +73,17 @@ typedef struct {
     uint32_t cycle_started_tick;
     uint16_t covered_cells;
     uint16_t active_sweep_ticks;
+
+    /* Tick a sweep task for this district was last evicted by
+     * find_reclaimable_system_task_slot() to free a slot for a
+     * higher-priority RETURN_TO_SAFE_ZONE/EQUIPMENT_CACHE task. Without
+     * this, the generator immediately re-nominates the same district
+     * (it's still the stalest) the very next tick, that task gets
+     * evicted again if the pool pressure hasn't let up, and the pair
+     * repeats every tick - a tight create/evict thrash loop that never
+     * makes progress and shows up on the dashboard as a task
+     * flickering in and out of existence. */
+    uint32_t reclaimed_at_tick;
 } SearchZoneState_t;
 
 extern SearchZoneState_t g_search_zones[NUM_SEARCH_ZONES];

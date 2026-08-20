@@ -3,6 +3,10 @@
 
 SearchZoneState_t g_search_zones[NUM_SEARCH_ZONES];
 uint32_t g_cell_last_covered_tick[GRID_WIDTH][GRID_HEIGHT];
+uint32_t g_diag_sweep_genuine_complete[NUM_SEARCH_ZONES] = {0};
+uint32_t g_diag_sweep_stalled[NUM_SEARCH_ZONES] = {0};
+uint32_t g_diag_sweep_stall_coverage_sum[NUM_SEARCH_ZONES] = {0};
+uint32_t g_diag_sweep_tasks_created[NUM_SEARCH_ZONES] = {0};
 
 void search_zones_init(void)
 {
@@ -14,6 +18,7 @@ void search_zones_init(void)
         g_search_zones[i].cycle_started_tick = 0;
         g_search_zones[i].covered_cells = 0;
         g_search_zones[i].active_sweep_ticks = 0;
+        g_search_zones[i].reclaimed_at_tick = 0;
     }
 
     for(int x = 0; x < GRID_WIDTH; x++)
@@ -102,6 +107,10 @@ uint8_t search_zone_coverage_percent(uint8_t district_id)
     return (uint8_t)((covered * 100u) / navigable_total);
 }
 
+extern uint32_t g_diag_sweep_genuine_complete[NUM_SEARCH_ZONES];
+extern uint32_t g_diag_sweep_stalled[NUM_SEARCH_ZONES];
+extern uint32_t g_diag_sweep_stall_coverage_sum[NUM_SEARCH_ZONES];
+
 uint8_t search_zone_check_cycle_completion(uint8_t district_id, uint32_t current_tick)
 {
     if(district_id >= NUM_SEARCH_ZONES)
@@ -113,6 +122,7 @@ uint8_t search_zone_check_cycle_completion(uint8_t district_id, uint32_t current
     if(coverage >= ZONE_SWEEP_COMPLETION_FLOOR_PERCENT)
     {
         /* Genuine completion. */
+        g_diag_sweep_genuine_complete[district_id]++;
         zone->last_swept_tick = current_tick;
         zone->sweep_count++;
         zone->aftershock_hits_since_swept = 0;
@@ -124,6 +134,8 @@ uint8_t search_zone_check_cycle_completion(uint8_t district_id, uint32_t current
 
     if(zone->active_sweep_ticks >= ZONE_SWEEP_ACTIVE_TICK_CAP)
     {
+        g_diag_sweep_stalled[district_id]++;
+        g_diag_sweep_stall_coverage_sum[district_id] += coverage;
         /* Stalled, not completed. covered_cells and last_swept_tick
          * are left exactly as they are - progress carries over and
          * the district stays a legitimate stale candidate. Only the

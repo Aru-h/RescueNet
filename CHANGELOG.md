@@ -292,3 +292,166 @@ those fixes; layered in what was genuinely new on the other side.
 
 - Built the simulator with `gcc -std=c11 -Wall -Wextra -Wpedantic`.
 - Ran a seeded smoke simulation with `./tron 1 1 200`.
+
+
+20th August 2026
+Merge summary
+=============
+You uploaded files-2.zip containing 9 files from a separate branch of work
+(diagnostics/tracing flags, a fog-of-war "god/operator view" toggle, a
+sweep-task anti-thrash cooldown, and a real capability-matrix bug fix).
+I diffed every one of them against what I'd already built and merged as
+follows:
+
+TRUE MERGES (both sides had changes to reconcile)
+--------------------------------------------------
+tools__app.py
+  - Kept: my handshake gating (/api/status, /api/board/launch,
+    /api/board/continue-without-nucleo) and the override route
+    (/api/board/override) from this chat.
+  - Added: the "--trace" "--diag" CLI flags to both subprocess launch
+    points (/api/run and /api/run-live), which is the only real content
+    their branch's app.py had (everything else in their version was just
+    a pre-handshake baseline, not an intentional removal).
+
+tools_templates__index.html
+  - Kept: my real confirmPendingOverride() fetch() implementation.
+  - Added: their fog-of-war "god mode / operator view" toggle (button,
+    toggleFogView(), and the two incident-filtering call sites) - this
+    only works together with the "discovered" field debug.c now emits
+    (see below), so both had to come over together.
+
+ADOPTED AS-IS (files I never touched - no merge needed, just verified
+they don't conflict with anything I built: no shared-struct changes to
+CBBAAgentState_t/TeamState_t/IncidentState_t, no mission_link/comms_
+transport touches)
+-----------------------------------------------------------------------
+platform_laptop__debug.c   -> platform/laptop/debug.c
+  Adds "discovered" to the JSON incident/system-task output - required
+  by index.html's fog-of-war toggle.
+
+platform_laptop__main.c    -> platform/laptop/main.c
+  New --trace / --diag CLI flags (gates g_simulation_trace_enabled and
+  the end-of-run [DIAG ...] stderr summary, both off by default).
+
+core__scoring.c            -> core/scoring.c
+  Fixes a real bug: CAPABILITY_MATRIX's row/column order didn't match
+  the actual Specialization_t enum (SEARCH=0, MEDICAL=1, ...) - Search
+  and Medical had swapped data. Re-derived from the original intended
+  semantics, not new numbers.
+
+core__simulation.c         -> core/simulation.c
+core__search_zones.h       -> core/search_zones.h
+core__search_zones.c       -> core/search_zones.c
+core__incident.c           -> core/incident.c
+  Diagnostic counters (g_diag_discovered_by_type etc.) and a new
+  ZONE_SWEEP_RECLAIM_COOLDOWN_TICKS / reclaimed_at_tick field on
+  SearchZoneState_t to stop a create/evict thrash loop.
+
+Verification performed after merging
+-------------------------------------
+- Full laptop build: clean, no errors.
+- All core/board files that touch mission-link work re-checked with
+  host gcc against the real BSP headers (-fsyntax-only): clean.
+- All 5 standalone test suites re-run against the merged sources:
+  handshake_selftest.c, mission_link_selftest.c, lora_frame_selftest.c,
+  override_selftest.c (rebuilt against the merged core/scoring.c,
+  core/incident.c etc.), handshake_selftest.py, telemetry_bridge_
+  selftest.py - all pass.
+- index.html's merged JS re-parsed for syntax errors: clean, both
+  features (override fetch + fog toggle) confirmed present.
+- A real ./tron run with --trace --diag confirmed the new flags actually
+  produce output.
+
+Filenames below use "__" in place of "/" - map back to the real path
+using the arrow.
+
+NEW FILES (from this chat, unaffected by the merge)
+-----------------------------------------------------
+core__mission_link_codec.h          -> core/mission_link_codec.h
+core__mission_link.c                -> core/mission_link.c
+platform_board__mission_link_task.c -> platform/board/mission_link_task.c
+tools__mission_link_selftest.c      -> tools/mission_link_selftest.c
+core__mission_link_handshake.h      -> core/mission_link_handshake.h
+core__mission_link_handshake.c      -> core/mission_link_handshake.c
+tools__handshake_selftest.c         -> tools/handshake_selftest.c
+tools__handshake_selftest.py        -> tools/handshake_selftest.py
+tools__override_selftest.c          -> tools/override_selftest.c
+tools__telemetry_bridge.py          -> tools/telemetry_bridge.py
+
+MERGED FILES (see above)
+---------------------------
+tools__app.py                       -> tools/app.py
+tools_templates__index.html         -> tools/templates/index.html
+
+EDITED (Makefile only, unrelated to this merge)
+--------------------------------------------------
+Makefile                            -> Makefile
+
+ADOPTED AS-IS FROM files-2.zip (see above)
+---------------------------------------------
+platform_laptop__debug.c            -> platform/laptop/debug.c
+platform_laptop__main.c             -> platform/laptop/main.c
+core__scoring.c                     -> core/scoring.c
+core__simulation.c                  -> core/simulation.c
+core__search_zones.h                -> core/search_zones.h
+core__search_zones.c                -> core/search_zones.c
+core__incident.c                    -> core/incident.c
+
+NOT included (already correct, never touched by me or files-2.zip):
+core/mission_link.h, core/mission_link_override.h, core/mission_link_
+override.c, core/mission_state.h, core/cbba.c,
+core/WIRE_PROTOCOL_MAGIC_BYTES.md.
+
+
+Second upload (files.zip) - genuine merge conflict
+=====================================================
+This one was the real thing: files.zip contained core/mission_state.h and
+core/incident.c from a branch that ALSO started before the override work
+landed on CBBAAgentState_t - exactly the collision the original override
+prompt's own coordination note warned about ("if another change also adds
+a field here around the same time, reconcile field order explicitly
+rather than letting one silently clobber the other").
+
+Their mission_state.h had two genuine, unrelated additions:
+  - WORK_RATE_MIN/WORK_RATE_MAX (1-8, replacing a hardcoded 1-5) - a
+    tuned constant with a detailed sensitivity-sweep justification
+    comment (cuts total task volume 39%, safe-zone fallback failures 91%)
+  - NUM_SYSTEM_TASKS bumped 10 -> 20
+
+...but their version of the file had DROPPED the override_active /
+override_incident_id fields and the _Static_assert entirely - not an
+intentional removal, just an artifact of branching before those existed.
+Taking their file as-is would have silently broken core/cbba.c's
+cbba_apply_override_pin() and core/mission_link_override.c's apply
+function (both reference those fields directly) - compile failure, not
+a subtle bug, but still exactly the kind of clobber the coordination
+note was trying to prevent.
+
+Merge performed: took their file as the base (their tuning work is real
+and correct), re-inserted the override_active/override_incident_id
+fields and _Static_assert in the same place as before, added a "MERGE
+NOTE" explaining why, and re-ran the sizeof() probe rather than assuming
+the old 216-byte number still held (it does - neither of their changes
+affects this struct's layout: WORK_RATE_MIN/MAX are plain #defines,
+NUM_SYSTEM_TASKS only sizes an unrelated array).
+
+incident.c's one change (hardcoded 1,5 -> WORK_RATE_MIN/WORK_RATE_MAX)
+depends on mission_state.h's new constants and had no other conflicts -
+adopted as-is.
+
+Verified NUM_SYSTEM_TASKS=20 doesn't break anything: grepped every call
+site across the codebase (debug.c, allocator.c, cbba.c, team.c,
+incident.c, recovery_manager.c, mission_execution_twin.c,
+test_metrics.c) - every one already uses the macro, not a hardcoded 10,
+so the array simply got bigger with no code changes needed.
+
+Re-ran the full verification pass after this merge, override_selftest.c
+in particular (the test most directly dependent on the re-merged
+fields): full build clean, board syntax checks clean, all 5 standalone
+test suites pass, and a live smoke run confirms NUM_SYSTEM_TASKS=20 is
+in effect (system task slot IDs now go past 10).
+
+core__mission_state.h               -> core/mission_state.h  (merged)
+core__incident.c                    -> core/incident.c        (updated,
+                                        replaces the earlier core__incident.c)

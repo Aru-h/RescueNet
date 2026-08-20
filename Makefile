@@ -79,7 +79,7 @@ BOARD_OBJ_DIR = build/board-check
 ifneq ($(wildcard $(BSP_DIR)/include),)
   ARM_CFLAGS = $(ARM_CFLAGS_BASE) -D_STM32CUBE_DISCOVERY_N657_ \
 	-I$(BSP_DIR)/config -I$(BSP_DIR)/include -I$(BSP_DIR)
-  BOARD_SOURCES = $(CORE_SOURCES) $(BOARD_DIR)/debug.c $(BOARD_DIR)/snapshot.c $(BOARD_DIR)/main_board.c
+  BOARD_SOURCES = $(CORE_SOURCES) $(BOARD_DIR)/debug.c $(BOARD_DIR)/snapshot.c $(BOARD_DIR)/main_board.c $(BOARD_DIR)/mission_link_task.c
   BSP_MODE = real BSP2 headers ($(BSP_DIR))
 else
   ARM_CFLAGS = $(ARM_CFLAGS_BASE)

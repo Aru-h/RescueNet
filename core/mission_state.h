@@ -103,6 +103,27 @@ typedef enum {
 #define STAMINA_TRAVEL_COST     0.110f
 #define STAMINA_OPERATION_COST  0.330f
 
+/* Per-tick incident work-rate range. Was 1-5, matched almost exactly to
+ * EQUIPMENT_DRAIN_MAX (team.c) at the same 1-5/tick range, which meant an
+ * average task (work_remaining=100) and average equipment supply (100)
+ * both ran out in ~33 ticks - close enough to a coin flip whether a team
+ * finished a task or got yanked home for equipment exhaustion first. That
+ * collision was the single largest driver of total task volume: sensitivity
+ * sweep (20 seeds x 3000 ticks per candidate) showed RETURN_TO_SAFE_ZONE
+ * system tasks were 92% of all tasks ever created at 1-5, dropping to 89%
+ * and cutting total task volume 39% (13598->8359) and safe-zone-slot
+ * fallback failures 91% (9475->827) at 1-8, while also resolving *more*
+ * organic incidents than the 1-5 baseline (167 vs 158) - the only
+ * candidate range tested that improved both volume and throughput at
+ * once. Equipment-side alternatives (slowing EQUIPMENT_DRAIN_MAX instead)
+ * cut volume as much or more but resolved fewer incidents in most runs,
+ * likely because busier teams register as less "available" to
+ * calculate_generation_probability() and throttle down how much work gets
+ * generated in the first place - so raising work rate was chosen over
+ * slowing equipment drain. */
+#define WORK_RATE_MIN            1
+#define WORK_RATE_MAX            8
+
 /* NFPA 1584 (Standard on the Rehabilitation Process for Members During
  * Emergency Operations) draws a hard line between a brief, informal
  * self-rehab after a single work cycle (>=10 min rest/hydration, no formal
@@ -141,7 +162,7 @@ typedef enum {
 #define NUM_TEAMS     10
 #define MIN_NUM_INCIDENTS 4
 #define NUM_INCIDENTS 20
-#define NUM_SYSTEM_TASKS 10
+#define NUM_SYSTEM_TASKS 20
 #define CBBA_MAX_BUNDLE_SIZE 3
 #define CBBA_COMMITMENT_LIMIT 3
 #define MIN_SAFE_ZONES 2
@@ -331,7 +352,73 @@ typedef struct
     uint32_t timestamp[NUM_TEAMS];
     uint8_t winner[NUM_INCIDENTS];
     float winning_bid[NUM_INCIDENTS];
+    /* Manual dashboard override pin (core/mission_link_override.h) -
+     * NOT touched by cbba_init()'s per-tick reset (deliberately: a
+     * pin is a standing operator directive that must survive across
+     * ticks until the incident it targets is no longer INC_OPEN, not
+     * a per-round bidding artifact). See core/cbba.c's
+     * cbba_build_bundle() for where these are read: force-injected
+     * ahead of normal marginal-bid competition for the owning team,
+     * and excluded from every OTHER team's bidding entirely, so a
+     * forced assignment can't be silently re-bid-away next round.
+     *
+     * COORDINATION NOTE: this field pair was added to the END of
+     * CBBAAgentState_t specifically (not inserted between existing
+     * fields) to minimize collision risk with any concurrent edit to
+     * this same struct's neighboring code. If another change also
+     * adds a field here around the same time, reconcile field order
+     * explicitly rather than letting one silently clobber the other -
+     * both this struct's size (see the _Static_assert two lines
+     * below the struct) and every fixed-offset assumption elsewhere
+     * in this codebase (there should be none - packed offset
+     * assumptions on a non-wire, RAM-only struct like this one would
+     * themselves be a bug - but re-check before assuming that holds).
+     *
+     * MERGE NOTE (re-applied after this struct's surrounding tuning
+     * work - WORK_RATE_MIN/MAX, NUM_SYSTEM_TASKS=20 - landed from a
+     * branch that started before these two fields existed and so
+     * dropped them; see the incoming diff that triggered this note):
+     * neither of those changes touches this struct's layout (WORK_
+     * RATE_MIN/MAX are plain #defines, NUM_SYSTEM_TASKS only sizes an
+     * unrelated array elsewhere), so the size re-probe below is
+     * expected to land back on the same 216 bytes it did the first
+     * time - confirmed, not assumed, by re-running the same host
+     * gcc probe after this merge (see that probe's own caveat below
+     * about this still not being the real Cortex-M55 target).
+     */
+    uint8_t override_active;       /* 1 = override_incident_id below is a live pin */
+    uint32_t override_incident_id; /* valid only when override_active */
 } CBBAAgentState_t;
+
+/* Size re-verified after adding override_active/override_incident_id
+ * above, per this project's own rule for any struct-size change (see
+ * core/lora_frame.h's CBBAMessage_t note for the precedent this
+ * follows): NOT hand-calculated and NOT assumed free. Measured via a
+ * host x86-64 gcc probe (`sizeof(CBBAAgentState_t)`): 208 bytes
+ * before this change, 216 after - the two new fields cost 8 bytes,
+ * not the 5 (1 + 4) a naive "just one small field" assumption would
+ * expect, because a uint8_t immediately followed by a uint32_t forces
+ * 3 bytes of alignment padding between them on a 4-byte-aligned
+ * struct (this struct is NOT __attribute__((packed)) - it is
+ * RAM-only, never put on a wire, so natural alignment is correct and
+ * intended here, unlike the packed wire-format structs elsewhere in
+ * this project).
+ *
+ * Caveat, stated plainly rather than silently assumed: this specific
+ * probe ran on x86-64, not the real Cortex-M55 target - no
+ * arm-none-eabi-gcc toolchain was available in the environment this
+ * change was made in. uint8_t/uint32_t/float alignment rules are
+ * standard EABI behavior expected to match between the two (no
+ * 8-byte-aligned type like double/int64_t is present here, which is
+ * where x86-64 SysV and ARM EABI padding rules can actually diverge),
+ * but per this project's established process this _Static_assert
+ * should be treated as "expected to hold on the real target" rather
+ * than "confirmed on the real target" until someone with the actual
+ * toolchain re-runs this probe on real hardware. */
+_Static_assert(sizeof(CBBAAgentState_t) == 216u,
+               "CBBAAgentState_t size changed - re-verify padding assumptions "
+               "(see the comment immediately above this assert), including on "
+               "the real Cortex-M55 target, before trusting this number");
 
 typedef enum
 {

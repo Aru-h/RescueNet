@@ -68,6 +68,7 @@ void simulation_step(void) //simulation
     generate_incidents_if_needed();
     update_all_teams();
     move_all_teams();
+    search_sweep_step(g_current_tick);
     update_all_incident_work();
     update_all_passive_effects();
     mission_execution_twin_step();
@@ -97,14 +98,23 @@ void simulation_step(void) //simulation
          * Read AFTER recovery_dispatch() runs, not before, since dispatch
          * is what actually applies status changes like RESTING for this
          * tick - reading status earlier in this loop would miss them
-         * until the following tick. */
+         * until the following tick.
+         *
+         * Gated behind g_simulation_trace_enabled (off by default via
+         * sim_runner_init()) so a plain `./tron` run stays silent while
+         * it's actually running - previously this printed unconditionally
+         * on every status change, which flooded a terminal running the
+         * binary directly. app.py passes --trace when it launches the
+         * binary for the dashboard, so the Recovery/Rest tab keeps
+         * getting this data; only bare CLI usage goes quiet. */
         uint8_t status_now = g_teams[team_id].status;
         if(status_now != g_diag_prev_status[team_id])
         {
-            debug_trace(
-                "[DIAG] tick=%u team=%u status %u->%u stamina=%.2f hours=%u\n",
-                g_current_tick, team_id, g_diag_prev_status[team_id], status_now,
-                g_teams[team_id].stamina, g_teams[team_id].hours_worked);
+            if(g_simulation_trace_enabled)
+                debug_trace(
+                    "[DIAG] tick=%u team=%u status %u->%u stamina=%.2f hours=%u\n",
+                    g_current_tick, team_id, g_diag_prev_status[team_id], status_now,
+                    g_teams[team_id].stamina, g_teams[team_id].hours_worked);
 
             if(status_now == STATUS_RESTING)
             {
@@ -113,11 +123,12 @@ void simulation_step(void) //simulation
             }
             else if(g_diag_prev_status[team_id] == STATUS_RESTING)
             {
-                debug_trace(
-                    "[DIAG] tick=%u team=%u RESTED ticks=%u stamina %.2f->%.2f\n",
-                    g_current_tick, team_id,
-                    g_current_tick - g_diag_rest_start_tick[team_id],
-                    g_diag_rest_start_stamina[team_id], g_teams[team_id].stamina);
+                if(g_simulation_trace_enabled)
+                    debug_trace(
+                        "[DIAG] tick=%u team=%u RESTED ticks=%u stamina %.2f->%.2f\n",
+                        g_current_tick, team_id,
+                        g_current_tick - g_diag_rest_start_tick[team_id],
+                        g_diag_rest_start_stamina[team_id], g_teams[team_id].stamina);
             }
 
             g_diag_prev_status[team_id] = status_now;

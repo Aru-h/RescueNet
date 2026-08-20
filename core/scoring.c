@@ -376,12 +376,21 @@ void scoring_reset_weights(void)
 }
 
 static const float CAPABILITY_MATRIX[5][5] = {
-/*              MED    SRCH   EXTR   PERIM  SUPP  */
-/* Medical   */ {1.00, 0.45,  0.15,  0.30,  0.60},
-/* Search    */ {0.35, 1.00,  0.70,  0.60,  0.50},
-/* Extraction*/ {0.25, 0.55,  1.00,  0.45,  0.50},
-/* Perimeter */ {0.30, 0.40,  0.45,  1.00,  0.75},
-/* Support   */ {0.60, 0.50,  0.55,  0.70,  1.00},
+/* Row/column order corrected to match the real Specialization_t enum
+   (SEARCH=0, MEDICAL=1, EXTRACTION=2, PERIMETER=3, SUPPORT=4) - the
+   previous version's comment labels (MED, SRCH, EXTR, PERIM, SUPP)
+   did not match this order, so indices 0 and 1 held each other's
+   intended data. Only Search/Medical were affected: Extraction,
+   Perimeter, and Support were already at their correct real-index
+   position, so their rows/columns are unchanged here - every value
+   below is re-derived from the original intended semantics (row0<->
+   row1 and col0<->col1 swapped), not newly chosen. */
+/*              SRCH   MED    EXTR   PERIM  SUPP  */
+/* Search    */ {1.00, 0.35,  0.70,  0.60,  0.50},
+/* Medical   */ {0.45, 1.00,  0.15,  0.30,  0.60},
+/* Extraction*/ {0.55, 0.25,  1.00,  0.45,  0.50},
+/* Perimeter */ {0.40, 0.30,  0.45,  1.00,  0.75},
+/* Support   */ {0.50, 0.60,  0.55,  0.70,  1.00},
 };
 
 static float path_distance_score(

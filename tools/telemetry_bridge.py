@@ -6,7 +6,13 @@ This module acts as the host-side counterpart to platform/board/main_board.c
 and platform/board/snapshot.c. It opens the designated USB Virtual COM port
 connected to the STM32N6570-DK board, spawns a background thread to safely
 consume the incoming byte stream without blocking the UI event loop, and handles:
-  1. Parsing board node `READY` handshake notifications (plain text).
+  1. The mission-link liveness handshake (core/mission_link_handshake.h) -
+     sending MissionLinkHandshakeReq_t to DK, decoding
+     MissionLinkHandshakeReply_t for both board_id 0 (DK) and board_id 1
+     (NUCLEO, relayed through DK) - see HandshakeCoordinator below. This is
+     what the old plain-text `READY` line parsing has been replaced with;
+     see that class's docstring for why a text-based liveness signal wasn't
+     good enough on its own.
   2. Decoding incoming live telemetry frames into a thread-safe queue for
      real-time dashboard visualization.
   3. Transmitting explicit binary/text command packets (e.g., `START`) down
@@ -15,22 +21,27 @@ consume the incoming byte stream without blocking the UI event loop, and handles
 Wire format
 -----------
 USART1 is a single shared line: platform/board/snapshot.c's ring drain writes
-binary telemetry frames on it, and free-running tm_printf debug text from the
-rest of the firmware can appear on it at any time, interleaved at arbitrary
-byte boundaries. There is no separate channel to tell the two apart, so this
-module reads raw bytes (not readline()) and scans for the frame boundary
-itself, per the wire contract documented in core/telemetry_frame.h:
+binary telemetry frames on it, core/mission_link_handshake.c's board-side
+state machine writes binary handshake frames on it, and free-running
+tm_printf debug text from the rest of the firmware can appear on it at any
+time, interleaved at arbitrary byte boundaries. There is no separate channel
+to tell any of these apart, so this module reads raw bytes (not readline())
+and scans for frame boundaries itself, per the wire contracts documented in
+core/telemetry_frame.h and core/mission_link_handshake.h:
 
-    byte 0-1   magic          0xA5 0x5A
-    byte 2-11  payload        run_id (u32 LE), cycle (u32 LE),
-                               team_id (u8), event_type (u8)
-    byte 12    checksum       1-byte additive checksum over the payload
+    byte 0-1   magic          0xA5 0x5A (telemetry) or 0xB6 0x6B (handshake)
+    byte 2-N   payload        frame-type-specific (see each header)
+    byte N+1   checksum       1-byte additive checksum over the payload
 
-Total frame size: TELEMETRY_FRAME_WIRE_SIZE (13) bytes. See that header for
-the full rationale (magic bytes are non-ASCII so they can't appear in
-tm_printf text; checksum mismatches are an expected resync case, not an
-error; gaps in `cycle` between consecutive frames are expected under the
-ring's overwrite-oldest overflow policy and are not a transport error).
+Telemetry frame total size: TELEMETRY_FRAME_WIRE_SIZE (13) bytes. Handshake
+reply frame total size: HANDSHAKE_REPLY_WIRE_SIZE (6) bytes - this module
+only ever needs to recognize Reply frames, never Req (the laptop only ever
+sends a Req, never receives one - see HandshakeCoordinator's docstring for
+the full sequence). See those headers for the fuller rationale (magic bytes
+are non-ASCII so they can't appear in tm_printf text; checksum mismatches
+are an expected resync case, not an error; gaps in `cycle` between
+consecutive telemetry frames are expected under the ring's overwrite-oldest
+overflow policy and are not a transport error).
 """
 
 import queue
@@ -60,6 +71,58 @@ def telemetry_frame_checksum(payload: bytes) -> int:
     payload buffer - mirrors the TELEMETRY_FRAME_CHECKSUM() macro in
     core/telemetry_frame.h (sum of payload bytes, mod 256)."""
     return sum(payload) & 0xFF
+
+
+# --- Wire format constants (mirrors core/mission_link_handshake.h) ------
+#
+# Magic bytes verified distinct from TELEMETRY_FRAME_MAGIC0/1 above and
+# from every core/mission_link.h magic pair - see
+# core/mission_link_handshake.h's own top-of-file distinctness check for
+# the full cross-reference; this is the same pair, just mirrored here for
+# the host side the same way TELEMETRY_FRAME_MAGIC0/1 above mirrors
+# core/telemetry_frame.h's.
+
+HANDSHAKE_MAGIC0 = 0xB6
+HANDSHAKE_MAGIC1 = 0x6B
+HANDSHAKE_MAGIC = bytes((HANDSHAKE_MAGIC0, HANDSHAKE_MAGIC1))
+
+MISSION_LINK_PROTOCOL_VERSION = 1  # mirrors core/mission_link_handshake.h
+
+# MissionLinkHandshakeReq_t: board_id (u8), protocol_version (u8) - the
+# laptop only ever SENDS this shape, never receives it (see
+# HandshakeCoordinator's docstring), so this module has no need for a
+# parser for it, only the packer below.
+_REQ_STRUCT = struct.Struct("<BB")
+HANDSHAKE_REQ_PAYLOAD_SIZE = _REQ_STRUCT.size
+assert HANDSHAKE_REQ_PAYLOAD_SIZE == 2
+HANDSHAKE_REQ_WIRE_SIZE = 2 + HANDSHAKE_REQ_PAYLOAD_SIZE + 1  # 5
+
+# MissionLinkHandshakeReply_t: board_id (u8), protocol_version (u8),
+# ready (u8) - the laptop only ever RECEIVES this shape.
+_REPLY_STRUCT = struct.Struct("<BBB")
+HANDSHAKE_REPLY_PAYLOAD_SIZE = _REPLY_STRUCT.size
+assert HANDSHAKE_REPLY_PAYLOAD_SIZE == 3
+HANDSHAKE_REPLY_WIRE_SIZE = 2 + HANDSHAKE_REPLY_PAYLOAD_SIZE + 1  # 6
+
+
+def handshake_checksum(payload: bytes) -> int:
+    """1-byte additive checksum over a handshake payload buffer - same
+    scheme as telemetry_frame_checksum() above, mirrors
+    core/mission_link_handshake.c's handshake_checksum()."""
+    return sum(payload) & 0xFF
+
+
+def pack_handshake_req(board_id: int, protocol_version: int = MISSION_LINK_PROTOCOL_VERSION) -> bytes:
+    """Builds the laptop -> DK MissionLinkHandshakeReq_t wire frame -
+    mirrors core/mission_link_handshake.c's
+    mission_link_handshake_pack_req(). board_id is always 0 in this
+    module's actual usage (the laptop only ever addresses DK directly;
+    DK is responsible for reaching NUCLEO on its own - see
+    HandshakeCoordinator's docstring), but the parameter is kept
+    general rather than hardcoded so a test can exercise the codec
+    without reaching into a private constant."""
+    payload = _REQ_STRUCT.pack(board_id, protocol_version)
+    return HANDSHAKE_MAGIC + payload + bytes((handshake_checksum(payload),))
 
 
 class TelemetryFrameParser:
@@ -143,6 +206,264 @@ class TelemetryFrameParser:
         return events
 
 
+class HandshakeReplyParser:
+    """Stateful byte-stream scanner for MissionLinkHandshakeReply_t
+    frames (core/mission_link_handshake.h) - same resync shape as
+    TelemetryFrameParser above (scan for magic, verify checksum, drop
+    one byte and resync on a mismatch rather than discarding
+    everything), scoped to this one frame shape. The laptop never
+    needs to recognize a Req on the wire since it only ever sends
+    those, never receives them (see HandshakeCoordinator below).
+
+    Deliberately a separate class from TelemetryFrameParser rather
+    than folded into it: that class is scoped to
+    core/telemetry_frame.h's wire format specifically (its name says
+    so), and conflating a second, unrelated frame type's magic bytes
+    and payload shape into it would blur which header governs which
+    part of its behavior. Composition instead - see TelemetryBridge.
+    _read_loop below for how the two are chained on the same raw byte
+    stream (this one runs first; whatever it doesn't recognize as a
+    Reply frame is passed on to TelemetryFrameParser exactly as if it
+    had arrived directly, so plain debug text and telemetry frames are
+    unaffected by this class existing at all).
+
+    feed() returns a list of events, each either:
+        ("reply", {"board_id": int, "protocol_version": int, "ready": bool})
+        ("passthrough", bytes)  -- not part of a valid Reply frame;
+                                    caller should feed this to
+                                    TelemetryFrameParser next.
+    """
+
+    def __init__(self):
+        self._buf = bytearray()
+
+    def feed(self, data: bytes):
+        if data:
+            self._buf.extend(data)
+
+        events = []
+
+        while True:
+            idx = self._buf.find(HANDSHAKE_MAGIC)
+
+            if idx == -1:
+                if self._buf and self._buf[-1] == HANDSHAKE_MAGIC0:
+                    if len(self._buf) > 1:
+                        events.append(("passthrough", bytes(self._buf[:-1])))
+                        del self._buf[:-1]
+                elif self._buf:
+                    events.append(("passthrough", bytes(self._buf)))
+                    self._buf.clear()
+                break
+
+            if idx > 0:
+                events.append(("passthrough", bytes(self._buf[:idx])))
+                del self._buf[:idx]
+
+            # Buffer now starts at the magic pair. This parser only
+            # ever expects a Reply-shaped frame (HANDSHAKE_REPLY_WIRE_
+            # SIZE bytes) here - the laptop never receives a Req -
+            # so, unlike a parser that has to disambiguate multiple
+            # shapes sharing one magic pair (see core/mission_link_
+            # handshake.c's own note on this), there is only one
+            # candidate length to wait for.
+            if len(self._buf) < HANDSHAKE_REPLY_WIRE_SIZE:
+                break
+
+            candidate = bytes(self._buf[:HANDSHAKE_REPLY_WIRE_SIZE])
+            payload = candidate[2:2 + HANDSHAKE_REPLY_PAYLOAD_SIZE]
+            claimed_checksum = candidate[2 + HANDSHAKE_REPLY_PAYLOAD_SIZE]
+
+            if handshake_checksum(payload) == claimed_checksum:
+                board_id, protocol_version, ready = _REPLY_STRUCT.unpack(payload)
+                events.append((
+                    "reply",
+                    {
+                        "board_id": board_id,
+                        "protocol_version": protocol_version,
+                        "ready": bool(ready),
+                    },
+                ))
+                del self._buf[:HANDSHAKE_REPLY_WIRE_SIZE]
+            else:
+                del self._buf[:1]
+
+        return events
+
+
+class HandshakeCoordinator:
+    """Laptop-side counterpart to core/mission_link_handshake.c's
+    board-side state machine (see that file's top-of-file comment for
+    the full six-step sequence this implements the laptop's half of).
+
+    The actual problem this solves: without this, the laptop has no
+    way to know either board is alive and past its own init before it
+    starts pushing MissionLinkRoster_t/Incident/Fault traffic at teams
+    that might not exist yet on the receiving end - see
+    core/mission_link_handshake.h's own top comment. A plain-text
+    `READY` line (the previous approach) could not distinguish "DK is
+    alive but NUCLEO isn't" from "both are alive", had no notion of a
+    reply actually confirming completion of the SPECIFIC board's own
+    init (fault_injector_init/watchdog_init/etc - see
+    MissionLinkHandshakeReply_t.ready's doc) rather than merely "the
+    UART ISR is up", and had no retry/timeout policy at all - this
+    class's job is to be a small, testable state machine that answers
+    exactly one question correctly: is it safe to proceed, and if not,
+    what should the operator be told about why.
+
+    Sequence, laptop side only (see core/mission_link_handshake.c for
+    the board side of each numbered step):
+
+      1. due_for_req() goes true immediately once start() is called;
+         the caller (TelemetryBridge._read_loop below) sends
+         pack_handshake_req(0) to DK and calls note_req_sent().
+      2. DK's Reply{board_id=0} arrives on the wire; feed() decodes it
+         via HandshakeReplyParser and records it.
+      3-4. DK relays NUCLEO's Reply{board_id=1} (or, after DK's own
+         timeout, a synthetic ready=0 one - see core/mission_link_
+         handshake.c's timeout policy) whenever it has one, unprompted
+         - the laptop never sends a second kind of Req asking about
+         board 1 specifically. feed() records whichever board_id shows
+         up, in whatever order they arrive.
+      5. all_ready is true only once BOTH board_id 0 and board_id 1
+         have replied ready=True - order of arrival does not matter
+         (see tools/handshake_selftest.py for the out-of-order proof).
+      6. Timeout/retry policy (laptop side; see core/mission_link_
+         handshake.c's own comment for why this exists on both ends
+         rather than trusting DK's tick-based timeout alone): if
+         board_id 1 never replies at all within BOARD1_TIMEOUT_SEC of
+         start() (covers the case where DK itself isn't relaying
+         anything - e.g. this handshake logic isn't flashed onto DK
+         yet - which DK's own tick-based timeout can't detect since it
+         depends on DK's firmware actually running), OR DK relays its
+         own synthetic ready=0 for board_id 1, board1_timed_out
+         becomes true. Neither case flips all_ready or lets traffic
+         proceed automatically - can_proceed only additionally allows
+         it once the operator has explicitly called
+         request_dk_only_override() (see app.py's
+         /api/board/continue-without-nucleo route), so a demo never
+         silently runs degraded without the operator confirming it -
+         it also never blocks forever, since board1_timed_out gives
+         the dashboard something concrete to show and act on instead
+         of an indefinite spinner.
+    """
+
+    REQ_RETRY_INTERVAL_SEC = 2.0
+    BOARD1_TIMEOUT_SEC = 30.0
+
+    def __init__(self):
+        self.replies = {}  # board_id -> {"protocol_version": int, "ready": bool}
+        self._parser = HandshakeReplyParser()
+        self._started_at = None
+        self._req_sent_at = None
+        self.dk_only_override = False
+
+    def start(self):
+        """Call once when the laptop begins trying to reach the
+        board(s) - e.g. right after the serial port opens."""
+        self.replies = {}
+        self._started_at = time.time()
+        self._req_sent_at = None
+        self.dk_only_override = False
+
+    def feed(self, data: bytes) -> bytes:
+        """Feed raw USART1 bytes. Returns whatever was NOT part of a
+        valid Reply frame, for the caller to pass on to
+        TelemetryFrameParser next (see this module's top-of-file wire
+        format note and TelemetryBridge._read_loop below)."""
+        leftover = bytearray()
+        for kind, payload in self._parser.feed(data):
+            if kind == "reply":
+                self.note_reply(payload["board_id"], payload["protocol_version"], payload["ready"])
+            else:
+                leftover.extend(payload)
+        return bytes(leftover)
+
+    def note_reply(self, board_id: int, protocol_version: int, ready: bool):
+        """Records a reply. Exposed directly (not just via feed())
+        so tests can drive this state machine without needing to
+        round-trip through the byte-stream codec - see
+        tools/handshake_selftest.py."""
+        self.replies[board_id] = {
+            "protocol_version": protocol_version,
+            "ready": bool(ready),
+        }
+
+    def due_for_req(self) -> bool:
+        """Whether a fresh MissionLinkHandshakeReq_t{board_id=0} is
+        due right now."""
+        if self._started_at is None:
+            return False
+        if self.board0_ready:
+            return False
+        if self._req_sent_at is None:
+            return True
+        return (time.time() - self._req_sent_at) >= self.REQ_RETRY_INTERVAL_SEC
+
+    def note_req_sent(self):
+        self._req_sent_at = time.time()
+
+    @property
+    def board0_ready(self) -> bool:
+        return self.replies.get(0, {}).get("ready", False)
+
+    @property
+    def board1_ready(self) -> bool:
+        return self.replies.get(1, {}).get("ready", False)
+
+    @property
+    def board1_timed_out(self) -> bool:
+        """True once there is a definitive negative signal for board
+        1: either DK's own synthetic ready=False relay (see this
+        class's docstring, step 6), or this class's own
+        BOARD1_TIMEOUT_SEC backstop elapsing with nothing at all
+        recorded for board_id 1 yet."""
+        if 1 in self.replies and not self.replies[1]["ready"]:
+            return True
+        if self._started_at is None or self.board1_ready:
+            return False
+        return (time.time() - self._started_at) >= self.BOARD1_TIMEOUT_SEC
+
+    @property
+    def all_ready(self) -> bool:
+        """True only once both boards have confirmed ready - the
+        property tools/handshake_selftest.py exists to check, since
+        this is the exact thing a naive implementation (flip ready as
+        soon as ANY reply arrives) would get wrong for whichever board
+        replies second."""
+        return self.board0_ready and self.board1_ready
+
+    @property
+    def can_proceed(self) -> bool:
+        """True once it is safe for the laptop to send roster/
+        incident/fault traffic and for the dashboard to enable its
+        "start simulation" control: either both boards are ready, or
+        board 0 is ready and the operator has explicitly accepted
+        running DK-only after board 1 timed out."""
+        return self.all_ready or (self.board0_ready and self.dk_only_override)
+
+    def request_dk_only_override(self) -> bool:
+        """Operator-driven escape hatch (app.py's /api/board/continue-
+        without-nucleo route). Only takes effect once board 1 has
+        actually timed out and board 0 is ready, so a stray/early call
+        can't skip the check it exists to gate. Returns whether the
+        override is now in effect."""
+        if self.board0_ready and self.board1_timed_out:
+            self.dk_only_override = True
+        return self.dk_only_override
+
+    def status_dict(self) -> dict:
+        """JSON-serializable snapshot for app.py's /api/status."""
+        return {
+            "board0_ready": self.board0_ready,
+            "board1_ready": self.board1_ready,
+            "board1_timed_out": self.board1_timed_out,
+            "all_ready": self.all_ready,
+            "dk_only_override": self.dk_only_override,
+            "can_proceed": self.can_proceed,
+        }
+
+
 class TelemetryBridge:
     """Manages serial communication, packet parsing, and command transmission
 
@@ -159,6 +480,7 @@ class TelemetryBridge:
         self.thread = None
         self._parser = TelemetryFrameParser()
         self._text_buf = bytearray()
+        self.handshake = HandshakeCoordinator()
 
     def connect(self) -> bool:
         """Opens the USB serial port connected to the STM32N6 board and spins up
@@ -172,6 +494,7 @@ class TelemetryBridge:
                 self.port, self.baudrate, timeout=0.1
             )
             self.running = True
+            self.handshake.start()
             self.thread = threading.Thread(
                 target=self._read_loop, daemon=True
             )
@@ -212,20 +535,40 @@ class TelemetryBridge:
         """Background daemon thread listening for incoming byte streams.
 
         Reads raw bytes (this is a binary wire format, not line-delimited
-        text) and scans for magic-byte-framed telemetry frames per
-        core/telemetry_frame.h, resyncing byte-by-byte on a checksum
-        mismatch. Decoded frames go on telemetry_queue; anything left
-        over (READY handshakes, general tm_printf debug output) flows
-        through the same line-based log path as before.
+        text) and scans for magic-byte-framed frames of BOTH kinds that
+        can appear on this wire: handshake replies
+        (core/mission_link_handshake.h, via self.handshake.feed()) first,
+        then telemetry frames (core/telemetry_frame.h, via self._parser)
+        on whatever bytes the handshake scanner didn't recognize - see
+        this module's top-of-file wire format note for why handshake
+        frames need their own byte-level scan rather than flowing through
+        the old newline-delimited text/log path the way plain `READY`
+        lines used to. Decoded telemetry frames go on telemetry_queue;
+        decoded handshake replies update self.handshake directly (no
+        queue - app.py reads self.handshake.status_dict() synchronously,
+        same as it already reads self.nodes_ready); anything left over
+        (general tm_printf debug output) flows through the existing
+        line-based log path.
+
+        Also drives the handshake's own retry timer
+        (self.handshake.due_for_req()): this loop's 0.1s read timeout
+        already gives it a steady ~10Hz cadence, so no second thread is
+        needed just to resend MissionLinkHandshakeReq_t on schedule.
         """
         while self.running and self.serial_conn and self.serial_conn.is_open:
             try:
+                if self.handshake.due_for_req():
+                    self.serial_conn.write(pack_handshake_req(0))
+                    self.handshake.note_req_sent()
+
                 waiting = self.serial_conn.in_waiting
                 chunk = self.serial_conn.read(waiting if waiting else 1)
                 if not chunk:
                     continue
 
-                for kind, payload in self._parser.feed(chunk):
+                leftover = self.handshake.feed(chunk)
+
+                for kind, payload in self._parser.feed(leftover):
                     if kind == "frame":
                         self.telemetry_queue.put(payload)
                     else:
@@ -240,7 +583,33 @@ class TelemetryBridge:
 
         to transition the board's mission state from IDLE_WAITING_FOR_HOST to
         MISSION_STATE_EXECUTING (triggering init_search_zones()).
+
+        Now gated on self.handshake.can_proceed rather than firing
+        unconditionally: the previous version of this method wrote
+        directly into a channel nothing on the board actually listens on
+        yet (see this module's top-of-file note and core/mission_link_
+        handshake.h's own "actual problem this solves" framing) with no
+        check that either board was even alive. The gate fixes the
+        "writes into nothing" half of that problem for THIS method: a
+        caller can no longer send a command before both boards (or an
+        explicit DK-only override - see HandshakeCoordinator.
+        request_dk_only_override()) have confirmed readiness.
+
+        What this method still does NOT fix, and is explicitly out of
+        scope here: there is no real START wire protocol on the board
+        side at all yet (main_board.c currently begins running its sim
+        immediately on boot with hardcoded BOARD_SEED/BOARD_SEED_COUNT
+        constants - see that file - rather than waiting for any command
+        from the laptop). The b"START\\n" text write below is therefore
+        still a stub in the sense that nothing currently reads it; unlike
+        the handshake itself, inventing a real board-side START protocol
+        is a different prompt's problem, not silently solved here.
         """
+        if not self.handshake.can_proceed:
+            print("Refusing to send START: handshake not complete "
+                  f"({self.handshake.status_dict()})")
+            return False
+
         if self.serial_conn and self.serial_conn.is_open:
             try:
                 self.serial_conn.write(b"START\n")

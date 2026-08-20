@@ -89,45 +89,6 @@ static uint64_t recovery_team_signature(const TeamState_t *team)
     return signature;
 }
 
-static void recovery_clear_assignment_only(TeamState_t *team)
-{
-    IncidentState_t *task = NULL;
-    TaskPool_t pool = (TaskPool_t)team->assigned_task_pool;
-
-    if(pool == TASK_POOL_INCIDENT &&
-       team->assigned_task_slot < NUM_INCIDENTS)
-    {
-        task = &g_incidents[team->assigned_task_slot];
-    }
-    else if(pool == TASK_POOL_SYSTEM &&
-            team->assigned_task_slot < NUM_SYSTEM_TASKS)
-    {
-        task = &g_system_tasks[team->assigned_task_slot];
-    }
-
-    if(task != NULL && task->slot_occupied)
-    {
-        if(task->assigned_team == team->team_id)
-            task->assigned_team = NO_ASSIGNMENT;
-        if(task->support_team == team->team_id)
-            task->support_team = NO_ASSIGNMENT;
-
-        if(task->status == INC_ASSIGNED)
-            task->status = INC_OPEN;
-    }
-
-    team->assigned_task_pool = TASK_POOL_NONE;
-    team->assigned_task_slot = NO_ASSIGNMENT;
-    team->incident_queue_size = 0;
-    team->incident_queue_index = 0;
-
-    for(uint8_t q = 0; q < CBBA_MAX_BUNDLE_SIZE; q++)
-    {
-        team->incident_queue_slot[q] = NO_ASSIGNMENT;
-        team->incident_queue_id[q] = 0;
-    }
-}
-
 static void recovery_metrics_reset(void)
 {
     memset(&g_recovery_metrics, 0, sizeof(g_recovery_metrics));
@@ -1185,11 +1146,27 @@ void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
              * every tick, forever - the recovery-manager equivalent of the
              * RETURN_TO_SAFE_ZONE oscillation above. A RESTING team is
              * already doing exactly what LOCAL_RECOVERY wants; there's
-             * nothing left to apply. */
+             * nothing left to apply.
+             *
+             * Third fix: setting team->status = STATUS_RESTING directly
+             * (the old code just cleared the assignment in place) has
+             * zero location check - it marks the team "resting" wherever
+             * it happens to be
+             * standing, which is how both Search teams ended up idling in
+             * the middle of the road and Support 4 ended up "resting"
+             * outside both safe zones. RESTING is supposed to mean "at a
+             * safe zone"; use the exact same safe-zone-return machinery
+             * RETURN_TO_SAFE_ZONE relies on (abandon_task_for_recovery ->
+             * create_return_to_safe_zone_task) so LOCAL_RECOVERY actually
+             * sends the team home (EN_ROUTE) instead of freezing it in
+             * place. abandon_task_for_recovery already no-ops safely when
+             * there's nothing to abandon (the common AVAILABLE case here)
+             * and falls back to team_set_available() if no safe zone slot
+             * is free, so this is a strict improvement with no new
+             * failure mode. */
             if(team->status == STATUS_AVAILABLE)
             {
-                recovery_clear_assignment_only(team);
-                team->status = STATUS_RESTING;
+                abandon_task_for_recovery(team);
             }
             break;
 

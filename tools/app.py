@@ -21,6 +21,7 @@ import json
 import os
 import queue
 import re
+import struct
 import subprocess
 import threading
 import time
@@ -29,13 +30,56 @@ from pathlib import Path
 import serial
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
-from telemetry_bridge import TelemetryFrameParser
+from telemetry_bridge import HandshakeCoordinator, TelemetryFrameParser, pack_handshake_req
 
 TOOLS_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = TOOLS_DIR.parent
 CSV_PATH = PROJECT_DIR / "tron_snapshot_dataset.csv"
 HISTORY_PATH = PROJECT_DIR / ".dashboard_history.json"
 BINARY = PROJECT_DIR / "tron"
+
+# --- Wire format constants (mirrors core/mission_link_override.h) -------
+#
+# Not imported from telemetry_bridge.py: this prompt's file ownership is
+# core/mission_link_override.h/.c plus this file and templates/index.html
+# only (telemetry_bridge.py belongs to an earlier prompt's file set - see
+# that module's own HandshakeCoordinator for the precedent this mirrors).
+# Self-contained here for the same reason pack_handshake_req() is
+# self-contained in telemetry_bridge.py rather than split across files.
+#
+# See core/WIRE_PROTOCOL_MAGIC_BYTES.md for the authoritative registry -
+# this is a mirror of that file's MissionLinkOverride_t row, not a fresh
+# allocation.
+
+OVERRIDE_MAGIC0 = 0x28
+OVERRIDE_MAGIC1 = 0x82
+OVERRIDE_MAGIC = bytes((OVERRIDE_MAGIC0, OVERRIDE_MAGIC1))
+
+# MissionLinkOverride_t: team_id (u8), incident_id (u32 LE) - packed,
+# matches core/mission_link_override.h's __attribute__((packed)) struct.
+_OVERRIDE_STRUCT = struct.Struct("<BI")
+OVERRIDE_PAYLOAD_SIZE = _OVERRIDE_STRUCT.size
+assert OVERRIDE_PAYLOAD_SIZE == 5
+OVERRIDE_WIRE_SIZE = 2 + OVERRIDE_PAYLOAD_SIZE + 1  # 8
+
+
+def _override_checksum(payload: bytes) -> int:
+    """Same additive checksum scheme every mission-link-family wire
+    format in this project uses - mirrors core/mission_link_override.c's
+    override_checksum()."""
+    return sum(payload) & 0xFF
+
+
+def pack_override(team_id: int, incident_id: int) -> bytes:
+    """Builds the laptop -> DK MissionLinkOverride_t wire frame -
+    mirrors core/mission_link_override.c's mission_link_override_pack().
+    The laptop only ever sends this shape (there is no reply - see that
+    header's own top comment: "this is a one-shot directive, not
+    something that expects a reply"), so this module has no need for a
+    parser, only this packer."""
+    payload = _OVERRIDE_STRUCT.pack(team_id, incident_id)
+    return OVERRIDE_MAGIC + payload + bytes((_override_checksum(payload),))
+
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
@@ -78,9 +122,17 @@ class TelemetryBridge:
     Board telemetry (platform/board/snapshot.c's ring drain) arrives as
     binary, magic-byte-framed wire frames per core/telemetry_frame.h -
     see telemetry_bridge.TelemetryFrameParser for the byte-stream
-    scanning/resync logic, shared with the standalone bridge. Plain
-    tm_printf debug text shares the same UART and is handled via the
-    existing line-based READY/log path.
+    scanning/resync logic, shared with the standalone bridge. The
+    mission-link liveness handshake (core/mission_link_handshake.h)
+    arrives the same way, via telemetry_bridge.HandshakeCoordinator -
+    see that class's docstring for the full request/reply sequence and
+    retry/timeout policy this delegates to (this class does not
+    reimplement it - see this file's history for why a duplicate
+    implementation here would have been the wrong move: it existed
+    only because `nodes_ready`/`all_ready` predate that class, not
+    because this app's needs are actually different from the
+    standalone bridge's). Plain tm_printf debug text shares the same
+    UART and is handled via the existing line-based READY/log path.
     """
 
     def __init__(self):
@@ -94,6 +146,7 @@ class TelemetryBridge:
         self.mission_started = False
         self._parser = TelemetryFrameParser()
         self._text_buf = bytearray()
+        self.handshake = HandshakeCoordinator()
 
     def connect(self, port: str, baudrate: int) -> bool:
         """Opens the USB serial port connected to the STM32N6 board."""
@@ -104,6 +157,7 @@ class TelemetryBridge:
             self.running = True
             self.nodes_ready.clear()
             self.mission_started = False
+            self.handshake.start()
             self.thread = threading.Thread(target=self._read_loop, daemon=True)
             self.thread.start()
             return True
@@ -115,7 +169,11 @@ class TelemetryBridge:
         if not line:
             return
 
-        # Parse READY handshake notifications from board nodes
+        # Legacy plain-text READY notifications. Superseded by the
+        # binary mission-link handshake (self.handshake) for actually
+        # gating readiness/launch decisions - see this class's
+        # docstring - but still recorded here too for the debug-log
+        # view, since a board's tm_printf output isn't going away.
         if "READY" in line:
             parts = line.split(":")
             node_id = parts[0].strip() if len(parts) > 1 else "STM32N6_Board"
@@ -136,22 +194,38 @@ class TelemetryBridge:
     def _read_loop(self):
         """Background thread listening for incoming byte streams and parsing packets.
 
-        Reads raw bytes (binary wire format, not line-delimited text) and
-        scans for magic-byte-framed telemetry frames per
-        core/telemetry_frame.h, resyncing on a checksum mismatch instead
-        of crashing or discarding the whole stream. Decoded frames go on
-        telemetry_queue as structured dicts; everything else (READY
+        Reads raw bytes (binary wire format, not line-delimited text)
+        and scans for magic-byte-framed frames of both kinds this wire
+        carries: handshake replies first (self.handshake.feed(), see
+        telemetry_bridge.HandshakeCoordinator), then telemetry frames
+        per core/telemetry_frame.h on whatever's left
+        (self._parser.feed()) - same chaining
+        telemetry_bridge.TelemetryBridge._read_loop uses, and for the
+        same reason (see that method's docstring). Decoded telemetry
+        frames go on telemetry_queue as structured dicts; decoded
+        handshake replies update self.handshake directly, read
+        synchronously by /api/status; everything else (READY
         handshakes, general tm_printf debug output) flows through the
         same line-based log path as before.
+
+        Also drives the handshake's retry timer the same way
+        telemetry_bridge.TelemetryBridge._read_loop does, piggybacked
+        on this loop's existing ~10Hz (0.1s read timeout) cadence.
         """
         while self.running and self.serial_conn and self.serial_conn.is_open:
             try:
+                if self.handshake.due_for_req():
+                    self.serial_conn.write(pack_handshake_req(0))
+                    self.handshake.note_req_sent()
+
                 waiting = self.serial_conn.in_waiting
                 chunk = self.serial_conn.read(waiting if waiting else 1)
                 if not chunk:
                     continue
 
-                for kind, payload in self._parser.feed(chunk):
+                leftover = self.handshake.feed(chunk)
+
+                for kind, payload in self._parser.feed(leftover):
                     if kind == "frame":
                         self.telemetry_queue.put(payload)
                     else:
@@ -162,7 +236,22 @@ class TelemetryBridge:
                 break
 
     def send_start(self) -> bool:
-        """Transmit the explicit text/binary START command packet down the USB line."""
+        """Transmit the explicit text/binary START command packet down the USB line.
+
+        Gated on self.handshake.can_proceed - see
+        telemetry_bridge.TelemetryBridge.send_start()'s docstring for
+        why (both boards ready, or board 0 ready plus an explicit
+        continue-without-NUCLEO override - see
+        /api/board/continue-without-nucleo below) and for what this
+        gate does and does not fix (the board-side START protocol
+        itself remains a stub; this only stops the command from being
+        sent before it's safe to).
+        """
+        if not self.handshake.can_proceed:
+            print("Refusing to send START: handshake not complete "
+                  f"({self.handshake.status_dict()})")
+            return False
+
         if self.serial_conn and self.serial_conn.is_open:
             try:
                 self.serial_conn.write(b"START\n")
@@ -183,6 +272,7 @@ class TelemetryBridge:
         self.serial_conn = None
         self.nodes_ready.clear()
         self.mission_started = False
+        self.handshake = HandshakeCoordinator()
 
 
 # Global bridge singleton instance for hardware board session
@@ -374,7 +464,6 @@ def index():
 @app.route("/api/status")
 def api_status():
     connected = bridge.serial_conn is not None and bridge.serial_conn.is_open
-    expected_nodes = ["STM32N6_Board"]
 
     new_frames = []
     while not bridge.telemetry_queue.empty():
@@ -390,10 +479,26 @@ def api_status():
             "port": bridge.port,
             "baudrate": bridge.baudrate,
             "nodes_ready": list(bridge.nodes_ready),
-            "expected_nodes": expected_nodes,
-            "all_ready": set(expected_nodes).issubset(bridge.nodes_ready),
             "mission_started": bridge.mission_started,
             "new_telemetry": new_frames,
+            # Mission-link liveness handshake (core/mission_link_
+            # handshake.h) - this is what "all_ready"/launch-readiness
+            # actually means now: replies confirmed for BOTH board_id 0
+            # (DK) and board_id 1 (NUCLEO, relayed through DK), not the
+            # single hardcoded-node-name text check this used to be.
+            # See telemetry_bridge.HandshakeCoordinator's docstring for
+            # the full sequence and the retry/timeout/DK-only-override
+            # policy behind board1_timed_out / dk_only_override /
+            # can_proceed below.
+            "handshake": bridge.handshake.status_dict(),
+            # Kept for any existing caller still reading this top-level
+            # key directly: now derived from the real handshake
+            # (can_proceed) instead of the old single-node text check,
+            # so "start simulation" gating is correct rather than
+            # assumed. New code should read board.handshake instead,
+            # which has the finer-grained board0/board1/timeout detail
+            # this single boolean can't express.
+            "all_ready": bridge.handshake.can_proceed,
         }
     })
 
@@ -420,7 +525,96 @@ def api_board_launch():
     success = bridge.send_start()
     if success:
         return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Failed to send START command"}), 400
+    return jsonify({
+        "status": "error",
+        "message": "Failed to send START command",
+        "handshake": bridge.handshake.status_dict(),
+    }), 400
+
+
+@app.route("/api/board/continue-without-nucleo", methods=["POST"])
+def api_board_continue_without_nucleo():
+    """Operator-driven escape hatch for the case core/mission_link_
+    handshake.c's top comment (timeout/retry policy) and
+    telemetry_bridge.HandshakeCoordinator's docstring both call out
+    explicitly: NUCLEO never replies (LoRa module not flashed yet,
+    still on the bench, etc.). Does NOT let the laptop block forever
+    (board1_timed_out gives the dashboard a concrete state to show
+    instead of an indefinite spinner) and does NOT silently proceed
+    DK-only either (a demo running silently degraded is worse than one
+    that makes the operator confirm it) - this route is the explicit
+    confirmation step in between. A no-op (see
+    HandshakeCoordinator.request_dk_only_override()) if board 1 hasn't
+    actually timed out yet or board 0 isn't ready, so calling it early
+    can't be used to skip the check.
+    """
+    overridden = bridge.handshake.request_dk_only_override()
+    if overridden:
+        return jsonify({"status": "success", "handshake": bridge.handshake.status_dict()})
+    return jsonify({
+        "status": "error",
+        "message": "Override not applicable yet (board 0 not ready, or board 1 hasn't timed out)",
+        "handshake": bridge.handshake.status_dict(),
+    }), 400
+
+
+@app.route("/api/board/override", methods=["POST"])
+def api_board_override():
+    """The Flask route core/mission_link_override.h's pipeline doc
+    (step 1-2) describes: the dashboard's drag-drop already builds a
+    {team_id, incident_id} pair on confirm (tools/templates/index.html)
+    - this route packs it into a MissionLinkOverride_t wire frame and
+    writes it to USART1 (bridge.serial_conn), the laptop's only channel.
+
+    It does NOT decide DK-vs-NUCLEO routing itself - see that header's
+    own top comment, step 3: DK's board-side mission-link layer
+    (core/mission_link_override.c's mission_link_override_route_or_
+    apply(), hooked into platform/board/mission_link_task.c's RX loop
+    per that header's handoff note) is what actually decides, once the
+    frame arrives, whether the team lives on this board or needs
+    relaying to NUCLEO. This route's only job is getting the directive
+    onto the one wire the laptop has.
+
+    Gated on bridge.handshake.can_proceed, same as send_start(): there
+    is no point addressing an override at a board that hasn't even
+    confirmed it's alive and past its own init yet (see
+    telemetry_bridge.HandshakeCoordinator's docstring) - an override
+    written into that silence would have exactly the same "channel
+    nothing listens on" problem core/mission_link_handshake.h's own
+    top comment was written to fix in the first place.
+    """
+    data = request.get_json(force=True) or {}
+
+    try:
+        team_id = int(data["team_id"])
+        incident_id = int(data["incident_id"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({
+            "status": "error",
+            "message": "Request body must include integer team_id and incident_id",
+        }), 400
+
+    if not (0 <= team_id <= 255):
+        return jsonify({"status": "error", "message": "team_id out of range (0-255)"}), 400
+    if not (0 <= incident_id <= 0xFFFFFFFF):
+        return jsonify({"status": "error", "message": "incident_id out of range (u32)"}), 400
+
+    if not bridge.handshake.can_proceed:
+        return jsonify({
+            "status": "error",
+            "message": "Board handshake not complete - cannot send override yet",
+            "handshake": bridge.handshake.status_dict(),
+        }), 400
+
+    if not (bridge.serial_conn and bridge.serial_conn.is_open):
+        return jsonify({"status": "error", "message": "Board not connected"}), 400
+
+    try:
+        bridge.serial_conn.write(pack_override(team_id, incident_id))
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"status": "error", "message": f"Failed to write to serial port: {exc}"}), 500
+
+    return jsonify({"status": "success", "team_id": team_id, "incident_id": incident_id})
 
 
 @app.route("/api/run", methods=["POST"])
@@ -435,7 +629,7 @@ def api_run():
     if not build_ok:
         return jsonify({"error": "build failed", "build_log": build_log}), 500
 
-    args = [str(BINARY), str(seed), str(seed_count), str(ticks)]
+    args = [str(BINARY), str(seed), str(seed_count), str(ticks), "--trace", "--diag"]
     if fault_profile and fault_profile != "none":
         args += ["--fault-profile", fault_profile]
 
@@ -497,7 +691,7 @@ def api_run_live():
         return Response(err_stream(), mimetype="text/event-stream")
 
     args = [str(BINARY), str(seed), "1", str(ticks),
-            "--live", f"--tick-delay-ms={tick_delay_ms}"]
+            "--live", "--trace", "--diag", f"--tick-delay-ms={tick_delay_ms}"]
     if fault_profile and fault_profile != "none":
         args += ["--fault-profile", fault_profile]
 

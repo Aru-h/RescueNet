@@ -53,6 +53,7 @@ int main(int argc, char **argv)
 
     FaultProfile_t fault_profile = FAULT_PROFILE_NONE;
     int live_mode = 0;
+    int diag_mode = 0;  /* off by default - see --diag below */
     uint32_t tick_delay_ms = 0;
     uint32_t positional_args[5] = {0};
     uint32_t positional_count = 0;
@@ -62,6 +63,30 @@ int main(int argc, char **argv)
         if(strcmp(argv[i], "--live") == 0)
         {
             live_mode = 1;
+            continue;
+        }
+
+        /* Prints the [DIAG SUMMARY]/[DIAG WORK]/[DIAG THROUGHPUT]/
+         * [DIAG FOG]/[DIAG SWEEP] end-of-run instrumentation. The
+         * underlying g_diag_* counters always get tracked (cheap,
+         * always-on bookkeeping) - this flag only controls whether the
+         * summary gets printed, so a normal run stays quiet and you
+         * opt in with --diag when you actually want to look at it. */
+        if(strcmp(argv[i], "--diag") == 0)
+        {
+            diag_mode = 1;
+            continue;
+        }
+
+        /* Enables the per-tick [DIAG] status/RESTED trace in
+         * simulation.c (g_simulation_trace_enabled) - off by default so
+         * a bare `./tron` run doesn't scroll a status line every time
+         * any team changes state. app.py passes this when it launches
+         * the binary, since the dashboard's Recovery/Rest tab parses
+         * this trace live. */
+        if(strcmp(argv[i], "--trace") == 0)
+        {
+            g_simulation_trace_enabled = 1;
             continue;
         }
 
@@ -137,20 +162,49 @@ int main(int argc, char **argv)
 
     extern uint32_t g_diag_safezone_fallback_count;
     extern uint32_t g_diag_discarded_signal_count;
-    extern uint32_t g_diag_incidents_resolved[NUM_TEAMS];
-    extern uint32_t g_diag_stage_completions[NUM_TEAMS];
-    extern uint32_t g_diag_work_progress_calls;
-    extern uint32_t g_diag_in_progress_entries;
-    extern uint32_t g_diag_ticks_resting[NUM_TEAMS];
-    extern uint32_t g_diag_ticks_working[NUM_TEAMS];
-    extern uint32_t g_diag_ticks_available[NUM_TEAMS];
-    fprintf(stderr, "[DIAG SUMMARY] safezone_fallback_count=%u discarded_signal_count=%u\n",
-        g_diag_safezone_fallback_count, g_diag_discarded_signal_count);
-    fprintf(stderr, "[DIAG WORK] in_progress_entries=%u work_progress_calls=%u\n",
-        g_diag_in_progress_entries, g_diag_work_progress_calls);
-    for(uint8_t t = 0; t < NUM_TEAMS; t++)
-        fprintf(stderr, "[DIAG THROUGHPUT] team=%u incidents_resolved=%u stage_completions=%u resting=%u working=%u available=%u\n",
-            t, g_diag_incidents_resolved[t], g_diag_stage_completions[t], g_diag_ticks_resting[t], g_diag_ticks_working[t], g_diag_ticks_available[t]);
+    if(diag_mode)
+    {
+        extern uint32_t g_diag_incidents_resolved[NUM_TEAMS];
+        extern uint32_t g_diag_stage_completions[NUM_TEAMS];
+        extern uint32_t g_diag_work_progress_calls;
+        extern uint32_t g_diag_in_progress_entries;
+        extern uint32_t g_diag_ticks_resting[NUM_TEAMS];
+        extern uint32_t g_diag_ticks_working[NUM_TEAMS];
+        extern uint32_t g_diag_ticks_available[NUM_TEAMS];
+        fprintf(stderr, "[DIAG SUMMARY] safezone_fallback_count=%u discarded_signal_count=%u\n",
+            g_diag_safezone_fallback_count, g_diag_discarded_signal_count);
+        fprintf(stderr, "[DIAG WORK] in_progress_entries=%u work_progress_calls=%u\n",
+            g_diag_in_progress_entries, g_diag_work_progress_calls);
+        for(uint8_t t = 0; t < NUM_TEAMS; t++)
+            fprintf(stderr, "[DIAG THROUGHPUT] team=%u incidents_resolved=%u stage_completions=%u resting=%u working=%u available=%u\n",
+                t, g_diag_incidents_resolved[t], g_diag_stage_completions[t], g_diag_ticks_resting[t], g_diag_ticks_working[t], g_diag_ticks_available[t]);
+
+        extern uint32_t g_diag_discovered_by_type[NUM_INCIDENT_TYPES];
+        extern uint32_t g_diag_resolved_by_type[NUM_INCIDENT_TYPES];
+        extern uint32_t g_diag_spawned_by_type[NUM_INCIDENT_TYPES];
+        for(uint8_t ty = 0; ty < NUM_INCIDENT_TYPES; ty++)
+            fprintf(stderr, "[DIAG FOG] type=%u spawned=%u discovered=%u resolved=%u\n",
+                ty, g_diag_spawned_by_type[ty], g_diag_discovered_by_type[ty], g_diag_resolved_by_type[ty]);
+
+        extern uint32_t g_diag_sweep_genuine_complete[NUM_SEARCH_ZONES];
+        extern uint32_t g_diag_sweep_stalled[NUM_SEARCH_ZONES];
+        extern uint32_t g_diag_sweep_stall_coverage_sum[NUM_SEARCH_ZONES];
+        extern uint32_t g_diag_sweep_tasks_created[NUM_SEARCH_ZONES];
+        for(uint8_t z = 0; z < NUM_SEARCH_ZONES; z++)
+        {
+            uint32_t stalled = g_diag_sweep_stalled[z];
+            uint32_t avg_cov = stalled ? (g_diag_sweep_stall_coverage_sum[z] / stalled) : 0;
+            fprintf(stderr, "[DIAG SWEEP] district=%u tasks_created=%u genuine_complete=%u stalled=%u avg_coverage_at_stall=%u%%\n",
+                z, g_diag_sweep_tasks_created[z], g_diag_sweep_genuine_complete[z], stalled, avg_cov);
+        }
+        extern uint32_t g_diag_sweep_abandoned_for_recovery;
+        extern uint32_t g_diag_sweep_reclaimed_for_safezone;
+        extern uint32_t g_diag_sweep_duplicate_while_in_progress;
+        fprintf(stderr, "[DIAG SWEEP CHURN] abandoned_for_recovery=%u reclaimed_for_safezone=%u duplicate_while_in_progress=%u\n",
+            g_diag_sweep_abandoned_for_recovery, g_diag_sweep_reclaimed_for_safezone, g_diag_sweep_duplicate_while_in_progress);
+        extern uint32_t g_diag_sweep_retargets;
+        fprintf(stderr, "[DIAG SWEEP PATROL] retargets=%u\n", g_diag_sweep_retargets);
+    }
 
     print_world_state();
 
