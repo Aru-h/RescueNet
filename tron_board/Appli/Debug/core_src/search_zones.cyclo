@@ -1,8 +1,0 @@
-/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/search_zones.c:7:6:search_zones_init	4
-/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/search_zones.c:24:9:zone_id_for_location	5
-/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/search_zones.c:34:9:search_zone_trust	6
-/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/search_zones.c:59:6:search_zone_mark_cell_covered	7
-/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/search_zones.c:79:9:search_zone_coverage_percent	8
-/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/search_zones.c:105:9:search_zone_check_cycle_completion	4
-/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/search_zones.c:143:9:search_zone_pick_next_target	6
-/Users/harushsgtemkar/Downloads/tron_merged-board-2/core/search_zones.c:166:9:search_zone_pick_frontier_cell	12

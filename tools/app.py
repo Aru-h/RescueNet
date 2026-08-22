@@ -47,12 +47,24 @@ BINARY = PROJECT_DIR / "tron"
 # Self-contained here for the same reason pack_handshake_req() is
 # self-contained in telemetry_bridge.py rather than split across files.
 #
-# See core/WIRE_PROTOCOL_MAGIC_BYTES.md for the authoritative registry -
-# this is a mirror of that file's MissionLinkOverride_t row, not a fresh
-# allocation.
+# See core/mission_link_override.h's own "AUTHORITATIVE REGISTRY" comment
+# (section 2, on OVERRIDE_MAGIC0/1) for the running list of every magic
+# pair assigned across this project and the non-ASCII-first-byte
+# invariant they all follow - this is a mirror of that header's values,
+# not a fresh allocation, and must stay in sync with it.
+#
+# CORRECTION: an earlier draft of this file used 0x28/0x82 for this pair.
+# 0x28 is ASCII '(' - printable, and every OTHER magic pair on this same
+# USART1 wire (telemetry, roster/incident/fault/status, handshake) uses a
+# first byte >0x7E specifically so it can never appear in the free-running
+# ASCII tm_printf debug text also sharing that wire (see core/
+# mission_link.h section 5's doc). 0x28 would have broken that resync
+# guarantee for this message type alone. Corrected to 0x87/0x78 here and
+# in core/mission_link_override.h together, not left silently mismatched
+# between the two sides of the wire.
 
-OVERRIDE_MAGIC0 = 0x28
-OVERRIDE_MAGIC1 = 0x82
+OVERRIDE_MAGIC0 = 0x87
+OVERRIDE_MAGIC1 = 0x78
 OVERRIDE_MAGIC = bytes((OVERRIDE_MAGIC0, OVERRIDE_MAGIC1))
 
 # MissionLinkOverride_t: team_id (u8), incident_id (u32 LE) - packed,

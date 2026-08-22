@@ -91,6 +91,27 @@
  */
 extern uint32_t board_snapshot_ring_drain(void);
 
+/*
+ * Mission-link heartbeat trigger hook (this prompt's addition -
+ * additive only, coordinate with Prompt 4's roster-wait diagnostic
+ * hook in this same file, different concern). mission_link_task_step()
+ * (platform/board/mission_link_task.c) is what actually decides
+ * whether to send: it compares each local team's current status
+ * against MISSION_LINK_HEARTBEAT_INTERVAL_MS of wall-clock elapsed
+ * time via cbba_now_ms() (see that file's mission_link_status_tx_step()
+ * and mission_link.h section 5a) and re-anchors on a periodic
+ * heartbeat even when nothing changed. This hook's only job is to make
+ * sure that check actually runs often enough for the timer to matter -
+ * called every tick, same as the header's own handoff note 2 specifies
+ * ("unlike the snapshot ring, there's no large backlog to bound; each
+ * call does a handful of non-blocking reads/polls and returns"). Both
+ * functions are forward-declared here rather than added to a portable
+ * core/ header, same convention board_snapshot_ring_drain() above
+ * already follows for board-platform-internal plumbing.
+ */
+extern void mission_link_task_init(void);
+extern void mission_link_task_step(void);
+
 LOCAL void sim_task(INT stacd, void *exinf);
 LOCAL ID sim_tskid;
 LOCAL T_CTSK sim_ctsk = {
@@ -133,6 +154,16 @@ LOCAL void sim_task(INT stacd, void *exinf)
         return;
     }
 
+    /* Once, before the seed loop - see mission_link_task.c's own
+       handoff note 1. Must follow whatever sets
+       g_comms_transport_this_board_id / calls comms_transport_init()
+       per that same note; harmless to call ahead of that ordering
+       landing elsewhere too, since this only zeroes this file's own
+       per-team "last sent" bookkeeping (mission_link_task.c's
+       g_last_sent_status[]) and doesn't touch comms_transport state
+       itself. */
+    mission_link_task_init();
+
     for(uint32_t seed = BOARD_SEED; seed < BOARD_SEED + BOARD_SEED_COUNT; ++seed)
     {
         tm_printf((UB*)"tron: seed %lu start\n", (unsigned long)seed);
@@ -142,6 +173,17 @@ LOCAL void sim_task(INT stacd, void *exinf)
         for(uint32_t tick = 0; tick < BOARD_TICKS_PER_SEED; ++tick)
         {
             sim_tick();
+
+            /* Heartbeat trigger hook (this prompt's addition - see the
+               extern declarations above for scope). Every tick, not
+               gated behind an interval like the snapshot-ring drain
+               below: mission_link_status_tx_step() does its own
+               cbba_now_ms()-based rate limiting internally, so calling
+               this more often than the heartbeat interval just means
+               the wall-clock check runs (and finds nothing due yet)
+               a few extra times for free - cheap, non-blocking, no
+               reason to add a second interval here to throttle it. */
+            mission_link_task_step();
 
             if((tick % BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL) == 0u)
             {

@@ -34,6 +34,17 @@ void update_all_passive_effects(void);
 void complete_incident_stage(IncidentState_t *incident);
 void complete_return_to_safe_zone_task(TeamState_t *team, IncidentState_t *incident);
 int incident_needs_support(const IncidentState_t *incident);
+/* Board-hosted-team work rate: deterministic, fault-adjusted (equipment_
+ * level + fault_state.severity[]-derived, same spirit as core/team.c's
+ * stamina-drain formula), NOT the STREAM_WORK_RATE RNG roll below - see
+ * this function's definition for the formula and update_incident_work()
+ * for where it replaces that roll for teams cbba_team_is_local() reports
+ * true for. Exposed (not static) so core/mission_link.c's
+ * mission_link_build_status() can report the exact same value that will
+ * be (or was) applied to that team's work, rather than a second,
+ * independently-computed figure that could silently disagree with it -
+ * see mission_link.h's MissionLinkStatus_t doc. */
+uint8_t team_effective_work_rate(const TeamState_t *team);
 void initialize_evacuation_gateways(uint32_t seed);
 void initialize_evacuation_teams(void);
 void generate_incidents_if_needed(void);

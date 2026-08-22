@@ -815,6 +815,96 @@ void complete_return_to_safe_zone_task(TeamState_t *team, IncidentState_t *task)
     clear_task_slot(TASK_POOL_SYSTEM, task);
 }
 
+/*
+ * Deterministic, fault-adjusted work rate for a single team - see this
+ * function's declaration in incident.h for why it's shared (not
+ * duplicated) between update_incident_work() below and core/
+ * mission_link.c's mission_link_build_status().
+ *
+ * Base rate scales linearly with equipment_level across the same
+ * [WORK_RATE_MIN, WORK_RATE_MAX] band the STREAM_WORK_RATE RNG roll
+ * draws from, so a board-hosted team's reported figures stay
+ * comparable at a glance to a remote (RNG-rolled) team's. Faults then
+ * degrade that base rate, same spirit as team.c's change_stamina(
+ * -severity[FAULT_CLASS_RESOURCE]*0.12f) drain: FAULT_CLASS_RESOURCE
+ * (equipment/supply shortfall) and FAULT_CLASS_MOBILITY (impaired
+ * physical operation, not just travel - move_team() already applies
+ * FAULT_CLASS_MOBILITY to travel; this is its on-scene-output
+ * counterpart) each shave one unit off the rate per point of active
+ * severity. Floored at WORK_RATE_MIN rather than allowed to reach 0:
+ * this models a *degraded* team, not a stalled one - a team reporting
+ * truly zero progress would be visually indistinguishable from an idle
+ * team (assigned_incident_id == MISSION_LINK_NO_INCIDENT) on the
+ * dashboard, which would misrepresent an actively-struggling team as
+ * not working at all. A team that can no longer make even minimal
+ * progress is expected to get pulled off via abandon_task_for_recovery()
+ * (team.c) rather than sit here reporting 0.
+ *
+ * Independent of status/assignment - this is queried for every team's
+ * MissionLinkStatus_t report (mission_link_build_status()), including
+ * idle teams, since the field documents "currently-effective rate",
+ * not "rate currently being applied to something".
+ */
+uint8_t team_effective_work_rate(const TeamState_t *team)
+{
+    uint32_t base_range;
+    uint32_t scaled;
+    uint8_t rate;
+
+    if(team == NULL)
+        return WORK_RATE_MIN;
+
+    base_range = (uint32_t)(WORK_RATE_MAX - WORK_RATE_MIN);
+    scaled = ((uint32_t)team->equipment_level * base_range) / (uint32_t)EQ_MAX_LEVEL;
+    rate = (uint8_t)(WORK_RATE_MIN + scaled);
+
+    if(team->fault_state.active[FAULT_CLASS_RESOURCE])
+    {
+        uint8_t severity = team->fault_state.severity[FAULT_CLASS_RESOURCE];
+        rate = (rate > severity) ? (uint8_t)(rate - severity) : (uint8_t)WORK_RATE_MIN;
+    }
+
+    if(team->fault_state.active[FAULT_CLASS_MOBILITY])
+    {
+        uint8_t severity = team->fault_state.severity[FAULT_CLASS_MOBILITY];
+        rate = (rate > severity) ? (uint8_t)(rate - severity) : (uint8_t)WORK_RATE_MIN;
+    }
+
+    if(rate < WORK_RATE_MIN) rate = WORK_RATE_MIN;
+    if(rate > WORK_RATE_MAX) rate = WORK_RATE_MAX;
+
+    return rate;
+}
+
+/* core/cbba.c's cbba_team_is_local() - public, but deliberately not
+ * declared in cbba.h (see that function's own comment for why:
+ * "public, but not declared in cbba.h" is an established convention in
+ * that file for anything a standalone selftest needs to reach without
+ * standing up a full mission). Forward-declared here at the one call
+ * site that needs it, matching how this project already forward-
+ * declares this kind of cross-file-but-undeclared function elsewhere
+ * (e.g. platform/board/main_board.c's board_snapshot_ring_drain()). */
+extern bool cbba_team_is_local(uint8_t team_id);
+
+/*
+ * team_id's own work-rate contribution for this tick: the deterministic
+ * board-side formula for a locally-hosted team, the original
+ * STREAM_WORK_RATE RNG roll for everyone else (a team no board here
+ * hosts has no local execution state to compute a real rate from - see
+ * mission_link.h's MissionLinkFault_t doc on why a board's g_teams[]
+ * entry for a remote team isn't kept live). This is the single
+ * decision point both the primary and support-team contributions below
+ * route through, so the two can never pick different rules for the
+ * same team.
+ */
+static uint8_t incident_work_rate_for_team(uint8_t team_id)
+{
+    if(cbba_team_is_local(team_id))
+        return team_effective_work_rate(&g_teams[team_id]);
+
+    return random_range_stream(STREAM_WORK_RATE, WORK_RATE_MIN, WORK_RATE_MAX);
+}
+
 static void update_incident_work(IncidentState_t *incident) //incident
 {
     if(incident->status!=INC_IN_PROGRESS) return;
@@ -826,10 +916,11 @@ static void update_incident_work(IncidentState_t *incident) //incident
     extern uint32_t g_diag_work_progress_calls;
     g_diag_work_progress_calls++;
 
+    uint8_t work_rate = incident_work_rate_for_team(incident->assigned_team);
 
-    uint8_t work_rate=random_range_stream(STREAM_WORK_RATE,WORK_RATE_MIN,WORK_RATE_MAX);
     if(is_valid_team_id(incident->support_team) && g_teams[incident->support_team].status==STATUS_ON_SCENE)
-        work_rate+=random_range_stream(STREAM_WORK_RATE,WORK_RATE_MIN,WORK_RATE_MAX);
+        work_rate += incident_work_rate_for_team(incident->support_team);
+
     if(incident->work_remaining<=work_rate)
     {
         incident->work_remaining=0;

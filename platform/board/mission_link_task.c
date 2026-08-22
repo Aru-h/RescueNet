@@ -82,6 +82,30 @@
 #include "mission_state.h"
 #include "comms_transport.h"
 #include "lora_frame.h"
+#include "cbba.h"            /* cbba_now_ms() - reused as this link's
+                                 wall-clock source for the heartbeat
+                                 trigger below, same µT-Kernel timer
+                                 CBBA_ROUND_TIMEOUT_MS is already
+                                 enforced against - see mission_link.h
+                                 section 5a for why this shares that
+                                 clock rather than standing up a second
+                                 one. */
+
+/*
+ * mission_link_task_step() (this file's public entry point) is now
+ * called from main_board.c's per-tick loop - see this file's own
+ * top-of-file handoff notes, item 2. That wiring is scoped narrowly
+ * to what THIS prompt owns there (the heartbeat trigger - see
+ * main_board.c's own comment at the call site): it drives
+ * mission_link_status_tx_step() below often enough for the
+ * cbba_now_ms()-based heartbeat check to actually fire on schedule.
+ * The USART1/comms_transport RX halves of mission_link_task_step()
+ * ride along for free (they're both no-ops today anyway - see
+ * board_usart1_read_byte()'s weak stub above and comms_transport's
+ * own pending-bring-up status) rather than needing a second, narrower
+ * entry point split out just to avoid calling them before their
+ * backing drivers exist.
+ */
 
 /*
  * USART1 byte-level RX hook - NOT implemented here, same status as
@@ -457,17 +481,29 @@ static void mission_link_comms_transport_rx_step(void)
 /* ---------------------------------------------------------------
  * Channel 1 TX: local status change detection (every board)
  * ---------------------------------------------------------------
- * Sent on change, not every tick - see mission_link.h's
- * MissionLinkStatus_t doc for why (STATUS_ON_SCENE is typically held
- * for many ticks in a row, so per-tick sends would be mostly
- * redundant airtime/UART traffic).
+ * Sent on status/equipment_level/work_rate change, plus a periodic
+ * heartbeat - see mission_link.h's MissionLinkStatus_t doc (schema v2)
+ * for why: STATUS_ON_SCENE is typically held for many ticks in a row,
+ * so a per-tick send would be mostly redundant airtime/UART traffic,
+ * but a change-only trigger alone would let a silent board look
+ * identical to a healthy one holding steady - the heartbeat is what
+ * bounds that staleness and gives the laptop's watchdog a liveness
+ * signal.
+ *
+ * last_sent_ms is a cbba_now_ms() wall-clock timestamp, NOT a sim-tick
+ * count: BOARD_TICK_DELAY_MS is 0 by default (main_board.c runs the
+ * sim flat-out), so ticks don't correspond to real elapsed time on
+ * hardware - see mission_link.h section 5a and cbba.h's own
+ * CBBA_ROUND_TIMEOUT_MS comment for the identical reasoning.
  */
 
 typedef struct
 {
-    uint8_t status;
-    uint8_t equipment_level;
-    uint8_t known; /* 0 until the first status has been sent for this team */
+    uint8_t  status;
+    uint8_t  equipment_level;
+    uint8_t  work_rate;
+    uint8_t  known; /* 0 until the first status has been sent for this team */
+    uint32_t last_sent_ms;
 } MissionLinkLastSentStatus_t;
 
 static MissionLinkLastSentStatus_t g_last_sent_status[NUM_TEAMS];
@@ -500,11 +536,13 @@ static void mission_link_send_status(uint8_t team_id, const MissionLinkStatus_t 
 static void mission_link_status_tx_step(void)
 {
     uint8_t team_id;
+    uint32_t now_ms = cbba_now_ms();
 
     for (team_id = 0u; team_id < NUM_TEAMS; team_id++)
     {
         MissionLinkStatus_t status;
         MissionLinkLastSentStatus_t *last;
+        int should_send;
 
         if (comms_transport_board_id_for_team(team_id) != g_comms_transport_this_board_id)
         {
@@ -518,11 +556,48 @@ static void mission_link_status_tx_step(void)
         mission_link_build_status(team_id, &status);
         last = &g_last_sent_status[team_id];
 
-        if (last->known &&
-            last->status == status.status &&
-            last->equipment_level == status.equipment_level)
+        if (!last->known)
         {
-            continue; /* No change since the last send. */
+            /* Nothing sent yet for this team - always send, same as
+               v1's behavior (there is no prior anchor to compare
+               against). */
+            should_send = 1;
+        }
+        else if (last->status != status.status ||
+                 last->equipment_level != status.equipment_level)
+        {
+            /* v1 triggers, unchanged. */
+            should_send = 1;
+        }
+        else if (last->work_rate != status.work_rate)
+        {
+            /* New trigger: work_rate changed - fault onset/clear on a
+               resource-relevant class, or a new task assignment reset
+               the anchor (mission_link_build_status() reflects the
+               newly-assigned incident's work_remaining/incident_id
+               immediately, so a reassignment shows up here as a
+               work_rate-and/or-assigned_incident_id change even when
+               status/equipment_level didn't move). */
+            should_send = 1;
+        }
+        else if ((now_ms - last->last_sent_ms) >= MISSION_LINK_HEARTBEAT_INTERVAL_MS)
+        {
+            /* New trigger: periodic heartbeat. Re-anchors work_
+               remaining_at_report/stamina_at_report/report_tick even
+               though nothing else changed - see mission_link.h
+               section 5a. Unsigned subtraction wraps correctly across
+               a cbba_now_ms() rollover, same reasoning cbba.c's own
+               round-timeout wait already relies on. */
+            should_send = 1;
+        }
+        else
+        {
+            should_send = 0;
+        }
+
+        if (!should_send)
+        {
+            continue;
         }
 
         mission_link_send_status(team_id, &status);
@@ -530,6 +605,8 @@ static void mission_link_status_tx_step(void)
         last->known = 1u;
         last->status = status.status;
         last->equipment_level = status.equipment_level;
+        last->work_rate = status.work_rate;
+        last->last_sent_ms = now_ms;
     }
 }
 
@@ -549,6 +626,8 @@ void mission_link_task_init(void)
         g_last_sent_status[i].known = 0u;
         g_last_sent_status[i].status = 0u;
         g_last_sent_status[i].equipment_level = 0u;
+        g_last_sent_status[i].work_rate = 0u;
+        g_last_sent_status[i].last_sent_ms = 0u;
     }
 }
 

@@ -1,5 +1,22 @@
 [
   {
+    "timestamp": "2026-08-20 08:26:25",
+    "seed": 1,
+    "seed_count": 1,
+    "ticks": 2000,
+    "fault_profile": "none",
+    "elapsed_seconds": 321.12,
+    "returncode": 0,
+    "summary": {
+      "safezone_fallback_count": 585,
+      "discarded_signal_count": 96141
+    },
+    "rest_cycle_count": 322,
+    "rest_cycles_interrupted_1tick": 235,
+    "rest_cycles_sustained_10plus": 82,
+    "csv_rows": 1978
+  },
+  {
     "timestamp": "2026-08-19 14:44:41",
     "seed": 1,
     "seed_count": 1,

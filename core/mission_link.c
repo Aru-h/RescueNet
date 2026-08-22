@@ -1,8 +1,29 @@
 #include <stddef.h>
 
+#include "debug.h"          /* debug_trace() - eviction logging only */
 #include "mission_link.h"
 #include "mission_link_codec.h"
 #include "mission_state.h"
+#include "incident.h"        /* team_effective_work_rate() - see
+                                 mission_link_build_status() below */
+#include "cbba.h"            /* CBBA_ROUND_TIMEOUT_MS - static-assert
+                                 only, see below. Safe to include from a
+                                 .c file (unlike mission_link.h itself -
+                                 see that header's own comment on why IT
+                                 can't include cbba.h): this file has no
+                                 downstream includers to cycle through. */
+
+/* MISSION_LINK_HEARTBEAT_INTERVAL_MS (mission_link.h) is defined as an
+ * independent literal rather than derived from CBBA_ROUND_TIMEOUT_MS by
+ * #include, to avoid a circular include from mission_link.h itself (see
+ * that header's section 5a comment). This is the check that keeps the
+ * two from silently drifting apart: if CBBA_ROUND_TIMEOUT_MS ever
+ * changes and this stops being a whole multiple, fix the multiplier in
+ * mission_link.h, not this assert. */
+_Static_assert(
+    (MISSION_LINK_HEARTBEAT_INTERVAL_MS % CBBA_ROUND_TIMEOUT_MS) == 0u,
+    "MISSION_LINK_HEARTBEAT_INTERVAL_MS must stay a whole multiple of "
+    "CBBA_ROUND_TIMEOUT_MS - see mission_link.h section 5a");
 
 /*
  * Implements the codec + apply logic declared in mission_link_codec.h.
@@ -355,6 +376,125 @@ int mission_link_parse_status(const uint8_t *buf, uint32_t buf_len,
 }
 
 /* ---------------------------------------------------------------
+ * Board-side incident cache (BoardIncidentCache_t, mission_state.h)
+ * ---------------------------------------------------------------
+ * Local to this file - nothing outside mission_link.c needs the raw
+ * struct, only the board_incident_cache_get()/put()/remove() API
+ * declared in mission_link.h. Zero-initialized at startup, same as
+ * every other file-scope object in this project (no explicit init
+ * call needed: in_use == 0 for every slot until the first put()).
+ */
+static BoardIncidentCache_t g_board_incident_cache;
+
+MissionLinkIncident_t *board_incident_cache_get(uint32_t incident_id)
+{
+    uint32_t i;
+
+    for (i = 0u; i < BOARD_INCIDENT_CACHE_SIZE; i++)
+    {
+        if (g_board_incident_cache.slots[i].in_use &&
+            g_board_incident_cache.slots[i].incident.incident_id == incident_id)
+        {
+            return &g_board_incident_cache.slots[i].incident;
+        }
+    }
+
+    return NULL;
+}
+
+/* Finds the in-use slot holding the cached incident with the
+   furthest/lowest priority - i.e. the numerically HIGHEST Priority_t
+   value (PRIORITY_LOW == 4 is further/lower priority than
+   PRIORITY_CRITICAL == 1; see mission_state.h). This is the same
+   ordering IncidentState_t.priority already carries laptop-side -
+   nothing new invented here, just read off the existing enum. Ties
+   keep the first (lowest-index) match, which is as good as any other
+   tiebreak absent a documented one and keeps this deterministic. */
+static uint32_t board_incident_cache_find_eviction_index(void)
+{
+    uint32_t worst_index = 0u;
+    uint8_t worst_priority = 0u;
+    uint32_t i;
+
+    for (i = 0u; i < BOARD_INCIDENT_CACHE_SIZE; i++)
+    {
+        if (g_board_incident_cache.slots[i].in_use &&
+            g_board_incident_cache.slots[i].incident.priority > worst_priority)
+        {
+            worst_priority = g_board_incident_cache.slots[i].incident.priority;
+            worst_index = i;
+        }
+    }
+
+    return worst_index;
+}
+
+void board_incident_cache_put(const MissionLinkIncident_t *inc)
+{
+    uint32_t i;
+    uint32_t target_index;
+    int have_target = 0;
+
+    /* Update-in-place if already cached. */
+    for (i = 0u; i < BOARD_INCIDENT_CACHE_SIZE; i++)
+    {
+        if (g_board_incident_cache.slots[i].in_use &&
+            g_board_incident_cache.slots[i].incident.incident_id == inc->incident_id)
+        {
+            g_board_incident_cache.slots[i].incident = *inc;
+            return;
+        }
+    }
+
+    /* Not present - insert into the first free slot, if any. */
+    for (i = 0u; i < BOARD_INCIDENT_CACHE_SIZE; i++)
+    {
+        if (!g_board_incident_cache.slots[i].in_use)
+        {
+            target_index = i;
+            have_target = 1;
+            break;
+        }
+    }
+
+    /* Cache is full: evict the furthest/lowest-priority incident to
+       make room. Logged unconditionally (not gated behind a trace
+       flag like simulation.c's per-tick trace calls) since eviction
+       only happens under real load-spike pressure, not every tick -
+       silent eviction here would be a genuinely confusing bug to
+       chase later, exactly the scenario this line exists for. */
+    if (!have_target)
+    {
+        target_index = board_incident_cache_find_eviction_index();
+
+        debug_trace("mission_link: incident cache full, evicting incident_id=%lu "
+                    "(priority=%u) for incident_id=%lu (priority=%u)\n",
+                    (unsigned long)g_board_incident_cache.slots[target_index].incident.incident_id,
+                    (unsigned)g_board_incident_cache.slots[target_index].incident.priority,
+                    (unsigned long)inc->incident_id,
+                    (unsigned)inc->priority);
+    }
+
+    g_board_incident_cache.slots[target_index].incident = *inc;
+    g_board_incident_cache.slots[target_index].in_use = 1u;
+}
+
+void board_incident_cache_remove(uint32_t incident_id)
+{
+    uint32_t i;
+
+    for (i = 0u; i < BOARD_INCIDENT_CACHE_SIZE; i++)
+    {
+        if (g_board_incident_cache.slots[i].in_use &&
+            g_board_incident_cache.slots[i].incident.incident_id == incident_id)
+        {
+            g_board_incident_cache.slots[i].in_use = 0u;
+            return;
+        }
+    }
+}
+
+/* ---------------------------------------------------------------
  * Apply logic - what a received message does to local board state.
  * ---------------------------------------------------------------
  */
@@ -472,6 +612,22 @@ void mission_link_apply_incident(const MissionLinkIncident_t *msg)
     incident->status = msg->status;
     incident->victim_count = msg->victim_count;
     incident->discovered = msg->discovered;
+
+    /* Keep the board's lean incident cache (mission_state.h's
+       BoardIncidentCache_t) in sync with the same frame that just
+       updated g_incidents[] above - this is the "incoming MissionLink
+       Incident_t frames get unpacked" point both consumers share.
+       Cache the latest view first, then immediately drop it again if
+       this frame reports the incident resolved: no reason to hold a
+       finished incident in a 15-slot cache and let it consume a slot
+       (or trigger an eviction) until eviction pressure eventually
+       gets around to it. */
+    board_incident_cache_put(msg);
+
+    if (msg->status == (uint8_t)INC_RESOLVED)
+    {
+        board_incident_cache_remove(msg->incident_id);
+    }
 }
 
 void mission_link_apply_fault(const MissionLinkFault_t *msg)
@@ -493,8 +649,40 @@ void mission_link_apply_fault(const MissionLinkFault_t *msg)
     }
 }
 
+/*
+ * Finds the IncidentState_t (either pool) team_id is currently assigned
+ * to, if any - the same pool/slot resolution pattern already used at
+ * every other assigned_task_pool/assigned_task_slot read site in this
+ * project (see e.g. core/team.c's update_team() STATUS_ON_SCENE case,
+ * core/simulation.c's move_team()). Returns NULL for TASK_POOL_NONE or
+ * a stale/cleared slot - both mean "nothing to anchor this report to",
+ * which mission_link_build_status() below reports via
+ * MISSION_LINK_NO_INCIDENT rather than treating as an error.
+ */
+static const IncidentState_t *mission_link_team_current_task(const TeamState_t *team)
+{
+    if (team->assigned_task_pool == TASK_POOL_INCIDENT &&
+        team->assigned_task_slot < NUM_INCIDENTS)
+    {
+        const IncidentState_t *task = &g_incidents[team->assigned_task_slot];
+        return task->slot_occupied ? task : NULL;
+    }
+
+    if (team->assigned_task_pool == TASK_POOL_SYSTEM &&
+        team->assigned_task_slot < NUM_SYSTEM_TASKS)
+    {
+        const IncidentState_t *task = &g_system_tasks[team->assigned_task_slot];
+        return task->slot_occupied ? task : NULL;
+    }
+
+    return NULL;
+}
+
 void mission_link_build_status(uint8_t team_id, MissionLinkStatus_t *out)
 {
+    const TeamState_t *team;
+    const IncidentState_t *task;
+
     out->team_id = team_id;
 
     if (team_id >= NUM_TEAMS)
@@ -504,9 +692,50 @@ void mission_link_build_status(uint8_t team_id, MissionLinkStatus_t *out)
            valid, but this keeps *out fully initialized regardless. */
         out->status = STATUS_AVAILABLE;
         out->equipment_level = 0u;
+        out->assigned_incident_id = MISSION_LINK_NO_INCIDENT;
+        out->work_remaining_at_report = 0u;
+        out->work_rate = 0u;
+        out->stamina_at_report = 0u;
+        out->report_tick = g_current_tick;
         return;
     }
 
-    out->status = g_teams[team_id].status;
-    out->equipment_level = g_teams[team_id].equipment_level;
+    team = &g_teams[team_id];
+    task = mission_link_team_current_task(team);
+
+    out->status = team->status;
+    out->equipment_level = team->equipment_level;
+
+    /* Anchor snapshot - see mission_link.h's MissionLinkStatus_t doc
+       (schema v2) for why these are anchor values, not per-tick
+       deltas, and why work_rate is board-computed here rather than
+       left for the laptop to re-derive. team_effective_work_rate() is
+       the exact same function update_incident_work() (core/incident.c)
+       applies for this team's own work if it's a board-hosted team -
+       sharing the one function is what keeps this report and the
+       board's own snapshot log from ever silently disagreeing about
+       what was actually applied. Queried unconditionally (even for an
+       idle team) since the field documents "currently-effective rate",
+       not "rate currently being applied to something". */
+    out->work_rate = team_effective_work_rate(team);
+    out->report_tick = g_current_tick;
+
+    /* stamina is quantized to uint8_t (0-100) on the wire, same
+       convention as MissionLinkRoster_t.stamina - this is that
+       field's ongoing counterpart (see mission_link.h). TeamState_t.
+       stamina is already clamped to [MIN_STAMINA, MAX_STAMINA] == [0,
+       100] by team.c's change_stamina(), so a direct truncating cast
+       is safe here without an extra clamp. */
+    out->stamina_at_report = (uint8_t)team->stamina;
+
+    if (task != NULL)
+    {
+        out->assigned_incident_id = task->incident_id;
+        out->work_remaining_at_report = task->work_remaining;
+    }
+    else
+    {
+        out->assigned_incident_id = MISSION_LINK_NO_INCIDENT;
+        out->work_remaining_at_report = 0u;
+    }
 }

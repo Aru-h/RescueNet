@@ -1,6 +1,8 @@
+#include "cbba.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 #include "mission_state.h"
 #include "mission_state_utils.h"
 #include "allocator.h"
@@ -8,6 +10,7 @@
 #include "path.h"
 #include "random.h"
 #include "team.h"
+#include "comms_transport.h"
 
 
 
@@ -16,8 +19,49 @@
 #define CBBA_ROUTE_IMPROVEMENT_EPSILON 0.0001f
 #define CBBA_RELOCATE_MARGIN 0.005f
 
+/*
+ * Manual dashboard override pin (core/mission_link_override.h writes
+ * CBBAAgentState_t.override_active/override_incident_id; this file
+ * reads them - see that header's end-to-end doc comment for the full
+ * path from a drag-drop on the dashboard down to here).
+ *
+ * A sentinel winning_bid no normal marginal bid can ever reach:
+ * calculate_marginal_bundle_bid()'s scores are built from capability_
+ * score()/equipment_score()/stamina_score()/distance terms (see
+ * scoring.c), all bounded, small multiples of 1.0 - nowhere near
+ * 1e9f. Using this as both the pinned team's own winning_bid[] entry
+ * AND the value candidate_claim_is_better() compares incoming bids
+ * against is what makes the pin survive: it propagates through the
+ * exact same CBBA consensus gossip (cbba_broadcast()/cbba_receive_
+ * and_update()) every normal claim already uses, rather than
+ * bypassing that mechanism - see cbba_apply_override_pin() below.
+ */
+#define CBBA_OVERRIDE_PIN_BID 1.0e9f
+
 static uint32_t g_cbba_two_opt_improvements = 0;
 static uint32_t g_cbba_relocate_improvements = 0;
+
+/*
+ * Per-board team-locality check: a board only computes bids for the
+ * team_ids it hosts. Thin wrapper around
+ * comms_transport_board_id_for_team() - reuse, don't reimplement the
+ * team_id/5 rule (see comms_transport.h). g_cbba_agent_state stays
+ * full NUM_TEAMS-wide regardless of locality: winner[]/timestamp[]
+ * for a remote team hold this board's received belief about that
+ * team (via mesh consensus - see cbba_ingest_remote_mesh_replies()
+ * below), even though this board never builds a bundle/path on that
+ * team's behalf.
+ */
+/* Not static: cbba_init()/cbba_consensus() follow the same "public,
+   but not declared in cbba.h" convention already in this file for
+   anything a standalone selftest legitimately needs to reach without
+   standing up a full mission (grid/incidents/path cache) just to
+   exercise per-board scoping. */
+bool cbba_team_is_local(uint8_t team_id)
+{
+    return comms_transport_board_id_for_team(team_id) ==
+           g_comms_transport_this_board_id;
+}
 
 static bool cbba_resolve_task_location(const TaskRef_t *task, int16_t *loc_x, int16_t *loc_y)
 {
@@ -227,7 +271,16 @@ static bool cbba_try_best_relocate(void)
 
     for(uint8_t donor_id = 0; donor_id < NUM_TEAMS; donor_id++)
     {
-        CBBAAgentState_t *donor = &g_cbba_agent_state[donor_id];
+        CBBAAgentState_t *donor;
+
+        if(!cbba_team_is_local(donor_id))
+            continue; /* this board never builds a path/bundle for a
+                          remote team, so donor->path_size < 2 already
+                          skips it below in practice - kept explicit
+                          as a defensive guard against that invariant
+                          changing later, and for readability */
+
+        donor = &g_cbba_agent_state[donor_id];
         if(donor->path_size < 2)
             continue;
 
@@ -237,10 +290,15 @@ static bool cbba_try_best_relocate(void)
 
             for(uint8_t receiver_id = 0; receiver_id < NUM_TEAMS; receiver_id++)
             {
-                if(receiver_id == donor_id)
-                    continue;
+                CBBAAgentState_t *receiver;
 
-                CBBAAgentState_t *receiver = &g_cbba_agent_state[receiver_id];
+                if(receiver_id == donor_id || !cbba_team_is_local(receiver_id))
+                    continue; /* this board must not mutate a remote
+                                  team's path - relocation is local
+                                  bid-adjustment, same board scope as
+                                  cbba_build_bundle() */
+
+                receiver = &g_cbba_agent_state[receiver_id];
                 if(receiver->path_size >= CBBA_COMMITMENT_LIMIT ||
                    cbba_path_contains(receiver, task) ||
                    !cbba_team_can_execute_task(receiver_id, task))
@@ -389,13 +447,132 @@ void cbba_init(void)
     }
 }
 
+/* Self-contained lookup, same "each file keeps its own copy rather
+   than sharing" precedent core/mission_link.c's mission_link_find_
+   incident_slot() already established for this exact pattern
+   (incident_id is not a slot index - see that function's own
+   comment). Distinct name/static scope, not a re-export - this file
+   has no dependency on mission_link.c and shouldn't gain one just for
+   a five-line loop. */
+static uint8_t cbba_find_incident_slot_by_id(uint32_t incident_id)
+{
+    for(uint8_t i = 0; i < NUM_INCIDENTS; i++)
+    {
+        if(g_incidents[i].slot_occupied && g_incidents[i].incident_id == incident_id)
+        {
+            return i;
+        }
+    }
+
+    return NO_ASSIGNMENT;
+}
+
+/*
+ * Force-injects team_id's active override pin (if any) into its own
+ * bundle/path, ahead of the normal marginal-bid competition loop
+ * below, and stamps a CBBA_OVERRIDE_PIN_BID winning_bid no other
+ * team's normal bid can beat once it propagates through consensus
+ * (see the #define's own comment above).
+ *
+ * Called at the very top of cbba_build_bundle(), which cbba_run()'s
+ * round loop invokes many times per tick for the same team_id (see
+ * that loop's own comment) - idempotent across those repeat calls:
+ * once injected, cbba_bundle_contains() below stops it from being
+ * injected a second time, same guard the normal competitive loop
+ * already relies on for every other task.
+ *
+ * Pin lifecycle - cleared here, lazily, in exactly two cases:
+ *   1. The pinned incident_id no longer resolves to an occupied slot,
+ *      or that slot's status is no longer INC_OPEN. The latter is the
+ *      NORMAL, expected end of a successful pin: allocate_all_
+ *      incidents() (core/allocator.c) only flips a slot to INC_ASSIGNED
+ *      via assign_incident(), which runs AFTER cbba_run() (and
+ *      therefore after every cbba_build_bundle() call) has already
+ *      finished for that tick - so this function can't observe
+ *      "mission accomplished" until the NEXT tick's cbba_run() calls
+ *      it again. Leaving override_active set for that one extra tick
+ *      is harmless: cbba_bundle_contains() already prevents a
+ *      duplicate injection in the meantime, and nothing else reads
+ *      override_active except this function.
+ *   2. bundle_size is already at CBBA_COMMITMENT_LIMIT with the pinned
+ *      task not among the entries (would only happen if something
+ *      else filled the bundle first within the same tick's repeat
+ *      calls, which the injection-at-the-top ordering here prevents
+ *      in practice, but checked defensively rather than assumed).
+ *      This one does NOT clear the pin - it's a "try again next
+ *      round/tick" condition, not "no longer actionable", since
+ *      bundle_size resets to 0 every cbba_init() (start of the next
+ *      cbba_run()).
+ */
+static void cbba_apply_override_pin(uint8_t team_id)
+{
+    CBBAAgentState_t *agent = &g_cbba_agent_state[team_id];
+    uint8_t pinned_slot;
+    TaskRef_t task;
+
+    if(!agent->override_active)
+        return;
+
+    pinned_slot = cbba_find_incident_slot_by_id(agent->override_incident_id);
+
+    if(pinned_slot == NO_ASSIGNMENT ||
+       !g_incidents[pinned_slot].slot_occupied ||
+       g_incidents[pinned_slot].status != INC_OPEN)
+    {
+        /* No longer actionable (see case 1 above) - drop the stale
+           pin so a future incident that happens to reuse this same
+           incident_id (or team_id, if this pin's team later gets a
+           fresh override) doesn't inherit a leftover force. */
+        agent->override_active = 0u;
+        return;
+    }
+
+    task.pool = TASK_POOL_INCIDENT;
+    task.slot = pinned_slot;
+
+    if(agent->bundle_size >= CBBA_COMMITMENT_LIMIT || cbba_bundle_contains(team_id, task))
+        return; /* case 2 above, or already injected earlier this
+                    tick's repeat calls - nothing to do */
+
+    agent->bundle[agent->bundle_size] = task;
+    agent->bundle_bid[agent->bundle_size] = CBBA_OVERRIDE_PIN_BID;
+    agent->bundle_size++;
+
+    /* Front of the path: a forced assignment should be this team's
+       very next stop, not queued behind whatever it already committed
+       to earlier this same bidding cycle. This also piggybacks on an
+       existing invariant elsewhere in this file: cbba_try_best_
+       relocate()'s donor loop starts at donor_index = 1, never 0
+       (path[0] is this team's current/next destination - see cbba_
+       sync_team_execution_twin()'s own use of path[0] - and is
+       already treated as committed, not up for route-relocation). By
+       landing the pin at path[0], the post-convergence relocate pass
+       (cbba_improve_routes() -> cbba_try_best_relocate(), which runs
+       every cbba_run() after this function's round loop finishes)
+       can never pick it up as a donor candidate and hand it to a
+       different team for a route-utility gain - exactly the "don't
+       let normal [bidding OR route optimization] override it"
+       requirement this pin exists to satisfy. */
+    for(uint8_t j = agent->path_size; j > 0; j--)
+    {
+        agent->path[j] = agent->path[j - 1];
+    }
+    agent->path[0] = task;
+    agent->path_size++;
+
+    agent->winner[pinned_slot] = team_id;
+    agent->winning_bid[pinned_slot] = CBBA_OVERRIDE_PIN_BID;
+}
+
 void cbba_build_bundle(uint8_t team_id)
 {
     TeamState_t *team=&g_teams[team_id];
     CBBAAgentState_t *agent=&g_cbba_agent_state[team_id];
     
     TaskRef_t task, best_task;
-    
+
+    cbba_apply_override_pin(team_id);
+
     while(agent->bundle_size < CBBA_COMMITMENT_LIMIT)
     {
         float best_bid=-1;
@@ -676,6 +853,152 @@ static uint8_t cbba_communication_link_up(uint8_t team_id)
     return (elapsed % cadence) == 0;
 }
 
+/*
+ * ---------------------------------------------------------------
+ * Real mesh exchange (CBBA_ROUND_TIMEOUT_MS - see cbba.h)
+ * ---------------------------------------------------------------
+ * cbba_consensus() above is the in-process simulation of the whole
+ * mesh (every team, same address space, same tick - see cbba_run()'s
+ * round loop) and stays exactly as it was; it's what lets the
+ * laptop/desktop build and any single-process test model a
+ * fully-converged multi-team auction without real radios. The two
+ * functions below are the actual comms_transport-backed path a real
+ * board uses to reach teams hosted on a DIFFERENT board - something
+ * cbba_consensus() cannot do for real, since a real board process
+ * only ever has its own local NUM_TEAMS-wide array, not another
+ * board's live state.
+ */
+
+/* Weak default: no real clock behind it - see cbba.h's cbba_now_ms()
+   doc comment for the full explanation and the real-hardware
+   override contract (same weak-default pattern as
+   comms_transport.c's lora_spi_transmit). Advances a simulated
+   millisecond counter by a fixed step every call, purely so the
+   bounded wait loop below always terminates in a small, deterministic
+   number of calls even with nothing to poll - never an infinite
+   spin, and never an instant (zero-wait) timeout either. */
+#ifndef CBBA_SIM_CLOCK_STEP_MS
+#define CBBA_SIM_CLOCK_STEP_MS 10u
+#endif
+
+__attribute__((weak)) uint32_t cbba_now_ms(void)
+{
+    static uint32_t s_sim_clock_ms = 0u;
+    s_sim_clock_ms += CBBA_SIM_CLOCK_STEP_MS;
+    return s_sim_clock_ms;
+}
+
+/* Sends every locally-hosted team's current belief snapshot to every
+   OTHER board over comms_transport (real LoRa once that driver
+   exists, an in-process queue round-trip today when boards happen to
+   coincide - see comms_transport_send()). One CBBAMessage_t per
+   local team, the same payload cbba_consensus()'s in-process outbox
+   already builds via cbba_broadcast() - reused here, not re-derived. */
+/* Not static - see cbba_team_is_local()'s comment above for why. */
+void cbba_broadcast_local_teams(void)
+{
+    uint8_t num_boards = (uint8_t)((NUM_TEAMS + 4u) / 5u); /* team_id/5
+        rule - see comms_transport_board_id_for_team() */
+
+    for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+    {
+        CBBAMessage_t msg;
+
+        if(!cbba_team_is_local(team_id))
+            continue;
+
+        cbba_broadcast(team_id, &msg);
+
+        for(uint8_t board = 0; board < num_boards; board++)
+        {
+            uint8_t representative_team_id;
+
+            if(board == g_comms_transport_this_board_id)
+                continue;
+
+            /* Any team_id on that board reaches the whole board -
+               comms_transport routes by board, not by the specific
+               receiver_team_id passed here (see comms_transport.h);
+               the receiving board fans this out to all of ITS local
+               teams itself, in cbba_ingest_remote_mesh_replies()
+               below. */
+            representative_team_id = (uint8_t)(board * 5u);
+
+            (void)comms_transport_send(team_id, representative_team_id,
+                                        LORA_FRAME_TYPE_CBBA,
+                                        (const uint8_t *)&msg,
+                                        (uint8_t)sizeof(msg));
+        }
+    }
+}
+
+/* Drains this board's comms_transport inbox for CBBA frames and folds
+   each one into every locally-hosted team's belief via
+   cbba_receive_and_update() - the same function cbba_consensus()'s
+   in-process gossip already uses, just fed from a real (or, until a
+   real multi-board harness exists, locally-stubbed - see
+   comms_transport_send()/comms_transport_poll_received(), both real,
+   no stub needed) wire message instead of an in-memory outbox[]
+   entry.
+
+   Actively waits up to CBBA_ROUND_TIMEOUT_MS for something to arrive:
+   comms_transport_poll_received() is itself non-blocking (returns 0
+   immediately on an empty inbox), so without an explicit wait this
+   function would finalize optimistically with zero wait - exactly
+   what CBBA_ROUND_TIMEOUT_MS exists to rule out (see cbba.h). It is
+   equally deliberate that this does NOT wait past the timeout even
+   if nothing has arrived yet: a real board still has to move its
+   teams every tick whether or not the other board replied in time,
+   so this finalizes with whatever's been ingested so far rather than
+   blocking indefinitely. */
+/* Not static - see cbba_team_is_local()'s comment above for why. */
+void cbba_ingest_remote_mesh_replies(void)
+{
+    uint32_t round_start = cbba_now_ms();
+
+    while((cbba_now_ms() - round_start) < CBBA_ROUND_TIMEOUT_MS)
+    {
+        uint8_t sender_team_id;
+        uint8_t frame_type;
+        uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
+        uint8_t payload_len;
+        CBBAMessage_t msg;
+
+        if(!comms_transport_poll_received(&sender_team_id, &frame_type,
+                                           payload, &payload_len))
+        {
+            continue; /* nothing waiting right now - keep waiting until
+                          the timeout, rather than giving up on the
+                          first empty poll */
+        }
+
+        if(frame_type != LORA_FRAME_TYPE_CBBA)
+            continue; /* mission-link's RX task (Prompt 3) owns those */
+
+        if(payload_len != (uint8_t)sizeof(CBBAMessage_t))
+            continue; /* protocol drift or a corrupt frame - drop it
+                          and keep draining rather than aborting the
+                          whole round over one bad message */
+
+        memcpy(&msg, payload, sizeof(msg));
+        (void)sender_team_id; /* msg.sender_id (wire field, set by
+            cbba_broadcast()) is authoritative - see comms_transport.h's
+            "Open question" note: sender identity for a genuinely
+            separate board isn't on the wire at the comms_transport
+            layer today, only inside CBBAMessage_t itself */
+
+        for(uint8_t receiver_id = 0; receiver_id < NUM_TEAMS; receiver_id++)
+        {
+            if(!cbba_team_is_local(receiver_id))
+                continue; /* only this board's own teams update their
+                              belief from a mesh reply - the other
+                              board's teams are that board's business */
+
+            cbba_receive_and_update(receiver_id, &msg);
+        }
+    }
+}
+
 void cbba_consensus(void)
 {
     CBBAMessage_t outbox[NUM_TEAMS];
@@ -734,11 +1057,25 @@ void cbba_run(void)
     {
         for(int team_id = 0; team_id < NUM_TEAMS; team_id++)
         {
+            if(!cbba_team_is_local((uint8_t)team_id))
+                continue; /* a board only bids for the teams it hosts -
+                              see cbba_team_is_local() */
+
             cbba_build_bundle((uint8_t)team_id);
         }
 
         cbba_consensus();
     }
+
+    /* One real mesh round-trip per tick's bidding cycle, not per
+       internal convergence round above: CBBA_ROUND_TIMEOUT_MS is a
+       per-tick budget (see cbba.h), and NUM_TEAMS * CBBA_MAX_BUNDLE_SIZE
+       rounds of waiting would be nowhere near real-time. Broadcast
+       this board's now-converged local belief, then wait up to
+       CBBA_ROUND_TIMEOUT_MS for the other board's reply before
+       finalizing with whatever's been heard. */
+    cbba_broadcast_local_teams();
+    cbba_ingest_remote_mesh_replies();
 
     cbba_improve_routes();
     cbba_sync_mission_execution_twin();

@@ -49,13 +49,49 @@ __attribute__((weak)) int lora_spi_transmit(const uint8_t *frame_bytes,
  */
 
 #ifndef COMMS_TRANSPORT_CHANNEL_BYTES_PER_TICK
-/* How many on-air bytes "fit" in one simulated cost tick. A
-   deliberately simple placeholder - proportional to message size, not
-   calibrated against a real SX1262 airtime-vs-bytes table (that
-   calibration is SPI/radio driver work, still pending bring-up).
-   +1u below guarantees every send costs at least one tick even for a
-   tiny payload, so the channel is never free regardless of size. */
-#define COMMS_TRANSPORT_CHANNEL_BYTES_PER_TICK 8u
+/*
+ * How many on-air bytes "fit" in one simulated cost tick. Calibrated
+ * against a real SX1262 LoRa time-on-air (ToA) figure - see the
+ * derivation below - not hand-picked. Still an approximation (see the
+ * caveats at the end), but a calibrated one now, not the "8u,
+ * proportional to size, no real number behind it" placeholder this
+ * replaced.
+ *
+ * ToA (Semtech AN1200.13 formula), for SF7 / BW125kHz / coding rate
+ * 4/5 / explicit header / payload CRC on / 8-symbol preamble, sized
+ * against the largest single frame this project actually sends -
+ * LORA_FRAME_MAX_WIRE_SIZE (lora_frame.h): 2 (header) + 144 (a full
+ * CBBAMessage_t payload, core/cbba.c) + 1 (checksum) = 147 bytes:
+ *
+ *   Tsym          = 2^SF / BW = 2^7 / 125000               = 1.024 ms
+ *   Tpreamble     = (8 + 4.25) * Tsym                       = 12.544 ms
+ *   payloadSymbNb = 8 + ceil((8*147 - 4*7 + 28 + 16) / (4*7)) * 5
+ *                 = 8 + ceil(1192 / 28) * 5 = 8 + 43*5      = 223 symbols
+ *   Tpayload      = 223 * Tsym                              = 228.352 ms
+ *   Ttotal        = Tpreamble + Tpayload                    = 240.896 ms
+ *
+ * i.e. ~610 bytes/sec for a 147-byte frame at SF7. Converted to this
+ * project's sim-tick unit via TICK_TIME_SEC=36 (mission_state.h - one
+ * sim tick represents 36 real seconds, so a sub-second real LoRa
+ * round-trip has to come out "fast" against a 36-second tick, not
+ * "free"):
+ *
+ *   BYTES_PER_TICK = (147 bytes / 0.240896 s) * 36 s/tick ~= 21968
+ *
+ * Caveats, stated rather than hidden: this is still a single linear
+ * bytes-per-tick constant standing in for a genuinely non-linear ToA
+ * curve (fixed preamble cost + per-symbol quantization, not a
+ * straight line through the origin) - exact at the 147-byte point it
+ * was calibrated against, an approximation elsewhere. It also bakes
+ * in SF7, an 8-symbol preamble, coding rate 4/5, explicit header, and
+ * CRC on - the actual register-level radio configuration is still
+ * SPI/radio driver work, still pending bring-up (see comms_transport.h's
+ * "Open question" note). Whoever owns that driver should re-derive
+ * this number, using the same formula above, once those settings are
+ * chosen and confirmed on real hardware. +1u below still guarantees
+ * every send costs at least one tick even for a tiny payload, so the
+ * channel is never free regardless of size. */
+#define COMMS_TRANSPORT_CHANNEL_BYTES_PER_TICK 21968u
 #endif
 
 static uint32_t g_channel_busy_until_tick;
@@ -156,9 +192,21 @@ void comms_transport_init(void)
     g_channel_busy_until_tick = g_current_tick;
 }
 
+#ifndef COMMS_TRANSPORT_TEAMS_PER_BOARD
+/* team_id / this = board_id. Real per-board firmware keeps the
+   default of 5 (matches NUM_TEAMS / 2 boards). A laptop build
+   simulating all NUM_TEAMS in one process overrides this via
+   -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS so every team resolves
+   to board 0 and takes the same-board path uniformly - without this,
+   teams 5-9 silently route to the stubbed lora_spi_transmit() instead
+   of the local inbox the moment anything (CBBA, mission-link) sends
+   through this layer in a laptop-only run. */
+#define COMMS_TRANSPORT_TEAMS_PER_BOARD 5u
+#endif
+
 uint8_t comms_transport_board_id_for_team(uint8_t team_id)
 {
-    return (uint8_t)(team_id / 5u);
+    return (uint8_t)(team_id / COMMS_TRANSPORT_TEAMS_PER_BOARD);
 }
 
 int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,

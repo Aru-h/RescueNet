@@ -1,5 +1,11 @@
 CC ?= gcc
 CFLAGS ?= -std=gnu11 -Wall -Wextra -Wpedantic
+# Laptop/desktop build simulates every team in one process - override
+# the board-split divisor so all NUM_TEAMS resolve to board 0 and
+# comms_transport takes the same-board path uniformly. Real per-board
+# firmware targets (ARM_CFLAGS below) do NOT get this override and
+# keep comms_transport.c's default of 5.
+CFLAGS += -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS
 LDFLAGS ?= -lm
 
 # --- Layout ---------------------------------------------------------

@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "fault_config.h"
+#include "mission_link.h"   /* MissionLinkIncident_t, for BoardIncidentCache_t below */
 
 typedef enum {
     SPEC_SEARCH       = 0,
@@ -162,6 +163,18 @@ typedef enum {
 #define NUM_TEAMS     10
 #define MIN_NUM_INCIDENTS 4
 #define NUM_INCIDENTS 20
+
+/* Board-side incident cache capacity (see BoardIncidentCache_t below).
+ * Deliberately NOT sized to mirror NUM_INCIDENTS (the laptop's full
+ * 20-incident world) - a board only fields one team's worth of CBBA
+ * bidding, and this cache exists to give that bidding fast, indexed
+ * access to the subset of MissionLinkIncident_t frames it actually
+ * cares about right now. Sized instead for the max number of
+ * incidents that could realistically be concurrently assigned across
+ * this board's teams at once (with some headroom for open-but-not-
+ * yet-assigned incidents a team is actively bidding on), not the
+ * laptop's total incident count. */
+#define BOARD_INCIDENT_CACHE_SIZE 15u
 #define NUM_SYSTEM_TASKS 20
 #define CBBA_MAX_BUNDLE_SIZE 3
 #define CBBA_COMMITMENT_LIMIT 3
@@ -311,6 +324,31 @@ typedef struct {
     uint8_t mission_fault_original_victim_count; /* Backup for victim count override */
 } IncidentState_t;
 
+/* One board-side cache slot: a single MissionLinkIncident_t frame
+ * (the board's already-partial, wire-shaped view of an incident - see
+ * mission_link.h's doc on that struct) plus an in_use flag. Keyed by
+ * incident_id, not array position, same rationale as g_incidents[]
+ * on this board (see mission_link.c's mission_link_find_incident_
+ * slot()): incidents arrive over the wire in discovery order, not in
+ * the laptop's own allocation order. */
+typedef struct
+{
+    MissionLinkIncident_t incident;
+    uint8_t in_use;
+} BoardIncidentCacheSlot_t;
+
+/* Fixed-size, linear-scan incident cache for the board side. At
+ * BOARD_INCIDENT_CACHE_SIZE (15) slots, a hash table would be pure
+ * overhead - a linear scan over 15 entries is cheap enough on a
+ * Cortex-M55 that adding hashing machinery here would only add code
+ * size and a new place to get the keying wrong, for no measurable
+ * lookup-time win. See core/mission_link.c for the board_incident_
+ * cache_get()/put()/remove() helpers that operate on this struct. */
+typedef struct
+{
+    BoardIncidentCacheSlot_t slots[BOARD_INCIDENT_CACHE_SIZE];
+} BoardIncidentCache_t;
+
 typedef struct{
     uint8_t safezone_id;
     int16_t loc_x,loc_y;
@@ -393,32 +431,52 @@ typedef struct
 /* Size re-verified after adding override_active/override_incident_id
  * above, per this project's own rule for any struct-size change (see
  * core/lora_frame.h's CBBAMessage_t note for the precedent this
- * follows): NOT hand-calculated and NOT assumed free. Measured via a
- * host x86-64 gcc probe (`sizeof(CBBAAgentState_t)`): 208 bytes
- * before this change, 216 after - the two new fields cost 8 bytes,
- * not the 5 (1 + 4) a naive "just one small field" assumption would
- * expect, because a uint8_t immediately followed by a uint32_t forces
- * 3 bytes of alignment padding between them on a 4-byte-aligned
- * struct (this struct is NOT __attribute__((packed)) - it is
- * RAM-only, never put on a wire, so natural alignment is correct and
- * intended here, unlike the packed wire-format structs elsewhere in
- * this project).
+ * follows): NOT hand-calculated and NOT assumed free.
  *
- * Caveat, stated plainly rather than silently assumed: this specific
- * probe ran on x86-64, not the real Cortex-M55 target - no
- * arm-none-eabi-gcc toolchain was available in the environment this
- * change was made in. uint8_t/uint32_t/float alignment rules are
- * standard EABI behavior expected to match between the two (no
- * 8-byte-aligned type like double/int64_t is present here, which is
- * where x86-64 SysV and ARM EABI padding rules can actually diverge),
- * but per this project's established process this _Static_assert
- * should be treated as "expected to hold on the real target" rather
- * than "confirmed on the real target" until someone with the actual
- * toolchain re-runs this probe on real hardware. */
-_Static_assert(sizeof(CBBAAgentState_t) == 216u,
-               "CBBAAgentState_t size changed - re-verify padding assumptions "
-               "(see the comment immediately above this assert), including on "
-               "the real Cortex-M55 target, before trusting this number");
+ * UPDATE - real Cortex-M55 probe now run (arm-none-eabi-gcc became
+ * available after the caveat below was first written), and it does
+ * NOT match the earlier host x86-64 number:
+ *
+ *   host x86-64 gcc     (`gcc -std=gnu11`):                      216 bytes
+ *   Cortex-M55           (`arm-none-eabi-gcc -mcpu=cortex-m55
+ *                          -mthumb -mfloat-abi=hard -mfpu=auto`):176 bytes
+ *
+ * Root cause, isolated field-by-field (not guessed): TaskRef_t
+ * {TaskPool_t pool; uint8_t slot;} is 8 bytes on x86-64 (plain enums
+ * default to `int` under the x86-64 SysV ABI: 4-byte pool + 1-byte
+ * slot + 3 bytes padding) but only 2 bytes on Cortex-M55
+ * (arm-none-eabi-gcc defaults to "short enums" per the ARM EABI:
+ * TaskPool_t's three enumerators fit in a uint8_t, so pool is sized
+ * as 1 byte there, no -fshort-enums flag needed - this project's
+ * ARM_CFLAGS in the Makefile don't pass it, and don't need to). This
+ * struct holds two TaskRef_t arrays (bundle[CBBA_MAX_BUNDLE_SIZE],
+ * path[CBBA_MAX_BUNDLE_SIZE]), so the 6-byte-per-TaskRef_t difference
+ * compounds, plus a knock-on alignment shift from TaskRef_t's own
+ * alignment shrinking from 4 bytes to 1 - together accounting for the
+ * full 40-byte gap. This is exactly the "don't assume, verify empirically"
+ * failure mode this project's own process document (see this file's
+ * history) warns about - the ORIGINAL 216-byte assert below would have
+ * silently passed on every laptop-side `make`/`make smoke` build
+ * forever while being flat-out wrong for `make check-board`, because
+ * nothing in the laptop build path ever compiles this header with the
+ * real ARM toolchain to catch it.
+ *
+ * Fix: assert BOTH known-correct numbers, keyed off sizeof(TaskPool_t)
+ * itself (the actual root cause) rather than off a compiler-identity
+ * macro guess (__ARM_EABI__ or similar) - this way the assert is
+ * self-verifying against the same enum-sizing behavior that produces
+ * the size difference, and it will fail loudly (not silently pass with
+ * a stale number) if a third toolchain/flag combination ever produces
+ * some other TaskPool_t size this comment hasn't accounted for, rather
+ * than silently trusting whichever one happened to be probed last. */
+_Static_assert(
+    (sizeof(TaskPool_t) == 1u && sizeof(CBBAAgentState_t) == 176u) ||
+    (sizeof(TaskPool_t) == 4u && sizeof(CBBAAgentState_t) == 216u),
+    "CBBAAgentState_t size changed for a TaskPool_t enum size this codebase "
+    "hasn't verified before (see the comment immediately above this assert) "
+    "- re-run the field-by-field offset probe on both the host build and "
+    "the real Cortex-M55 target (make check-board) before trusting any "
+    "new number, don't just widen this assert to make it pass");
 
 typedef enum
 {

@@ -1,5 +1,6 @@
 #include "snapshot.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -9,6 +10,159 @@
 #include "recovery_manager.h"
 #include "watchdog.h"
 #include "search_zones.h"
+#include "mission_link.h"
+
+/*
+ * core/cbba.c's cbba_team_is_local() - public, but deliberately not
+ * declared in cbba.h (see that function's own comment for the
+ * established "public, but not declared in cbba.h" convention).
+ * Forward-declared here at its one call site in this file, same
+ * pattern core/incident.c already follows for the same function.
+ */
+extern bool cbba_team_is_local(uint8_t team_id);
+
+/* ---------------------------------------------------------------
+ * Board-report anchor + laptop-side extrapolation
+ * ---------------------------------------------------------------
+ * Per-team last-received MissionLinkStatus_t anchor (schema v2 - see
+ * mission_link.h) plus the extrapolation formula that turns it into a
+ * smoothly-advancing display value between reports, instead of a
+ * message every tick. See mission_link.h's MissionLinkStatus_t doc for
+ * the full design; this is the laptop-side half of it.
+ *
+ * INGESTION STATUS: laptop_mission_link_status_received() below is
+ * the reset point every incoming MissionLinkStatus_t frame must go
+ * through (last-write-wins by arrival, same pattern CBBA already uses
+ * for timestamp[] conflict resolution - see mission_link.h). Nothing
+ * in this C build calls it yet: live MissionLinkStatus_t ingestion
+ * from a real board is a USB/serial concern that today lives in
+ * tools/app.py + tools/telemetry_bridge.py (Python), outside this
+ * prompt's file ownership, and that bridge doesn't parse mission-link
+ * frames yet either (only TelemetryFrame_t and MissionLinkOverride_t -
+ * see app.py's own wire-format section). Until one of those wires a
+ * real frame in, g_mission_link_anchor[] simply stays all-unknown and
+ * mission_link_extrapolated_stamina() below transparently falls back
+ * to the team's own live TeamState_t.stamina - so a standalone `tron`
+ * desktop run (which never receives real board reports at all) is
+ * completely unaffected by any of this.
+ */
+typedef struct
+{
+    uint8_t  known;                     /* 0 until the first report arrives */
+    uint32_t assigned_incident_id;
+    uint16_t work_remaining_at_report;
+    uint8_t  work_rate;
+    uint8_t  stamina_at_report;
+    uint32_t report_tick;
+} MissionLinkAnchor_t;
+
+static MissionLinkAnchor_t g_mission_link_anchor[NUM_TEAMS];
+
+/* Reset point for every incoming MissionLinkStatus_t frame - see the
+   INGESTION STATUS note above for who's expected to call this once a
+   real receiver exists. */
+void laptop_mission_link_status_received(const MissionLinkStatus_t *status)
+{
+    MissionLinkAnchor_t *anchor;
+
+    if (status == NULL || status->team_id >= NUM_TEAMS)
+        return;
+
+    anchor = &g_mission_link_anchor[status->team_id];
+
+    anchor->known = 1u;
+    anchor->assigned_incident_id = status->assigned_incident_id;
+    anchor->work_remaining_at_report = status->work_remaining_at_report;
+    anchor->work_rate = status->work_rate;
+    anchor->stamina_at_report = status->stamina_at_report;
+    anchor->report_tick = status->report_tick;
+}
+
+/*
+ * Displayed work-remaining for team_id's currently-anchored incident at
+ * current_tick: work_remaining_at_report - work_rate * (current_tick -
+ * report_tick), clamped at 0 - see mission_link.h's MissionLinkStatus_t
+ * doc. Returns 0 (not the team's live g_incidents[] value) if there is
+ * no live anchor yet or the team is idle (MISSION_LINK_NO_INCIDENT) -
+ * callers that need a live-sim fallback for a team with no anchor
+ * should check mission_link_anchor_is_live() first, same as
+ * mission_link_extrapolated_stamina() does below.
+ */
+uint16_t mission_link_extrapolated_work_remaining(uint8_t team_id, uint32_t current_tick)
+{
+    const MissionLinkAnchor_t *anchor;
+    uint32_t elapsed_ticks;
+    uint32_t decayed;
+
+    if (team_id >= NUM_TEAMS)
+        return 0u;
+
+    anchor = &g_mission_link_anchor[team_id];
+
+    if (!anchor->known || anchor->assigned_incident_id == MISSION_LINK_NO_INCIDENT)
+        return 0u;
+
+    /* current_tick is expected to be >= report_tick (extrapolating
+       forward from an anchor already received) - an out-of-order or
+       stale current_tick just clamps to the anchor's own value rather
+       than underflowing. */
+    elapsed_ticks = (current_tick > anchor->report_tick) ?
+        (current_tick - anchor->report_tick) : 0u;
+
+    decayed = (uint32_t)anchor->work_rate * elapsed_ticks;
+
+    if (decayed >= (uint32_t)anchor->work_remaining_at_report)
+        return 0u;
+
+    return (uint16_t)((uint32_t)anchor->work_remaining_at_report - decayed);
+}
+
+/* Same extrapolation, stamina equivalent - clamped to [0, 100] since
+   stamina's wire quantization (mission_link.h) is 0-100, unlike
+   work_remaining which has no fixed upper bound. */
+static uint8_t mission_link_extrapolated_stamina(uint8_t team_id, uint32_t current_tick)
+{
+    const MissionLinkAnchor_t *anchor;
+    uint32_t elapsed_ticks;
+    uint32_t decayed;
+    uint32_t result;
+
+    anchor = &g_mission_link_anchor[team_id];
+
+    elapsed_ticks = (current_tick > anchor->report_tick) ?
+        (current_tick - anchor->report_tick) : 0u;
+
+    /* work_rate is a *work* rate, not a stamina-drain rate - there is
+       no separate reported stamina-decay-per-tick figure on the wire.
+       Absent one, holding stamina_at_report flat between reports
+       (rather than inventing a second implied rate) is the safer
+       extrapolation: it can't drift stamina toward 0 or 100 based on a
+       number that was never actually about stamina. The next report
+       (change-triggered or heartbeat) still re-anchors it to the
+       board's real, ground-truth value on its own cadence. */
+    (void)elapsed_ticks;
+    (void)decayed;
+    result = anchor->stamina_at_report;
+
+    if (result > 100u)
+        result = 100u;
+
+    return (uint8_t)result;
+}
+
+/* True once at least one MissionLinkStatus_t has been received for
+   team_id - callers use this to decide between the board's reported
+   (extrapolated) figures and this build's own live TeamState_t/
+   g_incidents[] simulation. See write_snapshot_row() below for the
+   one caller in this file today. */
+static int mission_link_anchor_is_live(uint8_t team_id)
+{
+    if (team_id >= NUM_TEAMS)
+        return 0;
+
+    return g_mission_link_anchor[team_id].known &&
+           cbba_team_is_local(team_id);
+}
 
 static FILE *g_snapshot_file = NULL;
 static uint32_t g_dataset_seed = 0;
@@ -71,6 +225,7 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
     RecoveryStatus_t recovery;
     uint8_t zone_id;
     uint8_t zone_trust;
+    float display_stamina;
 
     if(g_snapshot_file == NULL || team_id >= NUM_TEAMS)
         return;
@@ -79,6 +234,18 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
     twin = &g_mission_execution_twin[team_id];
     watchdog = watchdog_get_status(team_id);
     recovery = recovery_manager_get_status(team_id);
+
+    /* Board-hosted team with a live anchor: display what the board
+       actually reported (extrapolated forward from its last report),
+       not this process's own live TeamState_t.stamina - see this
+       file's mission-link anchor section above for why the two must
+       not race. Every other team (no board hosts it, or no report has
+       arrived yet - e.g. every team in a standalone `tron` desktop
+       run) falls straight through to the live simulated value, same
+       as before this prompt. */
+    display_stamina = mission_link_anchor_is_live(team_id) ?
+        (float)mission_link_extrapolated_stamina(team_id, cycle) :
+        team->stamina;
 
     /* Zone context is meaningful for every team regardless of what it's
      * assigned to (or not) - unlike incident_discovered above, which
@@ -95,7 +262,7 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
         team->team_id,
         team->loc_x,
         team->loc_y,
-        team->stamina,
+        display_stamina,
         team->specialization,
         team->status,
         incident_id,
