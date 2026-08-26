@@ -632,6 +632,36 @@ static RecoverySignal_t evaluate_stamina(
     if(team->stamina <= RECOVERY_MANAGER_STAMINA_CRITICAL_THRESHOLD)
         confidence = recovery_clamp01(confidence + RECOVERY_MANAGER_STAMINA_CRITICAL_BONUS);
 
+    /* Fix for a real dead-zone bug (see the RETURN_TO_SAFE_ZONE branch
+     * below for the full writeup): the two fixed-threshold bonuses
+     * above (20.0, 10.0) are both well below get_soft_stamina_floor()
+     * (core/allocator.c) - 20.0 to 40.0 depending on fitness tier -
+     * which is the threshold team_can_accept_incident() actually
+     * refuses new work at. Without this, a team whose stamina sits
+     * between its own tier floor and 20.0 gets neither bonus, so
+     * `confidence` could stay under recovery_stage_action_floor()
+     * below and this function would return CONTINUE_MONITORING before
+     * ever reaching the branch that would route it to rest - even
+     * though it's already ineligible for new work.
+     *
+     * 0.30, not the 0.20 either existing bonus uses: verified against
+     * the actual floors this needs to clear, not guessed. With zero
+     * base confidence (twin->stamina_error near 0, which is the
+     * common idle-team case this bug hits), the relevant gate is
+     * RECOVERY_MANAGER_ACTION_FLOOR_LOCAL (0.24, at
+     * MISSION_STAGE_IDLE's 1.00x multiplier) - clearing just this one
+     * is enough, since recovery_dispatch()'s RECOVERY_ACTION_
+     * LOCAL_RECOVERY case already calls abandon_task_for_recovery()
+     * for a STATUS_AVAILABLE team (same safe-zone-return machinery
+     * RETURN_TO_SAFE_ZONE uses - see that dispatch case's own
+     * comment), so reaching LOCAL_RECOVERY's lower floor is
+     * sufficient; this doesn't need to clear RETURN_TO_SAFE_ZONE's
+     * own higher 0.36 floor directly. 0.30 clears 0.24 with margin
+     * for float rounding, without being as aggressive as the
+     * CRITICAL_BONUS magnitude. */
+    if(team->stamina < get_soft_stamina_floor(team))
+        confidence = recovery_clamp01(confidence + 0.30f);
+
     (void)watchdog;
 
     if(confidence < recovery_stage_action_floor(stage, RECOVERY_ACTION_LOCAL_RECOVERY))
@@ -649,10 +679,30 @@ static RecoverySignal_t evaluate_stamina(
                 confidence);
         }
     }
-    else if(team->degraded || team->stamina <= RECOVERY_MANAGER_STAMINA_CRITICAL_THRESHOLD)
+    else if(team->degraded || team->stamina <= RECOVERY_MANAGER_STAMINA_CRITICAL_THRESHOLD ||
+            team->stamina < get_soft_stamina_floor(team))
     {
         /* No active mission to abort - route to rest instead, same as the
-         * TRAVEL/WORK branch below does for a less severe deviation. */
+         * TRAVEL/WORK branch below does for a less severe deviation.
+         *
+         * The get_soft_stamina_floor() clause is the fix for a real
+         * dead-zone bug: without it, this branch only fired at
+         * RECOVERY_MANAGER_STAMINA_CRITICAL_THRESHOLD (10.0), while
+         * team_can_accept_incident() (core/allocator.c) already refuses
+         * new work below get_soft_stamina_floor() - 20.0 to 40.0
+         * depending on fitness tier, always higher than 10.0. An idle
+         * team between those two thresholds was ineligible for new
+         * work AND not yet recommended to rest: recovery_dispatch()
+         * (core/simulation.c, called every tick for every team
+         * regardless of status) had nothing to act on, so the team
+         * just sat at STATUS_AVAILABLE indefinitely, invisible to both
+         * the incident-bidding pipeline and the recovery pipeline.
+         * Confirmed empirically (tools/perimeter_probe.c): a team
+         * showing STATUS_AVAILABLE 94% of the time was only genuinely
+         * eligible for new work 61% of the time, with almost no
+         * overlap with when a CRITICAL incident it was capable of was
+         * open and discovered - it was stuck in this exact dead zone,
+         * not actually available in any useful sense. */
         return recovery_make_signal(
             recovery_downgrade_to_achievable_action(RECOVERY_ACTION_RETURN_TO_SAFE_ZONE, stage, confidence),
             RECOVERY_REASON_LOW_STAMINA,

@@ -1,0 +1,5 @@
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:12:6:generate_teams	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:124:13:change_stamina	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:137:6:update_team	40	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:325:6:update_all_teams	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:345:7:get_ready_stamina	16	static

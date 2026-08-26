@@ -1,0 +1,8 @@
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/search_zones.c:11:6:search_zones_init	4
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/search_zones.c:29:9:zone_id_for_location	5
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/search_zones.c:39:9:search_zone_trust	6
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/search_zones.c:64:6:search_zone_mark_cell_covered	7
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/search_zones.c:84:9:search_zone_coverage_percent	8
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/search_zones.c:114:9:search_zone_check_cycle_completion	4
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/search_zones.c:155:9:search_zone_pick_next_target	6
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/search_zones.c:178:9:search_zone_pick_frontier_cell	12

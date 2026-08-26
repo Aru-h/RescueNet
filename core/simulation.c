@@ -69,6 +69,7 @@ void simulation_step(void) //simulation
     update_all_teams();
     move_all_teams();
     search_sweep_step(g_current_tick);
+    escalate_starved_incidents(g_current_tick);
     update_all_incident_work();
     update_all_passive_effects();
     mission_execution_twin_step();

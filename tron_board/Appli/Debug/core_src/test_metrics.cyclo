@@ -1,0 +1,17 @@
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:30:17:count_open_incidents	4
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:39:17:count_active_incidents	4
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:48:17:count_active_system_tasks	4
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:58:6:metrics_begin_run	4
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:93:6:metrics_sample_tick	26
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:192:6:test_metrics_record_equipment_exhaustion_recovery	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:199:6:test_metrics_record_support_reserve_recovery	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:206:6:test_metrics_record_rest_entry	2
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:215:6:test_metrics_record_rest_exit	5
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:238:6:test_metrics_record_stage_completion	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:244:6:test_metrics_record_progress	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:249:10:test_metrics_current_tick	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:254:6:test_metrics_record_cbba_path_size	3
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:266:6:test_metrics_record_incident_assignment	2
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:279:6:test_metrics_record_incident_work_start	5
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:302:6:test_metrics_record_assignment_to_work_start	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/test_metrics.c:308:21:metrics_end_run	1

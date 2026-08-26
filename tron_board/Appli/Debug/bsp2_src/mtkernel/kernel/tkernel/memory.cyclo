@@ -1,0 +1,14 @@
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Appli/../../vendor/mtk3_bsp2/mtkernel/include/sys/queue.h:40:13:QueInit	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Appli/../../vendor/mtk3_bsp2/mtkernel/include/sys/queue.h:58:13:QueInsert	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Appli/../../vendor/mtk3_bsp2/mtkernel/include/sys/queue.h:71:13:QueRemove	2
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/memory.c:29:15:knl_searchFreeArea	9
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/memory.c:77:13:knl_appendFreeArea	4
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/memory.c:111:13:knl_removeFreeQue	4
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/memory.c:131:13:knl_insertAreaQue	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/memory.c:142:13:knl_removeAreaQue	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/memory.c:160:14:knl_Imalloc	5
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/memory.c:211:14:knl_Icalloc	2
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/memory.c:230:14:knl_Irealloc	5
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/memory.c:261:14:knl_Ifree	3
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/memory.c:295:12:initIMACB	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/memory.c:304:11:knl_init_Imalloc	1

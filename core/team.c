@@ -9,8 +9,6 @@
 
 #define EQ_RESERVE_LEVEL 15
 
-static float get_ready_stamina(const TeamState_t *team);
-
 void generate_teams(uint32_t seed) //team
 {
     random_seed_stream(STREAM_TEAMS, derive_seed(seed, STREAM_TEAMS));
@@ -59,7 +57,41 @@ void generate_teams(uint32_t seed) //team
                 break;
 
             case SPEC_SUPPORT:
-                g_teams[i].equipment_flags = EQ_GENERATOR | EQ_MEDICAL_KIT | EQ_ROPE;
+                /*
+                 * EQ_STRUCTURAL added on top of SUPPORT's original
+                 * loadout (EQ_GENERATOR | EQ_MEDICAL_KIT | EQ_ROPE) -
+                 * a deliberate fix, not the original design.
+                 *
+                 * Root cause this addresses: STRUCTURAL_COLLAPSE and
+                 * ACTIVE_FIRE, tagged SPEC_PERIMETER, both hard-require
+                 * EQ_STRUCTURAL as their equipment_requirements()
+                 * minimum (core/scoring.c) - team_has_minimum_equipment()
+                 * refuses ANY team lacking it outright, before
+                 * capability_score() or any other scoring factor is
+                 * even consulted. Only EXTRACTION and PERIMETER
+                 * carried EQ_STRUCTURAL before this change, so those
+                 * two incident types could only ever be serviced by 4
+                 * of the 10 teams - and PERIMETER itself is the most
+                 * oversubscribed specialization in the roster (5 of 11
+                 * incident archetypes require it, vs 1-2 for every
+                 * other specialization - see the archetype table's own
+                 * required_specialization column), so its own 2 teams
+                 * are already the bottleneck, not a source of spare
+                 * capacity to lean on further.
+                 *
+                 * SUPPORT was chosen as the specialization to extend,
+                 * not SEARCH or MEDICAL: capability_score() (core/
+                 * scoring.c's CAPABILITY_MATRIX) already rates SUPPORT
+                 * as the best non-PERIMETER match for PERIMETER work
+                 * (0.70) - better than SEARCH's 0.60, and well ahead of
+                 * EXTRACTION's own 0.45 or MEDICAL's 0.30 - so it was
+                 * already the natural substitute by score; it just
+                 * couldn't act on it because of this hard gear gate.
+                 * Adding the flag lets that existing capability
+                 * ranking actually take effect instead of being
+                 * silently vetoed before scoring ever runs.
+                 */
+                g_teams[i].equipment_flags = EQ_GENERATOR | EQ_MEDICAL_KIT | EQ_ROPE | EQ_STRUCTURAL;
                 break;
 
             default:
@@ -307,7 +339,10 @@ void update_all_teams(void) //team
     }
 }
 
-static float get_ready_stamina(const TeamState_t *team) //team
+/* Declared non-static in team.h - see that header's own comment for
+ * why: core/allocator.c shares this exact threshold now, rather than
+ * keeping its own, misaligned copy. */
+float get_ready_stamina(const TeamState_t *team) //team
 {
     switch(team->fitness_tier)
     {

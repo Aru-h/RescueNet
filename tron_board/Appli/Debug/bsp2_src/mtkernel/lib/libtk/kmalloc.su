@@ -1,0 +1,4 @@
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/lib/libtk/kmalloc.c:39:14:Kmalloc	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/lib/libtk/kmalloc.c:44:14:Kcalloc	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/lib/libtk/kmalloc.c:49:14:Krealloc	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/lib/libtk/kmalloc.c:54:13:Kfree	16	static

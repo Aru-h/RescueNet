@@ -645,13 +645,17 @@ int create_return_to_safe_zone_task(TeamState_t *team) //incident
 
     uint8_t safezone = find_nearest_safe_zone(team);
     if(safezone == NO_SAFE_ZONE)
+    {
         return NO_ASSIGNMENT;
+    }
 
     IncidentState_t *task = find_free_system_task_slot();
     if(task == NULL)
         task = find_reclaimable_system_task_slot();
     if(task == NULL)
+    {
         return NO_ASSIGNMENT;
+    }
 
     task->incident_id = allocate_incident_id();
 
@@ -2007,6 +2011,75 @@ void escalate_incidents_by_zone_trust(uint32_t current_tick)
     }
 }
 
+/*
+ * Anti-starvation for OPEN (unassigned) incidents. Deliberately
+ * separate from priority_score()'s own per-bid scoring (core/
+ * scoring.c): that function only ever moves an incident's score
+ * within its OWN tier's band, by design (see that function's own
+ * comment for why - letting a lower tier's score climb into a higher
+ * tier's territory is exactly the bug this whole mechanism exists to
+ * fix). A tier-respecting score alone means a badly-matched CRITICAL
+ * incident CAN sit open indefinitely if no currently-idle team is a
+ * good enough capability/distance fit to ever outbid whatever
+ * same-or-higher-tier work that team already has - band separation
+ * fixes the "tier order gets inverted" problem but reintroduces a
+ * "starvation" problem for whichever tier is currently least
+ * competitive for the available teams, so it needs its own, explicit
+ * fix rather than trying to make priority_score() serve both jobs.
+ *
+ * This function is the fix: once an incident has sat OPEN for longer
+ * than INCIDENT_STARVATION_ESCALATION_TICKS - deliberately well past
+ * priority_score()'s own in-tier saturation window (~2000 ticks, see
+ * logarithmic_waiting_time_bonus()'s normalized_age_limit) so this
+ * only fires for incidents that band separation alone has genuinely
+ * failed to get picked up, not ones just aging normally within their
+ * tier - its priority is promoted a full tier, same "decrement the
+ * Priority_t enum value" pattern core/fault_injector.c's
+ * inject_mission_fault() already uses for a different trigger. Unlike
+ * escalate_incidents_by_zone_trust() above, this can only ever
+ * escalate (never silently reassign to a LOWER priority based on an
+ * unrelated signal), only touches incidents nobody has picked up yet
+ * (INC_OPEN - once a team is working it, it's not neglected, whatever
+ * tier it's at), and its trigger (this incident's own open-ticks) has
+ * no dependency on the currently-broken search-zone-trust decay
+ * machinery that keeps the zone-trust version disabled.
+ *
+ * reported_at_tick is reset on escalation, not left alone: priority_
+ * score()'s in-band aging bonus should restart for the NEW tier
+ * (a freshly-escalated incident hasn't been sitting at ITS new tier
+ * for the same duration it sat at the old one), and resetting it also
+ * naturally prevents this same incident from re-triggering escalation
+ * again next tick. reported_at_tick's own doc comment (mission_state.h)
+ * confirms this field has no other consumer to disturb - laptop-side
+ * "age-weighted priority scoring" only, never sent to a board (see
+ * core/mission_link.h's own note on why it's excluded from the wire).
+ */
+#define INCIDENT_STARVATION_ESCALATION_TICKS 3000u
+
+void escalate_starved_incidents(uint32_t current_tick)
+{
+    for(uint16_t i = 0; i < NUM_INCIDENTS; i++)
+    {
+        IncidentState_t *incident = &g_incidents[i];
+
+        if(!incident->slot_occupied || incident->status != INC_OPEN)
+            continue;
+
+        if(incident->priority <= PRIORITY_CRITICAL)
+            continue; /* already at the top - nothing to escalate to */
+
+        uint32_t age = (current_tick >= incident->reported_at_tick)
+                        ? (current_tick - incident->reported_at_tick)
+                        : 0u;
+
+        if(age >= INCIDENT_STARVATION_ESCALATION_TICKS)
+        {
+            incident->priority = (Priority_t)(incident->priority - 1);
+            incident->reported_at_tick = current_tick;
+        }
+    }
+}
+
 void generate_incidents_if_needed(void)
 {
     IncidentType_t hazard_type;
@@ -2225,7 +2298,34 @@ void abandon_task_for_recovery(TeamState_t *team)
      * never once got to actually travel to or rest at the destination in
      * between. This is called from recovery_manager.c every tick a
      * RETURN_TO_SAFE_ZONE recommendation stays active, which is exactly
-     * the case where the team most likely already has one in flight. */
+     * the case where the team most likely already has one in flight.
+     *
+     * FLAG - a narrower version of the SAME class of churn still
+     * reproduces even with this dedup in place, traced empirically this
+     * session (seed=7, team 8, tools/perimeter_probe.c and friends - not
+     * kept in the repo, scratch instrumentation only) but not yet fixed:
+     * create_return_to_safe_zone_task() genuinely succeeds and sets
+     * status=EN_ROUTE, but on the VERY NEXT tick this function is
+     * entered again with the team back on the SAME UNSEARCHED_SECTOR
+     * slot it was just pulled off of. team_can_accept_incident() (core/
+     * allocator.c) correctly rejects non-AVAILABLE/RESTING teams, which
+     * rules out the obvious "reassigned while still EN_ROUTE" explanation
+     * - so something is either reclaiming the just-created RETURN_TO_
+     * SAFE_ZONE slot back into a fresh UNSEARCHED_SECTOR task (see
+     * find_reclaimable_system_task_slot()'s own UNSEARCHED_SECTOR-only
+     * reclaim scope - it and the sector-task generator both draw from
+     * the same NUM_SYSTEM_TASKS pool every tick) or the recovery
+     * dispatch and the system-task assignment loop in allocate_all_
+     * incidents() are racing on the same team within one tick. Confirmed
+     * NOT caused by: find_nearest_safe_zone() failing (path cost was
+     * finite from the stuck location), the system-task pool being full
+     * (1-3/20 slots occupied throughout), or move_team()'s own status
+     * reset branch (never fired for the affected team). Reproduces in
+     * 1 of 3 tested seeds; the other two were clean after the stamina-
+     * threshold fix above landed. Worth a dedicated session with the
+     * pool-slot lifecycle traced across find_free_system_task_slot(),
+     * find_reclaimable_system_task_slot(), and search_generate_sweep_
+     * tasks() together rather than one at a time. */
     if(task != NULL && task->slot_occupied &&
        task->incident_type == INCIDENT_RETURN_TO_SAFE_ZONE &&
        task->assigned_team == team->team_id)

@@ -1,0 +1,5 @@
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/sim_runner.c:10:5:sim_runner_init	8	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/sim_runner.c:22:6:sim_start_seed	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/sim_runner.c:31:6:sim_tick	8	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/sim_runner.c:38:6:sim_end_seed	8	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/sim_runner.c:43:6:sim_runner_shutdown	8	static

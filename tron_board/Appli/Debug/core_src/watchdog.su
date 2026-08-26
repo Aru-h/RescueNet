@@ -1,0 +1,17 @@
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:53:14:clamp01	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:64:14:normalized_error	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:72:14:accumulate_evidence	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:82:14:progress_evidence	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:88:14:stamina_evidence	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:100:14:communication_evidence	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:106:14:operating_state_evidence	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:113:14:path_evidence	32	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:166:14:assignment_evidence	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:192:14:timeout_evidence	32	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:231:17:evidence_flags_from_values	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:253:14:weighted_confidence	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:265:30:classify_failure_mode	32	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:327:16:recommend_action	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:358:6:watchdog_init	80	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:373:6:watchdog_step	64	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/watchdog.c:456:18:watchdog_get_status	48	static

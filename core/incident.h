@@ -51,6 +51,11 @@ void generate_incidents_if_needed(void);
 /* Not currently called from the live tick loop - see the large comment
  * on this function's definition in incident.c for why. */
 void escalate_incidents_by_zone_trust(uint32_t current_tick);
+/* Anti-starvation for OPEN incidents specifically, distinct from and
+ * safe alongside the disabled zone-trust escalation above - see this
+ * function's own comment in incident.c for the full contract. Called
+ * from simulation_step(). */
+void escalate_starved_incidents(uint32_t current_tick);
 /* Generates open sweep tasks for stale districts, left for the normal
  * competitive system-task loop to assign - see the large comment on
  * this function's definition in incident.c for why this isn't a

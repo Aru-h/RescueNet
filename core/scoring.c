@@ -7,19 +7,30 @@ static const float MAX_ROUTE_DISTANCE = ((GRID_WIDTH - 1) + (GRID_HEIGHT - 1)) *
 
 #define MIN_EQUIPMENT_FACTOR 0.25f
 
+/*
+ * priority's weight raised from 0.20 to 0.30 (capability trimmed
+ * 0.30->0.25, stamina 0.25->0.20 to make room) - the band-separated
+ * priority_score() (see that function's own comment) already
+ * guarantees ORDER is respected, but the original 0.20 weight left
+ * priority's contribution too easily overrun by a strong capability/
+ * distance match for a lower tier (e.g. a perfect-match, zero-travel
+ * MEDIUM task vs. a poorly-matched, distant CRITICAL one) - see
+ * assign_age_probe.c's empirical seed=42 run for the case this
+ * mattered on. Tuned empirically against that same probe across
+ * several seeds, not picked from theory alone. */
 static const ScoringWeights_t g_default_scoring_weights = {
-    0.30f,
-    0.15f,
-    0.20f,
     0.25f,
+    0.15f,
+    0.30f,
+    0.20f,
     0.10f
 };
 
 static ScoringWeights_t g_scoring_weights = {
-    0.30f,
-    0.15f,
-    0.20f,
     0.25f,
+    0.15f,
+    0.30f,
+    0.20f,
     0.10f
 };
 
@@ -430,26 +441,68 @@ float capability_score(const TeamState_t *team, const IncidentState_t *incident)
     return CAPABILITY_MATRIX[team->specialization][incident->req_capability];
 }
 
+/*
+ * Per-tier score BANDS, not a single additive-then-clamp scale.
+ *
+ * The previous version used base_priority (1.00/0.75/0.50/0.25) plus
+ * a flat, tier-independent age bonus (0 to +0.50) clamped at 1.0. That
+ * let a lower tier's score climb into and past a higher tier's own
+ * starting value well before either "should" be comparable: a HIGH
+ * incident tied a fresh CRITICAL's score after only ~50 ticks of
+ * waiting (0.75 + log-bonus reaching +0.25 already), and a MEDIUM
+ * incident reached the exact same 1.0 ceiling as a fresh CRITICAL
+ * after ~2000 ticks - see this project's own empirical measurement
+ * (assign_age_probe.c) showing CRITICAL incidents sitting OPEN for a
+ * mean of ~519 ticks before assignment while MEDIUM sat only ~41,
+ * because by the time either got noticed, their priority_score
+ * contributions were already close to equal and capability/distance
+ * (weighted higher - see g_default_scoring_weights below) decided the
+ * outcome instead. That's priority being advisory, not decisive -
+ * exactly backwards for what a priority field is supposed to do.
+ *
+ * Fix: partition [0.0, 1.0] into four non-overlapping 0.25-wide bands,
+ * one per tier, ordered so ANY incident in a higher tier's band scores
+ * at least as high as ANY incident in a lower tier's band, regardless
+ * of how long either has been waiting:
+ *
+ *   CRITICAL  [0.75, 1.00]
+ *   HIGH      [0.50, 0.75]
+ *   MEDIUM    [0.25, 0.50]
+ *   LOW       [0.00, 0.25]
+ *
+ * The waiting-time bonus still does real work - it moves an incident
+ * from the bottom to the top of its OWN band as it ages, so a
+ * long-neglected MEDIUM incident still outbids a freshly-spawned
+ * MEDIUM incident (the "don't let anything rot forever" property the
+ * original design wanted) - it just can no longer cross into
+ * CRITICAL's or HIGH's territory to do it. Bands touch at their
+ * boundaries (a fully-aged HIGH reaches exactly 0.75, the same as a
+ * brand-new CRITICAL's floor) rather than leaving a gap, so aging
+ * still closes the distance as far as it structurally can without
+ * inverting tier order - ties at that boundary are then legitimately
+ * broken by capability/distance/stamina, which is the right place for
+ * those factors to matter.
+ */
 float priority_score(const IncidentState_t *incident)
 {
-    float base_priority;
+    float band_floor;
 
     switch(incident->priority)
     {
         case PRIORITY_CRITICAL:
-            base_priority = 1.00f;
+            band_floor = 0.75f;
             break;
 
         case PRIORITY_HIGH:
-            base_priority = 0.75f;
+            band_floor = 0.50f;
             break;
 
         case PRIORITY_MEDIUM:
-            base_priority = 0.50f;
+            band_floor = 0.25f;
             break;
 
         case PRIORITY_LOW:
-            base_priority = 0.25f;
+            band_floor = 0.00f;
             break;
 
         default:
@@ -464,10 +517,14 @@ float priority_score(const IncidentState_t *incident)
             g_current_tick - incident->reported_at_tick;
     }
 
-    float score = base_priority + logarithmic_waiting_time_bonus(age_ticks);
+    /* logarithmic_waiting_time_bonus() returns 0.00-0.50 (see its own
+       comment) - halved here so it spans exactly one 0.25-wide band
+       instead of the two bands' worth of range it was scaled for
+       under the old single-scale design. */
+    float score = band_floor + 0.5f * logarithmic_waiting_time_bonus(age_ticks);
 
-    if(score > 1.0f)
-        score = 1.0f;
+    if(score > band_floor + 0.25f)
+        score = band_floor + 0.25f;
 
     return score;
 }

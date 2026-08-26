@@ -131,6 +131,174 @@ static uint16_t get_heuristic(int x,int y,int dest_x,int dest_y) //path
     return abs(x-dest_x)+abs(y-dest_y);
 }
 
+/*
+ * ---------------------------------------------------------------
+ * Binary min-heap open-set, ordered by f_cost = g_cost + heuristic
+ * ---------------------------------------------------------------
+ * Replaces the flat open_list_x[]/open_list_y[] arrays' O(n) linear
+ * scan for pop-min with O(log n) via a proper heap. Unlike a lazy-
+ * deletion heap, this uses TRUE decrease-key: a position-index array
+ * (g_heap_pos) tracks each cell's current slot in the heap, so a
+ * g_cost improvement re-sifts the existing entry in place rather than
+ * pushing a duplicate. Net effect: capped at exactly GRID_WIDTH*
+ * GRID_HEIGHT entries (same bound as the array it replaces, no
+ * oversized safety-margin array needed for stale duplicates) while
+ * still getting the O(log n) pop-min win. Costs are never cached in
+ * the heap itself - f_cost is always computed live from nodes[][].g_cost
+ * at comparison time, so a decrease-key is just "re-sift this cell's
+ * existing slot," nothing more.
+ */
+
+#define PATH_HEAP_NONE 0xFFFFu
+
+static uint16_t g_heap[GRID_WIDTH * GRID_HEIGHT];
+static uint16_t g_heap_pos[GRID_WIDTH][GRID_HEIGHT];
+static int g_heap_size;
+
+static uint16_t path_cell_index(int x, int y)
+{
+    return (uint16_t)(x * GRID_HEIGHT + y);
+}
+
+static void path_heap_reset(void)
+{
+    g_heap_size = 0;
+
+    for(int x = 0; x < GRID_WIDTH; x++)
+    {
+        for(int y = 0; y < GRID_HEIGHT; y++)
+        {
+            g_heap_pos[x][y] = PATH_HEAP_NONE;
+        }
+    }
+}
+
+static uint32_t path_heap_f_cost(PathNode_t nodes[GRID_WIDTH][GRID_HEIGHT],
+                                  int dest_x, int dest_y, uint16_t cell)
+{
+    int x = cell / GRID_HEIGHT;
+    int y = cell % GRID_HEIGHT;
+
+    return (uint32_t)nodes[x][y].g_cost +
+           get_heuristic(x, y, dest_x, dest_y);
+}
+
+static void path_heap_swap(int i, int j)
+{
+    uint16_t ci = g_heap[i];
+    uint16_t cj = g_heap[j];
+    int cix = ci / GRID_HEIGHT, ciy = ci % GRID_HEIGHT;
+    int cjx = cj / GRID_HEIGHT, cjy = cj % GRID_HEIGHT;
+
+    g_heap[i] = cj;
+    g_heap[j] = ci;
+    g_heap_pos[cix][ciy] = (uint16_t)j;
+    g_heap_pos[cjx][cjy] = (uint16_t)i;
+}
+
+static void path_heap_sift_up(PathNode_t nodes[GRID_WIDTH][GRID_HEIGHT],
+                               int dest_x, int dest_y, int i)
+{
+    while(i > 0)
+    {
+        int parent = (i - 1) / 2;
+
+        if(path_heap_f_cost(nodes, dest_x, dest_y, g_heap[i]) >=
+           path_heap_f_cost(nodes, dest_x, dest_y, g_heap[parent]))
+        {
+            break;
+        }
+
+        path_heap_swap(i, parent);
+        i = parent;
+    }
+}
+
+static void path_heap_sift_down(PathNode_t nodes[GRID_WIDTH][GRID_HEIGHT],
+                                 int dest_x, int dest_y, int i)
+{
+    while(1)
+    {
+        int left = 2 * i + 1;
+        int right = 2 * i + 2;
+        int smallest = i;
+
+        if(left < g_heap_size &&
+           path_heap_f_cost(nodes, dest_x, dest_y, g_heap[left]) <
+           path_heap_f_cost(nodes, dest_x, dest_y, g_heap[smallest]))
+        {
+            smallest = left;
+        }
+
+        if(right < g_heap_size &&
+           path_heap_f_cost(nodes, dest_x, dest_y, g_heap[right]) <
+           path_heap_f_cost(nodes, dest_x, dest_y, g_heap[smallest]))
+        {
+            smallest = right;
+        }
+
+        if(smallest == i)
+        {
+            break;
+        }
+
+        path_heap_swap(i, smallest);
+        i = smallest;
+    }
+}
+
+static void path_heap_push(PathNode_t nodes[GRID_WIDTH][GRID_HEIGHT],
+                            int dest_x, int dest_y, int x, int y)
+{
+    int i = g_heap_size;
+
+    g_heap[i] = path_cell_index(x, y);
+    g_heap_pos[x][y] = (uint16_t)i;
+    g_heap_size++;
+
+    path_heap_sift_up(nodes, dest_x, dest_y, i);
+}
+
+static void path_heap_decrease_key(PathNode_t nodes[GRID_WIDTH][GRID_HEIGHT],
+                                    int dest_x, int dest_y, int x, int y)
+{
+    /* Caller already wrote the improved g_cost into nodes[][] before
+       calling this - just re-establish the heap invariant from this
+       cell's existing slot. */
+    path_heap_sift_up(nodes, dest_x, dest_y, g_heap_pos[x][y]);
+}
+
+static int path_heap_pop_min(PathNode_t nodes[GRID_WIDTH][GRID_HEIGHT],
+                              int dest_x, int dest_y,
+                              int *out_x, int *out_y)
+{
+    if(g_heap_size == 0)
+    {
+        return 0;
+    }
+
+    uint16_t root = g_heap[0];
+    int rx = root / GRID_HEIGHT, ry = root % GRID_HEIGHT;
+
+    g_heap_size--;
+
+    if(g_heap_size > 0)
+    {
+        g_heap[0] = g_heap[g_heap_size];
+
+        int lx = g_heap[0] / GRID_HEIGHT, ly = g_heap[0] % GRID_HEIGHT;
+        g_heap_pos[lx][ly] = 0;
+
+        path_heap_sift_down(nodes, dest_x, dest_y, 0);
+    }
+
+    g_heap_pos[rx][ry] = PATH_HEAP_NONE;
+
+    *out_x = rx;
+    *out_y = ry;
+    return 1;
+}
+
 int find_next_path_step_with_equipment(
     int start_x,
     int start_y,
@@ -208,51 +376,18 @@ int find_next_path_step_with_equipment(
     nodes[start_x][start_y].parent_y = (uint8_t)start_y;
     nodes[start_x][start_y].state = PATH_OPEN;
 
-    static int open_list_x[GRID_WIDTH * GRID_HEIGHT];
-    static int open_list_y[GRID_WIDTH * GRID_HEIGHT];
-    int open_count = 0;
-
-    open_list_x[open_count] = start_x;
-    open_list_y[open_count] = start_y;
-    open_count++;
+    path_heap_reset();
+    path_heap_push(nodes, dest_x, dest_y, start_x, start_y);
 
     while(1)
     {
-        int current_x = -1;
-        int current_y = -1;
-        int current_slot = -1;
-        uint32_t lowest_f = UINT32_MAX;
+        int current_x, current_y;
 
-        for(int i = 0; i < open_count; i++)
-        {
-            int x = open_list_x[i];
-            int y = open_list_y[i];
-
-            if(nodes[x][y].state != PATH_OPEN)
-                continue;
-
-            uint32_t f_cost =
-                nodes[x][y].g_cost +
-                get_heuristic(x, y, dest_x, dest_y);
-
-            if(f_cost < lowest_f)
-            {
-                lowest_f = f_cost;
-                current_x = x;
-                current_y = y;
-                current_slot = i;
-            }
-        }
-
-        if(current_x == -1)
+        if(!path_heap_pop_min(nodes, dest_x, dest_y, &current_x, &current_y))
         {
             path_cache_store(start_x, start_y, dest_x, dest_y, equipment_flags, -1, 0, 0);
             return -1;
         }
-
-        open_list_x[current_slot] = open_list_x[open_count - 1];
-        open_list_y[current_slot] = open_list_y[open_count - 1];
-        open_count--;
 
         if(current_x == dest_x && current_y == dest_y)
         {
@@ -290,11 +425,15 @@ int find_next_path_step_with_equipment(
                 nodes[nx][ny].parent_x = current_x;
                 nodes[nx][ny].parent_y = current_y;
 
-                if(nodes[nx][ny].state != PATH_OPEN)
+                if(nodes[nx][ny].state == PATH_OPEN)
                 {
-                    open_list_x[open_count] = nx;
-                    open_list_y[open_count] = ny;
-                    open_count++;
+                    /* Already sitting in the heap - re-sift its existing
+                       slot now that g_cost improved, don't push again. */
+                    path_heap_decrease_key(nodes, dest_x, dest_y, nx, ny);
+                }
+                else
+                {
+                    path_heap_push(nodes, dest_x, dest_y, nx, ny);
                 }
 
                 nodes[nx][ny].state = PATH_OPEN;

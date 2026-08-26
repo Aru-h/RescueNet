@@ -20,6 +20,8 @@
 #define WATCHDOG_INVESTIGATE_THRESHOLD 0.18f
 #define WATCHDOG_STAGNATION_STREAK_MAX 5u
 #define WATCHDOG_TIMEOUT_STREAK_MAX 6u
+#define WATCHDOG_MOBILITY_CONFIRM_TICKS 3u
+#define WATCHDOG_MOBILITY_PROGRESS_MARGIN 0.02f
 
 typedef enum
 {
@@ -46,6 +48,22 @@ typedef struct
     uint8_t has_last_sample;
     uint8_t path_stagnation_streak;
     uint8_t timeout_streak;
+
+    /* Board-observable substitute for reading team->fault_state.active[
+     * FAULT_CLASS_MOBILITY] directly (that flag is only ever written by
+     * fault_injector.c - a board with no injector running would never
+     * see it flip, see the comment on update_mobility_confirmation()).
+     * These fields track the real, physically-derived signal instead:
+     * whether degraded progress survives the travel->on-scene
+     * transition, which is the one thing an environment obstacle
+     * (path-only) can never do but a genuine mobility impairment
+     * (which also degrades team_effective_work_rate on-scene) will. */
+    uint8_t prev_actual_status;
+    uint8_t travel_degradation_seen;
+    uint8_t mobility_watch_active;
+    uint8_t mobility_watch_ticks;
+    float mobility_watch_baseline_error;
+    uint8_t confirmed_mobility_impairment;
 } WatchdogTeamState_t;
 
 static WatchdogTeamState_t g_watchdog_state[NUM_TEAMS];
@@ -110,8 +128,94 @@ static float operating_state_evidence(
     return team->status == twin->expected_operating_state ? 0.0f : 1.0f;
 }
 
-static float path_evidence(
+/*
+ * Board-observable substitute for team->fault_state.active[
+ * FAULT_CLASS_MOBILITY]. That flag is only ever written by
+ * fault_injector.c - nothing in platform/board/ independently detects
+ * or sets it, so on real hardware with no injector running it reads
+ * false forever, and any evidence/classification logic keyed off it
+ * would silently degrade (evidence builds at half speed, and
+ * classify_failure_mode() could never report MOBILITY_DEGRADATION at
+ * all).
+ *
+ * The physically real distinction we actually have available on the
+ * board: a genuine mobility impairment degrades the team both during
+ * travel (move_team(), simulation.c) and after arrival
+ * (team_effective_work_rate(), incident.c), while an environment
+ * obstacle only ever slows one path segment - once the team is past
+ * it, nothing else about them is impaired. So instead of reading the
+ * injected flag, watch whether degraded progress (twin->progress_error
+ * staying elevated/growing rather than shrinking) survives the actual
+ * travel->on-scene transition (team->status, not the twin's own
+ * nominal mission_stage, which can flip to WORK on its own clock well
+ * before a stagnating team physically arrives). If it does, that is
+ * real evidence of a standing impairment; if progress catches up once
+ * on scene, whatever slowed the team down stayed behind on the path.
+ */
+static void update_mobility_confirmation(
     const TeamState_t *team,
+    const MissionExecutionTwin_t *twin,
+    WatchdogTeamState_t *watchdog)
+{
+    uint8_t now_en_route = team->status == STATUS_EN_ROUTE;
+    uint8_t now_on_scene = team->status == STATUS_ON_SCENE;
+    uint8_t was_en_route = watchdog->prev_actual_status == STATUS_EN_ROUTE;
+
+    if(now_en_route && watchdog->prev_actual_status != STATUS_EN_ROUTE)
+        watchdog->travel_degradation_seen = 0;
+
+    if(now_en_route && twin->progress_error > WATCHDOG_MOBILITY_PROGRESS_MARGIN)
+        watchdog->travel_degradation_seen = 1;
+
+    if(was_en_route && now_on_scene)
+    {
+        if(watchdog->travel_degradation_seen)
+        {
+            watchdog->mobility_watch_active = 1;
+            watchdog->mobility_watch_ticks = 0;
+            watchdog->mobility_watch_baseline_error = twin->progress_error;
+        }
+        else
+        {
+            /* Clean travel leg just finished - any earlier suspicion is
+             * stale; the team is demonstrably moving fine now. */
+            watchdog->confirmed_mobility_impairment = 0;
+            watchdog->mobility_watch_active = 0;
+        }
+
+        watchdog->travel_degradation_seen = 0;
+    }
+    else if(watchdog->mobility_watch_active && now_on_scene)
+    {
+        watchdog->mobility_watch_ticks++;
+
+        if(twin->progress_error >
+           watchdog->mobility_watch_baseline_error + WATCHDOG_MOBILITY_PROGRESS_MARGIN)
+        {
+            /* Still falling further behind after arrival - a path-only
+             * obstacle can no longer touch a team that has already
+             * reached the scene, so ongoing divergence means something
+             * about the team itself, not the route, is degraded. */
+            watchdog->confirmed_mobility_impairment = 1;
+            watchdog->mobility_watch_active = 0;
+        }
+        else if(watchdog->mobility_watch_ticks >= WATCHDOG_MOBILITY_CONFIRM_TICKS)
+        {
+            /* Held steady (or caught up) for a full window on scene:
+             * the slowdown stayed behind with the path segment. */
+            watchdog->confirmed_mobility_impairment = 0;
+            watchdog->mobility_watch_active = 0;
+        }
+    }
+    else if(!now_on_scene && !now_en_route)
+    {
+        watchdog->mobility_watch_active = 0;
+    }
+
+    watchdog->prev_actual_status = team->status;
+}
+
+static float path_evidence(
     const MissionExecutionTwin_t *twin,
     WatchdogTeamState_t *watchdog)
 {
@@ -133,13 +237,13 @@ static float path_evidence(
     }
 
     if(twin->progress_error <= 0.0f &&
-       !team->fault_state.active[FAULT_CLASS_MOBILITY])
+       !watchdog->confirmed_mobility_impairment)
     {
         watchdog->path_stagnation_streak = 0;
         return 0.0f;
     }
 
-    if(team->fault_state.active[FAULT_CLASS_MOBILITY])
+    if(watchdog->confirmed_mobility_impairment)
     {
         if(watchdog->path_stagnation_streak + 2u < WATCHDOG_STAGNATION_STREAK_MAX)
             watchdog->path_stagnation_streak = (uint8_t)(watchdog->path_stagnation_streak + 2u);
@@ -156,7 +260,7 @@ static float path_evidence(
         (float)watchdog->path_stagnation_streak /
         (float)WATCHDOG_STAGNATION_STREAK_MAX);
 
-        if(team->fault_state.active[FAULT_CLASS_MOBILITY])
+        if(watchdog->confirmed_mobility_impairment)
             evidence = clamp01(0.35f + 0.65f * evidence);
 
         return evidence;
@@ -265,7 +369,8 @@ static float weighted_confidence(const float *values)
 static WatchdogFailureMode_t classify_failure_mode(
     const TeamState_t *team,
     const MissionExecutionTwin_t *twin,
-    const float *values)
+    const float *values,
+    uint8_t confirmed_mobility_impairment)
 {
     float best = 0.0f;
     WatchdogFailureMode_t mode = WATCHDOG_FAILURE_NONE;
@@ -281,7 +386,7 @@ static WatchdogFailureMode_t classify_failure_mode(
     {
         best = values[WATCHDOG_EVIDENCE_SLOT_PATH] +
             values[WATCHDOG_EVIDENCE_SLOT_PROGRESS] * 0.5f;
-        mode = team->fault_state.active[FAULT_CLASS_MOBILITY]
+        mode = confirmed_mobility_impairment
             ? WATCHDOG_FAILURE_MOBILITY_DEGRADATION
             : WATCHDOG_FAILURE_TASK_EXECUTION_DELAY;
     }
@@ -387,8 +492,11 @@ void watchdog_step(void)
             communication_evidence(twin);
         instantaneous[WATCHDOG_EVIDENCE_SLOT_OPERATING_STATE] =
             operating_state_evidence(team, twin);
+
+        update_mobility_confirmation(team, twin, watchdog);
+
         instantaneous[WATCHDOG_EVIDENCE_SLOT_PATH] =
-            path_evidence(team, twin, watchdog);
+            path_evidence(twin, watchdog);
         instantaneous[WATCHDOG_EVIDENCE_SLOT_ASSIGNMENT] =
             assignment_evidence(team, twin, watchdog);
         instantaneous[WATCHDOG_EVIDENCE_SLOT_TIMEOUT] =
@@ -408,7 +516,11 @@ void watchdog_step(void)
         watchdog->status.anomaly_detected =
             watchdog->status.anomaly_confidence >= WATCHDOG_ANOMALY_THRESHOLD;
         watchdog->status.dominant_failure_mode =
-            classify_failure_mode(team, twin, watchdog->accumulated_evidence);
+            classify_failure_mode(
+                team,
+                twin,
+                watchdog->accumulated_evidence,
+                watchdog->confirmed_mobility_impairment);
         watchdog->status.recommended_action =
             recommend_action(&watchdog->status);
 

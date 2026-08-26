@@ -1,0 +1,13 @@
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:128:27:board_usart1_read_byte	4	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:140:13:mission_link_usart1_write	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:174:16:mission_link_representative_team	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:189:13:mission_link_route_or_apply_roster	40	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:210:13:mission_link_route_or_apply_fault	40	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:245:13:mission_link_apply_and_relay_incident	48	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:280:12:mission_link_rx_try_consume_one	64	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:346:13:mission_link_usart1_rx_step	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:383:13:mission_link_comms_transport_rx_step	232	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:511:13:mission_link_send_status	64	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:536:13:mission_link_status_tx_step	40	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:618:6:mission_link_task_init	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/mission_link_task.c:634:6:mission_link_task_step	8	static

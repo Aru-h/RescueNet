@@ -8,14 +8,13 @@
 #include "recovery_manager_config.h"
 #include "recovery_manager.h"
 #include "search_zones.h"
+#include "team.h"
 #include <string.h>
 
 
 static uint8_t count_available_teams_for_capability(uint8_t capability);
 static uint8_t count_open_incidents_for_capability(uint8_t capability);
 static void allocate_support_team(void);
-
-static float get_soft_stamina_floor(const TeamState_t *team);
 
 uint8_t select_best_team(const IncidentState_t *incident)
 {
@@ -202,7 +201,27 @@ bool team_can_accept_incident(const TeamState_t *team, const IncidentState_t *in
     if(team->equipment_level != EQ_MAX_LEVEL)
         return false;
 
-    return team->stamina >= get_soft_stamina_floor(team);
+    /*
+     * Fix for a real bug (confirmed empirically this session, see
+     * get_ready_stamina()'s own doc comment in core/team.h for the
+     * full writeup): this used to compare against get_soft_stamina_
+     * floor() - the much lower "eligible for new work at all" bar
+     * (20.0-40.0) - instead of get_ready_stamina() - the higher bar
+     * (50.0-65.0) update_team() itself requires before naturally
+     * promoting a RESTING team back to STATUS_AVAILABLE. That let
+     * this steal path grab a team the moment it cleared the low bar,
+     * long before it was actually "ready" by the standard the rest of
+     * the codebase uses - triggering a real, observed infinite
+     * RESTING<->EN_ROUTE oscillation for oversubscribed specializations
+     * (available_capacity < waiting_demand is essentially permanent
+     * for them, so every steal-eligible tick got exploited). Using the
+     * same ready-stamina bar update_team() uses means stealing a
+     * resting team now only ever happens right around when it would
+     * have been naturally promoted anyway - no premature interruption,
+     * no mismatch for evaluate_progress() (core/recovery_manager.c) to
+     * correctly flag as deviation and bounce straight back.
+     */
+    return team->stamina >= get_ready_stamina(team);
 }
 
 static uint8_t count_available_teams_for_capability(uint8_t capability)
@@ -249,7 +268,10 @@ static uint8_t count_open_incidents_for_capability(uint8_t capability)
     return count;
 }
 
-static float get_soft_stamina_floor(const TeamState_t *team)
+/* Declared non-static in allocator.h - see that header's own comment
+ * for why: core/recovery_manager.c shares this exact threshold now,
+ * rather than keeping its own, driftable copy. */
+float get_soft_stamina_floor(const TeamState_t *team)
 {
     switch(team->fitness_tier)
     {
