@@ -9,21 +9,35 @@ CFLAGS += -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS
 LDFLAGS ?= -lm
 
 # --- Layout ---------------------------------------------------------
-# core/     portable simulator: no stdio/OS/filesystem dependencies.
-#           Verified freestanding-clean for Cortex-M55 (see check-board).
-# platform/laptop/  desktop entry point, CLI parsing, CSV snapshot
-#           writer, printf-based debug sink, --live SSE pacing.
-# platform/board/   STM32N6570-DK entry point + debug/snapshot backends.
-#           Stubs pending BSP (contest-provided, not the public
-#           mtk3_bsp repo) — see TODO(bsp)/TODO(usb) markers.
-# tools/    laptop-only offline tooling: snapshot labeler, Flask
-#           dashboard, dataset comparison scripts. Never built for
-#           the board.
+# core/                    portable simulator: no stdio/OS/filesystem
+#                          dependencies. Verified freestanding-clean
+#                          for Cortex-M55/Cortex-M0+ (see check-board/
+#                          check-pico).
+# core/vendor/             vendored (redistribution-licensed, unlike
+#                          either BSP) SHARED dependencies - currently
+#                          just sx126x_driver, the SX1262 radio driver
+#                          core. Excluded from CORE_SOURCES's wildcard
+#                          (subdirectory, doesn't match core/*.c), so
+#                          the laptop build never links it.
+# laptop/                  desktop entry point, CLI parsing, CSV
+#                          snapshot writer, printf-based debug sink,
+#                          --live SSE pacing.
+# laptop/tools/            laptop-only offline tooling: snapshot
+#                          labeler, Flask dashboard, dataset comparison
+#                          scripts, board-side selftests. Never built
+#                          for either board target.
+# board/STM32N6570-DK/     STM32N6570-DK entry point + debug/snapshot
+#                          backends, plus its own vendor/mtk3_bsp2 BSP
+#                          (see that folder's own vendor/README.md).
+# board/Raspberry_Pi_Pico/ Raspberry Pi Pico entry point + debug/
+#                          snapshot backends, plus its own
+#                          vendor/mtk3_bsp (v1 — NOT the DK's BSP2)
+#                          BSP (see that folder's own vendor/README.md).
 
 CORE_DIR = core
-LAPTOP_DIR = platform/laptop
-BOARD_DIR = platform/board
-TOOLS_DIR = tools
+LAPTOP_DIR = laptop
+BOARD_DIR = board/STM32N6570-DK
+TOOLS_DIR = laptop/tools
 
 CORE_SOURCES = $(wildcard $(CORE_DIR)/*.c)
 LAPTOP_SOURCES = $(CORE_SOURCES) \
@@ -38,7 +52,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver
 
 all: $(TARGET) $(LABELER)
 
@@ -59,44 +73,55 @@ OUTPUT ?= tron_snapshot_dataset_labeled.csv
 N ?= 5
 
 # --- Board compile check ---------------------------------------------
-# Compiles core/ + platform/board/ for real, against the actual
+# Compiles core/ + board/STM32N6570-DK/ for real, against the actual
 # µT-Kernel 3.0 BSP2 headers (github.com/tron-forum/mtk3_bsp2) when
-# vendor/mtk3_bsp2 is present (see vendor/README.md to fetch it) --
-# this is a genuine header-accurate check, not a guess: it validates
-# real tk/tkernel.h and tm/tmonitor.h symbols (T_CTSK, tk_cre_tsk,
-# tm_printf, etc), not just freestanding-C-with-no-headers.
+# board/STM32N6570-DK/vendor/mtk3_bsp2 is present (see that folder's
+# README.md to fetch it) -- this is a genuine header-accurate check,
+# not a guess: it validates real tk/tkernel.h and tm/tmonitor.h symbols
+# (T_CTSK, tk_cre_tsk, tm_printf, etc), not just freestanding-C-with-
+# no-headers.
 #
 # Falls back to a plain freestanding compile (no BSP headers) if
-# vendor/mtk3_bsp2 isn't present, which still catches accidental
-# libc/OS dependency creep in core/ but can't validate platform/board/
-# against real BSP symbols.
+# board/STM32N6570-DK/vendor/mtk3_bsp2 isn't present, which still
+# catches accidental libc/OS dependency creep in core/ but can't
+# validate board/STM32N6570-DK/ against real BSP symbols.
 #
 # This is NOT a real firmware build (no linker script, no HAL init,
-# no STM32CubeIDE project) -- see vendor/README.md for what's still
-# needed to get a flashable image. Run this after every change to
-# core/ or platform/board/.
+# no STM32CubeIDE project) -- see board/STM32N6570-DK/vendor/README.md
+# for what's still needed to get a flashable image. Run this after
+# every change to core/ or board/STM32N6570-DK/.
+#
+# BSP_DIR's default moved here (from the old top-level vendor/) as
+# part of splitting each physical board into its own self-contained
+# board/<name>/ folder -- see board/STM32N6570-DK/vendor/README.md's
+# own note on why. A Pico/RP2040 target, when it exists, gets its own
+# board/Raspberry_Pi_Pico/vendor/mtk3_bsp (v1, NOT this v2 BSP -- see
+# the original handoff doc's BSP/toolchain section) and its own build
+# rule entirely; it does NOT reuse BSP_DIR/ARM_CFLAGS below, which are
+# STM32N6570-DK/Cortex-M55-specific (-mcpu=cortex-m55,
+# -D_STM32CUBE_DISCOVERY_N657_).
 ARM_CC ?= arm-none-eabi-gcc
-BSP_DIR ?= vendor/mtk3_bsp2
+BSP_DIR ?= board/STM32N6570-DK/vendor/mtk3_bsp2
 ARM_CFLAGS_BASE = -std=gnu11 -Wall -Wextra -mcpu=cortex-m55 -mthumb \
 	-mfloat-abi=hard -mfpu=auto -ffreestanding -fno-builtin \
 	-I$(CORE_DIR) -I$(BOARD_DIR)
 BOARD_OBJ_DIR = build/board-check
 
 ifneq ($(wildcard $(BSP_DIR)/include),)
-  ARM_CFLAGS = $(ARM_CFLAGS_BASE) -D_STM32CUBE_DISCOVERY_N657_ \
+  ARM_CFLAGS = $(ARM_CFLAGS_BASE) -D_STM32CUBE_DISCOVERY_N657_ -DTHIS_BOARD_ID=0 \
 	-I$(BSP_DIR)/config -I$(BSP_DIR)/include -I$(BSP_DIR)
   BOARD_SOURCES = $(CORE_SOURCES) $(BOARD_DIR)/debug.c $(BOARD_DIR)/snapshot.c $(BOARD_DIR)/main_board.c $(BOARD_DIR)/mission_link_task.c
   BSP_MODE = real BSP2 headers ($(BSP_DIR))
 else
   ARM_CFLAGS = $(ARM_CFLAGS_BASE)
-  # platform/board/debug.c and main_board.c call real BSP APIs
+  # board/STM32N6570-DK/debug.c and main_board.c call real BSP APIs
   # (tm_printf, tk_cre_tsk, ...) now, so they genuinely can't compile
-  # without vendor/mtk3_bsp2 -- that's correct, not a check-board bug.
-  # Fallback mode checks core/ only: still a real, useful check (catches
-  # libc/OS dependency creep in the portable simulator), just weaker
-  # than the real-BSP mode above.
+  # without board/STM32N6570-DK/vendor/mtk3_bsp2 -- that's correct,
+  # not a check-board bug. Fallback mode checks core/ only: still a
+  # real, useful check (catches libc/OS dependency creep in the
+  # portable simulator), just weaker than the real-BSP mode above.
   BOARD_SOURCES = $(CORE_SOURCES)
-  BSP_MODE = plain freestanding, core/ only (vendor/mtk3_bsp2 not found -- see vendor/README.md; platform/board/*.c needs real BSP headers so it's skipped in this mode)
+  BSP_MODE = plain freestanding, core/ only (board/STM32N6570-DK/vendor/mtk3_bsp2 not found -- see that folder's README.md; board/STM32N6570-DK/*.c needs real BSP headers so it's skipped in this mode)
 endif
 
 check-board: check-board-compile check-board-link
@@ -151,12 +176,12 @@ check-board-compile:
 #      build compiles against, not a hand-maintained guess list either).
 #      IMPORT is µT-Kernel/BSP2's own convention for "this is provided
 #      externally by the kernel/monitor, not defined in this header" --
-#      see e.g. vendor/mtk3_bsp2/mtkernel/include/tm/tmonitor.h.
+#      see e.g. board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/include/tm/tmonitor.h.
 #   5. UNRESOLVED minus EXPECTED_EXTERNAL is what's left: undefined
 #      references this build set genuinely cannot account for by any
 #      known-legitimate external source. That's a symbol something in
-#      core/*.c or platform/board/*.c calls, that nothing in core/*.c or
-#      platform/board/*.c (still) defines -- the exact bug class
+#      core/*.c or board/STM32N6570-DK/*.c calls, that nothing in core/*.c or
+#      board/STM32N6570-DK/*.c (still) defines -- the exact bug class
 #      check-board-compile can't see. Non-empty here is a hard failure.
 ARM_NM ?= arm-none-eabi-nm
 ARM_TARGET_FLAGS = -mcpu=cortex-m55 -mthumb -mfloat-abi=hard -mfpu=auto
@@ -190,7 +215,7 @@ check-board-link: check-board-compile
 	if [ -s $(BOARD_OBJ_DIR)/.bad_undefined_syms.txt ]; then \
 		echo ""; \
 		echo "check-board-link: FAILED -- undefined reference(s) to symbol(s) that should be"; \
-		echo "defined somewhere in core/*.c or platform/board/*.c, but aren't in this build:"; \
+		echo "defined somewhere in core/*.c or board/STM32N6570-DK/*.c, but aren't in this build:"; \
 		echo ""; \
 		sed 's/^/    /' $(BOARD_OBJ_DIR)/.bad_undefined_syms.txt; \
 		echo ""; \
@@ -198,7 +223,7 @@ check-board-link: check-board-compile
 		echo "every IMPORT-declared symbol under $(BSP_DIR) -- these are not libc/BSP calls)"; \
 		echo ""; \
 		echo "This means some file calls a function that no .c file in core/ or"; \
-		echo "platform/board/ actually defines -- a cross-file interface break that"; \
+		echo "board/STM32N6570-DK/ actually defines -- a cross-file interface break that"; \
 		echo "check-board-compile's per-file compile step cannot catch on its own."; \
 		exit 1; \
 	fi; \
@@ -208,5 +233,161 @@ check-board-link: check-board-compile
 
 clean:
 	rm -f $(TARGET) $(LABELER) tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv tron_telemetry.log
-	rm -rf $(BOARD_OBJ_DIR)
+	rm -rf $(BOARD_OBJ_DIR) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
+
+# --- Pico compile check --------------------------------------------------
+# Mirrors check-board-compile/-link above, same class of check now that
+# real project sources exist (board/Raspberry_Pi_Pico/{main_board,
+# mission_link_task,debug,snapshot}.c, ported from board/STM32N6570-DK/'s
+# equivalents) -- not just the BSP-only smoke check this used to be
+# (check-pico-bsp, kept below as its own smaller target: still useful on
+# its own to isolate "is the vendored BSP itself broken" from "did OUR
+# port break something", since it only ever compiles the BSP's own
+# sample, never our files).
+#
+# -mcpu=cortex-m0plus, NOT cortex-m55: RP2040 is dual Cortex-M0+, a
+# different core family from the DK's Cortex-M55, not just a different
+# chip in the same family -- see board/Raspberry_Pi_Pico/vendor/README.md.
+# -D_PICO_RP2040_ is the one BSP-select flag (see that same README for
+# why this, not a hand-set TARGET_DIR, is the real mechanism).
+PICO_DIR = board/Raspberry_Pi_Pico
+PICO_BSP_DIR ?= $(PICO_DIR)/vendor/mtk3_bsp
+PICO_ARM_CC ?= arm-none-eabi-gcc
+PICO_ARM_CFLAGS_BASE = -std=gnu11 -Wall -Wextra -mcpu=cortex-m0plus -mthumb \
+	-ffreestanding -fno-builtin -D_PICO_RP2040_ -DTHIS_BOARD_ID=1 \
+	-I$(CORE_DIR) -I$(PICO_DIR)
+PICO_BSP_OBJ_DIR = build/pico-bsp-check
+PICO_BOARD_OBJ_DIR = build/pico-check
+
+ifneq ($(wildcard $(PICO_BSP_DIR)/include),)
+  PICO_ARM_CFLAGS = $(PICO_ARM_CFLAGS_BASE) \
+	-I$(PICO_BSP_DIR)/config -I$(PICO_BSP_DIR)/include -I$(PICO_BSP_DIR)/kernel/knlinc
+  PICO_BOARD_SOURCES = $(CORE_SOURCES) $(PICO_DIR)/debug.c $(PICO_DIR)/snapshot.c $(PICO_DIR)/main_board.c $(PICO_DIR)/mission_link_task.c
+  PICO_BSP_MODE = real BSP (v1) headers ($(PICO_BSP_DIR))
+else
+  PICO_ARM_CFLAGS = $(PICO_ARM_CFLAGS_BASE)
+  # Same reasoning as check-board's fallback mode: board/Raspberry_Pi_Pico/
+  # debug.c and main_board.c call real BSP APIs (tm_printf, tk_cre_tsk,
+  # ...), so they genuinely can't compile without the BSP present -- not
+  # a check-pico bug. Fallback checks core/ only.
+  PICO_BOARD_SOURCES = $(CORE_SOURCES)
+  PICO_BSP_MODE = plain freestanding, core/ only ($(PICO_BSP_DIR) not found -- see board/Raspberry_Pi_Pico/vendor/README.md; $(PICO_DIR)/*.c needs real BSP headers so it's skipped in this mode)
+endif
+
+check-pico: check-pico-compile check-pico-link
+	@echo "check-pico: compile + link checks both passed ($(PICO_BSP_MODE))"
+
+check-pico-compile:
+	@echo "check-pico mode: $(PICO_BSP_MODE)"
+	@mkdir -p $(PICO_BOARD_OBJ_DIR)
+	@for f in $(PICO_BOARD_SOURCES); do \
+		obj=$(PICO_BOARD_OBJ_DIR)/$$(basename $$f .c).o; \
+		echo "  ARM-CC  $$f"; \
+		$(PICO_ARM_CC) $(PICO_ARM_CFLAGS) -c $$f -o $$obj || exit 1; \
+	done
+	@echo "check-pico-compile: all sources compile clean for Cortex-M0+ ($(PICO_BSP_MODE))"
+
+# Same undefined-cross-reference check as check-board-link -- see that
+# target's own long comment above for the full 5-step reasoning; not
+# repeated here since it's identical, only the target CPU/BSP differ.
+PICO_ARM_TARGET_FLAGS = -mcpu=cortex-m0plus -mthumb
+
+check-pico-link: check-pico-compile
+	@echo "check-pico-link: partial-linking every $(PICO_BOARD_OBJ_DIR)/*.o together to check for undefined cross-file references"
+	@objs="$$(ls $(PICO_BOARD_OBJ_DIR)/*.o 2>/dev/null)"; \
+	if [ -z "$$objs" ]; then \
+		echo "check-pico-link: no objects in $(PICO_BOARD_OBJ_DIR) -- check-pico-compile did not run?"; \
+		exit 1; \
+	fi; \
+	$(ARM_NM) -o $$objs | awk -F'[: \t]+' '$$2=="U" {print $$3}' | sort -u > $(PICO_BOARD_OBJ_DIR)/.undefined_syms.txt; \
+	$(ARM_NM) -o $$objs | awk -F'[: \t]+' '$$2!="U" && NF>=4 {print $$4}' | sort -u > $(PICO_BOARD_OBJ_DIR)/.defined_syms.txt; \
+	comm -23 $(PICO_BOARD_OBJ_DIR)/.undefined_syms.txt $(PICO_BOARD_OBJ_DIR)/.defined_syms.txt > $(PICO_BOARD_OBJ_DIR)/.unresolved_syms.txt; \
+	libc_a="$$($(PICO_ARM_CC) $(PICO_ARM_TARGET_FLAGS) -print-file-name=libc.a)"; \
+	libm_a="$$($(PICO_ARM_CC) $(PICO_ARM_TARGET_FLAGS) -print-file-name=libm.a)"; \
+	libgcc_a="$$($(PICO_ARM_CC) $(PICO_ARM_TARGET_FLAGS) -print-file-name=libgcc.a)"; \
+	: > $(PICO_BOARD_OBJ_DIR)/.expected_external.txt; \
+	for lib in "$$libc_a" "$$libm_a" "$$libgcc_a"; do \
+		if [ -f "$$lib" ]; then \
+			$(ARM_NM) "$$lib" 2>/dev/null | awk -F'[: \t]+' 'NF>=3 && $$2 ~ /^[A-Za-z]$$/ && $$2!="U" && $$2!="u" {print $$3}' >> $(PICO_BOARD_OBJ_DIR)/.expected_external.txt; \
+		fi; \
+	done; \
+	if [ -d "$(PICO_BSP_DIR)" ]; then \
+		grep -rhoE '^[[:space:]]*IMPORT[[:space:]]+[A-Za-z_][A-Za-z0-9_ ]*\*?[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(' $(PICO_BSP_DIR) 2>/dev/null \
+			| sed -E 's/^.*[[:space:]\*]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\($$/\1/' \
+			>> $(PICO_BOARD_OBJ_DIR)/.expected_external.txt; \
+	fi; \
+	sort -u $(PICO_BOARD_OBJ_DIR)/.expected_external.txt -o $(PICO_BOARD_OBJ_DIR)/.expected_external.txt; \
+	comm -23 $(PICO_BOARD_OBJ_DIR)/.unresolved_syms.txt $(PICO_BOARD_OBJ_DIR)/.expected_external.txt > $(PICO_BOARD_OBJ_DIR)/.bad_undefined_syms.txt; \
+	if [ -s $(PICO_BOARD_OBJ_DIR)/.bad_undefined_syms.txt ]; then \
+		echo ""; \
+		echo "check-pico-link: FAILED -- undefined reference(s) to symbol(s) that should be"; \
+		echo "defined somewhere in core/*.c or $(PICO_DIR)/*.c, but aren't in this build:"; \
+		echo ""; \
+		sed 's/^/    /' $(PICO_BOARD_OBJ_DIR)/.bad_undefined_syms.txt; \
+		echo ""; \
+		echo "(checked against the real libc.a/libm.a/libgcc.a for this target multilib and"; \
+		echo "every IMPORT-declared symbol under $(PICO_BSP_DIR) -- these are not libc/BSP calls)"; \
+		echo ""; \
+		echo "This means some file calls a function that no .c file in core/ or"; \
+		echo "$(PICO_DIR)/ actually defines -- a cross-file interface break that"; \
+		echo "check-pico-compile's per-file compile step cannot catch on its own."; \
+		exit 1; \
+	fi; \
+	echo "check-pico-link: real partial link of $$(echo $$objs | wc -w) objects clean --"; \
+	echo "  every undefined reference is accounted for by libc/libm/libgcc or an"; \
+	echo "  IMPORT-declared BSP symbol under $(PICO_BSP_DIR); no cross-file interface breaks."
+
+# --- Pico BSP smoke check ------------------------------------------------
+# Smaller, narrower check kept alongside check-pico above: only ever
+# compiles the vendored BSP's OWN bundled sample (app_program/app_main.c),
+# never this project's files -- useful specifically to isolate "the
+# vendored BSP itself is broken" from "our port broke something", which
+# check-pico-compile alone can't distinguish (a BSP header problem and a
+# project-file problem both show up as "check-pico-compile failed").
+check-pico-bsp:
+	@if [ ! -d "$(PICO_BSP_DIR)/include" ]; then \
+		echo "check-pico-bsp: SKIPPED -- $(PICO_BSP_DIR) not found (see"; \
+		echo "  board/Raspberry_Pi_Pico/vendor/README.md to fetch it)"; \
+		exit 0; \
+	fi
+	@mkdir -p $(PICO_BSP_OBJ_DIR)
+	@echo "  ARM-CC  $(PICO_BSP_DIR)/app_program/app_main.c"
+	@$(PICO_ARM_CC) -std=gnu11 -Wall -Wextra -mcpu=cortex-m0plus -mthumb \
+		-ffreestanding -fno-builtin -D_PICO_RP2040_ \
+		-I$(PICO_BSP_DIR)/config -I$(PICO_BSP_DIR)/include -I$(PICO_BSP_DIR)/kernel/knlinc \
+		-c $(PICO_BSP_DIR)/app_program/app_main.c -o $(PICO_BSP_OBJ_DIR)/app_main.o
+	@echo "check-pico-bsp: vendored mtk3_bsp (pico_rp2040) compiles clean for Cortex-M0+"
+
+# --- SX126X driver smoke check --------------------------------------------
+# Compiles core/vendor/sx126x_driver/src/sx126x.c freestanding for BOTH
+# real target CPUs -- unlike check-board/check-pico, this driver core
+# doesn't need either board's BSP headers at all (it's genuinely
+# standalone, calling out to sx126x_hal.h's four functions, which have
+# no implementation anywhere yet -- see core/vendor/sx126x_driver/
+# README.md's "What's still genuinely undecided" section). This only
+# proves the vendored driver core itself compiles clean for both CPUs;
+# it is NOT wired into check-board-compile/check-pico-compile's
+# BOARD_SOURCES/PICO_BOARD_SOURCES yet, and deliberately so -- doing
+# that before a real per-board HAL implementation exists would make
+# check-board-link/check-pico-link correctly (not spuriously) fail
+# with "undefined reference to sx126x_hal_write" etc., since nothing
+# defines those symbols yet. This target exists to keep proving the
+# driver core itself is sound in the meantime, without needing a
+# finished HAL to do that.
+SX126X_DIR = core/vendor/sx126x_driver/src
+SX126X_OBJ_DIR = build/sx126x-driver-check
+
+check-sx126x-driver:
+	@if [ ! -f "$(SX126X_DIR)/sx126x.c" ]; then \
+		echo "check-sx126x-driver: SKIPPED -- $(SX126X_DIR) not found"; \
+		exit 0; \
+	fi
+	@mkdir -p $(SX126X_OBJ_DIR)
+	@echo "  ARM-CC  $(SX126X_DIR)/sx126x.c (Cortex-M55, DK)"
+	@$(ARM_CC) -std=gnu11 -Wall -Wextra -mcpu=cortex-m55 -mthumb -mfloat-abi=hard -mfpu=auto \
+		-ffreestanding -fno-builtin -c $(SX126X_DIR)/sx126x.c -o $(SX126X_OBJ_DIR)/sx126x_m55.o
+	@echo "  ARM-CC  $(SX126X_DIR)/sx126x.c (Cortex-M0+, Pico)"
+	@$(PICO_ARM_CC) -std=gnu11 -Wall -Wextra -mcpu=cortex-m0plus -mthumb \
+		-ffreestanding -fno-builtin -c $(SX126X_DIR)/sx126x.c -o $(SX126X_OBJ_DIR)/sx126x_m0.o
+	@echo "check-sx126x-driver: vendored sx126x_driver core compiles clean for both Cortex-M55 and Cortex-M0+"
 

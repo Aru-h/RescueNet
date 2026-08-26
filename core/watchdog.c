@@ -131,7 +131,7 @@ static float operating_state_evidence(
 /*
  * Board-observable substitute for team->fault_state.active[
  * FAULT_CLASS_MOBILITY]. That flag is only ever written by
- * fault_injector.c - nothing in platform/board/ independently detects
+ * fault_injector.c - nothing in board/STM32N6570-DK/ independently detects
  * or sets it, so on real hardware with no injector running it reads
  * false forever, and any evidence/classification logic keyed off it
  * would silently degrade (evidence builds at half speed, and

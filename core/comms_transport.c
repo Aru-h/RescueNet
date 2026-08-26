@@ -209,6 +209,30 @@ uint8_t comms_transport_board_id_for_team(uint8_t team_id)
     return (uint8_t)(team_id / COMMS_TRANSPORT_TEAMS_PER_BOARD);
 }
 
+/*
+ * Ceiling division, not floor: a board owning even one team (a
+ * partial last group, e.g. NUM_TEAMS=7 with the default 5-per-board
+ * -> boards {0..4} and {5,6}, a 2-team partial board) still counts as
+ * a real board that needs a roster/handshake/relay slot. Floor
+ * division would silently drop that partial board from every loop
+ * that calls this, which is a worse failure mode (teams assigned to
+ * a board nothing ever iterates to) than the function existing at
+ * all. A function, not a header macro like COMMS_TRANSPORT_TEAMS_
+ * PER_BOARD itself: NUM_TEAMS and COMMS_TRANSPORT_TEAMS_PER_BOARD are
+ * only both in scope together here, in this .c file - NUM_TEAMS
+ * comes from mission_state.h, which this file already includes for
+ * other reasons, and COMMS_TRANSPORT_TEAMS_PER_BOARD is a #define
+ * local to this file (see immediately above) - so this is where the
+ * division actually happens once, rather than every caller needing
+ * both headers in scope to compute it themselves and risking drift
+ * if they use the wrong divisor.
+ */
+uint8_t comms_transport_board_count(void)
+{
+    return (uint8_t)((NUM_TEAMS + COMMS_TRANSPORT_TEAMS_PER_BOARD - 1u)
+                      / COMMS_TRANSPORT_TEAMS_PER_BOARD);
+}
+
 int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
                           uint8_t frame_type, const uint8_t *payload,
                           uint8_t payload_len)
@@ -295,4 +319,17 @@ int comms_transport_poll_received(uint8_t *out_sender_team_id,
     g_inbox_count--;
 
     return 1;
+}
+
+int comms_transport_deliver_received(uint8_t frame_type, const uint8_t *payload,
+                                      uint8_t payload_len)
+{
+    /* See comms_transport.h's own doc on this function: the real
+       physical-RX counterpart to comms_transport_send()'s same-board
+       path above (that path: pack -> lora_frame_try_parse() -> push;
+       this path: caller already parsed via lora_frame_try_parse()
+       itself -> push here). COMMS_TRANSPORT_UNKNOWN_SENDER, not a
+       real sender_team_id - see that macro's own doc for why. */
+    return comms_transport_inbox_push(COMMS_TRANSPORT_UNKNOWN_SENDER, frame_type,
+                                       payload, payload_len);
 }

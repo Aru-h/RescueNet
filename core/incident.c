@@ -887,7 +887,7 @@ uint8_t team_effective_work_rate(const TeamState_t *team)
  * standing up a full mission). Forward-declared here at the one call
  * site that needs it, matching how this project already forward-
  * declares this kind of cross-file-but-undeclared function elsewhere
- * (e.g. platform/board/main_board.c's board_snapshot_ring_drain()). */
+ * (e.g. board/STM32N6570-DK/main_board.c's board_snapshot_ring_drain()). */
 extern bool cbba_team_is_local(uint8_t team_id);
 
 /*
@@ -2302,7 +2302,7 @@ void abandon_task_for_recovery(TeamState_t *team)
      *
      * FLAG - a narrower version of the SAME class of churn still
      * reproduces even with this dedup in place, traced empirically this
-     * session (seed=7, team 8, tools/perimeter_probe.c and friends - not
+     * session (seed=7, team 8, laptop/tools/perimeter_probe.c and friends - not
      * kept in the repo, scratch instrumentation only) but not yet fixed:
      * create_return_to_safe_zone_task() genuinely succeeds and sets
      * status=EN_ROUTE, but on the VERY NEXT tick this function is

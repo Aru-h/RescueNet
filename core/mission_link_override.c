@@ -169,7 +169,7 @@ int mission_link_override_route_or_apply(const MissionLinkOverride_t *msg)
     mission_link_override_pack_payload(msg, payload);
 
     /* sender_team_id = 0u, not a "this came from team 0" claim -
-       matches platform/board/mission_link_task.c's own established
+       matches board/STM32N6570-DK/mission_link_task.c's own established
        convention for every other laptop-originated relay (see
        mission_link_route_or_apply_roster()/_fault() there): this
        directive came from the laptop operator over USART1, not from

@@ -232,7 +232,7 @@ typedef struct __attribute__((packed))
  *     nothing changed - bounds staleness and gives the laptop's
  *     watchdog a liveness signal if a board goes quiet.
  *
- * Laptop-side extrapolation (platform/laptop/snapshot.c): between
+ * Laptop-side extrapolation (laptop/snapshot.c): between
  * reports, the displayed progress is
  *     work_remaining_at_report - work_rate * (current_tick - report_tick)
  * clamped at 0 (and the analogous formula for stamina), NOT a second,
@@ -333,7 +333,7 @@ typedef struct __attribute__((packed))
  * the wire-size macro rather than a hardcoded byte count picks up the
  * new length automatically, and there is no firmware-in-the-field
  * compatibility burden yet (this link is not wired into a flashed
- * image - see platform/board/main_board.c's own top-of-file note) that
+ * image - see board/STM32N6570-DK/main_board.c's own top-of-file note) that
  * would otherwise justify spending a fresh magic pair on the version
  * bump instead of just documenting it here. */
 #define MISSION_LINK_STATUS_MAGIC0   ((uint8_t)0xF9u)

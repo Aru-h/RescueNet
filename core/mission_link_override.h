@@ -13,21 +13,21 @@
  * message's shape and lifecycle (operator-issued, no reply, no periodic
  * resend) has nothing in common with how those four are produced and
  * consumed. This is a one-shot directive, not something that expects a
- * reply - the laptop side (tools/app.py) only ever packs this, never
+ * reply - the laptop side (laptop/tools/app.py) only ever packs this, never
  * parses it; only the receiving board parses it.
  *
  * End-to-end path this header/mission_link_override.c serve:
  *
- *   1. Dashboard drag-drop (tools/templates/index.html) already builds
+ *   1. Dashboard drag-drop (laptop/tools/templates/index.html) already builds
  *      a pendingOverride{team_id, incident_id} object client-side.
  *      confirmPendingOverride() POSTs it to a new Flask route
- *      (tools/app.py).
+ *      (laptop/tools/app.py).
  *   2. That route packs a MissionLinkOverride_t via pack_override()
- *      (tools/app.py - a Python mirror of mission_link_override_pack()
+ *      (laptop/tools/app.py - a Python mirror of mission_link_override_pack()
  *      below, same self-contained-mirror precedent telemetry_bridge.py
  *      already set for pack_handshake_req()) and writes it to the
  *      laptop<->DK USART1 serial link.
- *   3. DK's USART1 RX path (platform/board/mission_link_task.c - NOT
+ *   3. DK's USART1 RX path (board/STM32N6570-DK/mission_link_task.c - NOT
  *      touched here, hook note only, same "don't touch, flag instead"
  *      rule this project already applies to core/mission_link.h/
  *      mission_link_task.c) calls mission_link_override_parse() on
@@ -148,14 +148,14 @@ _Static_assert(sizeof(MissionLinkOverride_t) == 5u,
  *
  * AUTHORITATIVE REGISTRY: this comment block (and the equivalent
  * blocks in mission_link.h/mission_link_handshake.h) is the running
- * list this project keeps to avoid a collision. tools/app.py's
+ * list this project keeps to avoid a collision. laptop/tools/app.py's
  * OVERRIDE_MAGIC0/1 constants are a Python mirror of THIS row (same
  * self-contained-mirror precedent as pack_handshake_req() already
  * set in telemetry_bridge.py) - keep them in sync if this pair ever
- * changes. (An earlier draft of tools/app.py used 0x28/0x82 for this
+ * changes. (An earlier draft of laptop/tools/app.py used 0x28/0x82 for this
  * pair - 0x28 is ASCII '(' and would have broken the non-ASCII-first-
  * byte resync guarantee above; corrected to 0x87/0x78 here and in
- * tools/app.py together, not left silently mismatched between the two
+ * laptop/tools/app.py together, not left silently mismatched between the two
  * sides of the wire.)
  */
 #define MISSION_LINK_OVERRIDE_MAGIC0 ((uint8_t)0x87u)
@@ -183,7 +183,7 @@ _Static_assert(sizeof(MissionLinkOverride_t) == 5u,
  *
  * Why a dedicated value instead of reusing LORA_FRAME_TYPE_MISSION_
  * LINK=1 with a fifth MISSION_LINK_MSG_* sub-type byte (verified
- * directly against core/mission_link_codec.h and platform/board/
+ * directly against core/mission_link_codec.h and board/STM32N6570-DK/
  * mission_link_task.c's mission_link_route_or_apply_roster()/_fault()
  * before deciding this - see mission_link_override_route_or_apply()'s
  * own doc for the full comparison): that sub-type enum is
@@ -257,21 +257,21 @@ void mission_link_override_apply(const MissionLinkOverride_t *msg);
  * board hosts msg->team_id, or relays it over comms_transport_send()
  * (real LoRa once that driver exists, an in-process queue today - see
  * comms_transport.h) to whichever board does, using
- * LORA_FRAME_TYPE_OVERRIDE above. Named and referenced by tools/
+ * LORA_FRAME_TYPE_OVERRIDE above. Named and referenced by laptop/tools/
  * app.py's /api/board/override route docstring - that route's own job
  * ends at writing the USART1 frame; THIS function is what decides,
  * once DK's USART1 RX path has parsed that frame, whether team_id
  * lives on this board or needs relaying to NUCLEO.
  *
  * Not called from anywhere in this project yet - the USART1 RX hook
- * on DK (platform/board/mission_link_task.c) is what should call this
+ * on DK (board/STM32N6570-DK/mission_link_task.c) is what should call this
  * once it has a freshly-parsed MissionLinkOverride_t, same "hook
  * note, don't touch the file directly" rule this header's top comment
  * already states for that file.
  *
  * SHAPE, not byte-for-byte reuse, of core/mission_link.h's own
  * four-message dual-channel pattern (verified directly against
- * platform/board/mission_link_task.c's mission_link_route_or_apply_
+ * board/STM32N6570-DK/mission_link_task.c's mission_link_route_or_apply_
  * roster()/_fault() before writing this): same "apply locally if this
  * board hosts team_id, else relay" decision via comms_transport_
  * board_id_for_team(), same payload-only pack function reused for the

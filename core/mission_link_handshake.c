@@ -16,7 +16,7 @@
  *
  * 1. Laptop sends MissionLinkHandshakeReq_t{board_id=0} to DK over
  *    USART1 directly, on its own retry timer (see
- *    tools/telemetry_bridge.py's HandshakeCoordinator for that side's
+ *    laptop/tools/telemetry_bridge.py's HandshakeCoordinator for that side's
  *    policy - this file only implements the board side).
  *
  * 2. DK, on receiving that Req (mission_link_handshake_note_request_
@@ -66,7 +66,7 @@
  *    the laptop over USART1 as a full magic-byte frame
  *    (mission_link_handshake_pack_reply(), board_id=1 as NUCLEO set
  *    it) via mission_link_handshake_get_relay_reply() - the mirror of
- *    the down-link relay pattern platform/board/mission_link_task.c
+ *    the down-link relay pattern board/STM32N6570-DK/mission_link_task.c
  *    already established for mission-link traffic proper (that file
  *    forwards a relayed MissionLinkStatus_t from board 1 out over
  *    USART1 the same way; this does the analogous thing one level
@@ -74,7 +74,7 @@
  *    type instead).
  *
  * 5. (Laptop-side aggregation: implemented in
- *    tools/telemetry_bridge.py's HandshakeCoordinator, not this
+ *    laptop/tools/telemetry_bridge.py's HandshakeCoordinator, not this
  *    file - the laptop only starts sending roster/incident/fault
  *    traffic, and app.py only enables the dashboard's "start
  *    simulation" control, once it holds a reply for both board_id 0
@@ -105,7 +105,7 @@
  *        it needed to know to make a decision.
  *      - What the LAPTOP does with a ready=0 board_id=1 reply (block
  *        forever vs. time out vs. offer a DK-only path) is that
- *        side's policy call, made in tools/telemetry_bridge.py's
+ *        side's policy call, made in laptop/tools/telemetry_bridge.py's
  *        HandshakeCoordinator - see that file's top comment. Short
  *        version: it does NOT block forever, and it does NOT
  *        silently proceed DK-only either - it surfaces the timeout to
@@ -319,16 +319,36 @@ static uint8_t g_this_board_id;
 static uint8_t g_local_ready;
 static uint8_t g_request_seen;
 
-/* DK-only fields (harmless, unused, if this board is NUCLEO - see
-   this file's top comment and this header's own doc for why the
+/* Relay-leg bookkeeping, per peer board_id - GENERALIZED from single
+   nucleo-only fields to arrays indexed directly by board_id (index
+   g_this_board_id's own slot is simply never touched by the relay
+   functions, since a board never relays to itself - no relabeling
+   needed to go from "the one NUCLEO" to "peer N"). Harmless, unused
+   past index 0, if this board isn't the relay initiator (see this
+   file's top comment and this header's own doc for why the
    board-0-only gating is the CALLER's job, not enforced internally
-   here). */
-static uint8_t g_nucleo_req_sent_once;
-static uint8_t g_nucleo_req_last_sent_valid;
-static uint32_t g_nucleo_req_last_sent_tick;
-static uint8_t g_nucleo_reply_seen;
-static MissionLinkHandshakeReply_t g_nucleo_reply;
-static uint8_t g_nucleo_timed_out;
+   here). Capped at HANDSHAKE_MAX_BOARDS (see that macro's own doc in
+   the header) - a peer_board_id >= this cap is out of range for every
+   function below and is either silently ignored (note_remote_reply)
+   or would read/write out of bounds if a caller passed one anyway
+   (the other three assert-worthy but this file has no assert
+   facility available in a freestanding build - callers are expected
+   to only ever pass values from comms_transport_board_count(), which
+   by construction never exceeds this cap unless someone raises
+   NUM_TEAMS far past what HANDSHAKE_MAX_BOARDS was sized for, in
+   which case raising this cap to match is the fix, not a bounds
+   check here). */
+static uint8_t g_relay_req_sent_once[HANDSHAKE_MAX_BOARDS];
+static uint8_t g_relay_req_last_sent_valid[HANDSHAKE_MAX_BOARDS];
+static uint32_t g_relay_req_last_sent_tick[HANDSHAKE_MAX_BOARDS];
+static uint8_t g_relay_reply_seen[HANDSHAKE_MAX_BOARDS];
+static MissionLinkHandshakeReply_t g_relay_reply[HANDSHAKE_MAX_BOARDS];
+static uint8_t g_relay_timed_out[HANDSHAKE_MAX_BOARDS];
+
+/* Shared across every peer, not per-peer: all relay legs are expected
+   to start around the same time, at boot (see this file's top
+   comment) - a single clock, seeded once, is enough to time out every
+   peer independently off the same zero point. */
 static uint32_t g_board_init_tick; /* `now` value at
                                        mission_link_handshake_board_
                                        init() - the timeout clock's
@@ -337,21 +357,27 @@ static uint8_t g_board_init_tick_valid;
 
 void mission_link_handshake_board_init(uint8_t this_board_id)
 {
+    uint8_t i;
+
     g_this_board_id = this_board_id;
     g_local_ready = 0u;
     g_request_seen = 0u;
 
-    g_nucleo_req_sent_once = 0u;
-    g_nucleo_req_last_sent_valid = 0u;
-    g_nucleo_req_last_sent_tick = 0u;
-    g_nucleo_reply_seen = 0u;
-    g_nucleo_timed_out = 0u;
     g_board_init_tick_valid = 0u;
     g_board_init_tick = 0u;
 
-    g_nucleo_reply.board_id = 1u;
-    g_nucleo_reply.protocol_version = 0u;
-    g_nucleo_reply.ready = 0u;
+    for (i = 0u; i < HANDSHAKE_MAX_BOARDS; i++)
+    {
+        g_relay_req_sent_once[i] = 0u;
+        g_relay_req_last_sent_valid[i] = 0u;
+        g_relay_req_last_sent_tick[i] = 0u;
+        g_relay_reply_seen[i] = 0u;
+        g_relay_timed_out[i] = 0u;
+
+        g_relay_reply[i].board_id = i;
+        g_relay_reply[i].protocol_version = 0u;
+        g_relay_reply[i].ready = 0u;
+    }
 }
 
 void mission_link_handshake_mark_local_ready(void)
@@ -384,11 +410,12 @@ int mission_link_handshake_build_local_reply(MissionLinkHandshakeReply_t *out)
 }
 
 /* Lazily seeds the timeout clock's zero point from the first `now`
-   value either should_send_nucleo_req() or nucleo_timed_out() ever
-   sees. Not seeded directly in board_init(): that function takes no
+   value either should_send_relay_req() or relay_timed_out() ever
+   sees, for ANY peer (the clock is shared - see the field's own doc
+   above). Not seeded directly in board_init(): that function takes no
    `now` parameter (board_init() runs at boot, before this board
    necessarily has a meaningful tick source at all - see this file's
-   top comment on when DK starts the NUCLEO leg vs. when the sim tick
+   top comment on when DK starts relay legs vs. when the sim tick
    loop itself starts), so the first call that actually has a real
    `now` value to offer is the right place to anchor "elapsed since
    we started trying". */
@@ -401,29 +428,29 @@ static void mission_link_handshake_seed_timeout_clock_if_needed(uint32_t now)
     }
 }
 
-static void mission_link_handshake_note_nucleo_req_sent(uint32_t now)
+static void mission_link_handshake_note_relay_req_sent(uint8_t peer_board_id, uint32_t now)
 {
-    g_nucleo_req_sent_once = 1u;
-    g_nucleo_req_last_sent_valid = 1u;
-    g_nucleo_req_last_sent_tick = now;
+    g_relay_req_sent_once[peer_board_id] = 1u;
+    g_relay_req_last_sent_valid[peer_board_id] = 1u;
+    g_relay_req_last_sent_tick[peer_board_id] = now;
 }
 
-int mission_link_handshake_should_send_nucleo_req(uint32_t now)
+int mission_link_handshake_should_send_relay_req(uint8_t peer_board_id, uint32_t now)
 {
     int due;
 
     mission_link_handshake_seed_timeout_clock_if_needed(now);
 
-    if (g_nucleo_reply_seen || g_nucleo_timed_out)
+    if (g_relay_reply_seen[peer_board_id] || g_relay_timed_out[peer_board_id])
     {
         return 0;
     }
 
-    if (!g_nucleo_req_sent_once)
+    if (!g_relay_req_sent_once[peer_board_id])
     {
         due = 1; /* send-on-boot, per this file's top-comment policy */
     }
-    else if (!g_nucleo_req_last_sent_valid)
+    else if (!g_relay_req_last_sent_valid[peer_board_id])
     {
         due = 1; /* defensive: sent_once true but no timestamp recorded somehow */
     }
@@ -434,7 +461,7 @@ int mission_link_handshake_should_send_nucleo_req(uint32_t now)
            codebase are already assumed to (tick counters here are
            never expected to wrap in practice, but this is free to
            get right). */
-        due = ((now - g_nucleo_req_last_sent_tick) >= HANDSHAKE_NUCLEO_RETRY_INTERVAL_TICKS) ? 1 : 0;
+        due = ((now - g_relay_req_last_sent_tick[peer_board_id]) >= HANDSHAKE_NUCLEO_RETRY_INTERVAL_TICKS) ? 1 : 0;
     }
 
     if (due)
@@ -443,29 +470,29 @@ int mission_link_handshake_should_send_nucleo_req(uint32_t now)
            now AND the timer has already been reset for you" - the
            caller is not expected to separately report back that it
            sent the Req. */
-        mission_link_handshake_note_nucleo_req_sent(now);
+        mission_link_handshake_note_relay_req_sent(peer_board_id, now);
     }
 
     return due;
 }
 
-int mission_link_handshake_nucleo_timed_out(uint32_t now)
+int mission_link_handshake_relay_timed_out(uint8_t peer_board_id, uint32_t now)
 {
-    if (g_nucleo_timed_out)
+    if (g_relay_timed_out[peer_board_id])
     {
         return 1;
     }
 
     mission_link_handshake_seed_timeout_clock_if_needed(now);
 
-    if (g_nucleo_reply_seen)
+    if (g_relay_reply_seen[peer_board_id])
     {
         return 0;
     }
 
     if ((now - g_board_init_tick) >= HANDSHAKE_NUCLEO_TIMEOUT_TICKS)
     {
-        g_nucleo_timed_out = 1u;
+        g_relay_timed_out[peer_board_id] = 1u;
         return 1;
     }
 
@@ -474,26 +501,36 @@ int mission_link_handshake_nucleo_timed_out(uint32_t now)
 
 void mission_link_handshake_note_remote_reply(const MissionLinkHandshakeReply_t *reply)
 {
-    g_nucleo_reply = *reply;
-    g_nucleo_reply_seen = 1u;
+    if (reply->board_id >= HANDSHAKE_MAX_BOARDS)
+    {
+        /* Out of range for this build's cap - see that macro's own
+           doc for why this is silently ignored rather than a bounds
+           violation: a reply this file was never sized to track
+           can't be "recorded" anywhere safe to later read back. */
+        return;
+    }
+
+    g_relay_reply[reply->board_id] = *reply;
+    g_relay_reply_seen[reply->board_id] = 1u;
 }
 
-int mission_link_handshake_get_relay_reply(uint32_t now, MissionLinkHandshakeReply_t *out)
+int mission_link_handshake_get_relay_reply(uint8_t peer_board_id, uint32_t now,
+                                            MissionLinkHandshakeReply_t *out)
 {
-    if (g_nucleo_reply_seen)
+    if (g_relay_reply_seen[peer_board_id])
     {
-        *out = g_nucleo_reply;
+        *out = g_relay_reply[peer_board_id];
         return 1;
     }
 
-    if (mission_link_handshake_nucleo_timed_out(now))
+    if (mission_link_handshake_relay_timed_out(peer_board_id, now))
     {
         /* Synthetic "presumed absent" reply - see this file's
-           top-comment timeout policy for why board_id=1/ready=0 here
-           specifically, and why this is safe to keep returning on
-           every call (mirrors mission_link_handshake_build_local_
-           reply()'s own "not consumed" contract). */
-        out->board_id = 1u;
+           top-comment timeout policy for why board_id=peer_board_id/
+           ready=0 here specifically, and why this is safe to keep
+           returning on every call (mirrors mission_link_handshake_
+           build_local_reply()'s own "not consumed" contract). */
+        out->board_id = peer_board_id;
         out->protocol_version = MISSION_LINK_PROTOCOL_VERSION;
         out->ready = 0u;
         return 1;

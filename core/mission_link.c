@@ -36,7 +36,7 @@ _Static_assert(
  * under (see Makefile's check-board target). Struct fields are copied
  * byte-by-byte via an (const uint8_t *) cast rather than memcpy(),
  * matching the convention already established in core/lora_frame.c
- * and platform/board/snapshot.c's ring drain (which does exactly this
+ * and board/STM32N6570-DK/snapshot.c's ring drain (which does exactly this
  * for TelemetryFrame_t) - this project avoids libc calls in
  * freestanding-checked files, and every struct this file touches is
  * __attribute__((packed)) on a little-endian-only target (Cortex-M55

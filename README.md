@@ -31,10 +31,10 @@ iteration and on the actual board for field deployment.
   built around FEMA's operational-period and PAR (Personnel
   Accountability Report) check-in cadence. See the comments in
   `core/mission_state.h` for the reasoning, not just the constants.
-- **A live dashboard you can actually watch.** `tools/app.py` streams
+- **A live dashboard you can actually watch.** `laptop/tools/app.py` streams
   the simulation tick-by-tick over SSE to a browser map with live
   hazard/building rendering, per-team status, and an incident journal
-  — see [`tools/README.md`](tools/README.md).
+  — see [`laptop/tools/README.md`](laptop/tools/README.md).
 
 ## Project status
 
@@ -43,14 +43,14 @@ iteration and on the actual board for field deployment.
   damage propagation, CBBA task allocation across 10 teams (2 per
   specialty), fault injection, watchdog/recovery, fog-of-war search
   dispatch (`core/search_zones.c`).
-- `platform/board/` compiles clean against real µT-Kernel 3.0 BSP2
+- `board/STM32N6570-DK/` compiles clean against real µT-Kernel 3.0 BSP2
   headers (`make check-board BSP_DIR=...`) — genuinely verified, not
   assumed.
 - Live browser dashboard with real-time map, telemetry, and an
   incident journal.
 
 **In progress / partially stubbed:**
-- Board telemetry (`platform/board/snapshot.c`) is a ring buffer with
+- Board telemetry (`board/STM32N6570-DK/snapshot.c`) is a ring buffer with
   no drain mechanism yet — every USB-related line is a `TODO(usb)`
   marker, not working code.
 - Board debug output works over the ST-LINK debug UART
@@ -59,7 +59,7 @@ iteration and on the actual board for field deployment.
 
 **Not started / open questions** (see `ARCHITECTURE.md`'s *Open
 Architectural Questions* section for the full reasoning):
-- No flashable firmware image — `platform/board/` compiles but there's
+- No flashable firmware image — `board/STM32N6570-DK/` compiles but there's
   no STM32CubeIDE project, linker script, or HAL init wrapping it yet.
 - No real distributed deployment — CBBA's message-passing shape is
   real, but all teams still run in one process today; nothing goes out
@@ -74,9 +74,9 @@ Architectural Questions* section for the full reasoning):
 core/             portable simulator — grid, environment, CBBA, pathing,
                   scoring, fault injection, watchdog/recovery. No
                   stdio/OS/filesystem dependencies.
-platform/laptop/  desktop entry point: CLI, printf debug, CSV writer
-platform/board/   STM32N6570-DK entry point: µT-Kernel task, tm_printf
-tools/            dashboard (Flask + SSE), snapshot labeler, compare scripts
+laptop/  desktop entry point: CLI, printf debug, CSV writer
+board/STM32N6570-DK/   STM32N6570-DK entry point: µT-Kernel task, tm_printf
+laptop/tools/            dashboard (Flask + SSE), snapshot labeler, compare scripts
 vendor/           notes on fetching the external µT-Kernel BSP (not bundled)
 ```
 
@@ -128,11 +128,11 @@ to get a flashable image.
 
 ```sh
 pip install flask --break-system-packages
-python3 tools/app.py
+python3 laptop/tools/app.py
 ```
 
 Then open <http://127.0.0.1:5050>. Full usage guide:
-[`tools/README.md`](tools/README.md).
+[`laptop/tools/README.md`](laptop/tools/README.md).
 
 ### Offline snapshot labeling
 

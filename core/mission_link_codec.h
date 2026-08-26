@@ -68,7 +68,7 @@
  * type is expected to start (no internal scanning for the magic pair
  * within buf - that scanning/resync loop, across all four message
  * types plus interleaved debug text, is mission_link_task.c's job on
- * the RX side, same division of labor tools/telemetry_bridge.py's
+ * the RX side, same division of labor laptop/tools/telemetry_bridge.py's
  * TelemetryFrameParser has relative to a single-frame-type decoder).
  *   1  a complete, checksum-valid frame of this type was found at
  *      buf[0]. *out is filled in.

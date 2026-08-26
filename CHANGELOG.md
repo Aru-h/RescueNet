@@ -1,5 +1,309 @@
 # Changelog
 
+## SX1262 driver core vendored (first piece of the actual radio driver)
+
+- Real hardware correction, confirmed with the user before vendoring
+  anything: the actual module is a **SmartElex SX1262 868M LoRa HAT**
+  (E22-900M22S), not the Waveshare Core1262-HF from the original
+  hardware handoff doc. This matters beyond naming — the real module
+  has RXEN/TXEN RF-switch control pins the original plan never
+  mentioned, which the eventual per-board HAL will need to account
+  for (driven by the MCU, or tied to DIO2 — not yet decided).
+- Vendored `core/vendor/sx126x_driver/` — Semtech's official SX126X
+  driver (https://github.com/Lora-net/sx126x_driver), Clear BSD
+  licensed (redistribution-friendly, unlike either BSP — see
+  `core/vendor/README.md` for why this changes where/how it's
+  vendored vs. the two BSP folders). Lives under `core/`, not either
+  board's own `vendor/`, because it's genuinely **shared** — the
+  driver core is meant to be identical on both boards; only the HAL
+  underneath differs. `core/vendor/sx126x_driver/src/*.c` doesn't
+  match `core/*.c`'s wildcard, so the laptop build never links it.
+- Confirmed, not assumed: genuinely freestanding (no `stdio.h`/
+  `malloc`/`printf` anywhere in the vendored source), and every one of
+  `sx126x.c`'s 74 public functions delegates entirely to four HAL
+  functions (`sx126x_hal_write`/`_read`/`_reset`/`_wakeup`) declared
+  in `sx126x_hal.h` — the driver core never touches SPI/GPIO directly,
+  confirmed by reading `sx126x.c` itself, not by trusting the header's
+  own doc comment alone.
+- New `check-sx126x-driver` Makefile target: compiles `sx126x.c`
+  freestanding for BOTH real target CPUs (`-mcpu=cortex-m55` and
+  `-mcpu=cortex-m0plus`), clean. Deliberately NOT added to
+  `check-board`/`check-pico`'s own `BOARD_SOURCES`/`PICO_BOARD_
+  SOURCES` yet — doing that before a real per-board HAL exists would
+  make those targets' link checks correctly fail on "undefined
+  reference to sx126x_hal_write" (nothing defines those symbols
+  anywhere yet), which would look like a regression rather than the
+  honest, expected state of an unfinished driver. This target exists
+  to keep proving the driver core itself is sound in the meantime.
+- Re-verified: laptop build, `check-board`, `check-pico`,
+  `check-pico-bsp`, and the new `check-sx126x-driver` all re-run clean
+  together.
+- What's genuinely still blocking either board's actual HAL
+  implementation, documented in `core/vendor/sx126x_driver/README.md`'s
+  "What's still genuinely undecided" section rather than guessed at:
+  GPIO pin assignments for both boards (the datasheet's own wiring
+  table is for a Raspberry Pi single-board computer running Linux,
+  which doesn't transfer to either of this project's actual bare-metal
+  targets) and the RXEN/TXEN handling decision.
+
+## Handshake generalized from a hardcoded 2-board pair to N boards
+
+- No 3rd board is actually planned for this project (confirmed with
+  the user before doing this) — this is a design-smell fix, not a
+  feature needed for a concrete future board. Driven by a single
+  configurable knob per language, matching the request: `core/
+  mission_link_handshake.h`'s `HANDSHAKE_MAX_BOARDS` (compile-time
+  `-D`, default 8, a static-array sizing cap, not the real board
+  count) and `laptop/tools/telemetry_bridge.py`'s
+  `HandshakeCoordinator.NUM_BOARDS` (runtime constant, default 2 — the
+  real board count for this project today). Neither number appears
+  anywhere else — comms_transport.c's existing `COMMS_TRANSPORT_TEAMS_
+  PER_BOARD` (already configurable) combined with `NUM_TEAMS` is still
+  the actual source of "how many boards", now exposed as a proper
+  function (`comms_transport_board_count()`, new) instead of being
+  re-derived ad-hoc in more than one place — `mission_link_task.c`'s
+  incident-relay loop (pre-existing, both boards) switched to call it
+  too, closing a related duplication this generalization surfaced.
+- `core/mission_link_handshake.h`/`.c`: `should_send_nucleo_req`/
+  `nucleo_timed_out`/`get_relay_reply` — all singular, hardcoded to
+  peer board_id=1 — renamed to `should_send_relay_req`/`relay_timed_
+  out`/`get_relay_reply`, all now taking a `peer_board_id` parameter,
+  with per-peer state converted from single variables to arrays
+  indexed by board_id (capped at `HANDSHAKE_MAX_BOARDS`).
+  `note_remote_reply`'s signature is unchanged — it already
+  self-identifies the peer from the reply's own `board_id` field, so
+  no parameter was needed there.
+- Both boards' `mission_link_task.c` (`board/STM32N6570-DK/` and
+  `board/Raspberry_Pi_Pico/`, kept identical): the handshake TX step's
+  DK-only section now loops `peer` over `comms_transport_board_
+  count()` instead of hardcoding board 1 — sending each peer's Req,
+  and forwarding each peer's reply to the laptop as its own distinct
+  frame (the wire format already self-identifies which board each
+  reply is from, so no format change was needed to carry N peers'
+  worth of status). Dedup-send state (`g_relay_reply_sent`/`_last_
+  sent`) converted from single variables to per-peer arrays.
+- `laptop/tools/telemetry_bridge.py`'s `HandshakeCoordinator`:
+  `board1_ready`/`board1_timed_out` (named, singular) replaced with
+  `board_ready(board_id)`/`board_timed_out(board_id)` plus
+  `peer_board_ids` (derived from `NUM_BOARDS`). `all_ready`,
+  `request_dk_only_override()` (now refuses unless EVERY currently-
+  not-ready peer has genuinely timed out, not just one), and
+  `status_dict()` (now `peer_ready`/`peer_timed_out` dicts keyed by
+  board_id, replacing the old single-peer-only fields) generalized to
+  match. Checked first that nothing in `app.py` or `templates/
+  index.html` depended on the old field names before changing the
+  JSON shape — confirmed `app.py` only ever passes `status_dict()`
+  through opaquely and the frontend template doesn't consume any of
+  these fields yet, so this was a clean rename, not a breaking change
+  to something already wired up.
+- New tests proving the generalization itself, not just that a single
+  peer still works through the new signatures: `handshake_selftest.c`'s
+  `test_relay_state_is_independent_per_peer()` (two C-side peers'
+  retry/reply/timeout state genuinely independent) and
+  `handshake_selftest.py`'s `test_multi_peer_independence()` (same
+  proof on the Python side, with `NUM_BOARDS` bumped to 3 for the
+  test). Both existing single-peer tests kept and renamed to match the
+  new API, still passing — proving today's actual 2-board behavior is
+  unchanged, not just that the generalized code compiles.
+- Re-verified for real, not assumed: laptop build, `check-board`,
+  `check-pico`, `check-pico-bsp`, the C `handshake_selftest`, the
+  Python `handshake_selftest.py` (9/9 tests), and
+  `telemetry_bridge_selftest.py` (unaffected, confirmed) all re-run
+  clean after every change in this entry.
+
+## Board folder restructure: laptop folder (step 5 — the last piece)
+
+- Moved `platform/laptop/{main.c, debug.c, snapshot.c}` to a new
+  top-level `laptop/`, and `tools/` to `laptop/tools/` (broader scope
+  than the board moves, by request — `tools/` is unambiguously
+  laptop-only per `ARCHITECTURE.md`'s own existing section header, so
+  it folds in cleanly; top-level docs stay where they are since they
+  cover the whole project, board targets included, not just the
+  laptop). `platform/` no longer exists at all — this was the last
+  thing in it. `core/` untouched, same reasoning as both board moves:
+  genuinely shared, moving it would break the "each target owns what's
+  specific to it" principle kept throughout this whole restructure.
+- Every literal `platform/laptop` and `tools/` path reference
+  repo-wide updated — including inside `laptop/tools/`'s own files
+  (their self-referential build-command comments, e.g. "gcc ...
+  tools/override_selftest.c"), which a first pass missed by only
+  fixing references pointing AT the moved folders, not references
+  FROM inside them — caught by a follow-up sweep, not by assuming the
+  first pass was complete.
+- `Makefile`'s `TOOLS_DIR` also fixed by hand (`TOOLS_DIR = tools`,
+  no trailing slash, so it wasn't touched by the literal `tools/`
+  substring replacement — different case from every other reference,
+  worth noting since it's the kind of miss that's easy to repeat).
+  Top-of-file layout comment block rewritten for accuracy while in
+  there — also removed stale pre-existing text on the `board/
+  STM32N6570-DK/` line ("Stubs pending BSP (contest-provided, not the
+  public mtk3_bsp repo)") that predated this session's actual DK BSP
+  work and no longer matched reality.
+- Re-verified for real, not assumed: laptop build (`tron` +
+  `label_snapshots`), `check-board`, `check-pico`, and `check-pico-bsp`
+  all re-run clean after the move; `handshake_selftest` (now under
+  `laptop/tools/`) rebuilt and re-run, still passes.
+
+## Board folder restructure: per-device `board/<name>/` layout (step 4 — Pico project sources)
+
+- Added `board/Raspberry_Pi_Pico/{main_board.c, mission_link_task.c,
+  debug.c, snapshot.c}`, ported from `board/STM32N6570-DK/`'s
+  equivalents. Genuinely mechanical for most of it: confirmed neither
+  BSP's actual STM32 HAL calls appear in any of the four DK files
+  (only portable `tk_*`/`tm_*` µT-Kernel API + `core/` headers), and
+  confirmed `tk_cre_tsk`/`tk_sta_tsk`/`tk_slp_tsk`/`tk_dly_tsk` and
+  `T_CTSK` are byte-for-byte identical between the v1 (Pico) and v2
+  (DK) BSPs by diffing both headers directly — closing an open
+  question flagged since this session's very first message.
+- Added `THIS_BOARD_ID` — a compile-time `-D`, resolved once in each
+  board's `main_board.c` at startup, setting `g_comms_transport_this_
+  board_id` and calling `comms_transport_init()` before anything that
+  depends on either. This closes a real gap that existed for **both**
+  boards, not just Pico: `g_comms_transport_this_board_id` has had a
+  single hardcoded `0u` initializer in `core/comms_transport.c` since
+  it was introduced, and nothing anywhere ever actually set it
+  per-board or called `comms_transport_init()` — confirmed by
+  grepping for callers before writing this. DK now builds with
+  `-DTHIS_BOARD_ID=0`, Pico with `-DTHIS_BOARD_ID=1`.
+- Three things rewritten by hand rather than mechanically ported,
+  because they don't carry over as-is:
+  - `main_board.c`'s top-of-file bring-up comment: rewritten around
+    the real Eclipse CDT project + boot chain (`Reset_Handler` ->
+    `knl_startup_hw()` -> `usermain()`, no CubeMX-generated `main.c`
+    to inject a start call into, no TrustZone split) instead of the
+    STM32CubeIDE/TrustZone/`knl_start_mtkernel()` steps that don't
+    apply to this BSP at all.
+  - The `TA_FPU` task-attribute comment: RP2040 is dual Cortex-M0+,
+    confirmed no FPU at all (`USE_FPU (0)` in this BSP's own
+    `config/config.h`) — rewritten rather than carrying over the DK's
+    `ALWAYS_FPU_ATR` reasoning, which doesn't apply.
+  - `debug.c`'s "`tm_printf` doesn't support floats" claim:
+    re-verified directly against `lib/libtm/libtm_printf.c`'s own
+    source (states "Unsupported specifiers: floating point..."
+    outright, no `'f'` case in its format-specifier switch) rather
+    than trusting the DK's citation of its own BSP's manual to also
+    hold for a different BSP.
+- New `check-pico`/`check-pico-compile`/`check-pico-link` Makefile
+  targets, mirroring `check-board-compile`/`-link` exactly
+  (`-mcpu=cortex-m0plus` in place of `-mcpu=cortex-m55`). Run for
+  real: full `core/` + all four `board/Raspberry_Pi_Pico/*.c` files
+  compile clean, 30-object partial link clean, zero cross-file
+  interface breaks. `check-pico-bsp` (the smaller, BSP-only smoke
+  check from step 3) kept alongside it, useful for isolating "the
+  vendored BSP is broken" from "our port broke something."
+- Re-verified `check-board`, `check-pico`, `check-pico-bsp`, and the
+  laptop build all together, all clean.
+- Scope NOT covered by this step, same honest caveat as the DK's own
+  file states about itself: **not yet wired into a real, flashable
+  firmware project.** Compiling/link-checking cleanly is not the same
+  as building a flashable image — that still needs the BSP's own
+  Eclipse CDT project (`board/Raspberry_Pi_Pico/vendor/mtk3_bsp/
+  .project`) to actually include `core/` and `board/Raspberry_Pi_
+  Pico/`'s sources in its build settings, which is IDE work, not
+  something done from this Makefile. Concretely simpler than the DK's
+  equivalent step, though (no TrustZone split, no manual entry-point
+  injection needed) — see `main_board.c`'s own rewritten header
+  comment for specifics.
+
+## Board folder restructure: per-device `board/<name>/` layout (step 3 — Pico BSP)
+
+- Added `board/Raspberry_Pi_Pico/vendor/mtk3_bsp/` — the real
+  `pico_rp2040` branch of `github.com/tron-forum/mtk3_bsp` (v1 BSP,
+  NOT `mtk3_bsp2` which the DK uses — confirmed genuinely different
+  repos, not branches of one repo, by actually cloning both), `.git`
+  stripped, matching `board/STM32N6570-DK/vendor/mtk3_bsp2/`'s
+  existing precedent of vendoring the real tree rather than only
+  documenting fetch steps.
+- Verified for real, not assumed from docs: cloned the branch
+  cleanly, then actually compiled the BSP's own bundled sample
+  (`app_program/app_main.c`) against its own headers with
+  `arm-none-eabi-gcc -mcpu=cortex-m0plus -D_PICO_RP2040_` — clean,
+  only two harmless pre-existing unused-parameter warnings in the
+  vendor's own sample code. New `make check-pico-bsp` target runs
+  this same check going forward; ran clean.
+- This corrects two assumptions the original handoff doc made
+  without being able to verify them at the time: (1) the Pico's real
+  build path is an Eclipse CDT managed-build project (`.project`/
+  `.cproject`, confirmed present on the real branch), not the
+  community `mtk3-pico-gmake` Makefile+`elf2uf2` fork that was the
+  best available reference before this; (2) this BSP has no
+  `pico-sdk` dependency at all (self-contained, embeds its own RP2040
+  stage-2 boot bytes) — see `board/Raspberry_Pi_Pico/vendor/
+  README.md` for the full corrected picture, including that this
+  BSP (like the DK's `mtk3_bsp2`) has no SPI driver at all, so the
+  SX1262 HAL's SPI half will need raw register access on both boards,
+  not a vendor SDK call.
+- Scope of THIS step: BSP only, matching step 1's scope for the DK.
+  No `board/Raspberry_Pi_Pico/*.c` project sources exist yet (no
+  main-loop file, no SX1262 HAL port) — `check-pico-bsp` deliberately
+  only checks the vendored BSP itself, not a `check-board`-equivalent
+  compile+link of project code, since there is no project code for
+  this target yet.
+
+## Board folder restructure: per-device `board/<name>/` layout (step 2)
+
+- Moved `platform/board/{main_board.c, mission_link_task.c, debug.c,
+  snapshot.c}` into `board/STM32N6570-DK/` directly (not nested under
+  another `platform/board/` inside it) — the last piece flagged as
+  "not moved yet" at the end of step 1 below. `platform/board/` is
+  now gone entirely; `platform/` holds only `laptop/`.
+- Every literal `platform/board` path reference repo-wide (comments,
+  `Makefile`'s `BOARD_DIR`, `ARCHITECTURE.md`, `CHANGELOG.md`,
+  `README.md`, several `core/*.h`/`.c` doc comments, `laptop/tools/*_selftest.c`
+  comments, and `tron_board/Appli/.project`/`.cproject`'s linked-
+  resource entries) updated to `board/STM32N6570-DK` via a single
+  literal-substring replacement — safe here because "platform/board"
+  never appears as a partial match inside an unrelated word or path
+  anywhere in this repo (checked, not assumed).
+- `board/STM32N6570-DK/` is now genuinely self-contained: its own
+  source files (`main_board.c`, `mission_link_task.c`, `debug.c`,
+  `snapshot.c`) alongside its own `vendor/mtk3_bsp2/` — matches the
+  "choose that board's folder to flash into the board" goal step 1
+  only partially achieved.
+- Re-verified with real tool runs, not assumed: `make check-board`
+  (compile + link, Cortex-M55, real BSP2 headers) and `make` (laptop
+  build) both pass clean against the new paths with zero `BSP_DIR`/
+  `BOARD_DIR` override needed; `laptop/tools/handshake_selftest.c` re-run and
+  still passes (unaffected — desktop-only, doesn't touch this path).
+- `tron_board/Appli/.cproject`'s include-path entries were included in
+  the same sed pass as `.project`'s linked-resource entry — same
+  "unverified in actual STM32CubeIDE, re-index/rebuild before
+  trusting" caveat as step 1's `vendor/mtk3_bsp2` path fix below.
+
+## Board folder restructure: per-device `board/<name>/` layout (step 1)
+
+- Moved the top-level `vendor/mtk3_bsp2/` (and its `README.md`) to
+  `board/STM32N6570-DK/vendor/mtk3_bsp2/`. `Makefile`'s `BSP_DIR`
+  default, `ARCHITECTURE.md`, and every in-repo comment referencing
+  the old path updated to match; `make check-board`/`make
+  check-board-compile`/`make check-board-link` re-verified clean
+  against the new location (real Cortex-M55 cross-compile + link, not
+  just a path-rename sanity check).
+- Purpose: each physical board target is moving toward owning a
+  self-contained `board/<name>/` folder (BSP, and eventually its own
+  build files) rather than sharing one top-level `vendor/`, so a
+  board's folder alone has what's needed to build/flash it. A
+  Raspberry Pi Pico target will get `board/Raspberry_Pi_Pico/vendor/
+  mtk3_bsp` (v1, NOT the v2 BSP STM32N6570-DK uses) alongside this one
+  once that port exists.
+- Scope of THIS step: the BSP move only. `board/STM32N6570-DK/*.c`
+  (`main_board.c`, `mission_link_task.c`, `debug.c`, `snapshot.c`) has
+  NOT moved and still targets STM32N6570-DK only — whether/how those
+  also move under `board/STM32N6570-DK/` is a separate follow-up.
+- `tron_board/Appli/.project`'s linked-resource entry AND
+  `.cproject`'s 12 include-path entries for `vendor/mtk3_bsp2` were
+  both updated (plain literal-substring replacement, same old path
+  string everywhere in both files) to point at the new
+  `board/STM32N6570-DK/vendor/mtk3_bsp2` path — this was NOT verified
+  by actually opening the project in STM32CubeIDE (no CubeIDE
+  available in this environment). Open the project and let the IDE
+  re-index/rebuild before trusting it. The generated `Debug/` build
+  tree (`subdir.mk`, `.o`/`.d`/`.su`/`.cyclo` files) was deliberately
+  left untouched — those are IDE-regenerated build artifacts from a
+  previous compile against the OLD path, not something to hand-patch;
+  a clean rebuild inside CubeIDE replaces them.
+  hand-patch.
+
 ## Merge: tron_merged_step11 (Dashboard: Incident Journal, PAR Timer, Map Visualization)
 
 Reconciled a sibling branch (11 separate merge/feature steps in another
@@ -164,15 +468,15 @@ those fixes; layered in what was genuinely new on the other side.
 ### Added
 
 - Split the codebase into `core/` (portable simulator, verified
-  freestanding-clean for Cortex-M55), `platform/laptop/`, and
-  `platform/board/` (STM32N6570-DK).
+  freestanding-clean for Cortex-M55), `laptop/`, and
+  `board/STM32N6570-DK/` (STM32N6570-DK).
 - Added `core/sim_runner.h/.c` as the single source of truth for the
   per-tick sequence (`fault_injector_step -> allocate_all_incidents ->
   simulation_step`), shared by both platforms.
-- Added `platform/board/main_board.c`, `debug.c`, `snapshot.c` -
+- Added `board/STM32N6570-DK/main_board.c`, `debug.c`, `snapshot.c` -
   compiled and verified against the real µT-Kernel 3.0 BSP2 headers
   (`github.com/tron-forum/mtk3_bsp2`, official STM32N6570-DK support).
-- Added `make check-board`, which compiles `core/` + `platform/board/`
+- Added `make check-board`, which compiles `core/` + `board/STM32N6570-DK/`
   for Cortex-M55 against real BSP headers when `vendor/mtk3_bsp2` is
   present (see `vendor/README.md`), catching libc/OS dependency
   regressions before they ever reach hardware.
@@ -326,11 +630,11 @@ they don't conflict with anything I built: no shared-struct changes to
 CBBAAgentState_t/TeamState_t/IncidentState_t, no mission_link/comms_
 transport touches)
 -----------------------------------------------------------------------
-platform_laptop__debug.c   -> platform/laptop/debug.c
+platform_laptop__debug.c   -> laptop/debug.c
   Adds "discovered" to the JSON incident/system-task output - required
   by index.html's fog-of-war toggle.
 
-platform_laptop__main.c    -> platform/laptop/main.c
+platform_laptop__main.c    -> laptop/main.c
   New --trace / --diag CLI flags (gates g_simulation_trace_enabled and
   the end-of-run [DIAG ...] stderr summary, both off by default).
 
@@ -370,19 +674,19 @@ NEW FILES (from this chat, unaffected by the merge)
 -----------------------------------------------------
 core__mission_link_codec.h          -> core/mission_link_codec.h
 core__mission_link.c                -> core/mission_link.c
-platform_board__mission_link_task.c -> platform/board/mission_link_task.c
-tools__mission_link_selftest.c      -> tools/mission_link_selftest.c
+platform_board__mission_link_task.c -> board/STM32N6570-DK/mission_link_task.c
+tools__mission_link_selftest.c      -> laptop/tools/mission_link_selftest.c
 core__mission_link_handshake.h      -> core/mission_link_handshake.h
 core__mission_link_handshake.c      -> core/mission_link_handshake.c
-tools__handshake_selftest.c         -> tools/handshake_selftest.c
-tools__handshake_selftest.py        -> tools/handshake_selftest.py
-tools__override_selftest.c          -> tools/override_selftest.c
-tools__telemetry_bridge.py          -> tools/telemetry_bridge.py
+tools__handshake_selftest.c         -> laptop/tools/handshake_selftest.c
+tools__handshake_selftest.py        -> laptop/tools/handshake_selftest.py
+tools__override_selftest.c          -> laptop/tools/override_selftest.c
+tools__telemetry_bridge.py          -> laptop/tools/telemetry_bridge.py
 
 MERGED FILES (see above)
 ---------------------------
-tools__app.py                       -> tools/app.py
-tools_templates__index.html         -> tools/templates/index.html
+tools__app.py                       -> laptop/tools/app.py
+tools_templates__index.html         -> laptop/tools/templates/index.html
 
 EDITED (Makefile only, unrelated to this merge)
 --------------------------------------------------
@@ -390,8 +694,8 @@ Makefile                            -> Makefile
 
 ADOPTED AS-IS FROM files-2.zip (see above)
 ---------------------------------------------
-platform_laptop__debug.c            -> platform/laptop/debug.c
-platform_laptop__main.c             -> platform/laptop/main.c
+platform_laptop__debug.c            -> laptop/debug.c
+platform_laptop__main.c             -> laptop/main.c
 core__scoring.c                     -> core/scoring.c
 core__simulation.c                  -> core/simulation.c
 core__search_zones.h                -> core/search_zones.h

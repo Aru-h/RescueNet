@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /*
- * Wire contract for draining platform/board/snapshot.c's ring buffer
+ * Wire contract for draining board/STM32N6570-DK/snapshot.c's ring buffer
  * to the laptop over USART1 (the same physical UART tm_printf debug
  * text already uses - there is no second UART or USB CDC on this
  * board). Nothing implements the drain yet (TODO(usb) in
@@ -20,10 +20,10 @@
  * ---------------------------------------------------------------
  * 1. Frame payload
  * ---------------------------------------------------------------
- * Mirrors BoardSnapshotEntry_t in platform/board/snapshot.c field
+ * Mirrors BoardSnapshotEntry_t in board/STM32N6570-DK/snapshot.c field
  * for field. Do NOT add fields here: the board ring intentionally
  * drops the other 44 CSV columns the laptop-native snapshot.c
- * captures (see the top-of-file comment in platform/board/
+ * captures (see the top-of-file comment in board/STM32N6570-DK/
  * snapshot.c) to keep the on-device ring cheap. If board-side
  * capture ever grows beyond these 4 fields, that is a schema
  * change to BoardSnapshotEntry_t first, with this struct updated
@@ -102,7 +102,7 @@ typedef struct __attribute__((packed))
  * 3. Ring overflow policy
  * ---------------------------------------------------------------
  * DECISION (permanent, supersedes the "decide deliberately" TODO in
- * platform/board/snapshot.c's snapshot_record()): overflow of
+ * board/STM32N6570-DK/snapshot.c's snapshot_record()): overflow of
  * BOARD_SNAPSHOT_RING_CAPACITY overwrites the oldest unsent entry.
  * The ring is a fixed-size circular buffer with no backpressure -
  * snapshot_record() must never block the sim tick to wait for USART1
@@ -110,7 +110,7 @@ typedef struct __attribute__((packed))
  *
  * Rationale: the ring is a debug/telemetry side-channel, not a
  * source of truth the sim depends on for correctness; the laptop-
- * side CSV (platform/laptop/snapshot.c) remains the authoritative,
+ * side CSV (laptop/snapshot.c) remains the authoritative,
  * lossless record when full fidelity matters. Bounding worst-case
  * drain latency's effect on the sim loop is worth more than
  * guaranteeing delivery of every board-side telemetry event.

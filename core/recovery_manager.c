@@ -697,7 +697,7 @@ static RecoverySignal_t evaluate_stamina(
          * regardless of status) had nothing to act on, so the team
          * just sat at STATUS_AVAILABLE indefinitely, invisible to both
          * the incident-bidding pipeline and the recovery pipeline.
-         * Confirmed empirically (tools/perimeter_probe.c): a team
+         * Confirmed empirically (laptop/tools/perimeter_probe.c): a team
          * showing STATUS_AVAILABLE 94% of the time was only genuinely
          * eligible for new work 61% of the time, with almost no
          * overlap with when a CRITICAL incident it was capable of was

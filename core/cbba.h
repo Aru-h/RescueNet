@@ -24,7 +24,7 @@
  * On real hardware this must be enforced against a genuine
  * wall-clock timer - a µT-Kernel timer (tk_get_tim() or equivalent),
  * NOT a sim-tick counter (BOARD_TICK_DELAY_MS is 0 by default - flat
- * out, unpaced - see platform/board/main_board.c - so sim ticks don't
+ * out, unpaced - see board/STM32N6570-DK/main_board.c - so sim ticks don't
  * correspond to real elapsed time on hardware). See cbba_now_ms()
  * below for where that hardware wiring plugs in.
  */
@@ -37,7 +37,7 @@
  * directly here. cbba.c provides a weak default (same pattern as
  * comms_transport.c's lora_spi_transmit weak stub) with no real
  * clock behind it, suitable only for the laptop/desktop harness and
- * standalone selftests. Whoever wires platform/board/main_board.c's
+ * standalone selftests. Whoever wires board/STM32N6570-DK/main_board.c's
  * usermain() should provide a strong (non-weak) override backed by a
  * µT-Kernel timer so CBBA_ROUND_TIMEOUT_MS is enforced in genuine
  * wall-clock ms on real hardware - do that BEFORE cbba_run() is first

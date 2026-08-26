@@ -53,6 +53,26 @@
    mismatch, doesn't act on it). */
 #define MISSION_LINK_PROTOCOL_VERSION ((uint8_t)1u)
 
+/*
+ * Compile-time cap on how many boards this build's state arrays are
+ * sized for - NOT the actual board count (that's core/comms_
+ * transport.h's comms_transport_board_count(), computed from NUM_
+ * TEAMS/COMMS_TRANSPORT_TEAMS_PER_BOARD; this file never re-derives
+ * that itself, see the "DK-side bookkeeping" section below). This cap
+ * only exists because these are static arrays in a portable core file
+ * with no dynamic allocation - it has to be sized for SOME upper
+ * bound at compile time. Overridable the same way HANDSHAKE_NUCLEO_
+ * RETRY_INTERVAL_TICKS below already is (-DHANDSHAKE_MAX_BOARDS=...),
+ * default generously larger than this project's actual board count
+ * (2, as of this generalization from a hardcoded DK<->NUCLEO pair -
+ * see CHANGELOG.md) so growing the real board count via NUM_TEAMS
+ * doesn't ALSO require bumping this unless someone genuinely exceeds
+ * 8 boards.
+ */
+#ifndef HANDSHAKE_MAX_BOARDS
+#define HANDSHAKE_MAX_BOARDS 8u
+#endif
+
 typedef struct __attribute__((packed))
 {
     uint8_t board_id;         /* which board this request is addressed
@@ -120,18 +140,32 @@ _Static_assert(sizeof(MissionLinkHandshakeReply_t) == 3u,
  * LoRa relay frame type for the DK<->NUCLEO hop (comms_transport_
  * send() / lora_frame_pack(), same Option-2 pattern mission_link.h's
  * own doc comment already established for roster/incident/fault/
- * status). core/lora_frame.h currently defines LORA_FRAME_TYPE_CBBA=0
- * and LORA_FRAME_TYPE_MISSION_LINK=1; this file does not add a third
- * value there directly (lora_frame.h belongs to the mission-link
- * relay prompt's file set, not this one - same "don't touch, flag
- * instead" rule this file follows for mission_link.h itself). Value
- * 2 is unused by either of those, so it's picked here and used
- * consistently by both sides of this handshake's LoRa hop; flagged
- * for whoever owns lora_frame.h to fold into that header's own
- * LORA_FRAME_TYPE_* list as the single canonical source once these
- * prompt sets converge, so a THIRD file doesn't later pick 2 again
- * for something unrelated. */
-#define LORA_FRAME_TYPE_HANDSHAKE ((uint8_t)2u)
+ * status). NOW CANONICALLY DEFINED in core/lora_frame.h (folded in as
+ * part of wiring this handshake's actual USART1/LoRa transport — see
+ * that header's own comment on LORA_FRAME_TYPE_HANDSHAKE for why it
+ * lives there now instead of here). Included below rather than
+ * redefined, so there is exactly one definition to keep in sync.
+ */
+#include "lora_frame.h"
+
+/* Sub-type byte for LORA_FRAME_TYPE_HANDSHAKE payloads on the
+   comms_transport/LoRa hop — mirrors mission_link_codec.h's
+   MISSION_LINK_MSG_* pattern, but in its own namespace since this
+   rides a distinct frame_type (LORA_FRAME_TYPE_HANDSHAKE, not
+   LORA_FRAME_TYPE_MISSION_LINK) and therefore never needs to be
+   distinguished from MISSION_LINK_MSG_* values by a receiver — the
+   frame_type byte already does that. */
+#define MISSION_LINK_HANDSHAKE_MSG_REQ   ((uint8_t)0u)
+#define MISSION_LINK_HANDSHAKE_MSG_REPLY ((uint8_t)1u)
+
+/* Wire size of a comms_transport-relayed handshake message: 1
+   sub-type byte + the bare payload — same shape as mission_link_
+   codec.h's *_RELAY_SIZE macros, no magic bytes/checksum (lora_
+   frame.h's own envelope already covers that). */
+#define MISSION_LINK_HANDSHAKE_REQ_RELAY_SIZE \
+    ((uint32_t)(1u + MISSION_LINK_HANDSHAKE_REQ_PAYLOAD_SIZE))
+#define MISSION_LINK_HANDSHAKE_REPLY_RELAY_SIZE \
+    ((uint32_t)(1u + MISSION_LINK_HANDSHAKE_REPLY_PAYLOAD_SIZE))
 
 /* ---------------------------------------------------------------
  * Channel 1: USART1 magic-byte framing (laptop <-> DK only)
@@ -171,7 +205,7 @@ void mission_link_handshake_parse_reply_payload(const uint8_t *payload,
  * mission_link_handshake.c's top-of-file comment for the full
  * request/reply/relay/timeout sequence this implements and the
  * handoff notes for wiring it into main_board.c and
- * platform/board/mission_link_task.c's RX/TX loop (neither touched
+ * board/STM32N6570-DK/mission_link_task.c's RX/TX loop (neither touched
  * directly by this file - see this header's own top comment).
  * ---------------------------------------------------------------
  */
@@ -181,7 +215,7 @@ void mission_link_handshake_parse_reply_payload(const uint8_t *payload,
    implement and why these particular values. Deliberately macros,
    not compiled-in constants, so a board bring-up build can override
    them (-DHANDSHAKE_NUCLEO_RETRY_INTERVAL_TICKS=... etc.) the same
-   way platform/board/main_board.c's own BOARD_* knobs are already
+   way board/STM32N6570-DK/main_board.c's own BOARD_* knobs are already
    overridable, without editing this file. */
 #ifndef HANDSHAKE_NUCLEO_RETRY_INTERVAL_TICKS
 #define HANDSHAKE_NUCLEO_RETRY_INTERVAL_TICKS 500u
@@ -193,7 +227,7 @@ void mission_link_handshake_parse_reply_payload(const uint8_t *payload,
 /* Call once at boot, after this board knows its own id
    (g_comms_transport_this_board_id - see core/comms_transport.h).
    Resets all handshake state; safe to call again to reset for a
-   fresh test run (see tools/handshake_selftest.c). Does NOT seed the
+   fresh test run (see laptop/tools/handshake_selftest.c). Does NOT seed the
    retry/timeout clock (it takes no `now` parameter) - that clock is
    lazily anchored to the first `now` value passed to
    mission_link_handshake_should_send_nucleo_req() or
@@ -233,51 +267,83 @@ void mission_link_handshake_note_request_received(void);
    transmit it yet". */
 int mission_link_handshake_build_local_reply(MissionLinkHandshakeReply_t *out);
 
-/* ---- DK-side bookkeeping for the NUCLEO leg (board 0 only calls
-   these - see mission_link_handshake.c's top comment for why this
-   isn't itself gated on g_comms_transport_this_board_id inside this
-   file: that's the caller's job, same division of responsibility
-   platform/board/mission_link_task.c's own board-0-only USART1 step
-   already has). ---- */
+/* ---- DK-side bookkeeping for relay legs (board 0 only calls these -
+   see mission_link_handshake.c's top comment for why this isn't
+   itself gated on g_comms_transport_this_board_id inside this file:
+   that's the caller's job, same division of responsibility
+   board/STM32N6570-DK/mission_link_task.c's own board-0-only USART1 step
+   already has).
 
-/* Whether DK should (re)send its Req to NUCLEO on this step, given
-   `now` (the caller's own monotonic tick counter - see this header's
-   HANDSHAKE_NUCLEO_RETRY_INTERVAL_TICKS doc for why this file takes
-   it as a parameter instead of reading a global). Returns 1 on the
-   very first call after mission_link_handshake_board_init() (board 0
-   only - see .c file for the "send on boot, not on-laptop-request"
-   policy this implements) and again every
-   HANDSHAKE_NUCLEO_RETRY_INTERVAL_TICKS ticks until either a NUCLEO
-   reply has been recorded (mission_link_handshake_note_remote_reply())
-   or the timeout has been declared (see
-   mission_link_handshake_nucleo_timed_out() below) - once timed out,
-   this permanently returns 0 (no more Reqs into the void). */
-int mission_link_handshake_should_send_nucleo_req(uint32_t now);
+   GENERALIZED from a hardcoded DK<->NUCLEO pair to N boards (see
+   CHANGELOG.md) - every function below takes a peer_board_id and
+   tracks state per-peer, in an array capped at HANDSHAKE_MAX_BOARDS
+   (see that macro's own doc above for why a cap exists at all). The
+   caller (mission_link_task.c's handshake TX step) is expected to
+   loop peer_board_id over every board this build actually has -
+   core/comms_transport.h's comms_transport_board_count(), skipping
+   its own id - not to hardcode which or how many peers exist; this
+   file has no opinion on board count beyond the compile-time cap. ---- */
+
+/* Whether DK should (re)send its Req to peer_board_id on this step,
+   given `now` (the caller's own monotonic tick counter - see this
+   header's HANDSHAKE_NUCLEO_RETRY_INTERVAL_TICKS doc for why this
+   file takes it as a parameter instead of reading a global). Returns
+   1 on the very first call for this peer_board_id after mission_
+   link_handshake_board_init() (see .c file for the "send on boot,
+   not on-laptop-request" policy this implements) and again every
+   HANDSHAKE_NUCLEO_RETRY_INTERVAL_TICKS ticks until either a reply
+   from that peer has been recorded (mission_link_handshake_note_
+   remote_reply(), which self-identifies the peer from the reply's
+   own board_id field - see that struct's doc) or the timeout has
+   been declared for that peer (see mission_link_handshake_relay_
+   timed_out() below) - once timed out, this permanently returns 0
+   for that peer_board_id (no more Reqs into the void), independently
+   of every other peer's own state. peer_board_id must be <
+   HANDSHAKE_MAX_BOARDS. */
+int mission_link_handshake_should_send_relay_req(uint8_t peer_board_id, uint32_t now);
 
 /* True once HANDSHAKE_NUCLEO_TIMEOUT_TICKS have elapsed since
-   mission_link_handshake_board_init() with no NUCLEO reply recorded.
-   Sticky: once true, stays true (does not un-time-out if a very late
-   reply eventually shows up - see .c file's policy note for why a
-   late reply is still applied to local state even after this point,
-   just no longer chased after). */
-int mission_link_handshake_nucleo_timed_out(uint32_t now);
+   mission_link_handshake_board_init() with no reply recorded from
+   peer_board_id specifically - every peer times out independently,
+   on the same shared clock (all relay legs are expected to start
+   around the same time, at boot - see .c file's top comment), not on
+   separate per-peer clocks. Sticky per peer: once true for a given
+   peer_board_id, stays true for that peer (does not un-time-out if a
+   very late reply eventually shows up - see .c file's policy note
+   for why a late reply is still applied to that peer's local state
+   even after this point, just no longer chased after). */
+int mission_link_handshake_relay_timed_out(uint8_t peer_board_id, uint32_t now);
 
-/* Records a reply received from NUCLEO over LoRa. DK caches this and
-   mission_link_handshake_get_relay_reply() below starts returning it. */
+/* Records a reply received from a peer over LoRa - which peer is read
+   from reply->board_id itself (see that field's own doc: "always
+   equal to the board_id the matching Req was addressed to"), not
+   passed separately, so callers relaying whatever comes off the wire
+   don't need to track peer identity out-of-band just to make this
+   call. DK caches this per-peer and mission_link_handshake_get_
+   relay_reply() below starts returning it for that peer_board_id.
+   A reply with board_id >= HANDSHAKE_MAX_BOARDS is silently ignored
+   (out of range for this build's cap - see that macro's own doc). */
 void mission_link_handshake_note_remote_reply(const MissionLinkHandshakeReply_t *reply);
 
-/* Fills *out with the reply DK should forward to the laptop over
-   USART1 right now and returns 1, or returns 0 if there's nothing to
-   forward yet. Three cases (see .c file for the full decision table):
-   an actual NUCLEO reply was recorded (out->ready reflects NUCLEO's
-   own value); the timeout fired with no reply ever recorded (out is
-   the synthetic board_id=1/ready=0 "presumed absent" reply - see this
-   header's MissionLinkHandshakeReply_t.ready doc); or neither has
-   happened yet (returns 0, nothing to relay). Like
-   mission_link_handshake_build_local_reply(), not "consumed" on
-   success - repeat calls keep returning 1 so an upstream retry loop
-   can resend if the previous USART1 transmit didn't get
-   acknowledged/observed. */
-int mission_link_handshake_get_relay_reply(uint32_t now, MissionLinkHandshakeReply_t *out);
+/* Fills *out with the reply DK should forward to the laptop for
+   peer_board_id right now and returns 1, or returns 0 if there's
+   nothing to forward yet for that peer. Three cases (see .c file for
+   the full decision table): an actual reply from that peer was
+   recorded (out->ready reflects the peer's own value); the timeout
+   fired for that peer with no reply ever recorded (out is the
+   synthetic board_id=peer_board_id/ready=0 "presumed absent" reply -
+   see this header's MissionLinkHandshakeReply_t.ready doc); or
+   neither has happened yet for that peer (returns 0, nothing to
+   relay for it - other peers may still have something to relay, this
+   only speaks to peer_board_id). Like mission_link_handshake_build_
+   local_reply(), not "consumed" on success - repeat calls keep
+   returning 1 so an upstream retry loop can resend if the previous
+   USART1 transmit didn't get acknowledged/observed. Callers forward
+   each ready peer as its own distinct MissionLinkHandshakeReply_t
+   frame (the wire format already self-identifies which board each
+   reply is from - no format change needed to carry N peers' worth of
+   status to the laptop, just N separate sends). */
+int mission_link_handshake_get_relay_reply(uint8_t peer_board_id, uint32_t now,
+                                            MissionLinkHandshakeReply_t *out);
 
 #endif /* MISSION_LINK_HANDSHAKE_H */

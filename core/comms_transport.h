@@ -94,6 +94,57 @@ void comms_transport_init(void);
    lookup table for something this cheap to compute. */
 uint8_t comms_transport_board_id_for_team(uint8_t team_id);
 
+/* Placeholder comms_transport_poll_received() fills out_sender_team_id
+   with for anything that arrived over the physical RX path (see
+   comms_transport_deliver_received() below) - see this header's own
+   "Open question" note above: LoRaFrame_t has no sender field, so a
+   genuinely separate receiving board cannot recover sender identity
+   from the wire. Every real caller of comms_transport_poll_received()
+   already ignores this output in favor of a payload-embedded
+   identifier instead (board_id/team_id inside the actual
+   MissionLink*_t/CBBAMessage_t struct itself) - confirmed by checking
+   every dispatch site, not assumed. */
+#define COMMS_TRANSPORT_UNKNOWN_SENDER ((uint8_t)0xFFu)
+
+/*
+ * The real physical-RX counterpart to comms_transport_send()'s
+ * same-board loopback path. A real SPI/IRQ RX handler (still pending
+ * bring-up - see lora_spi_transmit()'s own doc in comms_transport.c)
+ * is expected to accumulate raw bytes off the radio, call lora_frame_
+ * try_parse() itself once a complete frame is available (same
+ * accumulate-then-try-parse pattern mission_link_task.c's own USART1/
+ * LoRa RX steps already use, since byte-level stream framing is the
+ * physical layer's job, not this module's), and call this function
+ * once parsing succeeds - mirroring exactly what comms_transport_
+ * send()'s same-board path already does internally (pack -> reparse
+ * -> push), just with the parse step happening in the RX handler
+ * instead of here.
+ *
+ * sender_team_id is always recorded as COMMS_TRANSPORT_UNKNOWN_SENDER
+ * (see that macro's own doc) - not a limitation specific to this
+ * function, the wire format itself has no sender field.
+ *
+ * Returns 0 on success, -1 if the inbox was full (dropped, same
+ * "full inbox = report failure" policy comms_transport_inbox_push()
+ * already has for the same-board path).
+ */
+int comms_transport_deliver_received(uint8_t frame_type, const uint8_t *payload,
+                                      uint8_t payload_len);
+
+/* Total number of boards this build is compiled for: ceil(NUM_TEAMS /
+   COMMS_TRANSPORT_TEAMS_PER_BOARD) - see comms_transport.c's own doc
+   on this function for why it's a function and not a header macro.
+   THE single source of "how many boards exist" for anything that
+   needs to loop over every board - mission_link_task.c's incident
+   relay loop and mission_link_handshake.c's per-peer state (added
+   alongside this function, in the same change, specifically so
+   neither ever computes board count its own separate way again) both
+   call this instead of re-deriving it. Change COMMS_TRANSPORT_TEAMS_
+   PER_BOARD (a -D, see comms_transport.c) or NUM_TEAMS
+   (core/mission_state.h) to change how many boards this project
+   targets - nothing else needs editing to add or remove a board. */
+uint8_t comms_transport_board_count(void);
+
 /* Routes to receiver_team_id. If comms_transport_board_id_for_team(receiver_team_id)
    equals g_comms_transport_this_board_id, delivers via an in-process
    queue. Otherwise, calls out to lora_spi_transmit() (extern, NOT

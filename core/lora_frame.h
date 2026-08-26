@@ -44,12 +44,23 @@
  * corruption, not adversarial or burst corruption. On a checksum
  * failure, treat it as an expected-under-real-RF outcome, not a fatal
  * error - see lora_frame_try_parse()'s -1 case below, which follows
- * the same "drop and resync" policy tools/telemetry_bridge.py already
+ * the same "drop and resync" policy laptop/tools/telemetry_bridge.py already
  * applies on its checksum mismatches for the USART1 case.
  */
 
 #define LORA_FRAME_TYPE_CBBA          0u
 #define LORA_FRAME_TYPE_MISSION_LINK  1u
+#define LORA_FRAME_TYPE_HANDSHAKE     2u /* core/mission_link_handshake.h's
+                                             DK<->board-1 liveness handshake.
+                                             Canonical home for this value
+                                             is here (folded in per that
+                                             header's own long-standing
+                                             flag asking whoever wires the
+                                             handshake's LoRa hop to do
+                                             this) — mission_link_handshake.h
+                                             no longer defines its own
+                                             copy, it includes this header
+                                             instead. */
 
 /*
  * CBBAMessage_t (core/cbba.c, private to that file) is the largest
@@ -134,7 +145,7 @@ uint32_t lora_frame_pack(uint8_t frame_type, const uint8_t *payload,
  *
  * -1 is an expected outcome under real RF conditions (bit errors,
  * partial packets), not a fatal one - the same policy question
- * tools/telemetry_bridge.py already answers for the USART1 case: drop
+ * laptop/tools/telemetry_bridge.py already answers for the USART1 case: drop
  * the bad frame and resync rather than treating it as an error to
  * propagate. Since each LoRa packet is already a whole unit off the
  * radio (unlike the USART1 stream), "resync" here just means the

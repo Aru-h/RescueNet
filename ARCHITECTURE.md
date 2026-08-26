@@ -40,9 +40,9 @@ sequence that has to match on both.
 
 ```
 core/             portable simulator — no stdio/OS/filesystem deps
-platform/laptop/  desktop entry point (CLI, printf debug, CSV writer)
-platform/board/   STM32N6570-DK entry point (µT-Kernel task, tm_printf)
-tools/            laptop-only: Flask dashboard, snapshot labeler, compare scripts
+laptop/  desktop entry point (CLI, printf debug, CSV writer)
+board/STM32N6570-DK/   STM32N6570-DK entry point (µT-Kernel task, tm_printf)
+laptop/tools/            laptop-only: Flask dashboard, snapshot labeler, compare scripts
 vendor/           external BSP dependency notes (not bundled — see below)
 ```
 
@@ -81,7 +81,7 @@ Core sizing constants (`core/mission_state.h`): `NUM_TEAMS=10`,
 `NUM_INCIDENTS=15`, `NUM_SYSTEM_TASKS=10`, `CBBA_MAX_BUNDLE_SIZE=3`,
 `GRID_WIDTH=GRID_HEIGHT=36`, `TICK_TIME_SEC=36` (so `TICKS_PER_HOUR=100`).
 
-### `platform/laptop/` — desktop entry point
+### `laptop/` — desktop entry point
 
 - `main.c` — CLI argument parsing (`./tron [seed] [count] [ticks]
   [--fault-profile <name>] [--live] [--tick-delay-ms=N]`), drives
@@ -93,7 +93,22 @@ Core sizing constants (`core/mission_state.h`): `NUM_TEAMS=10`,
   mission-twin fields, watchdog/recovery status, and the fog-of-war
   columns `incident_discovered`/`team_zone_id`/`team_zone_trust`).
 
-### `platform/board/` — STM32N6570-DK entry point
+### `board/STM32N6570-DK/` — STM32N6570-DK entry point
+
+> **Folder-layout note (this restructure):** the STM32 BSP that used to
+> live at top-level `vendor/mtk3_bsp2/` now lives at
+> `board/STM32N6570-DK/vendor/mtk3_bsp2/` — see that folder's own
+> `README.md` for fetch instructions. This is the first step of
+> splitting each physical target into its own self-contained
+> `board/<name>/` folder (a Pico/RP2040 target, when it exists, gets
+> `board/Raspberry_Pi_Pico/vendor/mtk3_bsp` — note: v1, not this v2
+> BSP — alongside it), so each board's folder holds what that board
+> needs to build/flash rather than sharing one top-level `vendor/`.
+> `board/STM32N6570-DK/*.c` itself has NOT moved as part of this step — it
+> still targets STM32N6570-DK only, same as this section describes
+> below; whether/how it also moves under `board/STM32N6570-DK/` is a
+> separate, not-yet-decided follow-up, not something this note should
+> be read as already having done.
 
 - `main_board.c` — `EXPORT INT usermain(void)` creates one µT-Kernel
   task (`T_CTSK`, `tk_cre_tsk`) that runs the same `sim_runner`
@@ -116,7 +131,7 @@ Core sizing constants (`core/mission_state.h`): `NUM_TEAMS=10`,
 **What is not yet implemented, verified directly against the source
 (not assumed):** there is currently one task (`sim_task`) and no
 second task, no event flag, no mailbox, and no cyclic handler anywhere
-in `platform/board/`. Every USB-related line in `debug.c` and
+in `board/STM32N6570-DK/`. Every USB-related line in `debug.c` and
 `snapshot.c` is a `TODO(usb)` comment describing what still needs to
 be built, not code that exists. **A specific runtime shape — cyclic
 handler → event flag → main sim task → separate USB I/O task via
@@ -128,7 +143,7 @@ description of what's here. `search_zones.c`, `snapshot_record()`'s CSV
 columns, and `main_board.c`'s ring buffer are the actual current state
 of the telemetry path.
 
-### `tools/` — laptop-only, never built for the board
+### `laptop/tools/` — laptop-only, never built for the board
 
 - `app.py` (Flask) + `templates/index.html` — a local dashboard that
   runs `make` then `./tron <args>`, parsing stdout (`LIVEFRAME`,
@@ -224,7 +239,7 @@ nothing is actually going out over a wire yet.
 
 ## Board Runtime Architecture
 
-**Verified from `platform/board/main_board.c` and `vendor/README.md`
+**Verified from `board/STM32N6570-DK/main_board.c` and `vendor/README.md`
 directly** (see those files for the exact BSP verification commands):
 
 - Entry point: `EXPORT INT usermain(void)`.
@@ -246,7 +261,7 @@ directly** (see those files for the exact BSP verification commands):
   the debug UART, not a separate USB1/CN8 data link**; no second USB
   connector or CDC class driver appears anywhere in this repo.
 
-**Confirmed NOT yet built** (see the `platform/board/` section above
+**Confirmed NOT yet built** (see the `board/STM32N6570-DK/` section above
 for the full list): second task, event flag, mailbox, cyclic handler,
 USB telemetry transport, real firmware project (STM32CubeIDE/CubeMX
 scaffolding, linker script, HAL init, TrustZone secure/non-secure
@@ -309,7 +324,7 @@ any source file or prior doc:
   message type in addition to CBBA consensus messages, the first
   doesn't.
 - **USB telemetry protocol design** — genuinely open per the
-  `TODO(usb)` markers throughout `platform/board/`, not just
+  `TODO(usb)` markers throughout `board/STM32N6570-DK/`, not just
   unimplemented but undesigned (ring-buffer overflow policy,
   overwrite-vs-backpressure, wire format).
   :resolved on 13th aug 6pm
@@ -367,7 +382,7 @@ make smoke       # ./tron 1 1 200 — environment/team/incident/safe-zone summar
 ```
 
 `Makefile`'s `LAPTOP_SOURCES` is `$(wildcard core/*.c)` plus the three
-`platform/laptop/` files — new files dropped into `core/` are picked
+`laptop/` files — new files dropped into `core/` are picked
 up automatically, no Makefile edit needed.
 
 ### Board freestanding check
@@ -381,17 +396,19 @@ Two modes, both real compiles with `arm-none-eabi-gcc
 -mcpu=cortex-m55 -mthumb -mfloat-abi=hard -mfpu=auto -ffreestanding`,
 not a lint pass:
 
-- **Without `vendor/mtk3_bsp2`:** compiles `core/` only. Still a real,
-  useful check — catches libc/OS dependency creep in the portable
-  simulator — but can't validate `platform/board/*.c` against real BSP
-  symbols, since those files call real BSP APIs (`tm_printf`,
-  `tk_cre_tsk`) that don't exist without the actual headers.
-- **With `vendor/mtk3_bsp2`** (official BSP, fetched separately per
-  `vendor/README.md` — not bundled here, T-License 2.2 isn't
-  redistribution-friendly): compiles `core/` **and**
-  `platform/board/*.c` against the real `tk/tkernel.h`/`tm/tmonitor.h`
-  headers, with `_STM32CUBE_DISCOVERY_N657_` defined to select the
-  correct board variant.
+- **Without `board/STM32N6570-DK/vendor/mtk3_bsp2`:** compiles `core/`
+  only. Still a real, useful check — catches libc/OS dependency creep
+  in the portable simulator — but can't validate `board/STM32N6570-DK/*.c`
+  against real BSP symbols, since those files call real BSP APIs
+  (`tm_printf`, `tk_cre_tsk`) that don't exist without the actual
+  headers.
+- **With `board/STM32N6570-DK/vendor/mtk3_bsp2`** (official BSP,
+  fetched separately per `board/STM32N6570-DK/vendor/README.md` — not
+  bundled here, T-License 2.2 isn't redistribution-friendly): compiles
+  `core/` **and** `board/STM32N6570-DK/*.c` against the real
+  `tk/tkernel.h`/`tm/tmonitor.h` headers, with
+  `_STM32CUBE_DISCOVERY_N657_` defined to select the correct board
+  variant.
 
 Not a firmware build either way — no linker script, no HAL init, no
 STM32CubeIDE project. It's a compile-correctness check, and
@@ -405,6 +422,6 @@ seeds 1–15) checked for hangs/timeouts, before/after CSV column
 inspection for specific bug signatures (e.g., counting
 `4294967295` occurrences, checking resolved-task rows for real vs.
 sentinel incident IDs), and `make check-board` re-run after any
-`core/`/`platform/board/` change. This is a manual, documented
+`core/`/`board/STM32N6570-DK/` change. This is a manual, documented
 discipline rather than a CI pipeline — worth knowing if you're
 extending this project and wondering where the tests are.

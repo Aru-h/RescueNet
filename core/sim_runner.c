@@ -19,12 +19,39 @@ int sim_runner_init(void)
     return 0;
 }
 
+/* World-authority variant — see sim_runner.h's doc comment on this
+ * function before editing. Callers: laptop/main.c,
+ * laptop/tools/override_selftest.c. */
 void sim_start_seed(uint32_t seed, FaultProfile_t fault_profile)
 {
     fault_config_apply_profile(fault_profile);
     fault_injector_set_profile(fault_profile);
 
     generate_world(seed);
+    snapshot_begin_run(seed);
+}
+
+/* Board variant — deliberately does NOT call generate_world(). See
+ * sim_runner.h's doc comment on this function (read it before
+ * editing this one, or sim_start_seed() above) for why the split
+ * exists and the maintenance warning about keeping the two in sync
+ * on everything except the generate_world() call. Only caller:
+ * board/STM32N6570-DK/main_board.c. */
+void sim_start_seed_board(uint32_t seed, FaultProfile_t fault_profile)
+{
+    fault_config_apply_profile(fault_profile);
+    fault_injector_set_profile(fault_profile);
+
+    /* NO generate_world(seed) HERE — this is the entire point of
+     * this function existing separately from sim_start_seed(). The
+     * board is not a world authority; it waits for
+     * MissionLinkRoster_t/MissionLinkIncident_t/MissionLinkFault_t
+     * over the mission link instead (core/mission_link.h). If you
+     * are adding a call to generate_world() (or anything that
+     * transitively calls it, e.g. via a helper) on this path, stop
+     * — that almost certainly belongs in sim_start_seed() for a
+     * genuine world-authority caller, not here. */
+
     snapshot_begin_run(seed);
 }
 
