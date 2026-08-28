@@ -4,6 +4,8 @@
 #include "incident.h"
 #include "snapshot.h"
 #include "mission_state_utils.h"
+#include "allocator.h"
+#include "recovery_manager_config.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -138,8 +140,61 @@ void update_team(TeamState_t *team) //team
 {
     uint8_t replenish_rate;
     switch (team->status){
-        case(STATUS_AVAILABLE): 
+        case(STATUS_AVAILABLE):
+        {
+            /* An AVAILABLE team must be immediately eligible for new
+             * work (team_can_accept_incident()'s AVAILABLE branch,
+             * core/allocator.c: stamina >= get_soft_stamina_floor(),
+             * equipment_level > RECOVERY_MANAGER_EQUIPMENT_CRITICAL_
+             * THRESHOLD) or it is permanently stuck - this case is a
+             * no-op, so only STATUS_RESTING actually recovers stamina/
+             * equipment. An ineligible-but-AVAILABLE team can never be
+             * picked up again.
+             *
+             * Root cause (confirmed empirically this session, traced
+             * via a status-transition log on a stalled SEARCH team):
+             * multiple call sites across the codebase set a team
+             * directly to STATUS_AVAILABLE with no stamina/equipment
+             * check whenever its current task disappears out from
+             * under it. team_set_available() itself (core/
+             * mission_state_utils.c) is unconditional by design, and
+             * at least two OTHER sites bypass even that and assign
+             * team->status = STATUS_AVAILABLE directly: core/
+             * incident.c's search_sweep_step() (a SEARCH team's sweep
+             * cycle completing) and core/simulation.c's move_team()
+             * (task vanished mid-travel). Any one of them can land a
+             * team on AVAILABLE below the eligibility floor - traced
+             * directly: a SEARCH team hit this via search_sweep_step(),
+             * stamina 24.50 against a 26.0 floor, and simply never
+             * changed status again for the rest of a 2000-tick run.
+             *
+             * Rather than chase down and fix every current and future
+             * call site individually, close the gap at the one place
+             * that can catch all of them: if an AVAILABLE team doesn't
+             * actually meet the eligibility bar, route it to recovery
+             * here instead of leaving it idle. */
+            if(team->stamina >= get_soft_stamina_floor(team) &&
+               team->equipment_level > RECOVERY_MANAGER_EQUIPMENT_CRITICAL_THRESHOLD)
+            {
+                break;
+            }
+
+            if(create_return_to_safe_zone_task(team) == NO_ASSIGNMENT)
+            {
+                /* True last resort: even the safe-zone task machinery
+                 * couldn't route this team anywhere (system-task pool
+                 * exhausted, or no reachable safe zone). STATUS_RESTING
+                 * recovers stamina and equipment unconditionally
+                 * regardless of location in this simulator's model (see
+                 * the STATUS_RESTING case below - no position check),
+                 * so forcing it directly here guarantees the team
+                 * eventually recovers instead of freezing forever. */
+                extern uint32_t g_diag_safezone_fallback_count;
+                g_diag_safezone_fallback_count++;
+                team->status = STATUS_RESTING;
+            }
             break;
+        }
         case(STATUS_EN_ROUTE):
             if(team->stamina <= MIN_STAMINA)
             {
@@ -173,9 +228,42 @@ void update_team(TeamState_t *team) //team
 
             if(task == NULL || !task->slot_occupied)
             {
+                /* The task this team was working disappeared out from
+                 * under it (slot freed/reclaimed elsewhere while still
+                 * ON_SCENE) - route it through abandon_task_for_recovery()
+                 * exactly like every other "lost the task mid-work" case
+                 * in this function (equipment exhaustion, SUPPORT low-
+                 * equipment abort) rather than jumping straight to
+                 * team_set_available().
+                 *
+                 * Root cause this fixes (confirmed empirically - see
+                 * core/allocator.c's team_can_accept_incident(), AVAILABLE
+                 * branch): team_set_available() sets STATUS_AVAILABLE
+                 * unconditionally, with no stamina/equipment check. If
+                 * this team's stamina had already drained below its
+                 * fitness tier's soft floor (get_soft_stamina_floor())
+                 * by the time its task vanished, it landed in AVAILABLE
+                 * simultaneously ineligible for any new work (the
+                 * AVAILABLE branch of team_can_accept_incident() requires
+                 * stamina >= that same floor) - and STATUS_AVAILABLE's
+                 * own case above does nothing, only STATUS_RESTING
+                 * recovers stamina. That's a permanent deadlock: too
+                 * weak to be assigned, never resting to recover. Observed
+                 * directly via traced status transitions - a team would
+                 * go AVAILABLE once at low stamina and simply never
+                 * change status again for the rest of the run.
+                 *
+                 * abandon_task_for_recovery() instead tries to route the
+                 * team to a real safe zone (RESTING, which DOES recover
+                 * stamina) via create_return_to_safe_zone_task(), and
+                 * only falls back to team_set_available() if that
+                 * genuinely can't be created (tracked separately via
+                 * g_diag_safezone_fallback_count) - matching how every
+                 * other task-loss path in this same function already
+                 * behaves. */
                 team->assigned_task_pool = TASK_POOL_NONE;
                 team->assigned_task_slot = NO_ASSIGNMENT;
-                team_set_available(team);
+                abandon_task_for_recovery(team);
                 break;
             }
 

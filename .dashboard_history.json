@@ -1,5 +1,39 @@
 [
   {
+    "timestamp": "2026-08-28 14:08:10",
+    "seed": 1,
+    "seed_count": 1,
+    "ticks": 2000,
+    "fault_profile": "none",
+    "elapsed_seconds": 3.67,
+    "returncode": 0,
+    "summary": {
+      "safezone_fallback_count": 58,
+      "discarded_signal_count": 95542
+    },
+    "rest_cycle_count": 249,
+    "rest_cycles_interrupted_1tick": 164,
+    "rest_cycles_sustained_10plus": 78,
+    "csv_rows": 1972
+  },
+  {
+    "timestamp": "2026-08-28 14:04:32",
+    "seed": 1,
+    "seed_count": 1,
+    "ticks": 2000,
+    "fault_profile": "none",
+    "elapsed_seconds": 322.62,
+    "returncode": 0,
+    "summary": {
+      "safezone_fallback_count": 1074,
+      "discarded_signal_count": 94728
+    },
+    "rest_cycle_count": 238,
+    "rest_cycles_interrupted_1tick": 160,
+    "rest_cycles_sustained_10plus": 70,
+    "csv_rows": 1872
+  },
+  {
     "timestamp": "2026-08-26 13:43:24",
     "seed": 1,
     "seed_count": 1,
