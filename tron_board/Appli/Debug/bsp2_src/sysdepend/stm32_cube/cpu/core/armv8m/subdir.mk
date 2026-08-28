@@ -4,6 +4,15 @@
 ################################################################################
 
 # Add inputs and outputs from these tool invocations to the build variables 
+C_SRCS += \
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/cpu_cntl.c \
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/exc_hdr.c \
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/interrupt.c \
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/sys_start.c 
+
+S_UPPER_SRCS += \
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/dispatch.S 
+
 OBJS += \
 ./bsp2_src/sysdepend/stm32_cube/cpu/core/armv8m/cpu_cntl.o \
 ./bsp2_src/sysdepend/stm32_cube/cpu/core/armv8m/dispatch.o \

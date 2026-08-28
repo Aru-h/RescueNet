@@ -4,6 +4,9 @@
 ################################################################################
 
 # Add inputs and outputs from these tool invocations to the build variables 
+C_SRCS += \
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/device/hal_i2c/hal_i2c.c 
+
 OBJS += \
 ./bsp2_src/sysdepend/stm32_cube/device/hal_i2c/hal_i2c.o 
 

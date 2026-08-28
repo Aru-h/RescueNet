@@ -1,6 +1,0 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/cpu/core/armv8m/int_armv8m.c:35:13:set_basepri	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/cpu/core/armv8m/int_armv8m.c:44:11:get_basepri	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/cpu/core/armv8m/int_armv8m.c:55:11:disint	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/cpu/core/armv8m/int_armv8m.c:69:13:SetCpuIntLevel	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/cpu/core/armv8m/int_armv8m.c:77:12:GetCpuIntLevel	2
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/cpu/core/armv8m/int_armv8m.c:95:13:EnableInt_nvic	1

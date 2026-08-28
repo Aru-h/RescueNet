@@ -4,6 +4,9 @@
 ################################################################################
 
 # Add inputs and outputs from these tool invocations to the build variables 
+C_SRCS += \
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/usermain/usermain.c 
+
 OBJS += \
 ./bsp2_src/mtkernel/kernel/usermain/usermain.o 
 

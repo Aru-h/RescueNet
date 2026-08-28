@@ -4,6 +4,10 @@
 ################################################################################
 
 # Add inputs and outputs from these tool invocations to the build variables 
+C_SRCS += \
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/lib/libtm/libtm.c \
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/lib/libtm/libtm_printf.c 
+
 OBJS += \
 ./bsp2_src/mtkernel/lib/libtm/libtm.o \
 ./bsp2_src/mtkernel/lib/libtm/libtm_printf.o 

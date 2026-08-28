@@ -1,9 +1,0 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Appli/../../board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/cpu_status.h:69:13:knl_EnterTaskIndependent	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Appli/../../board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/cpu_status.h:73:13:knl_LeaveTaskIndependent	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Appli/../../board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/sysdepend.h:62:11:knl_get_ipsr	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/interrupt.c:33:13:knl_hll_inthdr	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/interrupt.c:52:13:knl_systim_inthdr	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/interrupt.c:65:11:knl_define_inthdr	3
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/interrupt.c:87:13:knl_return_inthdr	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/interrupt.c:93:6:knl_default_handler	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/interrupt.c:103:11:knl_init_interrupt	1

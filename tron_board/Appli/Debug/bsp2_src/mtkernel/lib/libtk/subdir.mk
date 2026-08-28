@@ -4,6 +4,11 @@
 ################################################################################
 
 # Add inputs and outputs from these tool invocations to the build variables 
+C_SRCS += \
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/lib/libtk/fastlock.c \
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/lib/libtk/fastmlock.c \
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/lib/libtk/kmalloc.c 
+
 OBJS += \
 ./bsp2_src/mtkernel/lib/libtk/fastlock.o \
 ./bsp2_src/mtkernel/lib/libtk/fastmlock.o \

@@ -1,8 +1,0 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/device/common/drvif/msdrvif.c:40:10:msdi_openfn	32	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/device/common/drvif/msdrvif.c:56:10:msdi_closefn	32	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/device/common/drvif/msdrvif.c:72:10:msdi_execfn	32	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/device/common/drvif/msdrvif.c:94:11:msdi_waitfn	24	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/device/common/drvif/msdrvif.c:102:10:msdi_abortfn	24	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/device/common/drvif/msdrvif.c:110:11:msdi_eventfn	32	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/device/common/drvif/msdrvif.c:131:11:msdi_def_dev	88	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/device/common/drvif/msdrvif.c:184:11:msdi_del_dev	24	static

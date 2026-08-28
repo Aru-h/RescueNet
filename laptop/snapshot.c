@@ -204,7 +204,14 @@ void snapshot_begin_run(uint32_t seed)
         "recovery_recommendation,recovery_reason,recovery_confidence,recovery_escalation_level,"
         "twin_expected_arrival_tick,twin_expected_operating_state,"
         "twin_assigned_task_pool,twin_assigned_task_slot,"
-        "incident_discovered,team_zone_id,team_zone_trust\n");
+        "incident_discovered,team_zone_id,team_zone_trust,"
+        "fault_active_mobility,fault_active_communication,fault_active_resource,"
+        "fault_active_environment,fault_active_mission,"
+        "fault_severity_mobility,fault_severity_communication,fault_severity_resource,"
+        "fault_severity_environment,fault_severity_mission,"
+        "fault_ticks_remaining_mobility,fault_ticks_remaining_communication,"
+        "fault_ticks_remaining_resource,fault_ticks_remaining_environment,"
+        "fault_ticks_remaining_mission\n");
 }
 
 /*
@@ -255,7 +262,7 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
     zone_trust = search_zone_trust(zone_id, cycle);
 
     fprintf(g_snapshot_file,
-        "%u,%u,%u,%u,%d,%d,%.2f,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%d,%d,%u,%.4f,%u,%u,%u,%u,%u,%.4f,%u,%u,%u,%u,%u,%d,%u,%u\n",
+        "%u,%u,%u,%u,%d,%d,%.2f,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%d,%d,%u,%.4f,%u,%u,%u,%u,%u,%.4f,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
         g_run_id,
         g_dataset_seed,
         cycle,
@@ -307,7 +314,39 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
         twin->assigned_task_slot,
         discovered,
         zone_id,
-        zone_trust);
+        zone_trust,
+        team->fault_state.active[FAULT_CLASS_MOBILITY],
+        team->fault_state.active[FAULT_CLASS_COMMUNICATION],
+        team->fault_state.active[FAULT_CLASS_RESOURCE],
+        team->fault_state.active[FAULT_CLASS_ENVIRONMENT],
+        team->fault_state.active[FAULT_CLASS_MISSION],
+        team->fault_state.severity[FAULT_CLASS_MOBILITY],
+        team->fault_state.severity[FAULT_CLASS_COMMUNICATION],
+        team->fault_state.severity[FAULT_CLASS_RESOURCE],
+        team->fault_state.severity[FAULT_CLASS_ENVIRONMENT],
+        team->fault_state.severity[FAULT_CLASS_MISSION],
+        /* recovery_tick > cycle guard: active[] stays 1 through the
+         * whole repair-confirmation window in fault_injector.c (past
+         * recovery_tick, before repair_confirm_tick - see that file's
+         * own comment on the two-stage repair process), so cycle can
+         * be >= recovery_tick while still active. Both are uint32_t;
+         * subtracting unguarded would underflow to ~4 billion instead
+         * of reading 0 for the whole confirmation window. */
+        (team->fault_state.active[FAULT_CLASS_MOBILITY] &&
+         team->fault_state.recovery_tick[FAULT_CLASS_MOBILITY] > cycle
+            ? team->fault_state.recovery_tick[FAULT_CLASS_MOBILITY] - cycle : 0u),
+        (team->fault_state.active[FAULT_CLASS_COMMUNICATION] &&
+         team->fault_state.recovery_tick[FAULT_CLASS_COMMUNICATION] > cycle
+            ? team->fault_state.recovery_tick[FAULT_CLASS_COMMUNICATION] - cycle : 0u),
+        (team->fault_state.active[FAULT_CLASS_RESOURCE] &&
+         team->fault_state.recovery_tick[FAULT_CLASS_RESOURCE] > cycle
+            ? team->fault_state.recovery_tick[FAULT_CLASS_RESOURCE] - cycle : 0u),
+        (team->fault_state.active[FAULT_CLASS_ENVIRONMENT] &&
+         team->fault_state.recovery_tick[FAULT_CLASS_ENVIRONMENT] > cycle
+            ? team->fault_state.recovery_tick[FAULT_CLASS_ENVIRONMENT] - cycle : 0u),
+        (team->fault_state.active[FAULT_CLASS_MISSION] &&
+         team->fault_state.recovery_tick[FAULT_CLASS_MISSION] > cycle
+            ? team->fault_state.recovery_tick[FAULT_CLASS_MISSION] - cycle : 0u));
 }
 
 void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)

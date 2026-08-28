@@ -1,0 +1,8 @@
+../../Drivers/STM32N6xx_HAL_Driver/Inc/stm32n6xx_ll_bus.h:2739:22:LL_APB1_GRP2_EnableClock	1
+../../Drivers/STM32N6xx_HAL_Driver/Inc/stm32n6xx_ll_bus.h:2775:22:LL_APB1_GRP2_DisableClock	1
+../../Drivers/STM32N6xx_HAL_Driver/Inc/stm32n6xx_ll_bus.h:2791:22:LL_APB1_GRP2_ForceReset	1
+../../Drivers/STM32N6xx_HAL_Driver/Inc/stm32n6xx_ll_bus.h:2807:22:LL_APB1_GRP2_ReleaseReset	1
+../../Drivers/STM32N6xx_HAL_Driver/Inc/stm32n6xx_ll_ucpd.h:356:22:LL_UCPD_Disable	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_ll_ucpd.c:79:13:LL_UCPD_DeInit	2
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_ll_ucpd.c:115:13:LL_UCPD_Init	2
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_ll_ucpd.c:143:6:LL_UCPD_StructInit	1
