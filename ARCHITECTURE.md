@@ -55,7 +55,7 @@ calls anywhere in this tier.
 
 | File | Lines | Role |
 |---|---|---|
-| `environment.c` | 2520 | Procedural world generation: districts, road network, buildings, earthquake damage propagation |
+| `environment.c` | 2520 | Procedural world generation: districts, road network, buildings, earthquake damage propagation. Based substantially on [Grzybojad's Procedural City Generation repository](https://github.com/Grzybojad/ProceduralCityGeneration). |
 | `incident.c` | 2017 | Incident lifecycle, task-pool assignment, system tasks (return-to-safe-zone, equipment cache, sector sweep) |
 | `recovery_manager.c` | 1266 | Translates watchdog evidence into recovery actions |
 | `scoring.c` | 801 | CBBA bid scoring (capability/distance/priority/stamina weighted) |

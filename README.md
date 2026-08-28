@@ -160,6 +160,15 @@ in `core/mission_state.h` are derived from them:
   table implemented in `core/cbba.c` is cited directly against this
   paper (Table I) in the source comments.
 
+## Acknowledgements
+
+The procedural city and map-generation work in `core/environment.c` is
+based substantially on [Grzybojad's Procedural City Generation
+repository](https://github.com/Grzybojad/ProceduralCityGeneration).
+That project provided the foundation that made this simulator's map
+building possible; this repository's disaster-response environment
+extends and adapts that work.
+
 ## Contest context
 
 Built for the **TRON Programming Contest 2026**, targeting µT-Kernel
