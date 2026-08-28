@@ -346,4 +346,30 @@ void mission_link_handshake_note_remote_reply(const MissionLinkHandshakeReply_t 
 int mission_link_handshake_get_relay_reply(uint8_t peer_board_id, uint32_t now,
                                             MissionLinkHandshakeReply_t *out);
 
+/* Whether a REAL reply (not a synthetic post-timeout one) has been
+   recorded for peer_board_id - no `now` parameter, no timeout-clock
+   read, no side effects at all: purely a check of already-recorded
+   state (mirrors mission_link_handshake_note_remote_reply()'s own
+   internal g_relay_reply_seen[] array). Exists for exactly one
+   reason: a caller that needs to check "has this peer definitely
+   replied yet" WITHOUT calling anything that consults the shared
+   timeout clock (see mission_link_handshake_should_send_relay_req()'s
+   own doc on that clock being shared across every peer) - because
+   calling cbba_now_ms() an extra time, from a second call site, on
+   top of whatever mission_link_task_step() itself already calls
+   per tick, measurably inflates that caller's own view of elapsed
+   time relative to a peer whose own process/clock never made that
+   extra call. Found for real: laptop/tools/two_board_harness.c
+   originally polled mission_link_handshake_get_relay_reply() itself
+   (which takes `now` and does consult the clock) once per iteration
+   to decide when it was safe to inject a test roster message, and
+   that extra clock read alone caused board 0's own view of "how long
+   has board 1 had to reply" to run roughly 2-3x faster than board 1's
+   actual elapsed time - triggering HANDSHAKE_NUCLEO_TIMEOUT_TICKS
+   (which is sticky - see mission_link_handshake_relay_timed_out()'s
+   own doc) well before board 1's real reply had a chance to arrive,
+   every single run. This function is the fix: check readiness without
+   ever touching the clock. */
+int mission_link_handshake_relay_reply_seen(uint8_t peer_board_id);
+
 #endif /* MISSION_LINK_HANDSHAKE_H */

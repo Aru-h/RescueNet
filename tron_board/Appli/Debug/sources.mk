@@ -27,6 +27,26 @@ Core/Src \
 Core/Startup \
 Drivers/STM32N6xx_HAL_Driver \
 board_src \
+board_src/vendor/mtk3_bsp2/mtkernel/device/adc \
+board_src/vendor/mtk3_bsp2/mtkernel/device/common/drvif \
+board_src/vendor/mtk3_bsp2/mtkernel/device/i2c \
+board_src/vendor/mtk3_bsp2/mtkernel/device/ser \
+board_src/vendor/mtk3_bsp2/mtkernel/kernel/inittask \
+board_src/vendor/mtk3_bsp2/mtkernel/kernel/sysinit \
+board_src/vendor/mtk3_bsp2/mtkernel/kernel/tkernel \
+board_src/vendor/mtk3_bsp2/mtkernel/kernel/tstdlib \
+board_src/vendor/mtk3_bsp2/mtkernel/kernel/usermain \
+board_src/vendor/mtk3_bsp2/mtkernel/lib/libtk \
+board_src/vendor/mtk3_bsp2/mtkernel/lib/libtm \
+board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m \
+board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/device/hal_adc \
+board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/device/hal_adc/sysdepend \
+board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/device/hal_i2c \
+board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube \
+board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/cpu/core/armv8m \
+board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/cpu/stm32n6 \
+board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk \
+board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtm/discovery_stm32n657 \
 bsp2_src/mtkernel/device/adc \
 bsp2_src/mtkernel/device/common/drvif \
 bsp2_src/mtkernel/device/i2c \
@@ -48,4 +68,5 @@ bsp2_src/sysdepend/stm32_cube/lib/libtk/cpu/stm32n6 \
 bsp2_src/sysdepend/stm32_cube/lib/libtk \
 bsp2_src/sysdepend/stm32_cube/lib/libtm/discovery_stm32n657 \
 core_src \
+core_src/vendor/sx126x_driver/src \
 

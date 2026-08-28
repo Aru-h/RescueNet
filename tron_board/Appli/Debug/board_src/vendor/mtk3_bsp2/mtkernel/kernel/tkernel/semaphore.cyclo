@@ -1,0 +1,12 @@
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Appli/../../board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/include/sys/queue.h:40:13:QueInit	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Appli/../../board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/include/sys/queue.h:58:13:QueInsert	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Appli/../../board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/include/sys/queue.h:85:15:QueRemoveNext	2
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Appli/../../board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/cpu_status.h:62:13:knl_isTaskIndependent	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/semaphore.c:33:11:knl_semaphore_initialize	2
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/semaphore.c:57:12:tk_cre_sem	9
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/semaphore.c:109:12:tk_del_sem	7
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/semaphore.c:138:12:tk_sig_sem	13
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/semaphore.c:195:12:sem_chg_pri	5
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/semaphore.c:233:12:sem_rel_wai	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/semaphore.c:247:12:tk_wai_sem	18
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/semaphore.c:296:12:tk_ref_sem	7

@@ -9,6 +9,7 @@ RM := rm -rf
 
 # All of the sources participating in the build are defined here
 -include sources.mk
+-include core_src/vendor/sx126x_driver/src/subdir.mk
 -include core_src/subdir.mk
 -include bsp2_src/sysdepend/stm32_cube/lib/libtm/discovery_stm32n657/subdir.mk
 -include bsp2_src/sysdepend/stm32_cube/lib/libtk/cpu/stm32n6/subdir.mk
@@ -30,6 +31,26 @@ RM := rm -rf
 -include bsp2_src/mtkernel/device/i2c/subdir.mk
 -include bsp2_src/mtkernel/device/common/drvif/subdir.mk
 -include bsp2_src/mtkernel/device/adc/subdir.mk
+-include board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtm/discovery_stm32n657/subdir.mk
+-include board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/cpu/stm32n6/subdir.mk
+-include board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/cpu/core/armv8m/subdir.mk
+-include board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/subdir.mk
+-include board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/device/hal_i2c/subdir.mk
+-include board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/device/hal_adc/sysdepend/subdir.mk
+-include board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/device/hal_adc/subdir.mk
+-include board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/subdir.mk
+-include board_src/vendor/mtk3_bsp2/sysdepend/stm32_cube/subdir.mk
+-include board_src/vendor/mtk3_bsp2/mtkernel/lib/libtm/subdir.mk
+-include board_src/vendor/mtk3_bsp2/mtkernel/lib/libtk/subdir.mk
+-include board_src/vendor/mtk3_bsp2/mtkernel/kernel/usermain/subdir.mk
+-include board_src/vendor/mtk3_bsp2/mtkernel/kernel/tstdlib/subdir.mk
+-include board_src/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/subdir.mk
+-include board_src/vendor/mtk3_bsp2/mtkernel/kernel/sysinit/subdir.mk
+-include board_src/vendor/mtk3_bsp2/mtkernel/kernel/inittask/subdir.mk
+-include board_src/vendor/mtk3_bsp2/mtkernel/device/ser/subdir.mk
+-include board_src/vendor/mtk3_bsp2/mtkernel/device/i2c/subdir.mk
+-include board_src/vendor/mtk3_bsp2/mtkernel/device/common/drvif/subdir.mk
+-include board_src/vendor/mtk3_bsp2/mtkernel/device/adc/subdir.mk
 -include board_src/subdir.mk
 -include Drivers/STM32N6xx_HAL_Driver/subdir.mk
 -include Core/Startup/subdir.mk

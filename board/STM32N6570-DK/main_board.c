@@ -141,6 +141,29 @@ extern void mission_link_task_init(void);
 extern void mission_link_task_step(void);
 
 /*
+ * sim_tick()-vs-roster-arrival gap (flagged, not designed - see the
+ * task note this change closes). mission_link_handshake_round_trip_
+ * complete() below only proves liveness: this board and its handshake
+ * peer are both up and able to exchange a frame. It says nothing
+ * about whether a real MissionLinkRoster_t for any team THIS board
+ * hosts has actually arrived and been applied - before that happens,
+ * g_teams[] for this board's own teams is still whatever
+ * sim_runner_init()/generate_teams() seeded it as, not the
+ * laptop-authoritative roster data the mission is actually supposed
+ * to run against. Defined in mission_link_task.c (this board's own
+ * file, same as the other forward-declared hooks above) as a simple
+ * "has mission_link_apply_roster() ever been called for one of this
+ * board's own teams" counter - see that file's own comment on
+ * g_roster_applied_count for why it counts local applies only, not
+ * relays. Used below exactly like the handshake gate just above it:
+ * block the seed loop, pumping mission_link_task_step() so the wait
+ * can actually resolve, until at least one team's real data has
+ * landed. */
+extern uint32_t mission_link_task_any_roster_applied(void);
+
+extern void sx1262_hal_init(void);
+
+/*
  * Handshake readiness gate (this prompt's addition — read alongside
  * the matching gate in board/STM32N6570-DK/mission_link_task.c's RX
  * paths, which reject inbound frames on the same condition this
@@ -239,6 +262,13 @@ LOCAL void sim_task(INT stacd, void *exinf)
     (void)stacd;
     (void)exinf;
 
+    /* SX1262 hardware bring-up (SPI5 + GPIO config) - must happen
+       before anything below tries to send/receive over LoRa, and
+       doesn't depend on sim_runner_init()/mission_link state, so it
+       goes first. See sx1262_hal.c's own top-of-file comment for the
+       wiring this assumes. */
+    sx1262_hal_init();
+
     tm_putstring((UB*)"tron: sim_runner_init\n");
 
     if(sim_runner_init() != 0)
@@ -308,7 +338,29 @@ LOCAL void sim_task(INT stacd, void *exinf)
         mission_link_task_step();
     }
 
-    tm_putstring((UB*)"tron: handshake ready, starting seed loop\n");
+    tm_putstring((UB*)"tron: handshake ready\n");
+
+    /*
+     * Roster-arrival gate - see the mission_link_task_any_roster_
+     * applied() extern's own doc above for why this is a distinct
+     * condition from the handshake completing. Same shape as the
+     * handshake wait loop just above: block, pumping
+     * mission_link_task_step() so RX (and therefore the apply that
+     * flips this counter) actually gets a chance to run, until at
+     * least one team's real roster data has landed on this board. On
+     * real hardware today this blocks forever, for the same reason
+     * the handshake gate's own comment already documents (no wire
+     * type wired to a real TX/RX path yet) - once that lands, roster
+     * frames follow the handshake frames through the same pipe.
+     */
+    tm_putstring((UB*)"tron: waiting on mission roster arrival\n");
+
+    while (mission_link_task_any_roster_applied() == 0u)
+    {
+        mission_link_task_step();
+    }
+
+    tm_putstring((UB*)"tron: roster received, starting seed loop\n");
 
     for(uint32_t seed = BOARD_SEED; seed < BOARD_SEED + BOARD_SEED_COUNT; ++seed)
     {

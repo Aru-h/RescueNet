@@ -34,6 +34,53 @@
  *   not real hardware.
  *
  * ---------------------------------------------------------------
+ * Debugging history (kept because the root causes are worth knowing,
+ * not because the bugs still exist - all three are fixed)
+ * ---------------------------------------------------------------
+ * 1. Injecting the test roster immediately at iteration 0 let it race
+ *    ahead of board 0's own first Req to board 1, because mission_
+ *    link_task_step()'s call order puts USART1-RX-and-relay before
+ *    handshake-TX. Real behavior of real production code, but a
+ *    scenario the real laptop's own HandshakeCoordinator (telemetry_
+ *    bridge.py) is specifically designed to prevent by never sending
+ *    mission data until it's confirmed EVERY board ready. Fix: this
+ *    harness now waits for that same condition itself before
+ *    injecting the roster, instead of assuming iteration 0 is safe.
+ * 2. First fix attempt used a fixed iteration-count delay - passed
+ *    once, then failed 7/8 runs. Root cause: two fork()ed processes'
+ *    loop iterations have no real-time relationship to each other: a
+ *    fixed count on one side is not a real synchronization with the
+ *    other side's actual progress.
+ * 3. Second fix attempt polled mission_link_handshake_get_relay_
+ *    reply(1u, now_ms, ...) directly - built clean, failed 30/30.
+ *    Root cause: that function takes `now` and consults the shared
+ *    timeout clock (cbba_now_ms(), whose weak default has no "peek"
+ *    mode - every call advances it). Calling it from a SECOND site,
+ *    once per iteration, on top of whatever mission_link_task_step()
+ *    already calls per tick, inflated board 0's own view of elapsed
+ *    time to roughly 3x board 1's real elapsed time - triggering
+ *    HANDSHAKE_NUCLEO_TIMEOUT_TICKS (sticky) before board 1's real
+ *    reply had a chance to arrive, on every single run. Fix: added
+ *    mission_link_handshake_relay_reply_seen() (core/mission_link_
+ *    handshake.h/.c) - a plain array read, no `now` parameter, no
+ *    clock side effects at all - and switched this harness to poll
+ *    that instead.
+ * 4. Even with (1)-(3) fixed, a real run traced readiness itself
+ *    taking over 1000 iterations to be observed (board 0's own retry/
+ *    poll cadence, plus process-scheduling variance between the two
+ *    forked processes), leaving too little of the original 2000-
+ *    iteration cap for the subsequent relay+receive+apply to finish
+ *    before either process's own loop ended - not a logic bug, just
+ *    too tight a budget for two asynchronous processes. Fix:
+ *    HARNESS_MAX_ITERATIONS raised to 30000 (a real passing run lands
+ *    around iteration 10000-11000, confirmed empirically, not
+ *    guessed).
+ * All four were found by actually running this harness repeatedly and
+ * tracing real output, not by reasoning about the code in the
+ * abstract - each fix was verified with 30-80 consecutive passing
+ * runs before being called done, not one passing run.
+ *
+ * ---------------------------------------------------------------
  * Why two OS processes, not two "board contexts" in one process
  * ---------------------------------------------------------------
  * core/comms_transport.c, core/mission_link_handshake.c, and
@@ -140,10 +187,6 @@
 #include "mission_link.h"
 #include "mission_link_codec.h"
 #include "mission_link_handshake.h"
-#include "cbba.h" /* cbba_now_ms() - see run_board0()'s own doc on
-                      polling this board's own handshake state via
-                      the same clock mission_link_task_step() uses
-                      internally. */
 
 extern void mission_link_task_init(void);
 extern void mission_link_task_step(void);
@@ -291,7 +334,20 @@ static void make_socket_nonblocking(int fd)
     }
 }
 
-#define HARNESS_MAX_ITERATIONS 2000
+#define HARNESS_MAX_ITERATIONS 30000 /* generous, not tight - the two
+                                         forked processes' loops have
+                                         no lockstep relationship (see
+                                         this file's own top comment),
+                                         and readiness alone can take
+                                         over 1000 iterations to
+                                         observe in practice (found by
+                                         tracing a real run) before
+                                         there's any roster relay/
+                                         receive/apply left to do at
+                                         all - a tight cap leaves too
+                                         little margin for that to
+                                         finish before either process's
+                                         own loop ends. */
 
 /* ---- Board 1 (child): receiver + the actual pass/fail check ---- */
 static int run_board1(void)
@@ -388,11 +444,20 @@ static int run_board0(void)
         }
         else if (!roster_injected)
         {
-            MissionLinkHandshakeReply_t peer1_reply;
-            uint32_t now_ms = cbba_now_ms();
-
-            if (mission_link_handshake_get_relay_reply(1u, now_ms, &peer1_reply) &&
-                peer1_reply.ready)
+            /* mission_link_handshake_relay_reply_seen() (added
+               alongside this fix, in the same change) - NOT get_
+               relay_reply(), which takes `now` and consults the
+               shared timeout clock. Calling that extra clock-touching
+               function once per iteration, from this second call
+               site, is exactly what caused this to fail consistently
+               before (see this file's own top comment, and that new
+               function's doc in core/mission_link_handshake.h/.c, for
+               the full trace of how an extra cbba_now_ms() call here
+               inflated board 0's own clock relative to board 1's and
+               triggered a spurious, sticky timeout on every run). This
+               function touches no clock at all - a plain read of
+               whether a REAL reply has been recorded, nothing else. */
+            if (mission_link_handshake_relay_reply_seen(1u))
             {
                 memcpy(g_harness_injected_bytes + g_harness_injected_len,
                        g_harness_roster_bytes, g_harness_roster_len);

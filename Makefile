@@ -52,7 +52,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness
 
 all: $(TARGET) $(LABELER)
 
@@ -108,9 +108,22 @@ ARM_CFLAGS_BASE = -std=gnu11 -Wall -Wextra -mcpu=cortex-m55 -mthumb \
 BOARD_OBJ_DIR = build/board-check
 
 ifneq ($(wildcard $(BSP_DIR)/include),)
+  # -I$(SX126X_DIR): sx1262_hal.c #includes "sx126x.h"/"sx126x_hal.h", which
+  # live in core/vendor/sx126x_driver/src, not board/STM32N6570-DK/.
+  # -Itron_board/Drivers/CMSIS/...: sx1262_hal.c also #includes the real
+  # "stm32n657xx.h" (register defs) which pulls in "core_cm55.h" and
+  # "system_stm32n6xx.h" - these ship as part of the checked-in
+  # STM32CubeIDE project (tron_board/), not board/STM32N6570-DK/vendor/
+  # mtk3_bsp2/, so they need their own -I here even in real-BSP mode.
   ARM_CFLAGS = $(ARM_CFLAGS_BASE) -D_STM32CUBE_DISCOVERY_N657_ -DTHIS_BOARD_ID=0 \
-	-I$(BSP_DIR)/config -I$(BSP_DIR)/include -I$(BSP_DIR)
-  BOARD_SOURCES = $(CORE_SOURCES) $(BOARD_DIR)/debug.c $(BOARD_DIR)/snapshot.c $(BOARD_DIR)/main_board.c $(BOARD_DIR)/mission_link_task.c
+	-I$(BSP_DIR)/config -I$(BSP_DIR)/include -I$(BSP_DIR) \
+	-I$(SX126X_DIR) \
+	-Itron_board/Drivers/CMSIS/Include -Itron_board/Drivers/CMSIS/Device/ST/STM32N6xx/Include
+  # sx126x.c (vendored driver core) + sx1262_hal.c (this board's HAL,
+  # implementing sx126x_hal_write/_read/_reset/_wakeup) now fold into
+  # the real per-board build, so check-board-link genuinely link-checks
+  # the HAL instead of leaving those four symbols undefined.
+  BOARD_SOURCES = $(CORE_SOURCES) $(BOARD_DIR)/debug.c $(BOARD_DIR)/snapshot.c $(BOARD_DIR)/main_board.c $(BOARD_DIR)/mission_link_task.c $(SX126X_DIR)/sx126x.c $(BOARD_DIR)/sx1262_hal.c
   BSP_MODE = real BSP2 headers ($(BSP_DIR))
 else
   ARM_CFLAGS = $(ARM_CFLAGS_BASE)
@@ -234,6 +247,7 @@ check-board-link: check-board-compile
 clean:
 	rm -f $(TARGET) $(LABELER) tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv tron_telemetry.log
 	rm -rf $(BOARD_OBJ_DIR) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
+	rm -f $(TWO_BOARD_HARNESS_BIN)
 
 # --- Pico compile check --------------------------------------------------
 # Mirrors check-board-compile/-link above, same class of check now that
@@ -260,9 +274,16 @@ PICO_BSP_OBJ_DIR = build/pico-bsp-check
 PICO_BOARD_OBJ_DIR = build/pico-check
 
 ifneq ($(wildcard $(PICO_BSP_DIR)/include),)
+  # -I$(SX126X_DIR): sx1262_hal.c #includes "sx126x.h"/"sx126x_hal.h", which
+  # live in core/vendor/sx126x_driver/src, not board/Raspberry_Pi_Pico/.
   PICO_ARM_CFLAGS = $(PICO_ARM_CFLAGS_BASE) \
-	-I$(PICO_BSP_DIR)/config -I$(PICO_BSP_DIR)/include -I$(PICO_BSP_DIR)/kernel/knlinc
-  PICO_BOARD_SOURCES = $(CORE_SOURCES) $(PICO_DIR)/debug.c $(PICO_DIR)/snapshot.c $(PICO_DIR)/main_board.c $(PICO_DIR)/mission_link_task.c
+	-I$(PICO_BSP_DIR)/config -I$(PICO_BSP_DIR)/include -I$(PICO_BSP_DIR)/kernel/knlinc \
+	-I$(SX126X_DIR)
+  # sx126x.c (vendored driver core) + sx1262_hal.c (this board's HAL,
+  # raw RP2040-register SPI0 + this BSP's own libbsp gpio_*() wrapper)
+  # now fold into the real per-board build, so check-pico-link genuinely
+  # link-checks the HAL instead of leaving those four symbols undefined.
+  PICO_BOARD_SOURCES = $(CORE_SOURCES) $(PICO_DIR)/debug.c $(PICO_DIR)/snapshot.c $(PICO_DIR)/main_board.c $(PICO_DIR)/mission_link_task.c $(SX126X_DIR)/sx126x.c $(PICO_DIR)/sx1262_hal.c
   PICO_BSP_MODE = real BSP (v1) headers ($(PICO_BSP_DIR))
 else
   PICO_ARM_CFLAGS = $(PICO_ARM_CFLAGS_BASE)
@@ -315,6 +336,9 @@ check-pico-link: check-pico-compile
 		grep -rhoE '^[[:space:]]*IMPORT[[:space:]]+[A-Za-z_][A-Za-z0-9_ ]*\*?[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(' $(PICO_BSP_DIR) 2>/dev/null \
 			| sed -E 's/^.*[[:space:]\*]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\($$/\1/' \
 			>> $(PICO_BOARD_OBJ_DIR)/.expected_external.txt; \
+		grep -rhoE '^[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[A-Za-z_][A-Za-z0-9_]*\(' $(PICO_BSP_DIR)/include/bsp 2>/dev/null \
+			| sed -E 's/^[A-Za-z_][A-Za-z0-9_]*[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\($$/\1/' \
+			>> $(PICO_BOARD_OBJ_DIR)/.expected_external.txt; \
 	fi; \
 	sort -u $(PICO_BOARD_OBJ_DIR)/.expected_external.txt -o $(PICO_BOARD_OBJ_DIR)/.expected_external.txt; \
 	comm -23 $(PICO_BOARD_OBJ_DIR)/.unresolved_syms.txt $(PICO_BOARD_OBJ_DIR)/.expected_external.txt > $(PICO_BOARD_OBJ_DIR)/.bad_undefined_syms.txt; \
@@ -365,15 +389,16 @@ check-pico-bsp:
 # standalone, calling out to sx126x_hal.h's four functions, which have
 # no implementation anywhere yet -- see core/vendor/sx126x_driver/
 # README.md's "What's still genuinely undecided" section). This only
-# proves the vendored driver core itself compiles clean for both CPUs;
-# it is NOT wired into check-board-compile/check-pico-compile's
-# BOARD_SOURCES/PICO_BOARD_SOURCES yet, and deliberately so -- doing
-# that before a real per-board HAL implementation exists would make
-# check-board-link/check-pico-link correctly (not spuriously) fail
-# with "undefined reference to sx126x_hal_write" etc., since nothing
-# defines those symbols yet. This target exists to keep proving the
-# driver core itself is sound in the meantime, without needing a
-# finished HAL to do that.
+# proves the vendored driver core itself compiles clean for both CPUs.
+# It is now ALSO wired into check-board-compile/check-pico-compile's
+# BOARD_SOURCES/PICO_BOARD_SOURCES (real per-board HALs exist now --
+# board/STM32N6570-DK/sx1262_hal.c, board/Raspberry_Pi_Pico/sx1262_hal.c
+# -- so check-board-link/check-pico-link genuinely link-check them
+# instead of failing on "undefined reference to sx126x_hal_write" etc).
+# This target stays anyway: it's a narrower, faster sanity check that
+# isolates "is the vendored driver core itself sound" from "did one
+# board's HAL/BSP integration break", the same way check-pico-bsp is
+# kept alongside check-pico for an analogous reason.
 SX126X_DIR = core/vendor/sx126x_driver/src
 SX126X_OBJ_DIR = build/sx126x-driver-check
 
@@ -390,4 +415,46 @@ check-sx126x-driver:
 	@$(PICO_ARM_CC) -std=gnu11 -Wall -Wextra -mcpu=cortex-m0plus -mthumb \
 		-ffreestanding -fno-builtin -c $(SX126X_DIR)/sx126x.c -o $(SX126X_OBJ_DIR)/sx126x_m0.o
 	@echo "check-sx126x-driver: vendored sx126x_driver core compiles clean for both Cortex-M55 and Cortex-M0+"
+
+# --- Two-board mission-link harness check ---------------------------------
+# Builds and runs laptop/tools/two_board_harness.c for real: two forked OS
+# processes, a real Unix socket standing in for the LoRa link, real
+# unmodified mission_link_task.c/comms_transport.c/mission_link_handshake.c
+# proving a handshake + roster relay actually completes across processes.
+# Mirrors check-sx126x-driver's shape (build + run, non-zero exit on
+# failure) per that file's own history -- see CHANGELOG.md and this
+# file's own top comment for the debugging history behind why it's built
+# the way it is. NOT plumbed through BOARD_SOURCES/ARM_CC -- this is a
+# laptop-only, host-gcc harness (real board firmware is out of scope; see
+# the file's own "Does NOT prove" section), so it uses $(CC), not $(ARM_CC).
+TWO_BOARD_HARNESS_BIN = build/two_board_harness
+
+check-two-board-harness:
+	@mkdir -p build
+	@echo "  CC      $(TOOLS_DIR)/two_board_harness.c (+ real mission-link/comms_transport sources)"
+	@$(CC) -std=gnu11 -Wall -Wextra -I$(CORE_DIR) -I$(BOARD_DIR) -I$(LAPTOP_DIR) \
+		-I$(TOOLS_DIR)/harness_stubs \
+		-o $(TWO_BOARD_HARNESS_BIN) $(TOOLS_DIR)/two_board_harness.c \
+		$(BOARD_DIR)/mission_link_task.c $(LAPTOP_DIR)/debug.c \
+		$(LAPTOP_DIR)/snapshot.c $(CORE_SOURCES) -lm
+	@./$(TWO_BOARD_HARNESS_BIN)
+	@echo "check-two-board-harness: real two-process handshake + LoRa-relayed roster delivery passed"
+
+# --- Two-board CBBA consensus harness check --------------------------------
+# CBBA-side counterpart to check-two-board-harness above: builds and runs
+# laptop/tools/two_board_cbba_harness.c, same two-forked-process/real-socket
+# shape, proving a real cbba_run() bid round resolves to the same winning
+# team/incident pairing on BOTH processes' own view of the world.
+#
+# This delegates to laptop/tools/check-two-board-cbba-harness.sh rather
+# than reimplementing its build+loop here: that script already runs the
+# harness 40x (well above the 20-run flakiness bar this project holds
+# every two-board harness to -- see check-two-board-harness's own history
+# for why a single passing run was never good enough), and it's the
+# thing that already found and cleared that bar for this harness. This
+# target is just the mechanical `make check-two-board-cbba-harness`
+# wiring the script's own top comment already anticipated adding later.
+check-two-board-cbba-harness:
+	@chmod +x $(TOOLS_DIR)/check-two-board-cbba-harness.sh
+	@$(TOOLS_DIR)/check-two-board-cbba-harness.sh
 

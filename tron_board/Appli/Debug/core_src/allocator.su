@@ -1,8 +1,8 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:20:9:select_best_team	32	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:42:6:assign_incident	24	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:60:6:allocate_all_incidents	40	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:147:6:team_can_accept_incident	32	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:208:16:count_available_teams_for_capability	24	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:224:16:count_open_incidents_for_capability	24	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:252:14:get_soft_stamina_floor	16	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:270:13:allocate_support_team	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:19:9:select_best_team	32	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:41:6:assign_incident	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:59:6:allocate_all_incidents	40	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:146:6:team_can_accept_incident	32	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:227:16:count_available_teams_for_capability	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:243:16:count_open_incidents_for_capability	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:274:7:get_soft_stamina_floor	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/allocator.c:292:13:allocate_support_team	24	static

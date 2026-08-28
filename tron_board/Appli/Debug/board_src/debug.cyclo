@@ -1,7 +1,7 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/debug.c:45:13:fmt_fixed3	16
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/debug.c:107:6:debug_trace	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/debug.c:124:6:print_world_state	5
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/debug.c:169:6:initialize_test_scenario	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/debug.c:179:6:debug_emit_live_frame	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/debug.c:194:6:debug_print_generator_evaluation	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/debug.c:221:6:debug_print_generator_selection	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/debug.c:45:13:fmt_fixed3	16
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/debug.c:107:6:debug_trace	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/debug.c:124:6:print_world_state	5
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/debug.c:169:6:initialize_test_scenario	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/debug.c:179:6:debug_emit_live_frame	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/debug.c:194:6:debug_print_generator_evaluation	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/debug.c:221:6:debug_print_generator_selection	1

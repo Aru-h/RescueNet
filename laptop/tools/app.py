@@ -23,20 +23,49 @@ import queue
 import re
 import struct
 import subprocess
+import sys
 import threading
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
-import serial
+
+try:
+    import serial
+except ImportError:
+    # pyserial is only actually needed by the real hardware path
+    # (TelemetryBridge.connect() below). Importing it unconditionally
+    # would make app.py fail to even start in an environment that
+    # deliberately doesn't have pyserial installed - exactly the
+    # "no pyserial port required at all" bar the headless/SIM_ONLY
+    # mode is supposed to meet (see SIM_ONLY below and
+    # sim_board_source.py's own top comment). TelemetryBridge.connect()
+    # checks for this and fails clearly, rather than at import time,
+    # if hardware mode is actually attempted without it installed.
+    serial = None
+
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
 from telemetry_bridge import HandshakeCoordinator, TelemetryFrameParser, pack_handshake_req
+from sim_board_source import SimBoardSource
 
 TOOLS_DIR = Path(__file__).resolve().parent
-PROJECT_DIR = TOOLS_DIR.parent
+PROJECT_DIR = TOOLS_DIR.parent.parent
 CSV_PATH = PROJECT_DIR / "tron_snapshot_dataset.csv"
 HISTORY_PATH = PROJECT_DIR / ".dashboard_history.json"
 BINARY = PROJECT_DIR / "tron"
+
+# --- Headless / sim-only mode --------------------------------------------
+# Explicit opt-in only (per this feature's own handoff doc: "don't
+# silently replace the hardware path") - either SIM_ONLY=1 in the
+# environment or --no-hardware on the command line. When active,
+# `bridge` below is a SimBoardSource (laptop simulator only, see that
+# module) instead of a TelemetryBridge (real serial/board hardware) -
+# every other route is unchanged and reads `bridge` exactly the same
+# way regardless of which one it is. Default (neither set) is the
+# original hardware-only behavior, completely unaffected by any of
+# this - SIM_ONLY defaults to False, bridge defaults to a real
+# TelemetryBridge, unchanged from before this mode existed.
+SIM_ONLY = os.environ.get("SIM_ONLY") == "1" or "--no-hardware" in sys.argv[1:]
 
 # --- Wire format constants (mirrors core/mission_link_override.h) -------
 #
@@ -162,6 +191,11 @@ class TelemetryBridge:
 
     def connect(self, port: str, baudrate: int) -> bool:
         """Opens the USB serial port connected to the STM32N6 board."""
+        if serial is None:
+            print("Failed to connect: pyserial is not installed "
+                  "(pip install pyserial, or run app.py in sim-only "
+                  "mode instead - see SIM_ONLY/--no-hardware)")
+            return False
         try:
             self.port = port
             self.baudrate = int(baudrate)
@@ -287,8 +321,17 @@ class TelemetryBridge:
         self.handshake = HandshakeCoordinator()
 
 
-# Global bridge singleton instance for hardware board session
-bridge = TelemetryBridge()
+# Global data-source singleton every route below reads as `bridge`.
+# Real hardware (TelemetryBridge) unless SIM_ONLY explicitly opted in,
+# in which case it's the laptop-simulator-backed SimBoardSource
+# instead - see the SIM_ONLY comment above and sim_board_source.py's
+# own top comment for why this swap is safe: both classes expose the
+# same public surface (serial_conn/nodes_ready/telemetry_queue/
+# mission_started/handshake/connect/disconnect/send_start).
+if SIM_ONLY:
+    bridge = SimBoardSource(PROJECT_DIR, BINARY)
+else:
+    bridge = TelemetryBridge()
 
 
 def build_binary():
@@ -486,6 +529,7 @@ def api_status():
         "makefile_found": (PROJECT_DIR / "Makefile").exists(),
         "binary_exists": BINARY.exists(),
         "csv_exists": CSV_PATH.exists(),
+        "sim_only": SIM_ONLY,
         "board": {
             "connected": connected,
             "port": bridge.port,
@@ -525,6 +569,43 @@ def api_board_connect():
     if success:
         return jsonify({"status": "success", "port": port})
     return jsonify({"status": "error", "message": "Failed to open serial port"}), 400
+
+
+@app.route("/api/board/connect-sim", methods=["POST"])
+def api_board_connect_sim():
+    """Sim-mode equivalent of /api/board/connect above - starts
+    `tron --live` as bridge's data source instead of opening a serial
+    port (see SimBoardSource.connect()). Only reachable when app.py
+    was started with SIM_ONLY=1 / --no-hardware: this is the "explicit
+    opt-in, never silently replace the hardware path" boundary the
+    SIM_ONLY comment above describes, enforced here rather than by
+    trusting the caller not to hit this route by mistake in normal
+    (hardware) mode.
+    """
+    if not SIM_ONLY:
+        return jsonify({
+            "status": "error",
+            "message": "Sim mode is not enabled for this app.py process "
+                       "- restart with SIM_ONLY=1 or --no-hardware",
+        }), 400
+
+    data = request.get_json(force=True) or {}
+    seed = int(data.get("seed", 1))
+    ticks = int(data.get("ticks", 2000))
+    fault_profile = data.get("fault_profile", "none")
+    tick_delay_ms = int(data.get("tick_delay_ms", 0))
+
+    success = bridge.connect(
+        seed=seed, ticks=ticks, fault_profile=fault_profile,
+        tick_delay_ms=tick_delay_ms,
+    )
+    if success:
+        return jsonify({
+            "status": "success",
+            "seed": seed, "ticks": ticks,
+            "fault_profile": fault_profile, "tick_delay_ms": tick_delay_ms,
+        })
+    return jsonify({"status": "error", "message": "Failed to start sim run (build failed or tron did not start - check server log)"}), 400
 
 
 @app.route("/api/board/disconnect", methods=["POST"])
@@ -768,5 +849,14 @@ def api_history():
 
 if __name__ == "__main__":
     print(f"Project dir: {PROJECT_DIR}")
+    if SIM_ONLY:
+        print("Starting dashboard in SIM-ONLY mode: no serial port will be "
+              "opened, no board hardware required. POST /api/board/"
+              "connect-sim to start a simulated run "
+              "(seed/ticks/fault_profile/tick_delay_ms).")
+    else:
+        print("Starting dashboard in hardware mode (default) - "
+              "/api/board/connect opens a real serial port. Start with "
+              "SIM_ONLY=1 or --no-hardware for headless/hardware-free mode.")
     print("Starting unified dashboard on http://127.0.0.1:5050")
     app.run(host="127.0.0.1", port=5050, debug=False)

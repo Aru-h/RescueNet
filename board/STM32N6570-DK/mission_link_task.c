@@ -185,6 +185,38 @@ static void mission_link_usart1_write(const uint8_t *bytes, uint32_t len)
 static uint8_t g_rx_buf[MISSION_LINK_RX_BUF_CAPACITY];
 static uint32_t g_rx_buf_len;
 
+/*
+ * sim_tick()-vs-roster-arrival gap (flagged against main_board.c,
+ * fixed here): mission_link_handshake_round_trip_complete() only
+ * proves liveness (this board and its peer both up and able to
+ * exchange a handshake frame) - it says nothing about whether any
+ * MissionLinkRoster_t for a team THIS board hosts has actually been
+ * applied yet. Before that happens, g_teams[] for this board's teams
+ * is still whatever sim_runner_init()/generate_teams() left it as
+ * (laptop-authoritative field values not yet overwritten), so running
+ * sim_tick() against it is running the sim against not-yet-real data.
+ *
+ * Tracked here (not in core/mission_link.c, which is portable and not
+ * this prompt's to touch) as a simple monotonic count of every
+ * mission_link_apply_roster() call this file actually makes on this
+ * board's own behalf - see both call sites below
+ * (mission_link_route_or_apply_roster()'s local-apply branch, and
+ * mission_link_comms_transport_rx_step()'s ROSTER case) - deliberately
+ * NOT counting the relay branch, since relaying a roster onward to
+ * another board is not this board's own team getting real data.
+ * main_board.c gates entry to its tick loop on
+ * mission_link_task_any_roster_applied() below being nonzero, the
+ * same "wait, pumping mission_link_task_step(), until a condition
+ * this file tracks becomes true" pattern it already uses for the
+ * handshake gate.
+ */
+static uint32_t g_roster_applied_count;
+
+uint32_t mission_link_task_any_roster_applied(void)
+{
+    return g_roster_applied_count;
+}
+
 /* Board-topology helper: which team id to address to reach `board_id`
    at all, given comms_transport addressing is per-team, not per-board
    (see comms_transport_board_id_for_team()'s team_id/5 rule). The
@@ -250,6 +282,7 @@ static void mission_link_route_or_apply_roster(const MissionLinkRoster_t *msg)
     if (target_board == g_comms_transport_this_board_id)
     {
         mission_link_apply_roster(msg);
+        g_roster_applied_count++;
         return;
     }
 
@@ -616,6 +649,7 @@ static void mission_link_comms_transport_rx_step(void)
                     MissionLinkRoster_t roster;
                     mission_link_parse_roster_payload(&payload[1], &roster);
                     mission_link_apply_roster(&roster);
+                    g_roster_applied_count++;
                 }
                 break;
 

@@ -1,0 +1,10 @@
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Appli/../../board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/include/sys/queue.h:40:13:QueInit	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Appli/../../board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/cpu/core/armv8m/cpu_status.h:62:13:knl_isTaskIndependent	4	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/task.h:40:13:knl_task_alive	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/task_sync.c:28:12:tk_sus_tsk	32	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/task_sync.c:77:12:tk_rsm_tsk	32	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/task_sync.c:124:12:tk_frsm_tsk	32	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/task_sync.c:176:12:tk_slp_tsk	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/task_sync.c:208:12:tk_wup_tsk	32	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/task_sync.c:242:13:tk_can_wup	32	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tkernel/task_sync.c:279:12:tk_dly_tsk	24	static

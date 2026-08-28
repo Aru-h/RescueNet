@@ -1,2 +1,3 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/main_board.c:143:12:sim_task	24	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/platform/board/main_board.c:224:12:usermain	8	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/main_board.c:220:12:mission_link_handshake_round_trip_complete	16	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/main_board.c:260:12:sim_task	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/main_board.c:426:12:usermain	8	static

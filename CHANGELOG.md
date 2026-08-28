@@ -1,5 +1,41 @@
 # Changelog
 
+## Two-board communication harness finished (Track 3 complete)
+
+- `laptop/tools/two_board_harness.c` now passes reliably (100+
+  consecutive runs, zero failures) after fixing three real bugs found
+  by actually running it, not by inspection:
+  1. Injecting the test roster at iteration 0 let it race ahead of
+     board 0's own first Req to board 1 (real `mission_link_task_
+     step()` call-order behavior). Fixed by having the harness wait
+     for board 1's confirmed readiness before injecting, mirroring
+     what the real laptop's `HandshakeCoordinator` already does.
+  2. A fixed-iteration-count version of that wait was flaky (7/8 runs
+     failed) — two `fork()`ed processes' loop iterations have no
+     real-time relationship to each other.
+  3. Polling `mission_link_handshake_get_relay_reply()` directly
+     failed 30/30 — that function consults the shared timeout clock
+     (`cbba_now_ms()`, no "peek" mode, every call advances it), and
+     polling it from a second call site inflated board 0's own clock
+     ~3x relative to board 1's, causing a spurious sticky timeout
+     every run.
+- New `core/mission_link_handshake.h`/`.c` function:
+  `mission_link_handshake_relay_reply_seen(uint8_t peer_board_id)` —
+  a plain array read, no `now` parameter, no clock side effects at
+  all. Added specifically to fix bug 3 above; purely additive, no
+  existing function's signature or behavior changed.
+- `HARNESS_MAX_ITERATIONS` raised from 2000 to 30000 — a real passing
+  run lands around iteration 10000-12000 (confirmed empirically
+  across many runs), and 2000 left too little margin for two
+  asynchronous processes' actual progress.
+- The file's own top comment now has a "Debugging history" section
+  recording all three root causes, so the reasoning isn't lost.
+- New `check-two-board-harness` Makefile target — builds and runs it
+  for real, non-zero exit on failure. Re-verified alongside every
+  other check (`check-board`, `check-pico`, `check-pico-bsp`,
+  `check-sx126x-driver`, laptop build, both handshake selftests) —
+  all clean together.
+
 ## SX1262 driver core vendored (first piece of the actual radio driver)
 
 - Real hardware correction, confirmed with the user before vendoring

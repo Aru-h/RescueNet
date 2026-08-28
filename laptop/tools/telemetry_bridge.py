@@ -48,7 +48,20 @@ import queue
 import struct
 import threading
 import time
-import serial
+
+try:
+    import serial
+except ImportError:
+    # Only TelemetryBridge.connect() below (real hardware) actually
+    # needs pyserial. HandshakeCoordinator/TelemetryFrameParser (the
+    # two things app.py imports from this module even in sim-only
+    # mode - see app.py's SIM_ONLY) have no serial dependency at all,
+    # so this module must stay importable without pyserial installed
+    # for app.py's own "no pyserial port required at all" sim-only
+    # bar to actually hold. TelemetryBridge.connect() checks for this
+    # itself and fails clearly if hardware mode is attempted without
+    # pyserial installed.
+    serial = None
 
 
 # --- Wire format constants (mirrors core/telemetry_frame.h) -------------
@@ -545,6 +558,10 @@ class TelemetryBridge:
 
         the background read loop thread for asynchronous stream ingestion.
         """
+        if serial is None:
+            print("Failed to connect: pyserial is not installed "
+                  "(pip install pyserial)")
+            return False
         try:
             # 0.1s timeout ensures the read loop can check self.running flags
             # promptly during disconnect requests without locking indefinitely.

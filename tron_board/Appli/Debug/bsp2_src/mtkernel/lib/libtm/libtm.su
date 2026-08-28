@@ -1,5 +1,5 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/lib/libtm/libtm.c:28:13:libtm_init	8	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/lib/libtm/libtm.c:37:12:tm_getchar	24	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/lib/libtm/libtm.c:53:12:tm_getline	32	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/lib/libtm/libtm.c:83:12:tm_putchar	24	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/vendor/mtk3_bsp2/mtkernel/lib/libtm/libtm.c:103:12:tm_putstring	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/lib/libtm/libtm.c:28:13:libtm_init	8	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/lib/libtm/libtm.c:37:12:tm_getchar	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/lib/libtm/libtm.c:53:12:tm_getline	32	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/lib/libtm/libtm.c:83:12:tm_putchar	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/lib/libtm/libtm.c:103:12:tm_putstring	24	static

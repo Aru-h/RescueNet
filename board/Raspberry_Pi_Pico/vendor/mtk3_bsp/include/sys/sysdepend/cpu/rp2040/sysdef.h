@@ -195,6 +195,51 @@
 #define	GPIO_SHEMITT		(1<<1)
 #define	GPIO_SLEWDAST		(1<<0)
 
+/* SPI (PL022) -- NOT part of the original vendored mtk3_bsp file;
+ * added for board/Raspberry_Pi_Pico/sx1262_hal.c. Confirmed against
+ * this project's own repo: RESETS_RESET_SPI0/SPI1 (above) and
+ * IO_QSPI_BASE (above) were the only SPI-adjacent macros the
+ * vendored sysdef.h actually shipped with -- SPI0_BASE/SPI1_BASE and
+ * the PL022 register offsets were missing, not just unused. Values
+ * below are the RP2040 datasheet's own SPI0/SPI1 base addresses and
+ * standard ARM PL022 register layout (silicon facts, not anything
+ * board-wiring-specific), added here rather than fabricated locally
+ * inside sx1262_hal.c so any other rp2040 code that needs the SPI
+ * block later can use the same names. */
+#define SPI0_BASE		0x4003c000
+#define SPI1_BASE		0x40040000
+
+#define	SSPCR0(base)		((base)+0x000)	/* Control register 0 */
+#define	SSPCR1(base)		((base)+0x004)	/* Control register 1 */
+#define	SSPDR(base)		((base)+0x008)	/* Data register */
+#define	SSPSR(base)		((base)+0x00C)	/* Status register */
+#define	SSPCPSR(base)		((base)+0x010)	/* Clock prescale register */
+#define	SSPIMSC(base)		((base)+0x014)	/* Interrupt mask set/clear */
+#define	SSPRIS(base)		((base)+0x018)	/* Raw interrupt status */
+#define	SSPMIS(base)		((base)+0x01C)	/* Masked interrupt status */
+#define	SSPICR(base)		((base)+0x020)	/* Interrupt clear register */
+#define	SSPDMACR(base)		((base)+0x024)	/* DMA control register */
+
+/* SSPCR0 fields */
+#define	SSPCR0_DSS_8BIT		(0x7)		/* 8-bit data, bits[3:0] */
+#define	SSPCR0_FRF_MOTOROLA	(0x0<<4)	/* Motorola SPI frame format */
+#define	SSPCR0_SPO		(1<<6)		/* Clock polarity */
+#define	SSPCR0_SPH		(1<<7)		/* Clock phase */
+#define	SSPCR0_SCR_SHIFT	8		/* Serial clock rate, bits[15:8] */
+
+/* SSPCR1 fields */
+#define	SSPCR1_LBM		(1<<0)		/* Loopback mode */
+#define	SSPCR1_SSE		(1<<1)		/* Synchronous serial port enable */
+#define	SSPCR1_MS		(1<<2)		/* Master/slave select (0 = master) */
+#define	SSPCR1_SOD		(1<<3)		/* Slave-mode output disable */
+
+/* SSPSR fields */
+#define	SSPSR_TFE		(1<<0)		/* Transmit FIFO empty */
+#define	SSPSR_TNF		(1<<1)		/* Transmit FIFO not full */
+#define	SSPSR_RNE		(1<<2)		/* Receive FIFO not empty */
+#define	SSPSR_RFF		(1<<3)		/* Receive FIFO full */
+#define	SSPSR_BSY		(1<<4)		/* SPI busy */
+
 /* Crystal Oscillator(XOSC) */
 #define XOSC_BASE               0x40024000
 #define XOSC_CTRL               (XOSC_BASE+0x00)

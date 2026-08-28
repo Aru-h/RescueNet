@@ -538,3 +538,12 @@ int mission_link_handshake_get_relay_reply(uint8_t peer_board_id, uint32_t now,
 
     return 0;
 }
+
+int mission_link_handshake_relay_reply_seen(uint8_t peer_board_id)
+{
+    /* Deliberately does NOT call mission_link_handshake_relay_timed_
+       out() or touch g_board_init_tick/cbba_now_ms() in any way - see
+       this function's own doc in the header for exactly why that
+       matters. A plain array read, nothing else. */
+    return (int)g_relay_reply_seen[peer_board_id];
+}
