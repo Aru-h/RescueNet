@@ -11,6 +11,29 @@
  *----------------------------------------------------------------------
  */
 
+/*
+ * Eclipse-CDT-only workaround (Track 2 / Raspberry Pi Pico build):
+ * this project's "Cross GCC Assembler -> General -> Other assembler
+ * flags" field unconditionally wraps whatever's typed there in
+ * -Wa,..., which only reaches the real `as` assembler AFTER the C
+ * preprocessor pass has already run - so a plain -D_PICO_RP2040_
+ * from that field never actually defines this macro in time for the
+ * #include below, and the whole rest of this file (gated on
+ * CPU_CORE_ARMV6M, which sys/machine.h only defines when
+ * _PICO_RP2040_ is already set) silently compiles to nothing,
+ * dropping knl_dispatch_entry and breaking the final link.
+ *
+ * The terminal build (build_pico_elf.sh) passes -D_PICO_RP2040_
+ * correctly and doesn't need this - the #ifndef below is a no-op
+ * there. This is purely a workaround for a real limitation in this
+ * specific toolchain definition's Eclipse UI, not a change to what
+ * this file actually needs to build correctly.
+ */
+#ifndef _PICO_RP2040_
+#define _PICO_RP2040_
+#define THIS_BOARD_ID 1
+#endif
+
 #include <sys/machine.h>
 #ifdef CPU_CORE_ARMV6M
 /*

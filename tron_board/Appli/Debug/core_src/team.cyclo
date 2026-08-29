@@ -1,5 +1,5 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:12:6:generate_teams	11
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:124:13:change_stamina	3
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:137:6:update_team	44
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:325:6:update_all_teams	6
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:345:7:get_ready_stamina	5
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:14:6:generate_teams	11
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:126:13:change_stamina	3
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:139:6:update_team	48
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:413:6:update_all_teams	6
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/team.c:433:7:get_ready_stamina	5

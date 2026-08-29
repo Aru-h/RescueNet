@@ -46,6 +46,14 @@
  * No real radio has been validated against this file yet - same
  * "next concrete step once you're ready to actually flash the board"
  * caveat as the rest of this board's bring-up work.
+ *
+ * RXEN/TXEN (RF switch control): this module exposes separate
+ * active-high RXEN/TXEN pins rather than auto-switching off DIO2, per
+ * the SmartElex SX1262 868M HAT's own SPI manual. Ported the DK
+ * board's opcode-snoop approach (apply_rf_switch_for_opcode() below,
+ * called from sx126x_hal_write()) rather than wiring DIO2 - keeps
+ * both boards' HALs consistent. SX1262_PIN_RXEN/SX1262_PIN_TXEN
+ * default to GP22/GP26; override at build time if wired differently.
  */
 
 #include <sys/machine.h>
@@ -85,6 +93,26 @@
 #ifndef SX1262_PIN_BUSY
 #define SX1262_PIN_BUSY   21u
 #endif
+#ifndef SX1262_PIN_RXEN
+#define SX1262_PIN_RXEN   22u   /* RF switch RX enable, active-high -
+                                  * ported from board/STM32N6570-DK/'s
+                                  * sx1262_hal.c opcode-snoop approach,
+                                  * see apply_rf_switch_for_opcode()
+                                  * below. DIO2-automatic-switching is
+                                  * NOT used, matching the DK board. */
+#endif
+#ifndef SX1262_PIN_TXEN
+#define SX1262_PIN_TXEN   26u   /* RF switch TX enable, active-high */
+#endif
+
+/* Opcodes this file needs to snoop for RXEN/TXEN switching (see
+ * apply_rf_switch_for_opcode() below). Not exported by sx126x_hal.h -
+ * the HAL boundary is deliberately opaque bytes - so re-declared here,
+ * same values as board/STM32N6570-DK/'s own copy of this comment,
+ * cross-checked against sx126x.c's private sx126x_commands_e. */
+#define SX1262_OPCODE_SET_SLEEP     0x84u
+#define SX1262_OPCODE_SET_TX        0x83u
+#define SX1262_OPCODE_SET_RX        0x82u
 
 #ifndef SX1262_SPI_BASE
 #define SX1262_SPI_BASE       SPI0_BASE
@@ -145,6 +173,13 @@ static void sx1262_spi_init(void)
     gpio_set_val(SX1262_PIN_NRESET, 1);     /* idle out of reset (active-low) */
     gpio_set_pin(SX1262_PIN_BUSY, GPIO_MODE_IN);
 
+    /* RXEN/TXEN idle low (RF switch off) until a SetTx/SetRx command
+       is actually seen - see apply_rf_switch_for_opcode() below. */
+    gpio_set_pin(SX1262_PIN_RXEN, GPIO_MODE_OUT);
+    gpio_set_val(SX1262_PIN_RXEN, 0);
+    gpio_set_pin(SX1262_PIN_TXEN, GPIO_MODE_OUT);
+    gpio_set_val(SX1262_PIN_TXEN, 0);
+
     /* Configure the PL022 block: disable while configuring, Motorola
        SPI format, 8-bit words, mode 0 (SPO=0/SPH=0 - SX126x's own
        datasheet requires CPOL=0/CPHA=0), master mode (MS bit left
@@ -187,6 +222,36 @@ static void sx1262_wait_not_busy(void)
     }
 }
 
+/* RXEN/TXEN switching: this module's RF switch is driven directly by
+ * this HAL (DIO2 left unconnected, matching the DK board's own
+ * wiring choice), so hal_write snoops the opcode byte of every
+ * command sent and drives the switch accordingly. Anything other
+ * than SetTx/SetRx/SetSleep leaves both lines as they were - most
+ * other commands are register/FIFO/config accesses issued while
+ * already mid-TX or mid-RX, and toggling the switch on those would
+ * be wrong. Ported verbatim (same opcodes, same behaviour) from
+ * board/STM32N6570-DK/sx1262_hal.c's apply_rf_switch_for_opcode(). */
+static void apply_rf_switch_for_opcode(uint8_t opcode)
+{
+    switch (opcode)
+    {
+    case SX1262_OPCODE_SET_TX:
+        gpio_set_val(SX1262_PIN_RXEN, 0);
+        gpio_set_val(SX1262_PIN_TXEN, 1);
+        break;
+    case SX1262_OPCODE_SET_RX:
+        gpio_set_val(SX1262_PIN_TXEN, 0);
+        gpio_set_val(SX1262_PIN_RXEN, 1);
+        break;
+    case SX1262_OPCODE_SET_SLEEP:
+        gpio_set_val(SX1262_PIN_RXEN, 0);
+        gpio_set_val(SX1262_PIN_TXEN, 0);
+        break;
+    default:
+        break;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* core/vendor/sx126x_driver/src/sx126x_hal.h contract - all four
  * "shall be implemented by the user" functions. `context` is unused:
@@ -201,6 +266,12 @@ sx126x_hal_status_t sx126x_hal_write(const void* context, const uint8_t* command
 
     (void)context;
     sx1262_spi_init();
+
+    if (command_length > 0u)
+    {
+        apply_rf_switch_for_opcode(command[0]);
+    }
+
     sx1262_wait_not_busy();
 
     gpio_set_val(SX1262_PIN_NSS, 0);
