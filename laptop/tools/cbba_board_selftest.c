@@ -34,6 +34,8 @@
  *   gcc -std=gnu11 -Wall -Wextra -Wpedantic -Icore \
  *       -o cbba_board_selftest laptop/tools/cbba_board_selftest.c \
  *       core/cbba.c core/comms_transport.c core/lora_frame.c \
+ *       core/lora_crypto.c core/aead_chacha20poly1305.c \
+ *       core/chacha20.c core/poly1305.c \
  *       core/mission_state.c core/team.c core/random.c \
  *       core/scoring.c core/path.c core/allocator.c \
  *       core/mission_state_utils.c core/incident.c \

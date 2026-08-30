@@ -36,6 +36,8 @@
  *       core/allocator.c core/cbba.c core/comms_transport.c \
  *       core/environment.c core/fault_config.c core/fault_injector.c \
  *       core/grid.c core/incident.c core/lora_frame.c \
+ *       core/lora_crypto.c core/aead_chacha20poly1305.c \
+ *       core/chacha20.c core/poly1305.c \
  *       core/mission_execution_twin.c core/mission_link.c \
  *       core/mission_link_handshake.c core/mission_link_override.c \
  *       core/mission_state.c core/mission_state_utils.c core/path.c \

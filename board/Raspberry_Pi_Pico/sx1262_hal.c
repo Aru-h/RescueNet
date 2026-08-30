@@ -67,6 +67,10 @@
 
 #include "sx126x.h"
 #include "sx126x_hal.h"
+#include "lora_frame.h"        /* lora_frame_try_parse(), LORA_FRAME_MAX_*
+                                   - RX path below (sx1262_rx_poll()) */
+#include "comms_transport.h"   /* comms_transport_deliver_received() -
+                                   RX path below (sx1262_rx_poll()) */
 
 /* ------------------------------------------------------------------ */
 /* Pin assignment - see file header. Override at build time (-D) once
@@ -92,6 +96,23 @@
 #endif
 #ifndef SX1262_PIN_BUSY
 #define SX1262_PIN_BUSY   21u
+#endif
+#ifndef SX1262_PIN_DIO1
+#define SX1262_PIN_DIO1   15u   /* IRQ line, plain GPIO input, polled (see
+                                  * sx1262_rx_poll() below) - not a real
+                                  * interrupt, matching how SX1262_PIN_BUSY
+                                  * above is also just polled on this board.
+                                  * Default only, same as every other
+                                  * SX1262_PIN_* here: this board's actual
+                                  * wiring of DIO1 has not been confirmed
+                                  * against real hardware yet, so GP15 is
+                                  * a placeholder pick (adjacent to the
+                                  * SPI0 MISO/NSS/SCK/MOSI block on
+                                  * GP16-19, otherwise unused by this
+                                  * file) - override at build time (-D)
+                                  * or edit this default once real wiring
+                                  * is decided, per this file's own
+                                  * top-of-file caveat. */
 #endif
 #ifndef SX1262_PIN_RXEN
 #define SX1262_PIN_RXEN   22u   /* RF switch RX enable, active-high -
@@ -172,6 +193,17 @@ static void sx1262_spi_init(void)
     gpio_set_pin(SX1262_PIN_NRESET, GPIO_MODE_OUT);
     gpio_set_val(SX1262_PIN_NRESET, 1);     /* idle out of reset (active-low) */
     gpio_set_pin(SX1262_PIN_BUSY, GPIO_MODE_IN);
+    gpio_set_pin(SX1262_PIN_DIO1, GPIO_MODE_IN);   /* IRQ line - see
+                                                       SX1262_PIN_DIO1's
+                                                       own doc above;
+                                                       configured the
+                                                       same way as
+                                                       SX1262_PIN_BUSY
+                                                       just above, since
+                                                       both are plain
+                                                       polled GPIO
+                                                       inputs on this
+                                                       board. */
 
     /* RXEN/TXEN idle low (RF switch off) until a SetTx/SetRx command
        is actually seen - see apply_rf_switch_for_opcode() below. */
@@ -387,6 +419,161 @@ int lora_spi_transmit(const uint8_t *frame_bytes, uint32_t frame_len)
     }
 
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* RX ingestion - mirrors board/STM32N6570-DK/sx1262_hal.c's own RX
+ * work (same DIO1 IRQ mask, same enter/poll contract), so the two
+ * boards behave identically here; this board just needed DIO1 pin
+ * wiring + IRQ config added first (see SX1262_PIN_DIO1 above and
+ * sx1262_hal_init() below), since neither existed on this board
+ * before this pass.
+ *
+ * RXEN/TXEN note: this section does NOT add any new RF-switch
+ * handling. RXEN/TXEN opcode-snooping (apply_rf_switch_for_opcode()
+ * above) was already present in this file before this pass, ported
+ * from the DK's own wiring - it is NOT re-derived or re-justified
+ * here, and this pass does not add to it. Whether THIS board's
+ * physical SX1262 module actually has an RXEN/TXEN RF-switch
+ * arrangement matching the DK's SmartElex HAT is still unconfirmed
+ * (open question, not verified against real Pico-side hardware) -
+ * flagged here again explicitly so it isn't missed, but resolving it
+ * is out of scope for this pass; SetRx below relies only on
+ * apply_rf_switch_for_opcode()'s existing SX1262_OPCODE_SET_RX case,
+ * whatever it ends up doing once that's confirmed. */
+
+/* Cheap poll: DIO1 is a single SIO register read (gpio_get_val), so
+ * checking it costs far less than a full SPI round trip - only fall
+ * through to sx126x_get_irq_status() (which does cost one) when DIO1
+ * is actually asserted. */
+static int sx1262_dio1_is_asserted(void)
+{
+    return gpio_get_val(SX1262_PIN_DIO1) != 0u;
+}
+
+/* sx126x_set_standby() -> sx126x_set_rx(NULL, 0) puts the radio into
+ * RX_SINGLE_MODE (see sx126x.h's own doc on sx126x_set_rx: timeout 0
+ * = SX126X_RX_SINGLE_MODE - "stays in RX mode until a reception
+ * occurs, then switch to standby RC"). Called both to first enter RX
+ * (from sx1262_hal_init() below) and to re-arm after every poll that
+ * observed DIO1 asserted (from sx1262_rx_poll() below) - per that
+ * same doc, the radio does NOT re-arm itself after RxDone/Timeout, it
+ * drops back to STDBY_RC, so an explicit re-enter is required every
+ * time. */
+void sx1262_enter_rx(void)
+{
+    sx1262_spi_init();
+    (void)sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC);
+    (void)sx126x_set_rx(NULL, 0u);
+}
+
+/* Call every tick, same cadence as mission_link_task_step() in
+ * board/Raspberry_Pi_Pico/main_board.c's seed loop - see that file.
+ * Contract: cheap no-op when nothing has arrived (the common case,
+ * one GPIO read); on RxDone, reads the frame out of the radio's Rx
+ * FIFO, hands it to lora_frame_try_parse() and, on a successful
+ * parse, to comms_transport_deliver_received(); any other outcome
+ * (parse failure, buffer-status/read failure) drops the packet
+ * silently, per lora_frame.h's own "drop and resync" policy - there
+ * is no NACK path at the LoRa layer. Always clears whatever IRQ bits
+ * were actually observed and always re-enters RX before returning,
+ * so a dropped/failed packet doesn't leave the radio stuck in
+ * STDBY_RC waiting for the next call that never re-arms it. */
+void sx1262_rx_poll(void)
+{
+    sx126x_irq_mask_t irq = SX126X_IRQ_NONE;
+    sx126x_rx_buffer_status_t rx_status;
+
+    if (!sx1262_dio1_is_asserted())
+    {
+        return;
+    }
+
+    if (sx126x_get_irq_status(NULL, &irq) != SX126X_STATUS_OK)
+    {
+        /* Couldn't even read IRQ status over SPI - nothing safe to
+           clear or act on; leave RX armed as-is and try again next
+           poll rather than forcing a re-enter on a command that just
+           failed. */
+        return;
+    }
+
+    if ((irq & SX126X_IRQ_RX_DONE) != 0u)
+    {
+        uint8_t raw[LORA_FRAME_MAX_WIRE_SIZE];
+        uint8_t out_type = 0u;
+        uint8_t out_sender_board_id = 0u;
+        uint8_t out_payload[LORA_FRAME_MAX_PAYLOAD];
+        uint8_t out_payload_len = 0u;
+
+        if (sx126x_get_rx_buffer_status(NULL, &rx_status) == SX126X_STATUS_OK &&
+            rx_status.pld_len_in_bytes <= sizeof(raw) &&
+            sx126x_read_buffer(NULL, rx_status.buffer_start_pointer, raw,
+                                rx_status.pld_len_in_bytes) == SX126X_STATUS_OK)
+        {
+            if (lora_frame_try_parse(raw, rx_status.pld_len_in_bytes, &out_type,
+                                      &out_sender_board_id, out_payload,
+                                      &out_payload_len) == 1)
+            {
+                /* out_sender_board_id: no further use here - see
+                   comms_transport.h's own "Open question" note on why
+                   LoRaFrame_t carries no sender field the receiving
+                   board can act on; the payload's own embedded
+                   board_id/team_id (if any) is what dispatch sites
+                   actually use. */
+                (void)out_sender_board_id;
+                (void)comms_transport_deliver_received(out_type, out_payload,
+                                                         out_payload_len);
+            }
+            /* parse_rc 0 (incomplete) or -1 (checksum/tag/length
+               reject): drop, matching lora_frame_try_parse()'s own
+               documented "drop and resync" policy. */
+        }
+        /* get_rx_buffer_status/read_buffer failure, or an
+           implausible pld_len_in_bytes: drop for the same reason -
+           nothing safe to hand upward. */
+    }
+
+    /* Clear every IRQ bit this poll actually observed (not just
+       RX_DONE) every time this function runs past the DIO1 check
+       above - Timeout and TxDone are both routed to DIO1 too (see
+       sx1262_hal_init()'s dio_irq_params call below), and leaving
+       either uncleared would keep DIO1 asserted forever, making
+       every future poll look like a fresh RxDone. */
+    (void)sx126x_clear_irq_status(NULL, irq);
+
+    /* Re-enter RX unconditionally - see sx1262_enter_rx()'s own doc
+       on why this is required after every DIO1 event, not just a
+       successful RxDone. */
+    sx1262_enter_rx();
+}
+
+/* One-time radio bring-up + IRQ config, called once from
+ * board/Raspberry_Pi_Pico/main_board.c before the seed loop starts -
+ * mirrors board/STM32N6570-DK/main_board.c's own sx1262_hal_init()
+ * call ordering (radio bring-up first, before sim_runner_init() or
+ * anything else that might try to use comms_transport). Does NOT
+ * configure pkt_type/RF frequency/modulation params - lora_spi_
+ * transmit() above doesn't either; that gap is pre-existing on this
+ * board and out of scope for this pass (see this board's own
+ * SPI/pin-assignment placeholder caveats at the top of this file). */
+void sx1262_hal_init(void)
+{
+    sx1262_spi_init();
+    (void)sx126x_hal_reset(NULL);
+
+    /* TxDone | RxDone | Timeout -> DIO1. Same mask as board/
+       STM32N6570-DK/sx1262_hal.c's own sx126x_set_dio_irq_params()
+       call, for consistency between the two boards' IRQ behavior -
+       see that file's ensure_radio_configured(). irq_mask and
+       dio1_mask both 0x0203 (TX_DONE|RX_DONE|TIMEOUT = bits 0,1,9 =
+       0x001|0x002|0x200 = 0x203); dio2_mask/dio3_mask both 0 - DIO2/
+       DIO3 unused by this HAL (DIO2 in particular is deliberately
+       NOT used for RF-switch auto-control here, matching the DK's
+       own wiring note on that same point). */
+    (void)sx126x_set_dio_irq_params(NULL, 0x0203u, 0x0203u, 0x0000u, 0x0000u);
+
+    sx1262_enter_rx();
 }
 
 #endif /* CPU_RP2040 */

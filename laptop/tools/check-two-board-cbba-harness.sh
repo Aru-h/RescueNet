@@ -52,6 +52,10 @@ gcc -std=gnu11 -Wall -Wextra -O1 \
     "${REPO_ROOT}/core/cbba.c" \
     "${REPO_ROOT}/core/comms_transport.c" \
     "${REPO_ROOT}/core/lora_frame.c" \
+    "${REPO_ROOT}/core/lora_crypto.c" \
+    "${REPO_ROOT}/core/aead_chacha20poly1305.c" \
+    "${REPO_ROOT}/core/chacha20.c" \
+    "${REPO_ROOT}/core/poly1305.c" \
     "${REPO_ROOT}/core/mission_state.c" \
     "${REPO_ROOT}/core/team.c" \
     "${REPO_ROOT}/core/random.c" \

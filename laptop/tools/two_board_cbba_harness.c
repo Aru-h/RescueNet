@@ -188,6 +188,8 @@
  *       -o two_board_cbba_harness laptop/tools/two_board_cbba_harness.c \
  *       laptop/debug.c laptop/snapshot.c \
  *       core/cbba.c core/comms_transport.c core/lora_frame.c \
+ *       core/lora_crypto.c core/aead_chacha20poly1305.c \
+ *       core/chacha20.c core/poly1305.c \
  *       core/mission_state.c core/team.c core/random.c \
  *       core/scoring.c core/path.c core/allocator.c \
  *       core/mission_state_utils.c core/incident.c \
@@ -294,9 +296,11 @@ static void harness_rx_pump(void)
     for (;;)
     {
         uint8_t frame_type;
+        uint8_t sender_board_id;
         uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
         uint8_t payload_len;
-        int rc = lora_frame_try_parse(buf, buf_len, &frame_type, payload, &payload_len);
+        int rc = lora_frame_try_parse(buf, buf_len, &frame_type, &sender_board_id,
+                                       payload, &payload_len);
 
         if (rc == 0)
         {
@@ -305,8 +309,15 @@ static void harness_rx_pump(void)
 
         if (rc == 1)
         {
-            uint32_t consumed = 2u + payload_len + 1u; /* header + payload + checksum */
+            /* header + payload + AEAD trailer (tag+counter_frag+
+               checksum) - see core/lora_frame.h. sender_board_id was
+               required to authenticate/decrypt this frame but isn't
+               needed past this point (comms_transport_deliver_received()
+               doesn't take one - see two_board_harness.c's own note
+               on the same pattern). */
+            uint32_t consumed = LORA_FRAME_HEADER_SIZE + payload_len + LORA_FRAME_TRAILER_SIZE;
             uint32_t i;
+            (void)sender_board_id;
 
             (void)comms_transport_deliver_received(frame_type, payload, payload_len);
 

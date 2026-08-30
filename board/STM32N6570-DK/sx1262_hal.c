@@ -72,6 +72,9 @@
 #include "sx126x.h"
 #include "sx126x_hal.h"
 
+#include "lora_frame.h"       /* lora_frame_try_parse(), LORA_FRAME_MAX_WIRE_SIZE */
+#include "comms_transport.h"  /* comms_transport_deliver_received() */
+
 /*
  * -----------------------------------------------------------------------
  * --- Pin/peripheral map (see the wiring table above) --------------------
@@ -442,6 +445,45 @@ sx126x_hal_status_t sx126x_hal_read(const void *context, const uint8_t *command,
 static int g_radio_configured;
 
 /*
+ * Puts the radio into RX and leaves it there. Called once from
+ * ensure_radio_configured() below (radio init) and NOT re-called by
+ * sx1262_poll_rx() after each received packet - see this function's
+ * own doc for why that's a correction against this file's original
+ * RX prompt, not an oversight.
+ *
+ * CORRECTION vs. this file's original RX prompt, which assumed
+ * sx126x_set_rx(NULL, 0) (timeout_in_ms=0) means "continuous RX" -
+ * checked against the vendored driver instead of assumed, per that
+ * prompt's own instruction, and that assumption is wrong. Per
+ * core/vendor/sx126x_driver/src/sx126x.c's sx126x_set_rx():
+ * timeout_in_ms is converted via sx126x_convert_timeout_in_ms_to_rtc_step(),
+ * so timeout_in_ms=0 always converts to rtc_step 0 -
+ * SX126X_RX_SINGLE_MODE (sx126x.h) - "the chip stays in RX mode until
+ * a reception occurs, then switch to standby RC". That is exactly the
+ * one-shot behavior this function needs to NOT have: it would mean
+ * sx1262_poll_rx() DOES have to re-arm RX after every single packet
+ * (and after every timeout, if a timeout were ever configured, which
+ * it isn't here either).
+ *
+ * True continuous mode is a distinct sentinel, SX126X_RX_CONTINUOUS
+ * (0x00FFFFFF, sx126x.h) - "the chip stays in RX mode even after
+ * reception of a packet" - reachable only via the *_with_timeout_in_
+ * rtc_step() entry point (sx126x_set_rx()'s own ms-based wrapper has
+ * no way to express it, since it always runs timeout_in_ms through
+ * the ms->rtc_step conversion first). That's what this function uses
+ * below, which is also why sx1262_poll_rx() does NOT call this
+ * function again after handling a received packet - the chip is
+ * already still listening, per the driver's own doc quoted above; a
+ * fresh standby->set_rx cycle after every packet would only reopen a
+ * listening gap this mode exists to avoid, for no benefit.
+ */
+static void sx1262_enter_rx(void)
+{
+    (void)sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC);
+    (void)sx126x_set_rx_with_timeout_in_rtc_step(NULL, SX126X_RX_CONTINUOUS);
+}
+
+/*
  * Radio bring-up this file can decide with actual certainty: reset,
  * standby, LoRa packet type, 868MHz RF frequency (this module's own
  * name - "SX1262 868M" - decides this one, not a guess), TX/RX FIFO
@@ -495,6 +537,27 @@ static void ensure_radio_configured(void)
     (void)sx126x_set_lora_pkt_params(NULL, &pkt_params);
 
     g_radio_configured = 1;
+
+    /* Listen by default from the moment radio bring-up finishes.
+       Placed here (end of the one-time bring-up path), not as a
+       separate call from sx1262_hal_init(), so it can't run before
+       set_dio_irq_params()/the mod/pkt params just above it -
+       sx1262_poll_rx() below also calls ensure_radio_configured() on
+       every poll (cheap after the first call, guarded by
+       g_radio_configured) specifically so RX starts even if this
+       board never happens to transmit before its first poll.
+
+       lora_spi_transmit() below switches the radio into TX (see
+       apply_rf_switch_for_opcode()'s SET_TX handling above) and, per
+       the datasheet, the chip auto-returns to standby RC on its own
+       once that TX completes or times out - NOT back to RX. This
+       function only re-arms RX once, here, at bring-up; getting the
+       radio listening again after each TX is sx1262_poll_rx()'s job
+       (it already sees TxDone/Timeout on the same DIO1 line RxDone
+       uses, since all three share one dio_irq_params mask above - see
+       that function's own doc on why it re-arms on those two bits and
+       not on RxDone). */
+    sx1262_enter_rx();
 }
 
 int lora_spi_transmit(const uint8_t *frame_bytes, uint32_t frame_len)
@@ -534,4 +597,105 @@ int lora_spi_transmit(const uint8_t *frame_bytes, uint32_t frame_len)
     }
 
     return 0;
+}
+
+/*
+ * -----------------------------------------------------------------------
+ * --- sx1262_poll_rx() - RX counterpart to lora_spi_transmit() above,
+ *     called every main-loop tick alongside mission_link_task_step()
+ *     (see board/STM32N6570-DK/main_board.c) ------------------------------
+ * -----------------------------------------------------------------------
+ *
+ * ensure_radio_configured() is called first, same as lora_spi_transmit()
+ * does - guarantees the radio (and therefore RX) has actually been
+ * brought up even if this board's first main-loop tick happens before
+ * its first transmit. Cheap after the first call (one int compare).
+ *
+ * Everything past the DIO1 read below must stay cheap: this runs every
+ * tick, and DIO1 is low the overwhelming majority of the time (nothing
+ * received or sent since the last poll) - the gpio_read() below is the
+ * only work done in that common case.
+ */
+void sx1262_poll_rx(void)
+{
+    sx126x_irq_mask_t irq_status;
+    sx126x_rx_buffer_status_t rx_buf_status;
+    uint8_t frame_bytes[LORA_FRAME_MAX_WIRE_SIZE];
+    uint8_t out_type;
+    uint8_t out_sender_board_id;
+    uint8_t out_payload[LORA_FRAME_MAX_PAYLOAD];
+    uint8_t out_payload_len;
+
+    ensure_radio_configured();
+
+    if (gpio_read(SX1262_DIO1_PORT, SX1262_DIO1_PIN) == 0)
+    {
+        return; /* nothing asserted - the common case, must stay cheap */
+    }
+
+    if (sx126x_get_irq_status(NULL, &irq_status) != SX126X_STATUS_OK)
+    {
+        return; /* SPI error reading status - try again next poll */
+    }
+
+    /* Clear whatever's actually set, in every case below, so DIO1
+       deasserts and this doesn't false-trigger next poll - see this
+       function's own top-of-file doc requirement. Clearing exactly
+       irq_status (not the full TxDone|RxDone|Timeout mask) only ever
+       clears bits that were actually pending. */
+    (void)sx126x_clear_irq_status(NULL, irq_status);
+
+    if ((irq_status & SX126X_IRQ_RX_DONE) == 0u)
+    {
+        /* TxDone and/or Timeout, no RxDone. Per the datasheet (see
+           ensure_radio_configured()'s doc above sx1262_enter_rx()'s
+           call site), the chip auto-returns to standby RC once a TX
+           completes or times out - re-arm RX so the radio goes back
+           to listening instead of sitting deaf in standby until the
+           next transmit. (RxDone can't reach this branch - handled
+           below instead, and does NOT need this same re-arm: RX is
+           configured continuous, see sx1262_enter_rx()'s own doc, so
+           the chip is still listening on its own after a reception.) */
+        sx1262_enter_rx();
+        return;
+    }
+
+    if (sx126x_get_rx_buffer_status(NULL, &rx_buf_status) != SX126X_STATUS_OK)
+    {
+        return;
+    }
+
+    if (rx_buf_status.pld_len_in_bytes > (uint8_t)sizeof(frame_bytes))
+    {
+        /* Can't happen for a frame shaped by this project's own
+           envelope (LORA_FRAME_MAX_WIRE_SIZE already covers the
+           worst case) - guard rather than overrun frame_bytes on a
+           value that came off the wire. */
+        return;
+    }
+
+    if (sx126x_read_buffer(NULL, rx_buf_status.buffer_start_pointer,
+                            frame_bytes, rx_buf_status.pld_len_in_bytes) != SX126X_STATUS_OK)
+    {
+        return;
+    }
+
+    /* lora_frame_try_parse() hands back a complete, already-decrypted
+       frame in one call - the radio delivered one whole packet, not a
+       stream, so rc==0 ("need more bytes") is not a real outcome
+       here; treated identically to rc==-1 below regardless. See
+       comms_transport_deliver_received()'s own doc on why
+       out_sender_board_id has no further use past authenticating this
+       frame (COMMS_TRANSPORT_UNKNOWN_SENDER is what actually gets
+       recorded) - same handling laptop/tools/two_board_harness.c's
+       harness_rx_pump() already uses for the identical situation. */
+    if (lora_frame_try_parse(frame_bytes, rx_buf_status.pld_len_in_bytes, &out_type,
+                              &out_sender_board_id, out_payload, &out_payload_len) == 1)
+    {
+        (void)out_sender_board_id;
+        (void)comms_transport_deliver_received(out_type, out_payload, out_payload_len);
+    }
+    /* rc == 0 or -1: drop - a bit-error-corrupted real-RF packet is an
+       expected outcome (see lora_frame.h's own doc on this), not
+       something to propagate as an error. */
 }

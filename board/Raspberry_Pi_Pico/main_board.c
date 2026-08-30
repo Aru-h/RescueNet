@@ -160,6 +160,22 @@ extern void mission_link_task_init(void);
 extern void mission_link_task_step(void);
 
 /*
+ * SX1262 radio bring-up + RX ingestion (board/Raspberry_Pi_Pico/
+ * sx1262_hal.c) - mirrors board/STM32N6570-DK/main_board.c's own
+ * sx1262_hal_init() extern/call just above this file's DK
+ * counterpart. sx1262_hal_init() does one-time bring-up (SPI/GPIO
+ * config, DIO1 IRQ routing, first RX arm) and must run before
+ * anything below tries to send/receive over LoRa - same reasoning as
+ * the DK's own call ordering. sx1262_rx_poll() is the per-tick RX
+ * pump: cheap (a single GPIO read) when nothing has arrived, called
+ * at the same cadence as mission_link_task_step() above so an
+ * incoming frame doesn't sit unread for a whole seed's worth of
+ * ticks.
+ */
+extern void sx1262_hal_init(void);
+extern void sx1262_rx_poll(void);
+
+/*
  * sim_tick()-vs-roster-arrival gap (flagged, not designed - see the
  * task note this change closes). mission_link_handshake_round_trip_
  * complete() below only proves liveness: this board and its handshake
@@ -286,6 +302,15 @@ LOCAL void sim_task(INT stacd, void *exinf)
     (void)stacd;
     (void)exinf;
 
+    /* SX1262 hardware bring-up (SPI0 + GPIO config, DIO1 IRQ routing,
+       first RX arm) - must happen before anything below tries to
+       send/receive over LoRa, and doesn't depend on sim_runner_init()/
+       mission_link state, so it goes first. Mirrors board/
+       STM32N6570-DK/main_board.c's own sx1262_hal_init() call
+       ordering - see sx1262_hal.c's own top-of-file comment for the
+       wiring this assumes. */
+    sx1262_hal_init();
+
     tm_putstring((UB*)"tron: sim_runner_init\n");
 
     if(sim_runner_init() != 0)
@@ -403,6 +428,12 @@ LOCAL void sim_task(INT stacd, void *exinf)
                a few extra times for free - cheap, non-blocking, no
                reason to add a second interval here to throttle it. */
             mission_link_task_step();
+
+            /* RX pump, same cadence as mission_link_task_step() just
+               above (every tick, not gated behind an interval) - see
+               the sx1262_rx_poll() extern's own doc a few hundred
+               lines up for why. */
+            sx1262_rx_poll();
 
             if((tick % BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL) == 0u)
             {

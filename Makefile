@@ -52,7 +52,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct
 
 all: $(TARGET) $(LABELER)
 
@@ -137,7 +137,7 @@ else
   BSP_MODE = plain freestanding, core/ only (board/STM32N6570-DK/vendor/mtk3_bsp2 not found -- see that folder's README.md; board/STM32N6570-DK/*.c needs real BSP headers so it's skipped in this mode)
 endif
 
-check-board: check-board-compile check-board-link
+check-board: check-board-ids-distinct check-board-compile check-board-link
 	@echo "check-board: compile + link checks both passed ($(BSP_MODE))"
 
 check-board-compile:
@@ -295,7 +295,7 @@ else
   PICO_BSP_MODE = plain freestanding, core/ only ($(PICO_BSP_DIR) not found -- see board/Raspberry_Pi_Pico/vendor/README.md; $(PICO_DIR)/*.c needs real BSP headers so it's skipped in this mode)
 endif
 
-check-pico: check-pico-compile check-pico-link
+check-pico: check-board-ids-distinct check-pico-compile check-pico-link
 	@echo "check-pico: compile + link checks both passed ($(PICO_BSP_MODE))"
 
 check-pico-compile:
@@ -428,6 +428,44 @@ check-sx126x-driver:
 # laptop-only, host-gcc harness (real board firmware is out of scope; see
 # the file's own "Does NOT prove" section), so it uses $(CC), not $(ARM_CC).
 TWO_BOARD_HARNESS_BIN = build/two_board_harness
+
+# --- Board-id distinctness check --------------------------------------
+# core/lora_crypto.h's nonce construction (lora_crypto_build_nonce())
+# only guarantees two boards can never produce the same (key, nonce)
+# pair if their THIS_BOARD_ID values actually differ - that guarantee
+# is a per-target compile-time constant (-DTHIS_BOARD_ID=..., set once
+# each in ARM_CFLAGS above for the DK and PICO_ARM_CFLAGS below for the
+# Pico), and NOTHING checks the two against each other at build time -
+# they're baked into two separate binaries by two separate recipes, so
+# no _Static_assert can span them. A provisioning slip (someone edits
+# one recipe's -DTHIS_BOARD_ID and not the other, or a future third
+# board reuses an existing value) would silently reintroduce the exact
+# nonce-collision vulnerability that field was added to close, with
+# nothing in the crypto layer itself able to catch it (see
+# core/lora_crypto.h's own doc on why this can't be caught mesh-side
+# either, once Channel 2 exists). This target is the cheapest place
+# such a mistake CAN be caught: both values are visible in this one
+# Makefile at once, even though the boards they belong to never are.
+check-board-ids-distinct:
+	@dk_id=$$($(ARM_CC) -dM -E -x c $(ARM_CFLAGS) /dev/null 2>/dev/null | grep -w THIS_BOARD_ID | awk '{print $$3}' | tr -d 'u'); \
+	pico_id=$$($(PICO_ARM_CC) -dM -E -x c $(PICO_ARM_CFLAGS) /dev/null 2>/dev/null | grep -w THIS_BOARD_ID | awk '{print $$3}' | tr -d 'u'); \
+	if [ -z "$$dk_id" ] || [ -z "$$pico_id" ]; then \
+		echo "check-board-ids-distinct: SKIPPED -- THIS_BOARD_ID not defined for one or both targets in this build mode."; \
+		echo "  (fallback/core-only mode does not compile board/*.c at all, so"; \
+		echo "  THIS_BOARD_ID is moot there -- see BSP_MODE/PICO_BSP_MODE above."; \
+		exit 0; \
+	fi; \
+	if [ "$$dk_id" = "$$pico_id" ]; then \
+		echo "check-board-ids-distinct: FAILED -- DK and Pico THIS_BOARD_ID both resolve to $$dk_id."; \
+		echo "  core/lora_crypto.h's per-board nonce partition (sender_board_id"; \
+		echo "  byte in lora_crypto_build_nonce()) only holds if every board's"; \
+		echo "  THIS_BOARD_ID is unique -- see this target's own comment in"; \
+		echo "  the Makefile. Fix Makefile's -DTHIS_BOARD_ID=... overrides"; \
+		echo "  (or board/*/main_board.c's #ifndef THIS_BOARD_ID fallbacks)"; \
+		echo "  so DK and Pico do not both resolve to the same value."; \
+		exit 1; \
+	fi; \
+	echo "check-board-ids-distinct: DK=$$dk_id, Pico=$$pico_id -- distinct, nonce partition assumption holds"
 
 check-two-board-harness:
 	@mkdir -p build

@@ -164,6 +164,23 @@ extern uint32_t mission_link_task_any_roster_applied(void);
 extern void sx1262_hal_init(void);
 
 /*
+ * RX counterpart to sx1262_hal_init() above (board/STM32N6570-DK/
+ * sx1262_hal.c). Non-blocking, cheap-when-idle poll of the SX1262's
+ * DIO1 line - see that function's own doc for the full contract.
+ * Called at every one of this file's mission_link_task_step() call
+ * sites below, not just the per-tick seed loop: comms_transport's
+ * inbox (which mission_link_task_step() drains) only ever gets real
+ * physical-RX data in it if this function is what's pumping DIO1/the
+ * radio in the first place, and the handshake-round-trip and
+ * roster-arrival wait loops below need exactly that to ever unblock
+ * on real hardware - the same "known gap" both loops' own comments
+ * already flag, now closed for the RX half specifically (TX still
+ * depends on lora_spi_transmit() being reachable, unrelated to this
+ * function).
+ */
+extern void sx1262_poll_rx(void);
+
+/*
  * Handshake readiness gate (this prompt's addition — read alongside
  * the matching gate in board/STM32N6570-DK/mission_link_task.c's RX
  * paths, which reject inbound frames on the same condition this
@@ -335,6 +352,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
            wait. Not gated behind the readiness check itself (that
            would deadlock — this call is what MAKES the check
            eventually true). */
+        sx1262_poll_rx();
         mission_link_task_step();
     }
 
@@ -357,6 +375,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
 
     while (mission_link_task_any_roster_applied() == 0u)
     {
+        sx1262_poll_rx();
         mission_link_task_step();
     }
 
@@ -385,6 +404,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
                the wall-clock check runs (and finds nothing due yet)
                a few extra times for free - cheap, non-blocking, no
                reason to add a second interval here to throttle it. */
+            sx1262_poll_rx();
             mission_link_task_step();
 
             if((tick % BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL) == 0u)

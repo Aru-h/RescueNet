@@ -1,5 +1,115 @@
 # Changelog
 
+## LoRa frame encryption implemented (AEAD_CHACHA20_POLY1305, RFC 8439)
+
+- `core/lora_frame.c`'s envelope (the single choke point every
+  `frame_type` — CBBA, mission-link, handshake — already passed
+  through) now AEAD-encrypts every frame under a static pre-shared
+  key, per the LoRa-encryption reference doc's "pragmatic fallback"
+  option (one PSK for the whole contest build, not a per-boot
+  session key). New files, all in `core/` so the laptop build's
+  `core/*.c` wildcard and both board Makefile targets pick them up
+  with no Makefile changes:
+  - `core/chacha20.c`/`.h` — RFC 8439 IETF ChaCha20 (96-bit nonce,
+    32-bit counter).
+  - `core/poly1305.c`/`.h` — RFC 8439 Poly1305, 26-bit-limb ("donna"
+    style) algorithm ported to fixed-width `uint32_t`/`uint64_t`
+    rather than `unsigned long`/`unsigned long long` (the original's
+    types are 32-bit on the Cortex-M targets but 64-bit on the
+    x86-64 laptop host — this algorithm's carry logic assumes a
+    specific limb width, so pinning it removes that platform
+    ambiguity rather than relying on it happening to still work).
+  - `core/aead_chacha20poly1305.c`/`.h` — the RFC 8439 §2.8 AEAD
+    construction combining the two.
+  - `core/lora_crypto.c`/`.h` — LoRa-specific policy: the static PSK,
+    per-sender TX counter, 12-byte nonce construction, and RX-side
+    16-bit-wire-fragment counter reconstruction (mirrors LoRaWAN's
+    own frame-counter scheme, per the reference doc).
+- Written in-repo rather than vendoring a library (the reference doc
+  flagged `cifra`/HACL*/ST's X-CUBE-CRYPTOLIB as candidates) —
+  avoids validating an external dependency's freestanding/license fit
+  across two different Cortex-M targets for the time available.
+- **Bug caught by cross-verification, not caught by inspection**: the
+  first `poly1305.c` pass had an inverted mask in the final `h`-vs-`p`
+  reduction (`mask = 0u - bit` instead of `mask = bit - 1u`), which
+  silently produced wrong tags. Found by cross-checking against
+  Python's `cryptography` library and an independent reference
+  implementation — not by re-reading the code. All RFC 8439 test
+  vectors, 50 randomized AEAD-seal vectors against `cryptography`'s
+  `ChaCha20Poly1305`, and open()/tamper-rejection tests now pass
+  exactly. Recorded here per this project's own "empirical
+  verification over assertion" norm — a bug this easy to introduce
+  and this easy to miss by inspection alone is exactly the case that
+  norm exists for.
+- **Deliberate, documented deviation from the reference doc's 165-byte
+  wire sketch**: added one `sender_board_id` AAD byte (166 bytes
+  total, not 165). The doc's counter/nonce sketch didn't work through
+  what happens when multiple boards share one static PSK — without a
+  per-sender nonce partition, two boards could reach the same 32-bit
+  counter value and produce an identical `(key, nonce)` pair, a
+  catastrophic AEAD break (plaintext recovery + tag forgery), not a
+  theoretical one. `sender_board_id` is folded into both the AAD
+  (so a receiver knows whose counter-state slot to check) **and**
+  the actual nonce fed to ChaCha20 (`core/lora_crypto.c`'s
+  `lora_crypto_build_nonce()` — byte 0 of the 12-byte nonce), which
+  is the part that actually separates the keystreams; AAD alone would
+  only have authenticated the claim without preventing the collision.
+  Verified directly: `lora_frame_selftest.c` packs the same payload
+  at the same counter value under two different `sender_board_id`s
+  and asserts the ciphertext differs, not just the header byte.
+- This resolves the reference doc's "bootstrap paradox" concern for
+  free: with a static PSK (not one derived from the handshake),
+  `MissionLinkHandshakeReq_t`/`Reply_t` need no special-casing — they
+  ride the same encrypted envelope as every other `frame_type`.
+- Also recomputed and updated `core/comms_transport.c`'s Semtech
+  AN1200.13 LoRa time-on-air calibration
+  (`COMMS_TRANSPORT_CHANNEL_BYTES_PER_TICK`), which was derived
+  against the old 147-byte max frame size and had gone stale: now
+  166 bytes → 248 symbols → 266.496 ms → ~22424 bytes/tick (was
+  21968). Re-derived with the same formula the original comment
+  used, not hand-waved.
+- **New: `make check-board-ids-distinct`** (wired into both
+  `check-board` and `check-pico`, so it runs by default) — closes a
+  gap found during review: the per-board nonce partition above only
+  holds if every board's `THIS_BOARD_ID` is actually unique, and
+  nothing previously checked that across the two boards' separate
+  compile recipes (`-DTHIS_BOARD_ID=0` for DK, `=1` for Pico, in two
+  different Makefile rules — no `_Static_assert` can span two
+  separate translation units built for two separate targets). The
+  new target asks each real compiler (`arm-none-eabi-gcc -dM -E`)
+  what `THIS_BOARD_ID` actually resolves to and fails loudly on a
+  collision; verified it both passes today (DK=0, Pico=1) and
+  actually fails when a real collision is forced through it (not
+  just asserted to fail — an earlier draft of this check hard-coded
+  the comparison values and would have silently always passed,
+  caught and fixed before landing).
+- Also documented, next to `lora_crypto_build_nonce()`'s own layout
+  comment: the 256-sender ceiling this scheme's one-byte
+  `sender_board_id` field sets (nowhere near a real constraint at
+  this project's 2-board scale, but a real limit worth having
+  written down rather than implicit), and that board-id uniqueness
+  is an assumption this crypto layer depends on but cannot itself
+  enforce — `check-board-ids-distinct` above is the actual guarantee.
+- **Known, deliberate, documented tradeoff** (not hidden): because the
+  PSK is static but each board's TX counter resets to 0 on reboot, a
+  frame captured before a reboot is technically replayable
+  immediately after. Accepted for this contest build per the
+  reference doc's own "pragmatic fallback" guidance; a real
+  deployment would need the doc's "full solution" (root-secret +
+  per-boot-derived session key) to close this gap.
+- Verified together, not just individually: `make check-board` and
+  `make check-pico` (real BSP mode, full partial-link, both clean),
+  `make smoke` (200-tick full sim through the encrypted envelope
+  every send), `make check-two-board-harness` (real cross-process
+  handshake + encrypted LoRa relay), `make check-two-board-cbba-harness`
+  (40/40 runs, this project's own flakiness bar), and the
+  `cbba_board_selftest`/`override_selftest`/`mission_link_selftest`
+  standalone selftests — all pass clean against the new envelope.
+- `laptop/tools/lora_frame_selftest.c` rewritten for the new
+  signatures/envelope: adds AAD-tampering and replay-rejection cases
+  alongside the pre-existing corruption/oversized/incomplete-buffer
+  coverage.
+
 ## Two-board communication harness finished (Track 3 complete)
 
 - `laptop/tools/two_board_harness.c` now passes reliably (100+

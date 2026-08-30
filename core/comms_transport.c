@@ -60,28 +60,35 @@ __attribute__((weak)) int lora_spi_transmit(const uint8_t *frame_bytes,
  * ToA (Semtech AN1200.13 formula), for SF7 / BW125kHz / coding rate
  * 4/5 / explicit header / payload CRC on / 8-symbol preamble, sized
  * against the largest single frame this project actually sends -
- * LORA_FRAME_MAX_WIRE_SIZE (lora_frame.h): 2 (header) + 144 (a full
- * CBBAMessage_t payload, core/cbba.c) + 1 (checksum) = 147 bytes:
+ * LORA_FRAME_MAX_WIRE_SIZE (lora_frame.h): 3 (header) + 144 (a full
+ * CBBAMessage_t payload, core/cbba.c) + 19 (AEAD trailer: Poly1305
+ * tag + counter fragment + checksum - see lora_frame.h's
+ * "Encryption" section) = 166 bytes. RE-DERIVED from the original
+ * 147-byte figure after core/lora_frame.c grew an AEAD envelope (see
+ * core/lora_crypto.h/core/aead_chacha20poly1305.h) - re-run this same
+ * formula again if LORA_FRAME_MAX_WIRE_SIZE ever changes again, same
+ * "don't let it silently drift" policy as lora_frame.h's own
+ * CBBAMessage_t-size comment:
  *
  *   Tsym          = 2^SF / BW = 2^7 / 125000               = 1.024 ms
  *   Tpreamble     = (8 + 4.25) * Tsym                       = 12.544 ms
- *   payloadSymbNb = 8 + ceil((8*147 - 4*7 + 28 + 16) / (4*7)) * 5
- *                 = 8 + ceil(1192 / 28) * 5 = 8 + 43*5      = 223 symbols
- *   Tpayload      = 223 * Tsym                              = 228.352 ms
- *   Ttotal        = Tpreamble + Tpayload                    = 240.896 ms
+ *   payloadSymbNb = 8 + ceil((8*166 - 4*7 + 28 + 16) / (4*7)) * 5
+ *                 = 8 + ceil(1344 / 28) * 5 = 8 + 48*5      = 248 symbols
+ *   Tpayload      = 248 * Tsym                              = 253.952 ms
+ *   Ttotal        = Tpreamble + Tpayload                    = 266.496 ms
  *
- * i.e. ~610 bytes/sec for a 147-byte frame at SF7. Converted to this
+ * i.e. ~623 bytes/sec for a 166-byte frame at SF7. Converted to this
  * project's sim-tick unit via TICK_TIME_SEC=36 (mission_state.h - one
  * sim tick represents 36 real seconds, so a sub-second real LoRa
  * round-trip has to come out "fast" against a 36-second tick, not
  * "free"):
  *
- *   BYTES_PER_TICK = (147 bytes / 0.240896 s) * 36 s/tick ~= 21968
+ *   BYTES_PER_TICK = (166 bytes / 0.266496 s) * 36 s/tick ~= 22424
  *
  * Caveats, stated rather than hidden: this is still a single linear
  * bytes-per-tick constant standing in for a genuinely non-linear ToA
  * curve (fixed preamble cost + per-symbol quantization, not a
- * straight line through the origin) - exact at the 147-byte point it
+ * straight line through the origin) - exact at the 166-byte point it
  * was calibrated against, an approximation elsewhere. It also bakes
  * in SF7, an 8-symbol preamble, coding rate 4/5, explicit header, and
  * CRC on - the actual register-level radio configuration is still
@@ -91,7 +98,7 @@ __attribute__((weak)) int lora_spi_transmit(const uint8_t *frame_bytes,
  * chosen and confirmed on real hardware. +1u below still guarantees
  * every send costs at least one tick even for a tiny payload, so the
  * channel is never free regardless of size. */
-#define COMMS_TRANSPORT_CHANNEL_BYTES_PER_TICK 21968u
+#define COMMS_TRANSPORT_CHANNEL_BYTES_PER_TICK 22424u
 #endif
 
 static uint32_t g_channel_busy_until_tick;
@@ -241,7 +248,13 @@ int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
     uint32_t wire_len;
     uint8_t receiver_board_id;
 
-    wire_len = lora_frame_pack(frame_type, payload, payload_len, wire_buf);
+    /* sender_board_id is always THIS board - see lora_frame.h's own
+       doc on lora_frame_pack(): a board only ever packs frames it is
+       itself originating, whether the destination ends up being the
+       same board (loopback, below) or a different one (SPI/radio
+       hand-off, below). */
+    wire_len = lora_frame_pack(frame_type, g_comms_transport_this_board_id,
+                                payload, payload_len, wire_buf);
 
     if (wire_len == 0u)
     {
@@ -267,9 +280,11 @@ int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
            attached (the same reasoning already applied to the
            existing in-process telemetry design). */
         uint8_t parsed_type;
+        uint8_t parsed_sender_board_id;
         uint8_t parsed_payload[LORA_FRAME_MAX_PAYLOAD];
         uint8_t parsed_len;
         int parse_rc = lora_frame_try_parse(wire_buf, wire_len, &parsed_type,
+                                             &parsed_sender_board_id,
                                              parsed_payload, &parsed_len);
 
         if (parse_rc != 1)
@@ -282,6 +297,14 @@ int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
                drop the message. */
             return -2;
         }
+
+        /* parsed_sender_board_id is always g_comms_transport_this_board_id
+           here (we packed it as such, just above) - this function's
+           own sender_team_id parameter, not the board id, is what
+           the inbox tracks per-message, so parsed_sender_board_id
+           itself has no further use in this branch beyond having
+           been required to authenticate/decrypt the loopback frame. */
+        (void)parsed_sender_board_id;
 
         return comms_transport_inbox_push(sender_team_id, parsed_type,
                                            parsed_payload, parsed_len);

@@ -280,9 +280,11 @@ static void harness_rx_pump(void)
     for (;;)
     {
         uint8_t frame_type;
+        uint8_t sender_board_id;
         uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
         uint8_t payload_len;
-        int rc = lora_frame_try_parse(buf, buf_len, &frame_type, payload, &payload_len);
+        int rc = lora_frame_try_parse(buf, buf_len, &frame_type, &sender_board_id,
+                                       payload, &payload_len);
 
         if (rc == 0)
         {
@@ -291,8 +293,18 @@ static void harness_rx_pump(void)
 
         if (rc == 1)
         {
-            uint32_t consumed = 2u + payload_len + 1u; /* header + payload + checksum, per lora_frame.h */
+            /* header + payload + AEAD trailer (tag+counter_frag+
+               checksum), per lora_frame.h. sender_board_id itself
+               isn't needed past this point - comms_transport_deliver_
+               received() (below) doesn't take a sender, matching its
+               own COMMS_TRANSPORT_UNKNOWN_SENDER doc (this harness's
+               real-physical-RX path is exactly the case that doc
+               describes). It was still required by lora_frame_try_
+               parse()'s signature to authenticate/decrypt this frame
+               in the first place. */
+            uint32_t consumed = LORA_FRAME_HEADER_SIZE + payload_len + LORA_FRAME_TRAILER_SIZE;
             uint32_t i;
+            (void)sender_board_id;
 
             (void)comms_transport_deliver_received(frame_type, payload, payload_len);
 
