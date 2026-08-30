@@ -21,8 +21,13 @@
  *   application state (g_teams[]) actually changes as a result, not
  *   just that bytes moved.
  *
- *   Does NOT prove: that real SPI/LoRa hardware works (no SX1262 HAL
- *   exists yet - see core/vendor/sx126x_driver/README.md), that
+ *   Does NOT prove: that real SPI/LoRa hardware works. Both boards
+ *   now have a real sx1262_hal.c (RX poll wired to comms_transport_
+ *   deliver_received(), TX wired to a strong lora_spi_transmit()) -
+ *   see core/vendor/sx126x_driver/README.md and each board's own
+ *   sx1262_rx_selftest for what's been checked there - but this
+ *   harness itself still talks over a Unix socket, not SPI/DIO1/a
+ *   real radio, so it exercises neither HAL. It also does not prove
  *   either board's real firmware boots on real silicon (neither has
  *   ever been flashed), or that the µT-Kernel scheduler itself
  *   behaves correctly under real task preemption (this harness runs

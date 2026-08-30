@@ -1,5 +1,103 @@
 # Changelog
 
+## Real SX1262 RX wired up on both boards (DK + Pico) - integration pass
+
+One logical milestone landed as two separate, independently-written
+board prompts (DK: `board/STM32N6570-DK/sx1262_hal.c` +
+`main_board.c`; Pico: `board/Raspberry_Pi_Pico/sx1262_hal.c` +
+`main_board.c`), each owning only its own board's files. This entry
+covers both together, plus the integration/documentation pass that
+followed once both had landed.
+
+- Both boards now poll DIO1 (`sx1262_poll_rx()` on the DK,
+  `sx1262_rx_poll()` on the Pico - same contract, different name per
+  board) for `IrqMask`/`Dio1Mask` `0x0203` (TxDone | RxDone |
+  Timeout), clear exactly the observed IRQ status (not a hardcoded
+  mask), and on RxDone parse and hand the frame to
+  `comms_transport_deliver_received()` with the same argument shape
+  and rc handling on both boards (rc==1 → deliver, rc==0/-1 → drop).
+  Both also now define a strong (non-weak) `lora_spi_transmit()`,
+  overriding `core/comms_transport.c`'s weak stub, so TX is wired to
+  real hardware on both boards as well, not just RX.
+- **Confirmed side by side, not assumed identical**: the two boards'
+  independently-written RX-poll code matches on the IRQ mask, the
+  IRQ-clear method, and the `comms_transport_deliver_received()`
+  call shape, per the checks above.
+- **Real, non-cosmetic inconsistency found and flagged back, not
+  silently fixed here**: the two boards re-enter RX mode differently
+  after handling a packet. The DK uses continuous RX mode
+  (`SX126X_RX_CONTINUOUS`) and only re-arms on the TxDone/Timeout
+  branch, relying on the radio to keep listening on its own after
+  RxDone. The Pico uses single-shot RX mode and unconditionally
+  re-arms after every DIO1 event, including RxDone. Both boards end
+  up listening again afterward, but via different mechanisms and
+  different justifying comments - this crosses the DK/Pico
+  file-ownership boundary, so it's reported here for whoever owns
+  those board prompts to reconcile (or explicitly confirm as an
+  acceptable divergence), not resolved unilaterally in this pass.
+- **Pico's RXEN/TXEN RF-switch wiring is unconfirmed against real
+  hardware** - this was previously recorded only as a code comment in
+  `board/Raspberry_Pi_Pico/sx1262_hal.c` ("RXEN/TXEN note"). Promoted
+  to `ARCHITECTURE.md`'s Open Architectural Questions so it isn't
+  lost/missed.
+- Each board prompt shipped its own standalone selftest under
+  `laptop/tools/`: `sx1262_rx_selftest_dk.c` and
+  `sx126x_rx_selftest_pico.c`. Both built and run per their own
+  build-comment recipe for this integration pass - `sx1262_rx_selftest:
+  all tests passed` and `sx126x_rx_selftest: all tests passed`
+  respectively.
+- Doc/comment accuracy pass, now that real HALs exist on both boards:
+  - `laptop/tools/two_board_harness.c` and
+    `laptop/tools/two_board_cbba_harness.c`'s own "Does NOT prove"
+    header comments previously said "no SX1262 HAL exists yet" - now
+    stale, since both exist. Fixed to say what's actually still
+    unproven by those harnesses: they talk over a Unix socket, not
+    SPI/DIO1/a real radio, so they still exercise neither board's
+    HAL - the harnesses' actual scope was already correct, only the
+    stated justification had gone stale.
+  - `core/vendor/sx126x_driver/README.md`'s project-specific section
+    (below the vendored Semtech README) previously said "neither
+    [HAL] exists yet anywhere in this repo" and left RXEN/TXEN
+    driving "NOT YET DECIDED" - updated to reflect that both HALs now
+    exist and that RXEN/TXEN driving is decided at the code level
+    (opcode-snooped, MCU-driven) even though the Pico's physical
+    wiring is still unconfirmed (see above).
+  - Both boards' `main_board.c` had an identical "known gap (nothing
+    sends/receives real handshake frames yet, so this currently
+    blocks forever on real hardware)" comment predating this RX work.
+    Comment-only fix on both: the gap is closed at the code level (RX
+    now feeds `comms_transport`'s inbox, TX has a strong
+    `lora_spi_transmit()`), but a full handshake round trip has not
+    been exercised on real silicon, since neither board has ever been
+    flashed.
+- Verified together: `make check-board`, `make check-pico` (both real
+  BSP mode, full compile + partial-link, clean on both), `make smoke`,
+  and `make check-two-board-harness` (real cross-process handshake +
+  LoRa-relayed roster delivery) all pass with both boards' RX work
+  landed together - the first point where a real inconsistency
+  between the two independently-written implementations could have
+  surfaced at build/link time. None did.
+- **`make check-two-board-cbba-harness` showed intermittent failures**
+  (1-3 out of 40 runs, reproduced across multiple independent runs) -
+  investigated and determined to be unrelated to this RX work: that
+  harness communicates over a Unix socket and never links either
+  board's `sx1262_hal.c` or `main_board.c`, so this pass cannot be
+  its cause. The failing runs show a genuine consensus-convergence
+  race in `core/cbba.c` (a board's local view disagreeing on the
+  winning bid) - a pre-existing issue in the CBBA harness itself,
+  flagged here rather than silently retried past, but out of scope
+  for this integration pass to fix.
+- Makefile: no changes needed - both boards' `sx1262_hal.c` and
+  `core/vendor/sx126x_driver/src/sx126x.c` were already correctly
+  wired into `BOARD_SOURCES`/`PICO_BOARD_SOURCES`/`ARM_CFLAGS` by the
+  two board prompts themselves, confirmed by the clean `check-board`/
+  `check-pico` results above. The one actual staleness found was a
+  doc comment, not a missing target:
+  `laptop/tools/check-two-board-cbba-harness.sh` said "No Makefile
+  target for this exists yet," but the Makefile already has a
+  `check-two-board-cbba-harness` target wired to it - comment fixed
+  to match.
+
 ## LoRa frame encryption implemented (AEAD_CHACHA20_POLY1305, RFC 8439)
 
 - `core/lora_frame.c`'s envelope (the single choke point every

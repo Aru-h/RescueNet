@@ -328,6 +328,21 @@ any source file or prior doc:
   unimplemented but undesigned (ring-buffer overflow policy,
   overwrite-vs-backpressure, wire format).
   :resolved on 13th aug 6pm
+- **Pico-side RXEN/TXEN RF-switch wiring is unconfirmed against real
+  hardware.** Both boards' `sx1262_hal.c` drive separate active-high
+  RXEN/TXEN pins by snooping SPI opcodes
+  (`apply_rf_switch_for_opcode()`) rather than relying on DIO2
+  auto-switching. The DK's arrangement is confirmed against its
+  SmartElex HAT. The Pico's opcode-snooping code was ported from the
+  DK unchanged, but whether the Pico's own physical SX1262 module
+  actually has a matching RXEN/TXEN RF-switch arrangement has not been
+  verified against real Pico-side hardware - it's flagged inline in
+  `board/Raspberry_Pi_Pico/sx1262_hal.c` (search "RXEN/TXEN note") but
+  wasn't recorded anywhere durable outside that one code comment until
+  now. Resolving it (or replacing the opcode-snoop approach with
+  DIO2 auto-switching if the Pico's actual RF front-end turns out not
+  to need separate enables) is out of scope for the RX-poll work that
+  raised it.
 
 ## Historical Bugs That Shaped Current Design
 

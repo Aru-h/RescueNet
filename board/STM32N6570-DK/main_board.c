@@ -318,9 +318,17 @@ LOCAL void sim_task(INT stacd, void *exinf)
     /*
      * Boot-side half of the handshake readiness gate — see the extern
      * block above this function for the full design note (role-based,
-     * not chip-based) and the known gap (nothing sends/receives real
-     * handshake frames yet, so this currently blocks forever on real
-     * hardware). Ordering: must follow whatever sets
+     * not chip-based). The previously-known gap here (nothing sent or
+     * received real handshake frames, so this blocked forever on real
+     * hardware) is closed: sx1262_poll_rx() above now feeds real DIO1/
+     * RX data into comms_transport's inbox and lora_spi_transmit() is
+     * a strong (non-weak) override on this board, so a real handshake
+     * round trip can complete here once run on actual hardware - not
+     * yet exercised on real silicon, since neither board has ever been
+     * flashed (see ARCHITECTURE.md's Board Runtime Architecture
+     * section) and laptop/tools/sx1262_rx_selftest_dk.c covers the RX
+     * path in isolation, not a full handshake round trip. Ordering:
+     * must follow whatever sets
      * g_comms_transport_this_board_id, same requirement
      * mission_link_task_init() already has a few lines up (now
      * satisfied — see above) — this call uses that same variable's

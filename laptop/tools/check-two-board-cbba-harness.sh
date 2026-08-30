@@ -10,14 +10,10 @@
 # found real flakiness that only showed up after dozens of runs, not
 # a handful.
 #
-# No Makefile target for this exists yet (this repo's own check-board/
-# check-pico targets are the established convention - see Makefile) -
-# this script is deliberately standalone so it doesn't need to guess
-# at how a future check-two-board-cbba-harness Makefile target should
-# be wired in; folding it in as `make check-two-board-cbba-harness`
-# later is a small, mechanical change (see check-board: / check-pico:
-# in the Makefile for the pattern), not attempted here to avoid
-# touching a shared file Track 4 wasn't scoped to change.
+# A `make check-two-board-cbba-harness` target now wires directly to
+# this script (see Makefile) - this file itself stays the actual
+# check logic so the Makefile target is just a thin `sh` invocation,
+# same pattern as check-board:/check-pico:.
 #
 # Usage:
 #   ./check-two-board-cbba-harness.sh [run_count]

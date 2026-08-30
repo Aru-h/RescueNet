@@ -32,8 +32,11 @@
  *   incident" agree with each other - not merely that one side
  *   thinks it won, or that bytes moved.
  *
- *   Does NOT prove: real SPI/LoRa hardware (no SX1262 HAL exists yet
- *   - see core/vendor/sx126x_driver/README.md), that either board's
+ *   Does NOT prove: real SPI/LoRa hardware works. Both boards now
+ *   have a real sx1262_hal.c (see core/vendor/sx126x_driver/README.md
+ *   and each board's own sx1262_rx_selftest), but this harness talks
+ *   over a Unix socket, not SPI/DIO1/a real radio, so it exercises
+ *   neither HAL. It also does not prove that either board's
  *   firmware boots on real silicon, or real µT-Kernel task
  *   preemption (cbba_run() is driven here as a plain function call in
  *   a loop, not under tk_cre_tsk/tk_sta_tsk). A world built by hand

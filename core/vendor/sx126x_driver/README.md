@@ -73,8 +73,8 @@ at all rather than under either board's own `vendor/`.
 
 This project doesn't use the CMake integration described above — it's
 compiled directly as part of `check-board`/`check-pico`'s own compile
-step (see the Makefile), same as every other `core/*.c` file, once a
-real HAL implementation exists per board (see below). LR-FHSS and BPSK
+step (see the Makefile), same as every other `core/*.c` file. Both
+boards now have a real HAL implementation (see below). LR-FHSS and BPSK
 (`sx126x_bpsk.c`, `lr_fhss_mac.c`, `sx126x_lr_fhss.c`) are not used by
 this project (plain LoRa modulation only, per the original hardware
 handoff) and are never added to any `*_SOURCES` list — left in the
@@ -102,8 +102,10 @@ NSS/BUSY/DIO1/RESET pin identifiers for that board's actual wiring)
 and casts it internally. NSS-assert / BUSY-poll / SPI-transfer /
 BUSY-poll-again / NSS-deassert is entirely the HAL implementer's job
 inside `hal_write`/`hal_read` — the core has no opinion on any of it.
-Two separate implementations are needed, one per board; neither exists
-yet anywhere in this repo.
+Two separate implementations were needed, one per board; both now
+exist (`board/STM32N6570-DK/sx1262_hal.c`,
+`board/Raspberry_Pi_Pico/sx1262_hal.c`), each with its own
+`sx1262_rx_selftest` under `laptop/tools/`.
 
 ### From the real hardware datasheet (SmartElex SX1262 HAT, E22-900M22S)
 
@@ -121,18 +123,21 @@ future HAL implementations regardless of MCU:
   matching `sx126x_hal_write`/`_read`'s own `command`/`data` split
   exactly — nothing extra needed to bridge the two.
 - The module has RXEN/TXEN RF-switch control pins — genuinely
-  different from the originally-planned Waveshare module. Whether
-  these need driving by the MCU or are wired to DIO2 for automatic
-  switching is NOT YET DECIDED.
+  different from the originally-planned Waveshare module. Both HALs
+  drive these directly from the MCU (by snooping SetTx/SetRx opcodes
+  in `apply_rf_switch_for_opcode()`) rather than relying on DIO2
+  auto-switching, so this is decided at the code level. On the DK it's
+  confirmed against the real SmartElex HAT; on the Pico the code was
+  ported unchanged but whether the Pico's own physical module actually
+  has a matching RXEN/TXEN arrangement is unverified against real
+  hardware — see `board/Raspberry_Pi_Pico/sx1262_hal.c`'s "RXEN/TXEN
+  note" and `ARCHITECTURE.md`'s Open Architectural Questions.
 
-### What's still genuinely undecided, and blocks writing either HAL
+### GPIO pin assignments
 
-- **GPIO pin assignments, for both boards.** The datasheet's own
-  "Raspberry Pi SPI Wiring" table is for a Raspberry Pi single-board
-  computer running Linux — completely different from either of this
-  project's actual targets (STM32N6570-DK, or the Pico's bare-metal
-  RP2040) and does not transfer. Which physical SPI peripheral and
-  GPIO pins each board's NSS/BUSY/DIO1/RESET/RXEN/TXEN lines are wired
-  to has to be decided separately, per board, before either HAL can
-  be written.
-- **RXEN/TXEN handling**, per the datasheet note above.
+Decided separately per board (the datasheet's own "Raspberry Pi SPI
+Wiring" table is for a Raspberry Pi single-board computer running
+Linux, and doesn't transfer to either of this project's actual targets
+— STM32N6570-DK, or the Pico's bare-metal RP2040). See each board's
+own `sx1262_hal.c` for its NSS/BUSY/DIO1/RESET/RXEN/TXEN pin
+definitions.
