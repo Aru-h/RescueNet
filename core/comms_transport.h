@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 #include "lora_frame.h"
+#include "comms_precedence.h"  /* CommsPrecedence_t - see comms_transport_send()'s
+                                   new precedence parameter and comms_transport_
+                                   dispatch_pending() below */
 
 /*
  * Single dispatch point for any outgoing message addressed to a team:
@@ -53,11 +56,21 @@
  * or LoRa - advances one shared "channel busy until tick" value by a
  * cost proportional to the bytes it puts on the (real or simulated)
  * air, and queues behind whatever is already occupying the channel
- * rather than landing instantly. See comms_transport.c for the exact
+ * rather than landing instantly. Same-board sends advance it
+ * immediately (same as before this file grew tiered TX queues);
+ * cross-board sends advance it when comms_transport_dispatch_pending()
+ * actually dispatches them, not when comms_transport_send() enqueues
+ * them - so this value keeps meaning real, in-dispatch-order channel
+ * occupancy even though a FLASH message can now jump ahead of an
+ * earlier-enqueued ROUTINE one. See comms_transport.c for the exact
  * formula and rationale; the point is that a board-0-only benchmark
  * (where every send happens to be same-board) must pay the same
  * aggregate channel cost a real spread-out N-board run would, or its
- * numbers don't transfer. comms_transport_channel_busy_until_tick()
+ * numbers don't transfer. This is a tick-based cost ESTIMATE, not a
+ * hardware-observed signal - comms_transport_dispatch_pending()'s
+ * actual "is the radio free" gate is lora_radio_tx_busy() (real
+ * TX_DONE-derived HAL state), not this value; don't substitute one
+ * for the other. comms_transport_channel_busy_until_tick()
  * exposes the current value read-only so tests (and, later,
  * benchmark/scoring code) can observe it without reaching into this
  * module's static state.
@@ -147,21 +160,74 @@ uint8_t comms_transport_board_count(void);
 
 /* Routes to receiver_team_id. If comms_transport_board_id_for_team(receiver_team_id)
    equals g_comms_transport_this_board_id, delivers via an in-process
-   queue. Otherwise, calls out to lora_spi_transmit() (extern, NOT
-   implemented here - that's the separate SX1262 SPI driver work,
-   still pending bring-up; a weak default in comms_transport.c lets
-   this file link and run standalone until that driver exists).
-   payload_len must not exceed LORA_FRAME_MAX_PAYLOAD (lora_frame.h) -
-   both paths pack through lora_frame_pack(), which enforces that same
-   ceiling.
+   queue - packed and pushed immediately, synchronously, same as
+   before (no real channel contention on a same-board loopback, so no
+   reason to queue it).
+
+   Otherwise (cross-board), this function does NOT call
+   lora_spi_transmit() itself and does NOT pack the frame yet - it
+   enqueues (frame_type, payload, payload_len) onto ONE of 4 tiered TX
+   queues, keyed by precedence (see comms_precedence.h). Packing (and
+   therefore the crypto TX-counter advance - see lora_frame_pack()'s
+   own doc on why that must happen at most once per frame actually
+   sent) is deferred to comms_transport_dispatch_pending() below,
+   which is what actually calls lora_spi_transmit() once the radio is
+   free. payload_len must not exceed LORA_FRAME_MAX_PAYLOAD
+   (lora_frame.h) on either path - checked explicitly here now, since
+   the cross-board path no longer gets that check for free from an
+   immediate lora_frame_pack() call.
+
+   precedence: which of the 4 tiers (comms_precedence.h) this message
+   belongs in. Ignored on the same-board path (nothing to schedule
+   there); determines TX queue placement and therefore dispatch order
+   on the cross-board path. Callers already hold whichever typed
+   struct they're sending, so they're expected to compute this
+   themselves - a constant for message types with a fixed precedence
+   (CBBA, OVERRIDE, HANDSHAKE, ROSTER), or via the matching
+   mission_link_*_precedence() helper (mission_link.h) for the three
+   message types whose urgency depends on payload content (FAULT,
+   INCIDENT, STATUS). This module stays deliberately payload-agnostic
+   (see "Deviation from the sketch signature" above) - it does not
+   compute precedence itself.
 
    sender_team_id: see "Deviation from the sketch signature" above.
 
    Returns 0 on queued/sent, non-zero on failure (e.g. payload_len too
-   large, or the local inbox is full on the same-board path). */
+   large, the local inbox is full on the same-board path, or that
+   precedence tier's TX queue is full on the cross-board path). */
 int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
-                          uint8_t frame_type, const uint8_t *payload,
-                          uint8_t payload_len);
+                          uint8_t frame_type, CommsPrecedence_t precedence,
+                          const uint8_t *payload, uint8_t payload_len);
+
+/* Non-preemptive strict-priority TX dispatcher - the piece that
+   actually moves a cross-board send from "enqueued" to "on air".
+   Meant to be called once per tick, from main_board.c's own tick
+   loop, alongside the existing RX-poll call (sx1262_rx_poll()/
+   sx1262_poll_rx(), board-specific) - see this project's design
+   notes for why dispatch and RX-poll belong at the same cadence.
+
+   Each call: if the radio is still transmitting a previously-
+   dispatched frame (lora_radio_tx_busy(), extern - implemented by
+   whichever board's sx1262_hal.c is linked, weak default in
+   comms_transport.c says "never busy" so this file keeps building
+   standalone before that HAL work exists), does nothing this tick.
+   Otherwise, scans the 4 TX queues from COMMS_PRECEDENCE_FLASH down
+   to COMMS_PRECEDENCE_ROUTINE, takes the oldest entry from the first
+   non-empty one, packs it (lora_frame_pack() - TX counter advances
+   here, not at enqueue time), and hands it to lora_spi_transmit().
+   At most one frame is dispatched per call - real LoRa airtime for
+   even a small frame spans many ticks at this project's tick rate, so
+   "check radio-free, send one, let TX_DONE arrive on a later tick"
+   is the natural cadence, not a limitation requiring a loop here.
+
+   No return value: dispatch failures (a queue entry too large to
+   pack, or lora_spi_transmit() itself failing) are dropped, matching
+   this project's existing "no NACK path at the LoRa layer" policy
+   (see sx1262_hal.c's own RX-side doc) rather than retried - a
+   dropped FLASH/IMMEDIATE message gets superseded by its sender's
+   next state on the next relevant trigger anyway (fault/status is
+   sent on every change, not just once). */
+void comms_transport_dispatch_pending(void);
 
 /* Non-blocking poll for anything addressed to a local team on this
    board. Returns 1 and fills out params if something's waiting, 0 if

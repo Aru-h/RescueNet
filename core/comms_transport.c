@@ -39,6 +39,27 @@ __attribute__((weak)) int lora_spi_transmit(const uint8_t *frame_bytes,
 }
 
 /*
+ * Real HAL-provided "is the radio still transmitting the last frame"
+ * signal, backed by the SX1262's actual TX_DONE IRQ (see whichever
+ * board's sx1262_hal.c is linked - both track a busy flag set in
+ * their own lora_spi_transmit() and cleared once TX_DONE/Timeout is
+ * observed). comms_transport_dispatch_pending() below is the only
+ * caller; NOT the same thing as comms_transport_channel_busy_until_
+ * tick() (a tick-based cost estimate - see comms_transport.h's
+ * "Channel contention model" note on why the two must stay separate).
+ * Weak default returns "never busy" so this file keeps building and
+ * running standalone (laptop tests, either board before its own HAL
+ * work lands) before a real HAL is linked in - same pattern as
+ * lora_spi_transmit() immediately above.
+ */
+extern int lora_radio_tx_busy(void);
+
+__attribute__((weak)) int lora_radio_tx_busy(void)
+{
+    return 0;
+}
+
+/*
  * ---------------------------------------------------------------
  * Shared channel-busy accounting
  * ---------------------------------------------------------------
@@ -183,6 +204,146 @@ static int comms_transport_inbox_push(uint8_t sender_team_id,
 
 /*
  * ---------------------------------------------------------------
+ * Tiered cross-board TX queues
+ * ---------------------------------------------------------------
+ * One fixed-capacity ring buffer per CommsPrecedence_t tier (see
+ * comms_precedence.h). Holds UNPACKED entries - frame_type + raw
+ * payload bytes, not the on-air packed/encrypted form - because
+ * packing advances the per-board crypto TX counter exactly once per
+ * successful call (lora_frame_pack()'s own doc), and a message
+ * sitting queued behind higher-precedence traffic must not burn that
+ * counter until it's actually about to go out. comms_transport_
+ * dispatch_pending() is the only place that pops an entry and calls
+ * lora_frame_pack() on it.
+ *
+ * Capacities are sized against real traffic, not arbitrary: PRIORITY
+ * has to absorb cbba_broadcast_local_teams()'s per-round burst (up to
+ * NUM_TEAMS-on-this-board x other-boards sends in one call - see
+ * core/cbba.c), so it gets the largest allowance. FLASH/IMMEDIATE are
+ * low-volume message types (fault escalation, override, handshake,
+ * critical-incident discovery) - a handful of slots is generous
+ * headroom, not a tight fit. ROUTINE (heartbeat/roster) arrives at a
+ * much lower rate than CBBA bidding. Same tail-drop-when-full policy
+ * the original single g_inbox already used, just applied per tier
+ * now instead of to one shared buffer - see this project's design
+ * notes on why strict-priority + tail-drop is the standard pairing
+ * here, not something invented for this file.
+ */
+
+#ifndef COMMS_TRANSPORT_TX_QUEUE_CAPACITY_FLASH
+#define COMMS_TRANSPORT_TX_QUEUE_CAPACITY_FLASH 4u
+#endif
+#ifndef COMMS_TRANSPORT_TX_QUEUE_CAPACITY_IMMEDIATE
+#define COMMS_TRANSPORT_TX_QUEUE_CAPACITY_IMMEDIATE 4u
+#endif
+#ifndef COMMS_TRANSPORT_TX_QUEUE_CAPACITY_PRIORITY
+#define COMMS_TRANSPORT_TX_QUEUE_CAPACITY_PRIORITY 12u
+#endif
+#ifndef COMMS_TRANSPORT_TX_QUEUE_CAPACITY_ROUTINE
+#define COMMS_TRANSPORT_TX_QUEUE_CAPACITY_ROUTINE 6u
+#endif
+
+typedef struct
+{
+    uint8_t frame_type;
+    uint8_t payload_len;
+    uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
+} CommsTxEntry_t;
+
+typedef struct
+{
+    CommsTxEntry_t *slots;
+    uint32_t capacity;
+    uint32_t head;  /* next slot to write */
+    uint32_t tail;  /* next slot to read */
+    uint32_t count;
+} CommsTxQueue_t;
+
+static CommsTxEntry_t g_tx_flash_slots[COMMS_TRANSPORT_TX_QUEUE_CAPACITY_FLASH];
+static CommsTxEntry_t g_tx_immediate_slots[COMMS_TRANSPORT_TX_QUEUE_CAPACITY_IMMEDIATE];
+static CommsTxEntry_t g_tx_priority_slots[COMMS_TRANSPORT_TX_QUEUE_CAPACITY_PRIORITY];
+static CommsTxEntry_t g_tx_routine_slots[COMMS_TRANSPORT_TX_QUEUE_CAPACITY_ROUTINE];
+
+/* Indexed by CommsPrecedence_t - COMMS_PRECEDENCE_COUNT entries,
+   ROUTINE..FLASH in that numeric order (see comms_precedence.h). */
+static CommsTxQueue_t g_tx_queues[COMMS_PRECEDENCE_COUNT];
+
+static void comms_transport_tx_queues_init(void)
+{
+    g_tx_queues[COMMS_PRECEDENCE_ROUTINE].slots    = g_tx_routine_slots;
+    g_tx_queues[COMMS_PRECEDENCE_ROUTINE].capacity  = COMMS_TRANSPORT_TX_QUEUE_CAPACITY_ROUTINE;
+    g_tx_queues[COMMS_PRECEDENCE_PRIORITY].slots    = g_tx_priority_slots;
+    g_tx_queues[COMMS_PRECEDENCE_PRIORITY].capacity = COMMS_TRANSPORT_TX_QUEUE_CAPACITY_PRIORITY;
+    g_tx_queues[COMMS_PRECEDENCE_IMMEDIATE].slots   = g_tx_immediate_slots;
+    g_tx_queues[COMMS_PRECEDENCE_IMMEDIATE].capacity = COMMS_TRANSPORT_TX_QUEUE_CAPACITY_IMMEDIATE;
+    g_tx_queues[COMMS_PRECEDENCE_FLASH].slots       = g_tx_flash_slots;
+    g_tx_queues[COMMS_PRECEDENCE_FLASH].capacity    = COMMS_TRANSPORT_TX_QUEUE_CAPACITY_FLASH;
+
+    for (uint32_t p = 0u; p < (uint32_t)COMMS_PRECEDENCE_COUNT; p++)
+    {
+        g_tx_queues[p].head = 0u;
+        g_tx_queues[p].tail = 0u;
+        g_tx_queues[p].count = 0u;
+    }
+}
+
+static int comms_transport_tx_enqueue(CommsPrecedence_t precedence,
+                                       uint8_t frame_type,
+                                       const uint8_t *payload,
+                                       uint8_t payload_len)
+{
+    CommsTxQueue_t *q = &g_tx_queues[(uint32_t)precedence];
+    CommsTxEntry_t *slot;
+    uint8_t i;
+
+    if (q->count == q->capacity)
+    {
+        return -1; /* tail-drop: that tier's queue is full */
+    }
+
+    slot = &q->slots[q->head];
+    slot->frame_type = frame_type;
+    slot->payload_len = payload_len;
+
+    for (i = 0u; i < payload_len; i++)
+    {
+        slot->payload[i] = payload[i];
+    }
+
+    q->head = (q->head + 1u) % q->capacity;
+    q->count++;
+
+    return 0;
+}
+
+/* Returns 1 and fills *out_entry if the highest-precedence non-empty
+   queue had something to pop, 0 if every queue is empty. Strict
+   priority: always checks FLASH first, then IMMEDIATE, PRIORITY,
+   ROUTINE - see comms_transport_dispatch_pending()'s own doc
+   (comms_transport.h) for why this is non-preemptive head-of-line
+   scheduling, not round-robin. */
+static int comms_transport_tx_dequeue_highest(CommsTxEntry_t *out_entry)
+{
+    int p;
+
+    for (p = (int)COMMS_PRECEDENCE_FLASH; p >= (int)COMMS_PRECEDENCE_ROUTINE; p--)
+    {
+        CommsTxQueue_t *q = &g_tx_queues[(uint32_t)p];
+
+        if (q->count > 0u)
+        {
+            *out_entry = q->slots[q->tail];
+            q->tail = (q->tail + 1u) % q->capacity;
+            q->count--;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * ---------------------------------------------------------------
  * Public API
  * ---------------------------------------------------------------
  */
@@ -192,6 +353,8 @@ void comms_transport_init(void)
     g_inbox_head = 0u;
     g_inbox_tail = 0u;
     g_inbox_count = 0u;
+
+    comms_transport_tx_queues_init();
 
     /* Channel starts idle as of right now, not "busy until 0" -
        matters if comms_transport_init() is ever called mid-run
@@ -241,51 +404,63 @@ uint8_t comms_transport_board_count(void)
 }
 
 int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
-                          uint8_t frame_type, const uint8_t *payload,
-                          uint8_t payload_len)
+                          uint8_t frame_type, CommsPrecedence_t precedence,
+                          const uint8_t *payload, uint8_t payload_len)
 {
-    uint8_t wire_buf[LORA_FRAME_MAX_WIRE_SIZE];
-    uint32_t wire_len;
     uint8_t receiver_board_id;
 
-    /* sender_board_id is always THIS board - see lora_frame.h's own
-       doc on lora_frame_pack(): a board only ever packs frames it is
-       itself originating, whether the destination ends up being the
-       same board (loopback, below) or a different one (SPI/radio
-       hand-off, below). */
-    wire_len = lora_frame_pack(frame_type, g_comms_transport_this_board_id,
-                                payload, payload_len, wire_buf);
-
-    if (wire_len == 0u)
+    if (payload_len > LORA_FRAME_MAX_PAYLOAD)
     {
-        /* payload_len exceeded LORA_FRAME_MAX_PAYLOAD - lora_frame_pack()
-           already refused to write anything; nothing was sent, so no
-           channel cost either. */
+        /* Same ceiling lora_frame_pack() itself enforces - checked
+           explicitly here now, since the cross-board path below no
+           longer calls lora_frame_pack() (and therefore doesn't get
+           this check for free) until dispatch time. */
         return -1;
     }
-
-    /* Unconditional: every send pays for channel occupancy, in-process
-       or not. This has to happen before either branch below returns,
-       so neither path can end up looking free. */
-    comms_transport_advance_channel_busy(wire_len);
 
     receiver_board_id = comms_transport_board_id_for_team(receiver_team_id);
 
     if (receiver_board_id == g_comms_transport_this_board_id)
     {
-        /* Same board: still round-trip through lora_frame_try_parse()
-           on the bytes just packed, even though nothing touches a
-           radio - keeps the framing code continuously exercised by
-           every test run, not just the ones with real hardware
-           attached (the same reasoning already applied to the
-           existing in-process telemetry design). */
+        /* Same board: unchanged from before this file grew tiered TX
+           queues - pack and push immediately. No real channel
+           contention on a pure in-process loopback, so nothing to
+           gain by queueing it; precedence is intentionally unused on
+           this path. */
+        uint8_t wire_buf[LORA_FRAME_MAX_WIRE_SIZE];
+        uint32_t wire_len;
         uint8_t parsed_type;
         uint8_t parsed_sender_board_id;
         uint8_t parsed_payload[LORA_FRAME_MAX_PAYLOAD];
         uint8_t parsed_len;
-        int parse_rc = lora_frame_try_parse(wire_buf, wire_len, &parsed_type,
-                                             &parsed_sender_board_id,
-                                             parsed_payload, &parsed_len);
+        int parse_rc;
+
+        (void)precedence;
+
+        /* sender_board_id is always THIS board - see lora_frame.h's
+           own doc on lora_frame_pack(): a board only ever packs
+           frames it is itself originating. */
+        wire_len = lora_frame_pack(frame_type, g_comms_transport_this_board_id,
+                                    payload, payload_len, wire_buf);
+
+        if (wire_len == 0u)
+        {
+            return -1;
+        }
+
+        /* Every send pays for channel occupancy, in-process or not -
+           charged immediately here since this path has no queue to
+           defer it through (contrast the cross-board path below,
+           where this now happens at actual dispatch time instead). */
+        comms_transport_advance_channel_busy(wire_len);
+
+        /* Still round-trip through lora_frame_try_parse() on the
+           bytes just packed, even though nothing touches a radio -
+           keeps the framing code continuously exercised by every test
+           run, not just the ones with real hardware attached. */
+        parse_rc = lora_frame_try_parse(wire_buf, wire_len, &parsed_type,
+                                         &parsed_sender_board_id,
+                                         parsed_payload, &parsed_len);
 
         if (parse_rc != 1)
         {
@@ -298,20 +473,72 @@ int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
             return -2;
         }
 
-        /* parsed_sender_board_id is always g_comms_transport_this_board_id
-           here (we packed it as such, just above) - this function's
-           own sender_team_id parameter, not the board id, is what
-           the inbox tracks per-message, so parsed_sender_board_id
-           itself has no further use in this branch beyond having
-           been required to authenticate/decrypt the loopback frame. */
         (void)parsed_sender_board_id;
 
         return comms_transport_inbox_push(sender_team_id, parsed_type,
                                            parsed_payload, parsed_len);
     }
 
-    /* Different board: hand off to the (currently stubbed) SPI driver. */
-    return lora_spi_transmit(wire_buf, wire_len);
+    /* Different board: don't touch the radio here. Enqueue for
+       comms_transport_dispatch_pending() to pack and actually
+       transmit once the radio is free and this is the highest-
+       precedence thing waiting - see this function's own doc
+       (comms_transport.h) for why packing (and the crypto counter
+       advance it does) is deliberately deferred to that point instead
+       of happening here. sender_team_id has no wire representation
+       (see this header's own "Open question" note) and isn't needed
+       to pack or dispatch a cross-board frame, so it's intentionally
+       not part of the queued entry. */
+    return comms_transport_tx_enqueue(precedence, frame_type, payload, payload_len);
+}
+
+void comms_transport_dispatch_pending(void)
+{
+    CommsTxEntry_t entry;
+    uint8_t wire_buf[LORA_FRAME_MAX_WIRE_SIZE];
+    uint32_t wire_len;
+
+    if (lora_radio_tx_busy())
+    {
+        /* Still transmitting whatever was dispatched last time -
+           nothing to do this tick. Re-checked from FLASH downward
+           again the next time this returns not-busy, so a higher-
+           precedence arrival always gets first look the moment the
+           radio actually frees up. */
+        return;
+    }
+
+    if (!comms_transport_tx_dequeue_highest(&entry))
+    {
+        return; /* every tier empty - nothing waiting to send */
+    }
+
+    wire_len = lora_frame_pack(entry.frame_type, g_comms_transport_this_board_id,
+                                entry.payload, entry.payload_len, wire_buf);
+
+    if (wire_len == 0u)
+    {
+        /* Shouldn't happen - comms_transport_send() already rejected
+           payload_len > LORA_FRAME_MAX_PAYLOAD before this entry was
+           ever enqueued - but if it somehow does, the entry is
+           already popped; drop it rather than leaving the queue
+           machinery in a half-dequeued state. No NACK path at this
+           layer (see this function's own doc), same policy as every
+           other drop case here. */
+        return;
+    }
+
+    /* Charged at actual dispatch time, not enqueue time, so this
+       stays real in-dispatch-order channel occupancy even when a
+       higher-precedence message jumps ahead of something enqueued
+       earlier - see comms_transport.h's "Channel contention model"
+       note. */
+    comms_transport_advance_channel_busy(wire_len);
+
+    /* Return value intentionally ignored - see this function's own
+       doc (comms_transport.h) on why a failed hand-off here is
+       dropped, not retried. */
+    (void)lora_spi_transmit(wire_buf, wire_len);
 }
 
 int comms_transport_poll_received(uint8_t *out_sender_team_id,

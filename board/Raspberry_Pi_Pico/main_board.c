@@ -176,6 +176,18 @@ extern void sx1262_hal_init(void);
 extern void sx1262_rx_poll(void);
 
 /*
+ * Tiered TX dispatcher (core/comms_transport.c) - the piece that
+ * actually moves a cross-board comms_transport_send() from "enqueued"
+ * to "on air". Must be called every place this file already pumps
+ * sx1262_rx_poll()/mission_link_task_step(), including the two wait-
+ * loops below (handshake/roster) - a handshake or roster relay
+ * message enqueued during those phases would otherwise never flush,
+ * since nothing else calls this. See core/comms_transport.h's own
+ * doc on this function for the full dispatch contract.
+ */
+extern void comms_transport_dispatch_pending(void);
+
+/*
  * sim_tick()-vs-roster-arrival gap (flagged, not designed - see the
  * task note this change closes). mission_link_handshake_round_trip_
  * complete() below only proves liveness: this board and its handshake
@@ -343,20 +355,9 @@ LOCAL void sim_task(INT stacd, void *exinf)
     /*
      * Boot-side half of the handshake readiness gate — see the extern
      * block above this function for the full design note (role-based,
-     * not chip-based). The previously-known gap here (nothing sent or
-     * received real handshake frames, so this blocked forever on real
-     * hardware) is closed: sx1262_rx_poll() above now feeds real DIO1/
-     * RX data into comms_transport's inbox and lora_spi_transmit() is
-     * a strong (non-weak) override on this board, so a real handshake
-     * round trip can complete here once run on actual hardware - not
-     * yet exercised on real silicon, since neither board has ever been
-     * flashed (see ARCHITECTURE.md's Board Runtime Architecture
-     * section), and this board's own RXEN/TXEN RF-switch wiring is
-     * still unconfirmed against real hardware (see this file's
-     * sx1262_hal.c "RXEN/TXEN note" and ARCHITECTURE.md's Open
-     * Architectural Questions). laptop/tools/sx126x_rx_selftest_pico.c
-     * covers the RX path in isolation, not a full handshake round
-     * trip. Ordering: must follow whatever sets
+     * not chip-based) and the known gap (nothing sends/receives real
+     * handshake frames yet, so this currently blocks forever on real
+     * hardware). Ordering: must follow whatever sets
      * g_comms_transport_this_board_id, same requirement
      * mission_link_task_init() already has a few lines up (now
      * satisfied — see above) — this call uses that same variable's
@@ -389,6 +390,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
            would deadlock — this call is what MAKES the check
            eventually true). */
         mission_link_task_step();
+        comms_transport_dispatch_pending();
     }
 
     tm_putstring((UB*)"tron: handshake ready\n");
@@ -411,6 +413,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
     while (mission_link_task_any_roster_applied() == 0u)
     {
         mission_link_task_step();
+        comms_transport_dispatch_pending();
     }
 
     tm_putstring((UB*)"tron: roster received, starting seed loop\n");
@@ -445,6 +448,14 @@ LOCAL void sim_task(INT stacd, void *exinf)
                the sx1262_rx_poll() extern's own doc a few hundred
                lines up for why. */
             sx1262_rx_poll();
+
+            /* TX dispatch - see the comms_transport_dispatch_pending()
+               extern's own doc above. Same cadence as the RX pump
+               just above; order relative to it doesn't matter (this
+               only acts on the radio's current busy state and
+               whatever's already queued, not on anything sx1262_rx_
+               poll() itself produces). */
+            comms_transport_dispatch_pending();
 
             if((tick % BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL) == 0u)
             {

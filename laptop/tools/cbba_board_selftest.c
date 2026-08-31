@@ -217,6 +217,7 @@ static void test_ingest_from_simulated_other_board(void)
     send_rc = comms_transport_send(remote_sender, /* sender_team_id */
                                     0,             /* receiver_team_id */
                                     LORA_FRAME_TYPE_CBBA,
+                                    COMMS_PRECEDENCE_PRIORITY,
                                     (const uint8_t *)&msg,
                                     (uint8_t)sizeof(msg));
     CHECK(send_rc == 0);

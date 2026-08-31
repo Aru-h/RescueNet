@@ -2,7 +2,9 @@
 #define MISSION_LINK_H
 
 #include <stdint.h>
-#include "fault_config.h"   /* NUM_OPERATIONAL_FAULT_CLASSES */
+#include "fault_config.h"       /* NUM_OPERATIONAL_FAULT_CLASSES */
+#include "comms_precedence.h"   /* CommsPrecedence_t - see mission_link_*_precedence()
+                                   declarations below, next to each struct they classify */
 
 /*
  * Wire contract for the PERSISTENT laptop<->board mission link, as
@@ -144,6 +146,23 @@ typedef struct __attribute__((packed))
 #define MISSION_LINK_INCIDENT_PAYLOAD_SIZE \
     ((uint32_t)sizeof(MissionLinkIncident_t)) /* 16 bytes */
 
+/*
+ * COMMS_PRECEDENCE_FLASH if this incident is both PRIORITY_CRITICAL
+ * (mission_state.h's Priority_t) and currently marked discovered - a
+ * newly-visible, critical-severity incident (mass casualty, active
+ * fire, chemical exposure, gas leak - see IncidentType_t) is
+ * CONCORD's closest real equivalent to CCEB's "initial contact"
+ * FLASH definition. COMMS_PRECEDENCE_PRIORITY otherwise (lower
+ * priority, or an ordinary field-update resend of an already-known
+ * incident) - see mission_link_apply_and_relay_incident() in
+ * board/{Raspberry_Pi_Pico,STM32N6570-DK}/mission_link_task.c, which
+ * relays every incident message
+ * identically regardless of priority/discovered today, so this is a
+ * pure function of fields already on the wire, not new state to
+ * track. Pure function of *msg - safe to call from any relay/send
+ * site that already has the struct in hand. */
+CommsPrecedence_t mission_link_incident_precedence(const MissionLinkIncident_t *msg);
+
 /* ---------------------------------------------------------------
  * 3. MissionLinkFault_t - laptop -> board, ongoing, per fault-state change
  * ---------------------------------------------------------------
@@ -166,6 +185,31 @@ typedef struct __attribute__((packed))
 
 #define MISSION_LINK_FAULT_PAYLOAD_SIZE \
     ((uint32_t)sizeof(MissionLinkFault_t)) /* 11 bytes, NUM_OPERATIONAL_FAULT_CLASSES == 5 */
+
+/*
+ * COMMS_PRECEDENCE_IMMEDIATE if any active fault class's severity is
+ * at or past the threshold recovery_manager.c itself already uses to
+ * escalate a recovery decision for that class - severity[FAULT_CLASS_
+ * COMMUNICATION] >= RECOVERY_MANAGER_COMMUNICATION_SEVERE_THRESHOLD,
+ * or severity[FAULT_CLASS_MOBILITY] >= RECOVERY_MANAGER_MOBILITY_
+ * SEVERITY_SCALE (the only two fault classes with a directly
+ * comparable named constant in recovery_manager_config.h).
+ * COMMS_PRECEDENCE_PRIORITY otherwise.
+ *
+ * Deliberately NOT a re-implementation of evaluate_mobility()'s full
+ * confidence math (recovery_manager.c) - that function also folds in
+ * WatchdogStatus_t, MissionStage_t, and team->degraded, none of which
+ * are naturally available at a relay/send call site building just
+ * this one struct. This is a lightweight proxy for message routing
+ * urgency, calibrated against the same two named thresholds recovery_
+ * manager.c uses for its own escalation decision, not a claim that it
+ * reproduces that decision exactly. FAULT_CLASS_RESOURCE/ENVIRONMENT/
+ * MISSION have no equivalent named threshold in recovery_manager_
+ * config.h today, so they're left at PRIORITY regardless of severity
+ * rather than guessing an unfounded cutoff for them - a known gap,
+ * not a silent omission, if one of those three classes ever needs the
+ * same treatment. */
+CommsPrecedence_t mission_link_fault_precedence(const MissionLinkFault_t *msg);
 
 /* ---------------------------------------------------------------
  * 4. MissionLinkStatus_t - board -> laptop, ongoing, status + progress
@@ -260,6 +304,26 @@ typedef struct __attribute__((packed))
 
 #define MISSION_LINK_STATUS_PAYLOAD_SIZE \
     ((uint32_t)sizeof(MissionLinkStatus_t)) /* 15 bytes (was 3 in schema v1) */
+
+/*
+ * COMMS_PRECEDENCE_FLASH if stamina_at_report or equipment_level is
+ * at or below the exact thresholds recovery_manager.c itself uses to
+ * consider RECOVERY_ACTION_ABORT_MISSION (RECOVERY_MANAGER_STAMINA_
+ * CRITICAL_THRESHOLD, RECOVERY_MANAGER_EQUIPMENT_CRITICAL_THRESHOLD -
+ * both already on this struct's own 0-100 wire scale, no unit
+ * conversion needed). COMMS_PRECEDENCE_ROUTINE otherwise - see this
+ * struct's own doc above on why routine heartbeat/status-change
+ * traffic is designed to tolerate staleness; this carve-out is the
+ * one case where that's no longer true. There is currently no
+ * separate "why did this change" signal in the send trigger (see
+ * mission_link_status_tx_step()/mission_link_send_status() in
+ * board/{Raspberry_Pi_Pico,STM32N6570-DK}/mission_link_task.c -
+ * status/equipment/work_rate change and
+ * the periodic heartbeat all funnel through the same call), so this
+ * function is what actually distinguishes an urgent send from a
+ * routine one - it must be called on every STATUS send, not just
+ * ones that "look" like they might be a recovery event. */
+CommsPrecedence_t mission_link_status_precedence(const MissionLinkStatus_t *msg);
 
 /* Sentinel for MissionLinkStatus_t.assigned_incident_id - see this
  * struct's own doc above for why this is a fresh, width-matched

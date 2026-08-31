@@ -21,13 +21,8 @@
  *   application state (g_teams[]) actually changes as a result, not
  *   just that bytes moved.
  *
- *   Does NOT prove: that real SPI/LoRa hardware works. Both boards
- *   now have a real sx1262_hal.c (RX poll wired to comms_transport_
- *   deliver_received(), TX wired to a strong lora_spi_transmit()) -
- *   see core/vendor/sx126x_driver/README.md and each board's own
- *   sx1262_rx_selftest for what's been checked there - but this
- *   harness itself still talks over a Unix socket, not SPI/DIO1/a
- *   real radio, so it exercises neither HAL. It also does not prove
+ *   Does NOT prove: that real SPI/LoRa hardware works (no SX1262 HAL
+ *   exists yet - see core/vendor/sx126x_driver/README.md), that
  *   either board's real firmware boots on real silicon (neither has
  *   ever been flashed), or that the µT-Kernel scheduler itself
  *   behaves correctly under real task preemption (this harness runs
@@ -195,6 +190,17 @@
 
 extern void mission_link_task_init(void);
 extern void mission_link_task_step(void);
+
+/* comms_transport_send() (core/comms_transport.c) now enqueues
+   cross-board sends onto tiered TX queues instead of calling
+   lora_spi_transmit() synchronously - see that file's own doc.
+   comms_transport_dispatch_pending() is what actually packs and
+   transmits one queued frame per call. Must be pumped alongside
+   mission_link_task_step()/harness_rx_pump() below in both run_
+   board0()/run_board1() loops, same reasoning as board/{Raspberry_Pi_
+   Pico,STM32N6570-DK}/main_board.c's
+   own per-tick pairing of RX-poll and dispatch. */
+extern void comms_transport_dispatch_pending(void);
 
 /* Shared by both processes' copies of these weak overrides -
    independent after fork() (COW), which is the entire point (see
@@ -382,6 +388,7 @@ static int run_board1(void)
     {
         harness_rx_pump();
         mission_link_task_step();
+        comms_transport_dispatch_pending();
 
         if (g_teams[expect_team_id].team_id == expect_team_id &&
             g_teams[expect_team_id].loc_x == 1234 &&
@@ -484,6 +491,7 @@ static int run_board0(void)
         }
 
         mission_link_task_step();
+        comms_transport_dispatch_pending();
     }
 
     /* Board 0 has no local assertion of its own to make - its whole

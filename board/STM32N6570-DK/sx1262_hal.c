@@ -445,6 +445,21 @@ sx126x_hal_status_t sx126x_hal_read(const void *context, const uint8_t *command,
 static int g_radio_configured;
 
 /*
+ * TX-busy tracking for comms_transport.c's dispatcher (lora_radio_tx_
+ * busy() below) - set the instant lora_spi_transmit() successfully
+ * keys the radio, cleared once sx1262_poll_rx() observes TxDone (or
+ * Timeout) on a later poll. No separate software watchdog needed on
+ * this board (contrast board/Raspberry_Pi_Pico/sx1262_hal.c's own
+ * poll-count watchdog): lora_spi_transmit() below already passes a
+ * 1000ms timeout to sx126x_set_tx(), so the radio's own hardware
+ * guarantees a Timeout IRQ (already routed to DIO1, same mask this
+ * file already used before this flag existed) fires on its own if
+ * TxDone never does - this flag is only ever left set for that
+ * bounded 1000ms window, never indefinitely.
+ */
+static volatile int g_lora_tx_busy;
+
+/*
  * Puts the radio into RX and leaves it there. Called once from
  * ensure_radio_configured() below (radio init) and NOT re-called by
  * sx1262_poll_rx() after each received packet - see this function's
@@ -596,7 +611,17 @@ int lora_spi_transmit(const uint8_t *frame_bytes, uint32_t frame_len)
         return 1;
     }
 
+    g_lora_tx_busy = 1;
+
     return 0;
+}
+
+/* comms_transport.c's lora_radio_tx_busy() extern - see that file's
+   weak default (used before this HAL is linked) and g_lora_tx_busy's
+   own doc above. */
+int lora_radio_tx_busy(void)
+{
+    return g_lora_tx_busy;
 }
 
 /*
@@ -655,7 +680,14 @@ void sx1262_poll_rx(void)
            next transmit. (RxDone can't reach this branch - handled
            below instead, and does NOT need this same re-arm: RX is
            configured continuous, see sx1262_enter_rx()'s own doc, so
-           the chip is still listening on its own after a reception.) */
+           the chip is still listening on its own after a reception.)
+
+           Given the configured IRQ mask (TxDone|RxDone|Timeout only -
+           see ensure_radio_configured()), "not RxDone" here means
+           whatever lora_spi_transmit() last keyed is no longer in
+           flight either way - clears the busy flag comms_transport.c's
+           dispatcher gates on. See g_lora_tx_busy's own doc above. */
+        g_lora_tx_busy = 0;
         sx1262_enter_rx();
         return;
     }

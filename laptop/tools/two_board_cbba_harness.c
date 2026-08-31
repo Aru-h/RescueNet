@@ -32,11 +32,8 @@
  *   incident" agree with each other - not merely that one side
  *   thinks it won, or that bytes moved.
  *
- *   Does NOT prove: real SPI/LoRa hardware works. Both boards now
- *   have a real sx1262_hal.c (see core/vendor/sx126x_driver/README.md
- *   and each board's own sx1262_rx_selftest), but this harness talks
- *   over a Unix socket, not SPI/DIO1/a real radio, so it exercises
- *   neither HAL. It also does not prove that either board's
+ *   Does NOT prove: real SPI/LoRa hardware (no SX1262 HAL exists yet
+ *   - see core/vendor/sx126x_driver/README.md), that either board's
  *   firmware boots on real silicon, or real µT-Kernel task
  *   preemption (cbba_run() is driven here as a plain function call in
  *   a loop, not under tk_cre_tsk/tk_sta_tsk). A world built by hand
@@ -541,8 +538,34 @@ static int run_board(uint8_t board_id, uint8_t local_team_lo, uint8_t local_team
        this). */
     for (tick = 0; tick < HARNESS_TICKS; tick++)
     {
+        int drain;
+
         g_current_tick = (uint32_t)tick;
         cbba_run();
+
+        /* comms_transport_send() (core/comms_transport.c) now enqueues
+           cross-board sends onto tiered TX queues instead of calling
+           lora_spi_transmit() synchronously - see that file's own
+           doc. comms_transport_dispatch_pending() is what actually
+           packs and transmits one queued frame per call, gated on
+           lora_radio_tx_busy() (weak default here, always "not busy" -
+           this harness registers no strong override, so every call
+           below is free to send immediately, matching this test's
+           pre-existing "no real radio contention" premise). Drained
+           in a small bounded loop rather than called once, so every
+           message cbba_broadcast_local_teams() enqueued THIS tick
+           (up to NUM_TEAMS/2 per board, per cbba_broadcast_local_
+           teams()'s own per-board fan-out) actually reaches the wire
+           before this tick's cbba_ingest_remote_mesh_replies() call
+           on the OTHER process gets a chance to look for it - without
+           this, everything above stays true (unmodified cbba_run())
+           but the messages it hands to comms_transport_send() would
+           sit queued and never actually cross the socketpair this
+           harness's lora_spi_transmit() override reads from. */
+        for (drain = 0; drain < NUM_TEAMS; drain++)
+        {
+            comms_transport_dispatch_pending();
+        }
     }
 
     /* Real, honest flakiness was found here by actually running this

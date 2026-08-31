@@ -926,6 +926,7 @@ void cbba_broadcast_local_teams(void)
 
             (void)comms_transport_send(team_id, representative_team_id,
                                         LORA_FRAME_TYPE_CBBA,
+                                        COMMS_PRECEDENCE_PRIORITY,
                                         (const uint8_t *)&msg,
                                         (uint8_t)sizeof(msg));
         }

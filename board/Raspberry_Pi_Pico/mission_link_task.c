@@ -293,6 +293,7 @@ static void mission_link_route_or_apply_roster(const MissionLinkRoster_t *msg)
         mission_link_pack_roster_payload(msg, &relay_buf[1]);
 
         (void)comms_transport_send(0u, msg->team_id, LORA_FRAME_TYPE_MISSION_LINK,
+                                    COMMS_PRECEDENCE_ROUTINE,
                                     relay_buf, MISSION_LINK_ROSTER_RELAY_SIZE);
     }
 }
@@ -323,6 +324,7 @@ static void mission_link_route_or_apply_fault(const MissionLinkFault_t *msg)
         mission_link_pack_fault_payload(msg, &relay_buf[1]);
 
         (void)comms_transport_send(0u, msg->team_id, LORA_FRAME_TYPE_MISSION_LINK,
+                                    mission_link_fault_precedence(msg),
                                     relay_buf, MISSION_LINK_FAULT_RELAY_SIZE);
     }
 }
@@ -372,8 +374,9 @@ static void mission_link_apply_and_relay_incident(const MissionLinkIncident_t *m
         mission_link_pack_incident_payload(msg, &relay_buf[1]);
 
         (void)comms_transport_send(0u, mission_link_representative_team(board_id),
-                                    LORA_FRAME_TYPE_MISSION_LINK, relay_buf,
-                                    MISSION_LINK_INCIDENT_RELAY_SIZE);
+                                    LORA_FRAME_TYPE_MISSION_LINK,
+                                    mission_link_incident_precedence(msg),
+                                    relay_buf, MISSION_LINK_INCIDENT_RELAY_SIZE);
     }
 }
 
@@ -760,6 +763,7 @@ static void mission_link_send_status(uint8_t team_id, const MissionLinkStatus_t 
            DK's relay step above forwards by sub-type, not by which
            specific team_id happened to route it there. */
         (void)comms_transport_send(team_id, 0u, LORA_FRAME_TYPE_MISSION_LINK,
+                                    mission_link_status_precedence(status),
                                     relay_buf, MISSION_LINK_STATUS_RELAY_SIZE);
     }
 }
@@ -913,6 +917,7 @@ static void mission_link_handshake_tx_step(void)
                    0) — same convention mission_link_send_status()
                    already uses for its own non-DK-board uplink. */
                 (void)comms_transport_send(0u, 0u, LORA_FRAME_TYPE_HANDSHAKE,
+                                            COMMS_PRECEDENCE_IMMEDIATE,
                                             relay_buf, MISSION_LINK_HANDSHAKE_REPLY_RELAY_SIZE);
             }
 
@@ -961,8 +966,8 @@ static void mission_link_handshake_tx_step(void)
                    only" sender convention channel 2's other sends
                    already use. */
                 (void)comms_transport_send(0u, mission_link_representative_team(peer),
-                                            LORA_FRAME_TYPE_HANDSHAKE, relay_buf,
-                                            MISSION_LINK_HANDSHAKE_REQ_RELAY_SIZE);
+                                            LORA_FRAME_TYPE_HANDSHAKE, COMMS_PRECEDENCE_IMMEDIATE,
+                                            relay_buf, MISSION_LINK_HANDSHAKE_REQ_RELAY_SIZE);
             }
 
             {

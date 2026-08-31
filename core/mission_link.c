@@ -12,6 +12,12 @@
                                  see that header's own comment on why IT
                                  can't include cbba.h): this file has no
                                  downstream includers to cycle through. */
+#include "recovery_manager_config.h" /* RECOVERY_MANAGER_*_THRESHOLD/
+                                 SCALE constants - see the three
+                                 mission_link_*_precedence() functions
+                                 at the end of this file, which reuse
+                                 these exact thresholds rather than
+                                 inventing separate ones. */
 
 /* MISSION_LINK_HEARTBEAT_INTERVAL_MS (mission_link.h) is defined as an
  * independent literal rather than derived from CBBA_ROUND_TIMEOUT_MS by
@@ -738,4 +744,62 @@ void mission_link_build_status(uint8_t team_id, MissionLinkStatus_t *out)
         out->assigned_incident_id = MISSION_LINK_NO_INCIDENT;
         out->work_remaining_at_report = 0u;
     }
+}
+
+/*
+ * ---------------------------------------------------------------
+ * Comms precedence classifiers - see the matching declarations in
+ * mission_link.h (next to each struct) for the full reasoning behind
+ * each cutoff. Grouped here, at the end of the file, rather than
+ * next to each struct's other helpers above, since these three are a
+ * single cohesive concern (message routing urgency) distinct from
+ * the pack/apply/relay logic the rest of this file implements.
+ * ---------------------------------------------------------------
+ */
+
+CommsPrecedence_t mission_link_incident_precedence(const MissionLinkIncident_t *msg)
+{
+    if (msg->priority == (uint8_t)PRIORITY_CRITICAL && msg->discovered != 0u)
+    {
+        return COMMS_PRECEDENCE_FLASH;
+    }
+
+    return COMMS_PRECEDENCE_PRIORITY;
+}
+
+CommsPrecedence_t mission_link_fault_precedence(const MissionLinkFault_t *msg)
+{
+    if (msg->active[FAULT_CLASS_COMMUNICATION] &&
+        msg->severity[FAULT_CLASS_COMMUNICATION] >= RECOVERY_MANAGER_COMMUNICATION_SEVERE_THRESHOLD)
+    {
+        return COMMS_PRECEDENCE_IMMEDIATE;
+    }
+
+    /* RECOVERY_MANAGER_MOBILITY_SEVERITY_SCALE is a divisor in
+       recovery_manager.c's own evaluate_mobility() (fault_severity =
+       severity / SCALE, compared against a stage-dependent confidence
+       floor there) - used here as a direct comparison instead, since
+       the stage/confidence machinery isn't available at this call
+       site. Treats "raw severity at or past the scale value" as the
+       escalation point, which is the same order of magnitude that
+       function's own division implies, not an independently invented
+       number. */
+    if (msg->active[FAULT_CLASS_MOBILITY] &&
+        (float)msg->severity[FAULT_CLASS_MOBILITY] >= RECOVERY_MANAGER_MOBILITY_SEVERITY_SCALE)
+    {
+        return COMMS_PRECEDENCE_IMMEDIATE;
+    }
+
+    return COMMS_PRECEDENCE_PRIORITY;
+}
+
+CommsPrecedence_t mission_link_status_precedence(const MissionLinkStatus_t *msg)
+{
+    if ((float)msg->stamina_at_report <= RECOVERY_MANAGER_STAMINA_CRITICAL_THRESHOLD ||
+        (uint32_t)msg->equipment_level <= RECOVERY_MANAGER_EQUIPMENT_CRITICAL_THRESHOLD)
+    {
+        return COMMS_PRECEDENCE_FLASH;
+    }
+
+    return COMMS_PRECEDENCE_ROUTINE;
 }

@@ -181,6 +181,18 @@ extern void sx1262_hal_init(void);
 extern void sx1262_poll_rx(void);
 
 /*
+ * Tiered TX dispatcher (core/comms_transport.c) - the piece that
+ * actually moves a cross-board comms_transport_send() from "enqueued"
+ * to "on air". Must be called every place this file already pumps
+ * sx1262_poll_rx()/mission_link_task_step(), including this file's
+ * two wait-loops (handshake/roster) - a handshake or roster relay
+ * message enqueued during those phases would otherwise never flush,
+ * since nothing else calls this. See core/comms_transport.h's own
+ * doc on this function for the full dispatch contract.
+ */
+extern void comms_transport_dispatch_pending(void);
+
+/*
  * Handshake readiness gate (this prompt's addition — read alongside
  * the matching gate in board/STM32N6570-DK/mission_link_task.c's RX
  * paths, which reject inbound frames on the same condition this
@@ -318,17 +330,9 @@ LOCAL void sim_task(INT stacd, void *exinf)
     /*
      * Boot-side half of the handshake readiness gate — see the extern
      * block above this function for the full design note (role-based,
-     * not chip-based). The previously-known gap here (nothing sent or
-     * received real handshake frames, so this blocked forever on real
-     * hardware) is closed: sx1262_poll_rx() above now feeds real DIO1/
-     * RX data into comms_transport's inbox and lora_spi_transmit() is
-     * a strong (non-weak) override on this board, so a real handshake
-     * round trip can complete here once run on actual hardware - not
-     * yet exercised on real silicon, since neither board has ever been
-     * flashed (see ARCHITECTURE.md's Board Runtime Architecture
-     * section) and laptop/tools/sx1262_rx_selftest_dk.c covers the RX
-     * path in isolation, not a full handshake round trip. Ordering:
-     * must follow whatever sets
+     * not chip-based) and the known gap (nothing sends/receives real
+     * handshake frames yet, so this currently blocks forever on real
+     * hardware). Ordering: must follow whatever sets
      * g_comms_transport_this_board_id, same requirement
      * mission_link_task_init() already has a few lines up (now
      * satisfied — see above) — this call uses that same variable's
@@ -362,6 +366,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
            eventually true). */
         sx1262_poll_rx();
         mission_link_task_step();
+        comms_transport_dispatch_pending();
     }
 
     tm_putstring((UB*)"tron: handshake ready\n");
@@ -385,6 +390,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
     {
         sx1262_poll_rx();
         mission_link_task_step();
+        comms_transport_dispatch_pending();
     }
 
     tm_putstring((UB*)"tron: roster received, starting seed loop\n");
@@ -414,6 +420,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
                reason to add a second interval here to throttle it. */
             sx1262_poll_rx();
             mission_link_task_step();
+            comms_transport_dispatch_pending();
 
             if((tick % BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL) == 0u)
             {

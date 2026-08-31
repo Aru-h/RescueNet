@@ -180,6 +180,7 @@ int mission_link_override_route_or_apply(const MissionLinkOverride_t *msg)
        message type in this project already uses for that same
        situation rather than inventing a different placeholder. */
     return comms_transport_send(0u, msg->team_id,
-                                 LORA_FRAME_TYPE_OVERRIDE, payload,
+                                 LORA_FRAME_TYPE_OVERRIDE, COMMS_PRECEDENCE_IMMEDIATE,
+                                 payload,
                                  (uint8_t)MISSION_LINK_OVERRIDE_PAYLOAD_SIZE);
 }

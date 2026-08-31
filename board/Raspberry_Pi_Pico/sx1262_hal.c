@@ -159,6 +159,37 @@
 
 static bool g_sx1262_spi_ready = false;
 
+/*
+ * TX-busy tracking for comms_transport.c's dispatcher (lora_radio_tx_
+ * busy() below) - set the instant lora_spi_transmit() successfully
+ * keys the radio, cleared once sx1262_rx_poll() observes TX_DONE (or
+ * Timeout) on a later poll. Previously this bit was read off DIO1/
+ * IRQ status and silently discarded (the IRQ mask already includes
+ * TX_DONE - see sx1262_hal_init()'s dio_irq_params call below - but
+ * nothing consumed it); this is what actually surfaces it.
+ *
+ * g_lora_tx_busy_poll_count: defensive watchdog, not a real-time
+ * deadline. sx126x_set_tx(NULL, 0u) below (unlike the DK's own
+ * lora_spi_transmit(), which passes a 1000ms hardware timeout to
+ * set_tx() and therefore gets TX_DONE-or-Timeout guaranteed by the
+ * radio itself) configures no hardware TX watchdog on this board, so
+ * a stuck TX_DONE (radio fault, corrupted state) would otherwise wedge
+ * this flag - and therefore the whole TX queue behind it - forever.
+ * Counts consecutive sx1262_rx_poll() calls seen while busy without
+ * observing TX_DONE; forced clear past SX1262_TX_BUSY_POLL_LIMIT.
+ * Deliberately a poll-count, not a tick/ms-based timeout: BOARD_TICK_
+ * DELAY_MS is 0 (see main_board.c) so there is no real-time pacing to
+ * measure against here - a bring-up-appropriate approximation, same
+ * "stated rather than hidden" spirit as comms_transport.c's own
+ * COMMS_TRANSPORT_CHANNEL_BYTES_PER_TICK caveat.
+ */
+static volatile int g_lora_tx_busy = 0;
+static uint32_t g_lora_tx_busy_poll_count = 0u;
+
+#ifndef SX1262_TX_BUSY_POLL_LIMIT
+#define SX1262_TX_BUSY_POLL_LIMIT 100000u
+#endif
+
 static void sx1262_spi_init(void)
 {
     if (g_sx1262_spi_ready)
@@ -418,7 +449,18 @@ int lora_spi_transmit(const uint8_t *frame_bytes, uint32_t frame_len)
         return -1;
     }
 
+    g_lora_tx_busy = 1;
+    g_lora_tx_busy_poll_count = 0u;
+
     return 0;
+}
+
+/* comms_transport.c's lora_radio_tx_busy() extern - see that file's
+   weak default (used before this HAL is linked) and this board's
+   g_lora_tx_busy doc above. */
+int lora_radio_tx_busy(void)
+{
+    return g_lora_tx_busy;
 }
 
 /* ------------------------------------------------------------------ */
@@ -484,6 +526,29 @@ void sx1262_rx_poll(void)
     sx126x_irq_mask_t irq = SX126X_IRQ_NONE;
     sx126x_rx_buffer_status_t rx_status;
 
+    /* Watchdog advance has to happen BEFORE the DIO1 early-return
+       below, not after it - the exact fault this guards against (a
+       stuck TX that never raises TX_DONE) means DIO1 never asserts
+       at all, so any watchdog logic placed after the early-return
+       would never run in that scenario. Cheap (one flag check, one
+       compare) even every poll. */
+    if (g_lora_tx_busy)
+    {
+        g_lora_tx_busy_poll_count++;
+
+        if (g_lora_tx_busy_poll_count > SX1262_TX_BUSY_POLL_LIMIT)
+        {
+            /* Force-clear rather than wedge the entire TX queue
+               behind one stuck send indefinitely - see g_lora_tx_
+               busy_poll_count's own doc above. The frame itself is
+               simply lost; no retry at this layer, matching this
+               project's existing "no NACK path at the LoRa layer"
+               policy. */
+            g_lora_tx_busy = 0;
+            g_lora_tx_busy_poll_count = 0u;
+        }
+    }
+
     if (!sx1262_dio1_is_asserted())
     {
         return;
@@ -541,6 +606,18 @@ void sx1262_rx_poll(void)
        either uncleared would keep DIO1 asserted forever, making
        every future poll look like a fresh RxDone. */
     (void)sx126x_clear_irq_status(NULL, irq);
+
+    /* TX_DONE (or Timeout - either one means whatever lora_spi_
+       transmit() last keyed is no longer in flight) clears the busy
+       flag comms_transport.c's dispatcher gates on - see g_lora_tx_
+       busy's own doc above. The watchdog counter that also guards
+       this flag lives at the top of this function, before the DIO1
+       early-return, not here - see that code's own comment on why. */
+    if ((irq & (SX126X_IRQ_TX_DONE | SX126X_IRQ_TIMEOUT)) != 0u)
+    {
+        g_lora_tx_busy = 0;
+        g_lora_tx_busy_poll_count = 0u;
+    }
 
     /* Re-enter RX unconditionally - see sx1262_enter_rx()'s own doc
        on why this is required after every DIO1 event, not just a
