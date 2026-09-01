@@ -511,6 +511,21 @@ def save_history(entry, keep=20):
 
 
 # Flask Routes
+@app.route("/bench/a")
+def bench_a():
+    return render_template("bench_a.html")
+
+
+@app.route("/bench/b")
+def bench_b():
+    return render_template("bench_b.html")
+
+
+@app.route("/bench/c")
+def bench_c():
+    return render_template("bench_c.html")
+
+
 @app.route("/")
 def index():
     return render_template("index.html")

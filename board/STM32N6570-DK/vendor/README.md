@@ -4,9 +4,10 @@ External dependencies for the STM32N6570-DK board target, fetched
 separately, not bundled in this repo. (Moved here from top-level
 `vendor/` as part of splitting each physical board target into its
 own self-contained `board/<name>/` folder — see `../../../
-CHANGELOG.md`'s "Board folder restructure" entry. A Pico/RP2040
-target gets its own `board/Raspberry_Pi_Pico/vendor/mtk3_bsp`, v1, not
-this v2 BSP, alongside this one once that port exists.)
+CHANGELOG.md`'s "Board folder restructure" entry. The Pico/RP2040
+target has its own `board/Raspberry_Pi_Pico/vendor/mtk3_bsp`, v1, not
+this v2 BSP — same "fetch separately, don't bundle" policy, see that
+folder's own README.)
 
 ## mtk3_bsp2 (µT-Kernel 3.0 BSP2)
 

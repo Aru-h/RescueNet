@@ -187,17 +187,43 @@ void initialize_test_scenario(void)
 
 void debug_emit_live_frame(uint32_t tick)
 {
-    (void)tick;
+    char stamina_buf[16];
+
     /* TODO(usb): this is the board's actual job, not a stub-forever
      * function. The laptop's LIVEFRAME is a JSON text line over
      * stdout for the Flask dashboard's SSE stream; the board
      * equivalent should be a compact binary telemetry frame over
      * USB carrying the same per-tick team/incident/safezone state.
-     * Now that tm_printf is confirmed working, a text-JSON variant
-     * over the debug UART is also a viable stopgap before real USB
-     * telemetry exists — likely the fastest path to something
-     * visible on real hardware, even if it's not the final design.
+     *
+     * Below is a text-UART stopgap, not that eventual design: just
+     * enough per-tick output (tick + compact per-team state) to see
+     * the sim is alive on real hardware right now, over the existing
+     * 115200bps debug UART via tm_printf. Deliberately narrower than
+     * laptop/debug.c's own LIVEFRAME (no per-incident array, no
+     * fault_mask/degraded/hours worked/dest fields/diagnostic-counter
+     * fields) - see this file's own comment above print_world_state()
+     * on why dumping that much every tick over this UART is real airtime;
+     * the same reasoning applies here. A fuller per-object dump, if
+     * ever wanted on-device, is that same comment's proposed
+     * DEBUG_FULL_DUMP-gated addition, not something to build in here.
      */
+    tm_printf((UB*)"LIVEFRAME tick=%lu", (unsigned long)tick);
+
+    for(int i = 0; i < NUM_TEAMS; i++)
+    {
+        fmt_fixed3(stamina_buf, sizeof(stamina_buf), g_teams[i].stamina, 3);
+        tm_printf((UB*)" team%d={id=%d,x=%d,y=%d,stamina=%s,status=%s,pool=%d,slot=%d}",
+            i,
+            g_teams[i].team_id,
+            g_teams[i].loc_x,
+            g_teams[i].loc_y,
+            (UB*)stamina_buf,
+            (UB*)team_status_to_string(g_teams[i].status),
+            g_teams[i].assigned_task_pool,
+            g_teams[i].assigned_task_slot);
+    }
+
+    tm_printf((UB*)"\n");
 }
 
 void debug_print_generator_evaluation(uint32_t tick,

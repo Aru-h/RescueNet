@@ -252,14 +252,59 @@ static int g_harness_socket_fd = -1;
 
 /* Strong override of comms_transport.c's weak lora_spi_transmit():
    writes onto this process's own socket fd instead of a real SX1262.
-   See this file's own top comment. */
+   See this file's own top comment.
+
+   Retries on EAGAIN/EWOULDBLOCK and short writes instead of treating
+   either as a dropped frame. comms_transport_dispatch_pending() (core/
+   comms_transport.c) discards this function's return value on failure
+   by design - "a failed hand-off here is dropped, not retried" - which
+   is the right call on real hardware (SPI TX genuinely can't block/
+   retry mid-tick; a missed send just gets picked up next tick). This
+   socket is not real hardware: it's a non-blocking fd, and under this
+   harness's own CPU contention (two single-threaded processes spin-
+   polling for up to 530ms each, see cbba_now_ms()'s override below,
+   frequently on a single-core sandbox) write() can transiently return
+   EAGAIN for reasons that have nothing to do with LoRa airtime -
+   comms_transport.c's channel-busy accounting already models real
+   airtime contention separately, so a raw kernel-send-buffer-full
+   here is a test artifact this harness should absorb, not a second,
+   uncontrolled source of message loss on top of it. Bounded retry
+   count, not an infinite spin, so a genuinely dead peer (EPIPE - the
+   other board's process already exited, expected and harmless at the
+   end of a run) still returns promptly instead of hanging. */
 int lora_spi_transmit(const uint8_t *frame_bytes, uint32_t frame_len)
 {
-    ssize_t written = write(g_harness_socket_fd, frame_bytes, frame_len);
-    if (written < 0 || (uint32_t)written != frame_len)
+    uint32_t total_written = 0u;
+    int retries = 0;
+    const int MAX_RETRIES = 100000; /* generous - each retry is a fast
+        EAGAIN spin, not a real wait; this only exists to bound a
+        genuinely stuck case, not to model realistic timing */
+
+    while (total_written < frame_len)
     {
+        ssize_t written = write(g_harness_socket_fd,
+                                 frame_bytes + total_written,
+                                 frame_len - total_written);
+
+        if (written > 0)
+        {
+            total_written += (uint32_t)written;
+            continue;
+        }
+
+        if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        {
+            if (++retries > MAX_RETRIES)
+            {
+                return -1;
+            }
+            continue;
+        }
+
+        /* written == 0, or a real error (EPIPE etc.) - not retryable. */
         return -1;
     }
+
     return 0;
 }
 

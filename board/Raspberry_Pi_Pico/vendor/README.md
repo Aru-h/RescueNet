@@ -35,17 +35,19 @@ branch) but is actually just `build_make/` being a shared,
 not-Pico-specific file present on every branch; cloning the branch
 directly avoids the confusion entirely.
 
-The BSP vendored here **is genuinely vendored** (full source tree
-present in this repo, `.git` stripped, matching the DK's
-`vendor/mtk3_bsp2/` — see that folder's own note on this), not just
-documented — same reasoning as the DK: it's real, freely-available
-code needed to build/verify this board target, and keeping it out of
-the repo would mean `check-<pico-target>` (once that exists) can't
-actually compile against real headers, the same gap this project has
-consistently avoided for the DK throughout its own build-check work.
-Still released under T-License 2.2 like `mtk3_bsp2` — same licensing
-character, re-fetch with the command above instead of trusting a stale
-copy if this ever needs updating.
+**Not vendored directly in this repo** — same policy as the DK's
+`vendor/mtk3_bsp2/`, and for the same reason: it's released under
+T-License 2.2, which isn't a redistribution-friendly license to
+bundle verbatim. Fetch it yourself with the command above rather than
+trusting a committed copy. (An earlier version of this doc said the
+opposite — that it *was* deliberately vendored in full — which was
+inconsistent with the DK's stated policy under the same license and
+has been corrected here; the source tree previously committed under
+this path has been removed from version control accordingly.)
+
+`board/Raspberry_Pi_Pico/` and `check-<pico-target>` (once that
+exists) expect the BSP at `board/Raspberry_Pi_Pico/vendor/mtk3_bsp/`
+exactly as cloned above.
 
 ## What's confirmed vs. what the original handoff doc assumed
 

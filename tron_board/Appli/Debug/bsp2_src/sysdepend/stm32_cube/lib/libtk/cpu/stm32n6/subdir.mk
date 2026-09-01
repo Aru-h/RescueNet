@@ -4,10 +4,6 @@
 ################################################################################
 
 # Add inputs and outputs from these tool invocations to the build variables 
-C_SRCS += \
-/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/cpu/stm32n6/int_stm32n6.c \
-/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/sysdepend/stm32_cube/lib/libtk/cpu/stm32n6/ptimer_stm32n6.c 
-
 OBJS += \
 ./bsp2_src/sysdepend/stm32_cube/lib/libtk/cpu/stm32n6/int_stm32n6.o \
 ./bsp2_src/sysdepend/stm32_cube/lib/libtk/cpu/stm32n6/ptimer_stm32n6.o 

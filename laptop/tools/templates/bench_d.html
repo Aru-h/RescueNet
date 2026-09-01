@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CONCORD — Common Operating Picture</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%226%22 fill=%22%2315202b%22/><circle cx=%2216%22 cy=%2216%22 r=%228%22 fill=%22none%22 stroke=%22%23d32f2f%22 stroke-width=%223%22/><circle cx=%2216%22 cy=%2216%22 r=%222.5%22 fill=%22%232e7d32%22/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter:opsz,wght@14..32,400..800&display=swap" rel="stylesheet">
+<script src="/static/chart.umd.min.js"></script>
+<script src="/static/bench-common.js"></script>
+<style>
+  :root {
+    --bg: #eef1f4;
+    --surface: #ffffff;
+    --surface-alt: #f6f8fa;
+    --border: #d7dce2;
+    --border-strong: #b9c1ca;
+    --text: #1a2129;
+    --text-dim: #5b6572;
+    --text-faint: #8892a0;
+    --header: #15202b;
+
+    /* Standard incident-severity convention. These colors mean severity ONLY — never used decoratively. */
+    --critical: #d32f2f;
+    --critical-bg: #fdecea;
+    --urgent: #ed6c02;
+    --urgent-bg: #fef3e6;
+    --caution: #b8860b;
+    --caution-bg: #fbf3d9;
+    --ok: #2e7d32;
+    --ok-bg: #e9f5ea;
+    --inactive: #78828c;
+    --inactive-bg: #eef0f2;
+
+    --font: 'Inter', -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: var(--font); background: var(--bg); color: var(--text); font-size: 14px;
+         font-feature-settings: "tnum" 1; }
+  ::-webkit-scrollbar { width:8px; } ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius:4px; }
+
+  /* ---------- Header ---------- */
+  header {
+    background: var(--header); color: #fff; padding: 10px 20px; display:flex; align-items:center;
+    justify-content:space-between;
+  }
+  .brand { display:flex; align-items:center; gap:10px; }
+  .brand-mark { width:26px; height:26px; border-radius:6px; background: #fff; display:flex; align-items:center; justify-content:center; }
+  .brand-mark svg { width:18px; height:18px; }
+  .brand-name { font-weight:800; font-size:16px; letter-spacing:0.2px; }
+  .brand-sub { font-size:11.5px; color:#9fb0c0; font-weight:500; margin-left:8px; }
+  .hdr-right { display:flex; align-items:center; gap:14px; }
+  .clock { font-variant-numeric: tabular-nums; font-size:13px; color:#c7d2db; font-weight:600; }
+  .conn { display:flex; align-items:center; gap:6px; font-size:12px; color:#c7d2db; font-weight:500; }
+  .dot { width:7px; height:7px; border-radius:50%; background:#5b6572; }
+  .dot.live { background:#4caf50; box-shadow:0 0 6px #4caf50; }
+  .modebtn {
+    background: rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:#fff;
+    padding:6px 14px; border-radius:6px; font-size:12.5px; font-weight:600; cursor:pointer; font-family: var(--font);
+  }
+  .modebtn:hover { background: rgba(255,255,255,0.18); }
+
+  /* ---------- Alert banner ---------- */
+  .alertbar { padding: 9px 20px; font-size:13px; font-weight:700; display:flex; align-items:center; gap:10px; }
+  .alertbar.ok { background: var(--ok-bg); color: var(--ok); }
+  .alertbar.critical { background: var(--critical-bg); color: var(--critical); }
+  .alertbar .ic { font-size:15px; }
+
+  /* ---------- Operator-only controls, hidden in wallboard mode ---------- */
+  .runbar {
+    display:flex; align-items:flex-end; gap:16px; flex-wrap:wrap; background: var(--surface);
+    border-bottom:1px solid var(--border); padding: 12px 20px;
+  }
+  body.wallboard .runbar, body.wallboard .op-only { display:none !important; }
+  body.wallboard header .modebtn.exit { display:inline-block; }
+  header .modebtn.exit { display:none; }
+
+  .field { display:flex; flex-direction:column; gap:4px; }
+  .field label { font-size:10.5px; color: var(--text-faint); font-weight:700; text-transform:uppercase; letter-spacing:0.3px; }
+  .field input, .field select { background: #fff; border:1px solid var(--border-strong); color: var(--text);
+    border-radius:6px; padding:6px 9px; font-size:13px; width:88px; font-family: var(--font); }
+  .field select { width:120px; }
+  .btn { border:1px solid var(--border-strong); background:#fff; color: var(--text); padding:7px 15px;
+    border-radius:6px; font-size:12.5px; font-weight:700; cursor:pointer; font-family: var(--font); }
+  .btn.primary { background: var(--header); border-color: var(--header); color:#fff; }
+  .btn.primary:hover { filter: brightness(1.15); }
+  .btn:hover { background: var(--surface-alt); }
+
+  /* ---------- Scorecards ---------- */
+  .scorerow { display:grid; grid-template-columns: repeat(5,1fr); gap:14px; padding: 16px 20px 0; }
+  body.wallboard .scorerow { padding: 22px 28px 0; gap:20px; }
+  .score { background: var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; text-align:left; }
+  body.wallboard .score { padding: 22px 22px; border-radius:14px; }
+  .score .lbl { font-size:11.5px; color: var(--text-faint); font-weight:700; text-transform:uppercase; letter-spacing:0.3px; margin-bottom:8px; }
+  body.wallboard .score .lbl { font-size:14px; margin-bottom:12px; }
+  .score .val { font-size:30px; font-weight:800; letter-spacing:-0.5px; }
+  body.wallboard .score .val { font-size:52px; }
+  .score .val.critical { color: var(--critical); } .score .val.urgent { color: var(--urgent); }
+  .score .val.ok { color: var(--ok); } .score .val.neutral { color: var(--text); }
+
+  /* ---------- Main COP layout: map dominant ---------- */
+  .cop { display:grid; grid-template-columns: 1.9fr 1fr; gap:16px; padding: 16px 20px 24px; align-items:start; }
+  body.wallboard .cop { padding: 20px 28px 30px; gap:20px; }
+  .panel { background: var(--surface); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+  .panel h3 { margin:0; padding: 13px 16px; font-size:12.5px; font-weight:800; text-transform:uppercase;
+    letter-spacing:0.4px; color: var(--text-dim); border-bottom:1px solid var(--border); background: var(--surface-alt); }
+  body.wallboard .panel h3 { font-size:16px; padding: 16px 20px; }
+  .mapwrap { padding:12px; }
+  canvas#mapD { width:100%; aspect-ratio: 1/1; display:block; border-radius:6px; }
+  .legend { display:flex; flex-wrap:wrap; gap:14px; padding:6px 16px 14px; font-size:11.5px; color: var(--text-dim); }
+  body.wallboard .legend { font-size:14px; gap:20px; }
+  .legend span { display:flex; align-items:center; gap:6px; }
+  .sw { width:10px; height:10px; border-radius:50%; display:inline-block; }
+
+  .sidecol { display:flex; flex-direction:column; gap:16px; }
+
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  body.wallboard table { font-size:16px; }
+  th { text-align:left; color: var(--text-faint); font-weight:700; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:0.3px; padding: 8px 14px; border-bottom:1px solid var(--border); background: var(--surface-alt); }
+  body.wallboard th { font-size:13px; padding: 12px 18px; }
+  td { padding: 8px 14px; border-bottom:1px solid var(--border); color: var(--text); }
+  body.wallboard td { padding: 12px 18px; }
+  tr:last-child td { border-bottom:none; }
+
+  .pill { padding:3px 9px; border-radius:99px; font-size:11px; font-weight:700; display:inline-block; }
+  body.wallboard .pill { font-size:13.5px; padding:5px 12px; }
+  .pill.available { background: var(--ok-bg); color: var(--ok); }
+  .pill.working { background: #e7edfb; color: #1a56db; }
+  .pill.resting { background: var(--caution-bg); color: var(--caution); }
+  .pill.degraded { background: var(--critical-bg); color: var(--critical); }
+  .pill.enroute { background: var(--inactive-bg); color: var(--inactive); }
+
+  .reassign-btn {
+    font-size:10.5px; font-weight:700; color: var(--text-faint); background:#fff; border:1px dashed var(--border-strong);
+    border-radius:5px; padding:3px 8px; cursor:not-allowed; opacity:0.7;
+  }
+  .stub-note { font-size:10px; color: var(--text-faint); padding: 6px 14px 10px; font-style:italic; }
+
+  .empty { color: var(--text-faint); font-size:13px; padding: 30px 16px; text-align:center; }
+  body.wallboard .empty { font-size:17px; padding: 50px 16px; }
+
+  details.diag { margin: 0 20px 24px; }
+  body.wallboard details.diag { display:none; }
+  details.diag summary { cursor:pointer; color: var(--text-faint); font-size:12px; }
+  details.diag pre { background: var(--surface-alt); border:1px solid var(--border); border-radius:8px; padding:12px;
+    font-size:11px; color: var(--text-dim); font-family: ui-monospace, monospace; max-height:200px; overflow:auto; margin-top:8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-mark"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="9" fill="none" stroke="#d32f2f" stroke-width="3"/><circle cx="16" cy="16" r="3" fill="#2e7d32"/></svg></div>
+    <span class="brand-name">CONCORD</span><span class="brand-sub">Common Operating Picture</span>
+  </div>
+  <div class="hdr-right">
+    <div class="conn"><span class="dot" id="connDot"></span><span id="connLabel">checking board…</span></div>
+    <div class="clock" id="clock">--:--:--</div>
+    <button class="modebtn" id="wallBtn">Wallboard mode</button>
+    <button class="modebtn exit" id="exitBtn">Exit wallboard (press Esc)</button>
+  </div>
+</header>
+
+<div class="alertbar ok" id="alertBar"><span class="ic">●</span><span id="alertText">All clear — no critical incidents active</span></div>
+
+<div class="runbar">
+  <div class="field"><label>Seed</label><input id="seed" type="number" value="1"></div>
+  <div class="field"><label>Ticks</label><input id="ticks" type="number" value="2000"></div>
+  <div class="field"><label>Fault profile</label><select id="fault"><option value="none">none</option><option value="random">random</option></select></div>
+  <div class="field"><label>Tick delay (ms)</label><input id="delay" type="number" value="120"></div>
+  <button class="btn primary" id="startLive">Start live run</button>
+  <button class="btn" id="runBatch">Run full speed</button>
+</div>
+
+<div class="scorerow">
+  <div class="score"><div class="lbl">Active incidents</div><div class="val critical" id="scActive">0</div></div>
+  <div class="score"><div class="lbl">Critical priority</div><div class="val critical" id="scCritical">0</div></div>
+  <div class="score"><div class="lbl">Teams deployed</div><div class="val neutral" id="scDeployed">0</div></div>
+  <div class="score"><div class="lbl">Teams available</div><div class="val ok" id="scAvailable">0</div></div>
+  <div class="score"><div class="lbl">Teams resting</div><div class="val urgent" id="scResting">0</div></div>
+</div>
+
+<div class="cop">
+  <div class="panel">
+    <h3>Region Map — 36×36</h3>
+    <div class="mapwrap"><canvas id="mapD"></canvas></div>
+    <div class="legend">
+      <span><i class="sw" style="background:#d32f2f"></i>Critical incident</span>
+      <span><i class="sw" style="background:#ed6c02"></i>Lower priority</span>
+      <span><i class="sw" style="background:#1a56db"></i>Team</span>
+      <span><i class="sw" style="background:#b8860b"></i>Resting</span>
+      <span><i class="sw" style="background:#2e7d32;border-radius:3px"></i>Safe zone</span>
+    </div>
+  </div>
+
+  <div class="sidecol">
+    <div class="panel">
+      <h3>Team Status</h3>
+      <table id="teamTable"><thead><tr><th>Team</th><th>Status</th><th>Stamina</th><th class="op-only">Action</th></tr></thead>
+        <tbody><tr><td colspan="4" class="empty">Start a live run to populate team status.</td></tr></tbody></table>
+      <div class="stub-note op-only">"Reassign" is a placeholder — not wired to a backend action yet.</div>
+    </div>
+    <div class="panel">
+      <h3>Active Incidents</h3>
+      <table id="incidentTable"><thead><tr><th>ID</th><th>Priority</th><th>Status</th></tr></thead>
+        <tbody><tr><td colspan="3" class="empty">No active incidents right now.</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+
+<details class="diag op-only"><summary>Diagnostics (stdout / stderr)</summary><pre id="diagOut">—</pre></details>
+
+<script>
+const COLORS = {
+  bg: '#f6f8fa', grid: '#e2e7eb', building: '#dfe4e9', buildingHazard: '#f6d9d6',
+  road: '#dfe4e9', safezone: '#2e7d32', incidentCrit: '#d32f2f', incidentLow: '#ed6c02',
+  team: '#1a56db', teamResting: '#b8860b', epicenter: '#d32f2f', text: '#5b6572'
+};
+
+function tick() { document.getElementById('clock').textContent = new Date().toLocaleTimeString(); }
+tick(); setInterval(tick, 1000);
+
+document.getElementById('wallBtn').addEventListener('click', () => document.body.classList.add('wallboard'));
+document.getElementById('exitBtn').addEventListener('click', () => document.body.classList.remove('wallboard'));
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.body.classList.remove('wallboard'); });
+
+function pillClass(status) { return ['available','enroute','working','resting','degraded'][status] || 'available'; }
+
+function updateScorecards(frame) {
+  if (!frame) return;
+  const incidents = frame.incidents || [];
+  const teams = frame.teams || [];
+  const critical = incidents.filter(i => i.priority >= 2).length;
+  document.getElementById('scActive').textContent = incidents.length;
+  document.getElementById('scCritical').textContent = critical;
+  document.getElementById('scDeployed').textContent = teams.filter(t => t.status === 1 || t.status === 2).length;
+  document.getElementById('scAvailable').textContent = teams.filter(t => t.status === 0).length;
+  document.getElementById('scResting').textContent = teams.filter(t => t.status === 3).length;
+
+  const bar = document.getElementById('alertBar'), txt = document.getElementById('alertText');
+  if (critical > 0) {
+    bar.className = 'alertbar critical';
+    txt.textContent = `${critical} critical incident${critical>1?'s':''} active — teams engaged`;
+  } else {
+    bar.className = 'alertbar ok';
+    txt.textContent = 'All clear — no critical incidents active';
+  }
+}
+
+function renderTeams(frame) {
+  const tbody = document.querySelector('#teamTable tbody');
+  if (!frame || !frame.teams || !frame.teams.length) return;
+  tbody.innerHTML = frame.teams.map(t => `
+    <tr><td>${Bench.teamName(t)}</td><td><span class="pill ${pillClass(t.status)}">${Bench.statusName(t.status)}</span></td>
+    <td>${t.stamina.toFixed(0)}%</td><td class="op-only"><button class="reassign-btn" title="Not wired yet">Reassign</button></td></tr>`).join('');
+}
+function renderIncidents(frame) {
+  const tbody = document.querySelector('#incidentTable tbody');
+  if (!frame) return;
+  if (!frame.incidents || !frame.incidents.length) { tbody.innerHTML = '<tr><td colspan="3" class="empty">No active incidents right now.</td></tr>'; return; }
+  tbody.innerHTML = frame.incidents.map(i => `
+    <tr><td>#${i.id}</td><td>${i.priority >= 2 ? '<span class="pill degraded">Critical</span>' : '<span class="pill enroute">Low</span>'}</td>
+    <td>${i.status ?? '—'}</td></tr>`).join('');
+}
+function drawMap() { Bench.renderMap(document.getElementById('mapD'), COLORS); }
+
+document.getElementById('startLive').addEventListener('click', () => {
+  document.getElementById('connLabel').textContent = 'streaming…';
+  document.getElementById('connDot').classList.add('live');
+  const params = { seed:+document.getElementById('seed').value, ticks:+document.getElementById('ticks').value,
+    fault_profile: document.getElementById('fault').value, tick_delay_ms:+document.getElementById('delay').value };
+  Bench.startLive(params, {
+    onStaticEnv: () => drawMap(),
+    onFrame: (frame) => { drawMap(); renderTeams(frame); renderIncidents(frame); updateScorecards(frame); },
+    onDiagLine: (line) => { document.getElementById('diagOut').textContent += line + '\n'; },
+    onDone: () => { document.getElementById('connLabel').textContent = 'idle'; document.getElementById('connDot').classList.remove('live'); },
+    onError: (e) => { document.getElementById('connLabel').textContent = 'error: ' + e.message; },
+  });
+});
+document.getElementById('runBatch').addEventListener('click', () => {
+  const params = { seed:+document.getElementById('seed').value, seed_count:1, ticks:+document.getElementById('ticks').value,
+    fault_profile: document.getElementById('fault').value };
+  document.getElementById('connLabel').textContent = 'running batch…';
+  Bench.runBatch(params, (data) => {
+    document.getElementById('connLabel').textContent = 'idle';
+    document.getElementById('diagOut').textContent = (data.stdout_tail || '') + '\n' + (data.stderr_tail || '');
+  });
+});
+
+Bench.fetchStatus().then(s => { document.getElementById('connLabel').textContent = (s.board && s.board.connected) ? 'board connected' : 'simulation mode'; });
+drawMap();
+window.addEventListener('resize', drawMap);
+</script>
+</body>
+</html>

@@ -6,6 +6,7 @@ core_src/mission_execution_twin.o: \
  /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/mission_state.h \
  /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/fault_config.h \
  /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/mission_link.h \
+ /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/comms_precedence.h \
  /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/incident.h \
  /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/mission_state_utils.h \
  /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/path.h
@@ -15,6 +16,7 @@ core_src/mission_execution_twin.o: \
 /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/mission_state.h:
 /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/fault_config.h:
 /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/mission_link.h:
+/Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/comms_precedence.h:
 /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/incident.h:
 /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/mission_state_utils.h:
 /Users/harushsgtemkar/projects/Tron\ project/Tron\ project\ Code/tron_merged-board-2/core/path.h:

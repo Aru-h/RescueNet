@@ -71,6 +71,8 @@
                                    - RX path below (sx1262_rx_poll()) */
 #include "comms_transport.h"   /* comms_transport_deliver_received() -
                                    RX path below (sx1262_rx_poll()) */
+#include "lora_radio_params.h" /* LOCKED PHY params shared with the DK HAL -
+                                   see that header's top comment (Track 1) */
 
 /* ------------------------------------------------------------------ */
 /* Pin assignment - see file header. Override at build time (-D) once
@@ -435,6 +437,26 @@ int lora_spi_transmit(const uint8_t *frame_bytes, uint32_t frame_len)
         return -1;
     }
 
+    /* pld_len_in_bytes has to match this specific send - re-set it
+       rather than assume sx1262_hal_init()'s one-time bring-up value
+       (0) still applies. Other fields are the same LOCKED values from
+       core/lora_radio_params.h used in sx1262_hal_init() above -
+       mirrors board/STM32N6570-DK/sx1262_hal.c's own
+       lora_spi_transmit(). */
+    {
+        sx126x_pkt_params_lora_t pkt_params;
+
+        pkt_params.preamble_len_in_symb = LORA_PREAMBLE_LEN_SYMB;
+        pkt_params.header_type = LORA_HEADER_MODE;
+        pkt_params.pld_len_in_bytes = (uint8_t)frame_len;
+        pkt_params.crc_is_on = LORA_CRC_IS_ON;
+        pkt_params.invert_iq_is_on = LORA_INVERT_IQ_IS_ON;
+        if (sx126x_set_lora_pkt_params(NULL, &pkt_params) != SX126X_STATUS_OK)
+        {
+            return -1;
+        }
+    }
+
     if (sx126x_write_buffer(NULL, 0u, frame_bytes, (uint8_t)frame_len) != SX126X_STATUS_OK)
     {
         return -1;
@@ -493,20 +515,28 @@ static int sx1262_dio1_is_asserted(void)
     return gpio_get_val(SX1262_PIN_DIO1) != 0u;
 }
 
-/* sx126x_set_standby() -> sx126x_set_rx(NULL, 0) puts the radio into
- * RX_SINGLE_MODE (see sx126x.h's own doc on sx126x_set_rx: timeout 0
- * = SX126X_RX_SINGLE_MODE - "stays in RX mode until a reception
- * occurs, then switch to standby RC"). Called both to first enter RX
- * (from sx1262_hal_init() below) and to re-arm after every poll that
- * observed DIO1 asserted (from sx1262_rx_poll() below) - per that
- * same doc, the radio does NOT re-arm itself after RxDone/Timeout, it
- * drops back to STDBY_RC, so an explicit re-enter is required every
- * time. */
+/* sx126x_set_standby() -> sx126x_set_rx_with_timeout_in_rtc_step(NULL,
+ * SX126X_RX_CONTINUOUS) puts the radio into true continuous RX - per
+ * sx126x.h's own doc, SX126X_RX_CONTINUOUS (0x00FFFFFF) means "the
+ * chip stays in RX mode even after reception of a packet", unlike the
+ * ms-based sx126x_set_rx(NULL, 0) wrapper this file used before this
+ * pass, which always resolves to RX_SINGLE_MODE (stays in RX only
+ * until ONE reception, then drops to standby RC). Converged onto the
+ * DK's approach (board/STM32N6570-DK/sx1262_hal.c's own
+ * sx1262_enter_rx()) rather than the other way around - see
+ * ARCHITECTURE.md's Open Architectural Questions / CHANGELOG.md for
+ * why this divergence existed and was flagged for reconciliation.
+ *
+ * Called both to first enter RX (from sx1262_hal_init() below) and to
+ * re-arm after a poll that observed TxDone/Timeout on DIO1 (from
+ * sx1262_rx_poll() below) - NOT after a successful RxDone, since with
+ * continuous mode the chip is already still listening on its own
+ * after a reception; see sx1262_rx_poll()'s own doc on that split. */
 void sx1262_enter_rx(void)
 {
     sx1262_spi_init();
     (void)sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC);
-    (void)sx126x_set_rx(NULL, 0u);
+    (void)sx126x_set_rx_with_timeout_in_rtc_step(NULL, SX126X_RX_CONTINUOUS);
 }
 
 /* Call every tick, same cadence as mission_link_task_step() in
@@ -518,9 +548,17 @@ void sx1262_enter_rx(void)
  * (parse failure, buffer-status/read failure) drops the packet
  * silently, per lora_frame.h's own "drop and resync" policy - there
  * is no NACK path at the LoRa layer. Always clears whatever IRQ bits
- * were actually observed and always re-enters RX before returning,
- * so a dropped/failed packet doesn't leave the radio stuck in
- * STDBY_RC waiting for the next call that never re-arms it. */
+ * were actually observed, but only re-enters RX on the TxDone/Timeout
+ * branch, NOT after a successful RxDone - now mirrors
+ * board/STM32N6570-DK/sx1262_hal.c's own sx1262_poll_rx() instead of
+ * diverging from it (see sx1262_enter_rx()'s own doc above): with RX
+ * now configured continuous, the chip is still listening on its own
+ * after a reception, so a fresh standby->set_rx cycle there would
+ * only reopen a listening gap this mode exists to avoid, for no
+ * benefit. TxDone/Timeout, by contrast, means the chip auto-returned
+ * to standby RC on its own (per the datasheet), so an explicit
+ * re-arm IS required on that branch or the radio would sit deaf in
+ * standby until the next transmit. */
 void sx1262_rx_poll(void)
 {
     sx126x_irq_mask_t irq = SX126X_IRQ_NONE;
@@ -596,7 +634,9 @@ void sx1262_rx_poll(void)
         }
         /* get_rx_buffer_status/read_buffer failure, or an
            implausible pld_len_in_bytes: drop for the same reason -
-           nothing safe to hand upward. */
+           nothing safe to hand upward. RX_DONE branch deliberately
+           does NOT re-enter RX below - see this function's own doc
+           on why (continuous mode, chip is still listening). */
     }
 
     /* Clear every IRQ bit this poll actually observed (not just
@@ -607,33 +647,55 @@ void sx1262_rx_poll(void)
        every future poll look like a fresh RxDone. */
     (void)sx126x_clear_irq_status(NULL, irq);
 
-    /* TX_DONE (or Timeout - either one means whatever lora_spi_
-       transmit() last keyed is no longer in flight) clears the busy
-       flag comms_transport.c's dispatcher gates on - see g_lora_tx_
-       busy's own doc above. The watchdog counter that also guards
-       this flag lives at the top of this function, before the DIO1
-       early-return, not here - see that code's own comment on why. */
-    if ((irq & (SX126X_IRQ_TX_DONE | SX126X_IRQ_TIMEOUT)) != 0u)
+    if ((irq & SX126X_IRQ_RX_DONE) == 0u)
     {
+        /* TxDone and/or Timeout, no RxDone. Per the datasheet, the
+           chip auto-returns to standby RC once a TX completes or
+           times out - re-arm RX so the radio goes back to listening
+           instead of sitting deaf in standby until the next transmit.
+           (RxDone can't reach this branch - handled above instead,
+           and does NOT need this same re-arm: RX is configured
+           continuous, see sx1262_enter_rx()'s own doc, so the chip is
+           still listening on its own after a reception.)
+
+           Given the configured IRQ mask (TxDone|RxDone|Timeout only -
+           see sx1262_hal_init()), "not RxDone" here means whatever
+           lora_spi_transmit() last keyed is no longer in flight
+           either way - clears the busy flag comms_transport.c's
+           dispatcher gates on. See g_lora_tx_busy's own doc above. */
         g_lora_tx_busy = 0;
         g_lora_tx_busy_poll_count = 0u;
+        sx1262_enter_rx();
     }
-
-    /* Re-enter RX unconditionally - see sx1262_enter_rx()'s own doc
-       on why this is required after every DIO1 event, not just a
-       successful RxDone. */
-    sx1262_enter_rx();
 }
 
 /* One-time radio bring-up + IRQ config, called once from
  * board/Raspberry_Pi_Pico/main_board.c before the seed loop starts -
  * mirrors board/STM32N6570-DK/main_board.c's own sx1262_hal_init()
  * call ordering (radio bring-up first, before sim_runner_init() or
- * anything else that might try to use comms_transport). Does NOT
- * configure pkt_type/RF frequency/modulation params - lora_spi_
- * transmit() above doesn't either; that gap is pre-existing on this
- * board and out of scope for this pass (see this board's own
- * SPI/pin-assignment placeholder caveats at the top of this file). */
+ * anything else that might try to use comms_transport). Now DOES
+ * configure pkt_type/RF frequency/buffer base/modulation+packet
+ * params/sync word/TX power, inline below, before the pre-existing
+ * sx1262_enter_rx() call - all values imported from
+ * core/lora_radio_params.h (Track 1), the single LOCKED source of
+ * truth shared with board/STM32N6570-DK/sx1262_hal.c, not hardcoded
+ * here.
+ *
+ * Deliberately does NOT mirror the DK HAL's shape for this config:
+ * the DK puts its equivalent config in a separate, lazily-triggered
+ * ensure_radio_configured(), guarded by a g_radio_configured flag,
+ * called from lora_spi_transmit() and its RX poll function instead of
+ * from its own sx1262_hal_init(). That lazy/guarded pattern exists on
+ * the DK for a reason tangled up with a separate, already-flagged
+ * DK-vs-Pico RX re-arm difference (see ARCHITECTURE.md) that's out of
+ * scope here. This board's sx1262_hal_init() is already only ever
+ * called once, at bring-up (confirmed in main_board.c), and already
+ * unconditionally calls sx1262_enter_rx() at its own end - so the
+ * config calls just go inline here, no guard flag needed since
+ * there's only one call site. If a future reader is tempted to
+ * refactor this into a DK-style lazy/guarded helper "for consistency
+ * between the two boards," that's the RX re-arm issue above to
+ * resolve first, not a shape mismatch to paper over here. */
 void sx1262_hal_init(void)
 {
     sx1262_spi_init();
@@ -649,6 +711,42 @@ void sx1262_hal_init(void)
        NOT used for RF-switch auto-control here, matching the DK's
        own wiring note on that same point). */
     (void)sx126x_set_dio_irq_params(NULL, 0x0203u, 0x0203u, 0x0000u, 0x0000u);
+
+    /* LOCKED PHY bring-up - values from core/lora_radio_params.h, the
+       single source of truth shared with the DK's own
+       ensure_radio_configured(). Order matches the DK's: pkt type,
+       RF frequency, buffer base address, then mod params, then pkt
+       params, then sync word, then TX power/ramp. */
+    (void)sx126x_set_pkt_type(NULL, SX126X_PKT_TYPE_LORA);
+    (void)sx126x_set_rf_freq(NULL, LORA_RF_FREQ_HZ);
+    (void)sx126x_set_buffer_base_address(NULL, 0u, 0u);
+
+    {
+        sx126x_mod_params_lora_t mod_params;
+
+        mod_params.sf = LORA_SPREADING_FACTOR;
+        mod_params.bw = LORA_BANDWIDTH;
+        mod_params.cr = LORA_CODING_RATE;
+        mod_params.ldro = LORA_LDRO;
+        (void)sx126x_set_lora_mod_params(NULL, &mod_params);
+    }
+
+    {
+        sx126x_pkt_params_lora_t pkt_params;
+
+        /* pld_len_in_bytes=0 here, same as the DK's own bring-up -
+           lora_spi_transmit() below re-sets it per-send to match
+           frame_len before actually keying TX. */
+        pkt_params.preamble_len_in_symb = LORA_PREAMBLE_LEN_SYMB;
+        pkt_params.header_type = LORA_HEADER_MODE;
+        pkt_params.pld_len_in_bytes = 0u;
+        pkt_params.crc_is_on = LORA_CRC_IS_ON;
+        pkt_params.invert_iq_is_on = LORA_INVERT_IQ_IS_ON;
+        (void)sx126x_set_lora_pkt_params(NULL, &pkt_params);
+    }
+
+    (void)sx126x_set_lora_sync_word(NULL, LORA_SYNC_WORD);
+    (void)sx126x_set_tx_params(NULL, LORA_TX_POWER_DBM, LORA_RAMP_TIME);
 
     sx1262_enter_rx();
 }

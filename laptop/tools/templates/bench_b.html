@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Concord — Live Allocation</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%2308090a%22/><circle cx=%2216%22 cy=%2216%22 r=%227%22 fill=%22%235e6ad2%22/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="/static/chart.umd.min.js"></script>
+<script src="/static/bench-common.js"></script>
+<style>
+  :root {
+    --bg: #08090a;
+    --bg-raised: #0d0f11;
+    --panel: rgba(255,255,255,0.025);
+    --border: rgba(255,255,255,0.08);
+    --border-soft: rgba(255,255,255,0.05);
+    --text: #eef0f2;
+    --text-dim: #8b8f98;
+    --text-faint: #55585f;
+    --accent: #6e79f5;
+    --accent-soft: rgba(110,121,245,0.14);
+    --good: #4cc38a;
+    --warn: #e5a749;
+    --bad: #eb5c5c;
+    --font: 'Inter', -apple-system, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: var(--font); background: var(--bg); color: var(--text); font-size: 13.5px;
+         -webkit-font-smoothing: antialiased; }
+  ::-webkit-scrollbar { width: 7px; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  header {
+    display:flex; align-items:center; justify-content:space-between; padding: 16px 32px 0;
+    max-width: 1180px; margin: 0 auto;
+  }
+  .brand { display:flex; align-items:center; gap:10px; }
+  .brand-mark { width:22px; height:22px; border-radius:7px; background: var(--accent); }
+  .brand-name { font-weight:700; font-size:15px; letter-spacing:-0.2px; }
+  .conn { font-size:12px; color: var(--text-faint); display:flex; align-items:center; gap:6px; font-weight:500; }
+  .dot { width:6px; height:6px; border-radius:50%; background: var(--text-faint); }
+  .dot.live { background: var(--good); box-shadow:0 0 8px var(--good); }
+
+  nav.tabs { display:flex; gap:2px; max-width:1180px; margin: 22px auto 0; padding: 0 32px; }
+  nav.tabs button {
+    background:none; border:none; color: var(--text-faint); padding: 9px 4px; margin-right:22px;
+    font-size:13.5px; font-weight:600; cursor:pointer; font-family: var(--font); border-bottom: 2px solid transparent;
+  }
+  nav.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  nav.tabs button:hover { color: var(--text); }
+  .tabline { border-bottom: 1px solid var(--border-soft); max-width:1180px; margin: 0 auto 28px; }
+
+  main { max-width: 1180px; margin: 0 auto; padding: 0 32px 60px; }
+  .view { display:none; } .view.active { display:block; }
+
+  .runbar { display:flex; align-items:flex-end; gap:22px; flex-wrap:wrap; margin-bottom: 28px; }
+  .field { display:flex; flex-direction:column; gap:6px; }
+  .field label { font-size:11px; color: var(--text-faint); font-weight:600; }
+  .field input, .field select {
+    background: var(--bg-raised); border:1px solid var(--border); color: var(--text); border-radius:8px;
+    padding:7px 10px; font-size:13px; width: 90px; font-family: var(--font);
+  }
+  .field select { width: 130px; }
+  .btn { border:1px solid var(--border); background: var(--bg-raised); color: var(--text); padding:8px 16px;
+         border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; font-family: var(--font); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color:#fff; }
+  .btn.primary:hover { filter: brightness(1.1); }
+  .btn:hover { background: #16181b; }
+
+  h1.pagehead { font-size: 26px; font-weight: 800; letter-spacing:-0.5px; margin: 0 0 4px; }
+  p.pagesub { color: var(--text-dim); font-size: 13.5px; margin: 0 0 26px; }
+
+  .grid2 { display:grid; grid-template-columns: 1.35fr 1fr; gap: 22px; align-items:start; }
+  .card { background: var(--panel); border:1px solid var(--border); border-radius: var(--radius); overflow:hidden; }
+  .card h3 { margin:0; padding: 16px 18px 12px; font-size:13px; font-weight:700; color: var(--text); }
+  .card .sub { padding: 0 18px 12px; margin-top:-10px; font-size:11.5px; color: var(--text-faint); }
+  canvas#mapB { width:100%; aspect-ratio:1/1; display:block; }
+  .maplegend { display:flex; flex-wrap:wrap; gap: 16px; padding: 12px 18px 16px; font-size:11.5px; color: var(--text-faint); }
+  .maplegend span { display:flex; align-items:center; gap:6px; }
+  .sw { width:8px; height:8px; border-radius:50%; display:inline-block; }
+
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { text-align:left; color: var(--text-faint); font-weight:600; font-size:11px; padding: 9px 18px; border-bottom:1px solid var(--border-soft); }
+  td { padding: 10px 18px; border-bottom:1px solid var(--border-soft); color: var(--text-dim); }
+  tr:last-child td { border-bottom:none; }
+  .pill { padding:3px 9px; border-radius:99px; font-size:11px; font-weight:600; display:inline-block; }
+  .pill.available { background: rgba(76,195,138,0.14); color: var(--good); }
+  .pill.working { background: var(--accent-soft); color: var(--accent); }
+  .pill.resting { background: rgba(229,167,73,0.14); color: var(--warn); }
+  .pill.degraded { background: rgba(235,92,92,0.14); color: var(--bad); }
+  .pill.enroute { background: rgba(255,255,255,0.06); color: var(--text-dim); }
+
+  .stat-row { display:grid; grid-template-columns: repeat(4,1fr); gap: 16px; margin-bottom: 24px; }
+  .stat { border:1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; background: var(--panel); }
+  .stat .lbl { font-size:11.5px; color: var(--text-faint); font-weight:600; margin-bottom:8px; }
+  .stat .val { font-size:26px; font-weight:800; letter-spacing:-0.5px; }
+  .stat .val.bad { color: var(--bad); } .stat .val.warn { color: var(--warn); } .stat .val.good { color: var(--good); }
+
+  .empty { color: var(--text-faint); font-size:12.5px; padding: 34px 18px; text-align:center; }
+
+  details.diag { margin-top:22px; } details.diag summary { cursor:pointer; color: var(--text-faint); font-size:12px; }
+  details.diag pre { background: var(--bg-raised); border:1px solid var(--border); border-radius:8px; padding:12px;
+    font-size:11px; color: var(--text-dim); font-family: var(--mono); max-height:220px; overflow:auto; margin-top:8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><div class="brand-mark"></div><span class="brand-name">Concord</span></div>
+  <div class="conn"><span class="dot" id="connDot"></span><span id="connLabel">checking board…</span></div>
+</header>
+
+<nav class="tabs">
+  <button class="active" data-view="live">Live Ops</button>
+  <button data-view="health">Team Health</button>
+  <button data-view="history">Run History</button>
+</nav>
+<div class="tabline"></div>
+
+<main>
+  <div class="view active" id="view-live">
+    <h1 class="pagehead">Live allocation</h1>
+    <p class="pagesub">Watch teams, incidents, and safe zones update as CBBA resolves each tick.</p>
+
+    <div class="runbar">
+      <div class="field"><label>Seed</label><input id="seed" type="number" value="1"></div>
+      <div class="field"><label>Ticks</label><input id="ticks" type="number" value="2000"></div>
+      <div class="field"><label>Fault profile</label><select id="fault"><option value="none">none</option><option value="random">random</option></select></div>
+      <div class="field"><label>Tick delay (ms)</label><input id="delay" type="number" value="120"></div>
+      <button class="btn primary" id="startLive">Start live run</button>
+      <button class="btn" id="runBatch">Run full speed</button>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h3>Region map</h3><div class="sub">36×36 grid, updated every tick</div>
+        <canvas id="mapB"></canvas>
+        <div class="maplegend">
+          <span><i class="sw" style="background:#eb5c5c"></i>Critical</span>
+          <span><i class="sw" style="background:#8a6a45"></i>Lower priority</span>
+          <span><i class="sw" style="background:#6e79f5"></i>Team</span>
+          <span><i class="sw" style="background:#e5a749"></i>Resting</span>
+          <span><i class="sw" style="background:#3d6e57;border-radius:3px"></i>Safe zone</span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Team status</h3><div class="sub">All ten response teams</div>
+        <table id="teamTable"><thead><tr><th>Team</th><th>Status</th><th>Stamina</th><th>Pos</th></tr></thead>
+        <tbody><tr><td colspan="4" class="empty">Start a live run to see team positions.</td></tr></tbody></table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:22px;">
+      <h3>Active incidents</h3>
+      <table id="incidentTable"><thead><tr><th>ID</th><th>Priority</th><th>Pos</th><th>Status</th></tr></thead>
+        <tbody><tr><td colspan="4" class="empty">No active incidents yet.</td></tr></tbody></table>
+    </div>
+    <details class="diag"><summary>Diagnostics (stdout / stderr)</summary><pre id="diagOut">—</pre></details>
+  </div>
+
+  <div class="view" id="view-health">
+    <h1 class="pagehead">Team health</h1>
+    <p class="pagesub">Stamina, rest cycles, and recovery signals from the last run.</p>
+    <div class="stat-row">
+      <div class="stat"><div class="lbl">Rest cycles</div><div class="val" id="statRest">—</div></div>
+      <div class="stat"><div class="lbl">1-tick interrupts</div><div class="val warn" id="statInterrupt">—</div></div>
+      <div class="stat"><div class="lbl">Sustained (10+)</div><div class="val good" id="statSustained">—</div></div>
+      <div class="stat"><div class="lbl">Discarded signals</div><div class="val bad" id="statDiscarded">—</div></div>
+    </div>
+    <div class="card"><h3>Recovery recommendations</h3><div id="recoveryBody" style="padding:0 18px 16px;">
+      <div class="empty">Run a simulation to see team-health data.</div></div></div>
+  </div>
+
+  <div class="view" id="view-history">
+    <h1 class="pagehead">Run history</h1>
+    <p class="pagesub">Your last simulation runs, most recent first.</p>
+    <div class="card">
+      <table id="historyTable"><thead><tr><th>Time</th><th>Seed</th><th>Ticks</th><th>Faults</th><th>Rest cycles</th><th>Discarded</th><th>Elapsed</th></tr></thead>
+      <tbody><tr><td colspan="7" class="empty">Loading history…</td></tr></tbody></table>
+    </div>
+  </div>
+</main>
+
+<script>
+const COLORS = {
+  bg: '#0a0b0d', grid: '#16181b', building: '#191b1f', buildingHazard: '#2e1e1e',
+  road: '#191b1f', safezone: '#3d6e57', incidentCrit: '#eb5c5c', incidentLow: '#8a6a45',
+  team: '#6e79f5', teamResting: '#e5a749', epicenter: '#eb5c5c', text: '#8b8f98'
+};
+
+document.querySelectorAll('nav.tabs button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('view-'+btn.dataset.view).classList.add('active');
+  });
+});
+
+function pillClass(status) { return ['available','enroute','working','resting','degraded'][status] || 'available'; }
+
+function renderTeams(frame) {
+  const tbody = document.querySelector('#teamTable tbody');
+  if (!frame || !frame.teams || !frame.teams.length) return;
+  tbody.innerHTML = frame.teams.map(t => `
+    <tr><td>${Bench.teamName(t)}</td><td><span class="pill ${pillClass(t.status)}">${Bench.statusName(t.status)}</span></td>
+    <td>${t.stamina.toFixed(0)}%</td><td>${t.x},${t.y}</td></tr>`).join('');
+}
+function renderIncidents(frame) {
+  const tbody = document.querySelector('#incidentTable tbody');
+  if (!frame) return;
+  if (!frame.incidents || !frame.incidents.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">No active incidents right now.</td></tr>'; return; }
+  tbody.innerHTML = frame.incidents.map(i => `
+    <tr><td>#${i.id}</td><td>${i.priority >= 2 ? '<span class="pill degraded">critical</span>' : '<span class="pill enroute">low</span>'}</td>
+    <td>${i.x},${i.y}</td><td>${i.status ?? '—'}</td></tr>`).join('');
+}
+function drawMap() { Bench.renderMap(document.getElementById('mapB'), COLORS); }
+
+document.getElementById('startLive').addEventListener('click', () => {
+  document.getElementById('connLabel').textContent = 'streaming…';
+  document.getElementById('connDot').classList.add('live');
+  const params = { seed:+document.getElementById('seed').value, ticks:+document.getElementById('ticks').value,
+    fault_profile: document.getElementById('fault').value, tick_delay_ms:+document.getElementById('delay').value };
+  Bench.startLive(params, {
+    onStaticEnv: () => drawMap(),
+    onFrame: (frame) => { drawMap(); renderTeams(frame); renderIncidents(frame); },
+    onDiagLine: (line) => { document.getElementById('diagOut').textContent += line + '\n'; },
+    onDone: (payload) => {
+      document.getElementById('connLabel').textContent = 'idle'; document.getElementById('connDot').classList.remove('live');
+      if (payload.diag) {
+        document.getElementById('statRest').textContent = payload.diag.rest_cycle_count ?? '—';
+        document.getElementById('statInterrupt').textContent = payload.diag.rest_cycles_interrupted_1tick ?? '—';
+        document.getElementById('statSustained').textContent = payload.diag.rest_cycles_sustained_10plus ?? '—';
+        document.getElementById('statDiscarded').textContent = (payload.diag.summary && payload.diag.summary.discarded_signal_count) ?? '—';
+      }
+      loadHistory();
+    },
+    onError: (e) => { document.getElementById('connLabel').textContent = 'error: ' + e.message; },
+  });
+});
+
+document.getElementById('runBatch').addEventListener('click', () => {
+  const params = { seed:+document.getElementById('seed').value, seed_count:1, ticks:+document.getElementById('ticks').value,
+    fault_profile: document.getElementById('fault').value };
+  document.getElementById('connLabel').textContent = 'running batch…';
+  Bench.runBatch(params, (data) => {
+    document.getElementById('connLabel').textContent = 'idle';
+    if (data.diag) {
+      document.getElementById('statRest').textContent = data.diag.rest_cycle_count ?? '—';
+      document.getElementById('statInterrupt').textContent = data.diag.rest_cycles_interrupted_1tick ?? '—';
+      document.getElementById('statSustained').textContent = data.diag.rest_cycles_sustained_10plus ?? '—';
+      document.getElementById('statDiscarded').textContent = (data.diag.summary && data.diag.summary.discarded_signal_count) ?? '—';
+    }
+    if (data.telemetry && data.telemetry.recovery_counts) {
+      const entries = Object.entries(data.telemetry.recovery_counts);
+      document.getElementById('recoveryBody').innerHTML = entries.length ? entries.map(([k,v]) =>
+        `<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border-soft);">
+          <span style="color:var(--text-dim)">${k}</span><span style="font-family:var(--mono)">${v}</span></div>`).join('')
+        : '<div class="empty">No recovery recommendations this run.</div>';
+    }
+    document.getElementById('diagOut').textContent = (data.stdout_tail || '') + '\n' + (data.stderr_tail || '');
+    loadHistory();
+  });
+});
+
+async function loadHistory() {
+  const hist = await Bench.fetchHistory();
+  const tbody = document.querySelector('#historyTable tbody');
+  if (!hist.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">No runs yet.</td></tr>'; return; }
+  tbody.innerHTML = hist.slice(0,15).map(r => `
+    <tr><td>${r.timestamp}</td><td>${r.seed}</td><td>${r.ticks}</td><td>${r.fault_profile}</td>
+    <td>${r.rest_cycle_count}</td><td>${(r.summary && r.summary.discarded_signal_count) ?? '—'}</td><td>${r.elapsed_seconds}s</td></tr>`).join('');
+}
+
+Bench.fetchStatus().then(s => { document.getElementById('connLabel').textContent = s.board && s.board.connected ? 'board connected' : 'simulation mode'; });
+loadHistory(); drawMap();
+window.addEventListener('resize', drawMap);
+</script>
+</body>
+</html>

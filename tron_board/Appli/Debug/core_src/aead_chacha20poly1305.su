@@ -1,0 +1,7 @@
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/aead_chacha20poly1305.c:18:17:aead_pad16	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/aead_chacha20poly1305.c:24:13:aead_store_le64	40	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/aead_chacha20poly1305.c:43:17:aead_build_mac_data	48	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/aead_chacha20poly1305.c:81:13:aead_derive_poly1305_key	88	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/aead_chacha20poly1305.c:100:12:aead_tag_equal	24	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/aead_chacha20poly1305.c:114:5:aead_chacha20poly1305_seal	264	static
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/aead_chacha20poly1305.c:147:5:aead_chacha20poly1305_open	280	static

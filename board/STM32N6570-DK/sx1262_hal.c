@@ -72,8 +72,9 @@
 #include "sx126x.h"
 #include "sx126x_hal.h"
 
-#include "lora_frame.h"       /* lora_frame_try_parse(), LORA_FRAME_MAX_WIRE_SIZE */
-#include "comms_transport.h"  /* comms_transport_deliver_received() */
+#include "lora_frame.h"          /* lora_frame_try_parse(), LORA_FRAME_MAX_WIRE_SIZE */
+#include "comms_transport.h"     /* comms_transport_deliver_received() */
+#include "lora_radio_params.h"   /* LOCKED PHY params shared with the Pico HAL - see that header's top comment */
 
 /*
  * -----------------------------------------------------------------------
@@ -504,16 +505,16 @@ static void sx1262_enter_rx(void)
  * name - "SX1262 868M" - decides this one, not a guess), TX/RX FIFO
  * base addresses, and DIO1 routed to TxDone/RxDone/Timeout.
  *
- * NOT decided here, and left as clearly-labeled PLACEHOLDER values
- * below: SF/BW/CR, preamble length, sync word, CRC/header mode. These
+ * SF/BW/CR, preamble length, sync word, CRC/header mode, and TX power
  * are protocol parameters that must MATCH whatever Track 2 (the Pico
  * board) configures its own SX1262 to, or the two boards' radios will
  * simply fail to hear each other - no crash, no damage, just silent
- * non-interop until synced. Placeholder values below are the common
- * "safe default" figures used in most SX126x reference examples
- * (SF7/BW125/CR4:5, explicit header, CRC on, sync word 0x34) - fine to
- * ship as a starting point, but must be confirmed against Track 2
- * before relying on this link for anything real.
+ * non-interop until synced. These are now LOCKED, defined once in
+ * core/lora_radio_params.h (SF7/BW125/CR4:5, explicit header, CRC on,
+ * sync word 0x34, +14dBm/200us ramp) and pulled in via the macros
+ * below rather than hardcoded here - that header is the single source
+ * of truth both boards' HALs read from, so this file no longer needs
+ * (or gets) its own copy of these values to keep in sync by hand.
  */
 static void ensure_radio_configured(void)
 {
@@ -528,28 +529,35 @@ static void ensure_radio_configured(void)
     (void)sx126x_hal_reset(NULL);
     (void)sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC);
     (void)sx126x_set_pkt_type(NULL, SX126X_PKT_TYPE_LORA);
-    (void)sx126x_set_rf_freq(NULL, 868000000u);
+    (void)sx126x_set_rf_freq(NULL, LORA_RF_FREQ_HZ);
     (void)sx126x_set_buffer_base_address(NULL, 0u, 0u);
     (void)sx126x_set_dio_irq_params(NULL, 0x0203u /* TxDone|RxDone|Timeout */,
                                      0x0203u /* -> DIO1 */, 0x0000u, 0x0000u);
 
-    /* PLACEHOLDER - see comment above. */
-    mod_params.sf = SX126X_LORA_SF7;
-    mod_params.bw = SX126X_LORA_BW_125;
-    mod_params.cr = SX126X_LORA_CR_4_5;
-    mod_params.ldro = 0u;
+    /* LOCKED - see comment above. Values from core/lora_radio_params.h. */
+    mod_params.sf = LORA_SPREADING_FACTOR;
+    mod_params.bw = LORA_BANDWIDTH;
+    mod_params.cr = LORA_CODING_RATE;
+    mod_params.ldro = LORA_LDRO;
     (void)sx126x_set_lora_mod_params(NULL, &mod_params);
 
-    /* PLACEHOLDER - see comment above. pld_len_in_bytes gets overwritten
+    /* LOCKED - see comment above. pld_len_in_bytes gets overwritten
        per-send in lora_spi_transmit() below (explicit header mode
        means the receiver reads length from the header, but the driver
        still wants the field set to match what's actually being sent). */
-    pkt_params.preamble_len_in_symb = 8u;
-    pkt_params.header_type = SX126X_LORA_PKT_EXPLICIT;
+    pkt_params.preamble_len_in_symb = LORA_PREAMBLE_LEN_SYMB;
+    pkt_params.header_type = LORA_HEADER_MODE;
     pkt_params.pld_len_in_bytes = 0u;
-    pkt_params.crc_is_on = true;
-    pkt_params.invert_iq_is_on = false;
+    pkt_params.crc_is_on = LORA_CRC_IS_ON;
+    pkt_params.invert_iq_is_on = LORA_INVERT_IQ_IS_ON;
     (void)sx126x_set_lora_pkt_params(NULL, &pkt_params);
+
+    /* Sync word and TX power/ramp - both LOCKED in core/lora_radio_params.h
+       and, like mod/pkt params above, not previously called anywhere, so
+       TX power was whatever the chip's reset default happened to be. Must
+       run before g_radio_configured is set, same as mod/pkt params above. */
+    (void)sx126x_set_lora_sync_word(NULL, LORA_SYNC_WORD);
+    (void)sx126x_set_tx_params(NULL, LORA_TX_POWER_DBM, LORA_RAMP_TIME);
 
     g_radio_configured = 1;
 
@@ -588,12 +596,13 @@ int lora_spi_transmit(const uint8_t *frame_bytes, uint32_t frame_len)
 
     /* pld_len_in_bytes has to match this specific send - re-set it
        rather than assume ensure_radio_configured()'s one-time value
-       still applies. */
-    pkt_params.preamble_len_in_symb = 8u;
-    pkt_params.header_type = SX126X_LORA_PKT_EXPLICIT;
+       still applies. Other fields are the same LOCKED values from
+       core/lora_radio_params.h used in ensure_radio_configured() above. */
+    pkt_params.preamble_len_in_symb = LORA_PREAMBLE_LEN_SYMB;
+    pkt_params.header_type = LORA_HEADER_MODE;
     pkt_params.pld_len_in_bytes = (uint8_t)frame_len;
-    pkt_params.crc_is_on = true;
-    pkt_params.invert_iq_is_on = false;
+    pkt_params.crc_is_on = LORA_CRC_IS_ON;
+    pkt_params.invert_iq_is_on = LORA_INVERT_IQ_IS_ON;
     if (sx126x_set_lora_pkt_params(NULL, &pkt_params) != SX126X_STATUS_OK)
     {
         return 1;

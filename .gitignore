@@ -12,3 +12,7 @@ tron_snapshot_dataset*.csv
 .settings/
 .project
 .cproject
+# Vendored T-License 2.2 BSPs — fetch separately per board vendor/README.md,
+# do not commit (not a redistribution-friendly license to bundle verbatim)
+board/STM32N6570-DK/vendor/mtk3_bsp2/
+board/Raspberry_Pi_Pico/vendor/mtk3_bsp/

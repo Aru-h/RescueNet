@@ -1,0 +1,4 @@
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/poly1305.c:3:17:poly1305_load_le32	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/poly1305.c:11:13:poly1305_store_le32	1
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/poly1305.c:29:13:poly1305_blocks	2
+/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/poly1305.c:82:6:poly1305_mac	4
