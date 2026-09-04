@@ -35,9 +35,9 @@ Idx Name          Size      VMA       LMA       File off  Algn
                   ALLOC
  15 .ARM.attributes 0000003a  00000000  00000000  00023900  2**0
                   CONTENTS, READONLY
- 16 .debug_info   00045fe6  00000000  00000000  0002393a  2**0
+ 16 .debug_info   00045fe8  00000000  00000000  0002393a  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 17 .debug_abbrev 0000b145  00000000  00000000  00069920  2**0
+ 17 .debug_abbrev 0000b145  00000000  00000000  00069922  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
  18 .debug_aranges 00003d20  00000000  00000000  00074a68  2**3
                   CONTENTS, READONLY, DEBUGGING, OCTETS
@@ -45,15 +45,15 @@ Idx Name          Size      VMA       LMA       File off  Algn
                   CONTENTS, READONLY, DEBUGGING, OCTETS
  20 .debug_macro  0005e1d8  00000000  00000000  0007b63c  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 21 .debug_line   0005cdb4  00000000  00000000  000d9814  2**0
+ 21 .debug_line   0005cdb8  00000000  00000000  000d9814  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 22 .debug_str    0022acf6  00000000  00000000  001365c8  2**0
+ 22 .debug_str    0022acf6  00000000  00000000  001365cc  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 23 .comment      00000043  00000000  00000000  003612be  2**0
+ 23 .comment      00000043  00000000  00000000  003612c2  2**0
                   CONTENTS, READONLY
- 24 .debug_frame  0000f450  00000000  00000000  00361304  2**2
+ 24 .debug_frame  0000f450  00000000  00000000  00361308  2**2
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 25 .debug_line_str 00000139  00000000  00000000  00370754  2**0
+ 25 .debug_line_str 00000139  00000000  00000000  00370758  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
 
 Disassembly of section .text:
@@ -42721,6 +42721,9 @@ void cbba_ingest_remote_mesh_replies(void)
     uint32_t round_start = cbba_now_ms();
 34011dea:	f7ff ff93 	bl	34011d14 <cbba_now_ms>
 34011dee:	f8c7 0128 	str.w	r0, [r7, #296]	@ 0x128
+#ifdef CBBA_DEBUG_TIMING
+    bool reply_ingested_this_round = false;
+#endif
 
     while((cbba_now_ms() - round_start) < CBBA_ROUND_TIMEOUT_MS)
 34011df2:	e046      	b.n	34011e82 <cbba_ingest_remote_mesh_replies+0x9e>
@@ -42765,10 +42768,10 @@ void cbba_ingest_remote_mesh_replies(void)
 34011e2a:	2290      	movs	r2, #144	@ 0x90
 34011e2c:	4618      	mov	r0, r3
 34011e2e:	f00e fae4 	bl	340203fa <memcpy>
-            cbba_broadcast()) is authoritative - see comms_transport.h's
-            "Open question" note: sender identity for a genuinely
-            separate board isn't on the wire at the comms_transport
-            layer today, only inside CBBAMessage_t itself */
+
+#ifdef CBBA_DEBUG_TIMING
+        reply_ingested_this_round = true;
+#endif
 
         for(uint8_t receiver_id = 0; receiver_id < NUM_TEAMS; receiver_id++)
 34011e32:	2300      	movs	r3, #0
@@ -42821,8 +42824,11 @@ void cbba_ingest_remote_mesh_replies(void)
 34011e8e:	f240 2211 	movw	r2, #529	@ 0x211
 34011e92:	4293      	cmp	r3, r2
 34011e94:	d9ae      	bls.n	34011df4 <cbba_ingest_remote_mesh_replies+0x10>
-        }
+                (unsigned)g_comms_transport_this_board_id,
+                (unsigned)(cbba_now_ms() - round_start),
+                (unsigned)CBBA_ROUND_TIMEOUT_MS);
     }
+#endif
 }
 34011e96:	bf00      	nop
 34011e98:	bf00      	nop
@@ -43102,7 +43108,6 @@ void cbba_run(void)
 
     path_cache_end();
 34012096:	f007 f8e3 	bl	34019260 <path_cache_end>
-}
 3401209a:	bf00      	nop
 3401209c:	3708      	adds	r7, #8
 3401209e:	46bd      	mov	sp, r7

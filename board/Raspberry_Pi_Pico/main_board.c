@@ -46,6 +46,11 @@
 
 #include <tk/tkernel.h>
 #include <tm/tmonitor.h>
+#include <bsp/libbsp.h>        /* gpio_set_pin()/gpio_set_val() - onboard
+                                   LED heartbeat below (BOARD_LED_PIN),
+                                   same header board/Raspberry_Pi_Pico/
+                                   sx1262_hal.c already uses for its own
+                                   GPIO work. */
 
 #include "sim_runner.h"
 #include "fault_config.h"
@@ -126,6 +131,60 @@
  * behavior against. */
 #ifndef BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL
 #define BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL 50u
+#endif
+
+/*
+ * Onboard LED heartbeat - added purely as a bring-up aid. This board
+ * currently has NO way to observe program state without extra
+ * hardware (no UART adapter, no SWD debugger on hand as of this
+ * writing - see this file's own commit history/chat record for that
+ * discussion) other than the RP2040's own native-USB port, which
+ * only serves the boot ROM's BOOTSEL mass-storage bootloader and has
+ * nothing listening on it once this firmware is running (no USB CDC
+ * stack anywhere in this codebase - confirmed by search, not
+ * assumed). The one thing available with truly zero extra hardware
+ * is the Pico board's own onboard LED, wired to GP25 on every
+ * standard (non-W, non-2) Raspberry Pi Pico. This is NOT a
+ * substitute for real UART/SWD bring-up once either is available -
+ * it only answers "did the board get this far", never "why did it
+ * stop" - but it's strictly better than flying fully blind on a
+ * first flash. See board_led_init()/board_led_pulse()/
+ * board_led_blink_n() below and their call sites in sim_task() for
+ * what each blink pattern means. Safe to delete this whole block
+ * once real UART/SWD bring-up is in place and this stops being
+ * useful. */
+#ifndef BOARD_LED_PIN
+#define BOARD_LED_PIN   25u   /* Onboard LED on every standard Pico
+                                 (RP2040) board - NOT one of this
+                                 file's own SX1262_PIN_* radio pins,
+                                 no conflict with sx1262_hal.c. If
+                                 you're on a Pico W or Pico 2 W, this
+                                 pin is wired to the wireless chip
+                                 instead of a plain GPIO on real
+                                 hardware and this default will need
+                                 overriding (or the LED code skipping
+                                 entirely) - override at build time
+                                 (-D) if so. */
+#endif
+#ifndef BOARD_LED_HEARTBEAT_TICK_INTERVAL
+#define BOARD_LED_HEARTBEAT_TICK_INTERVAL 200u  /* how often (in main
+                                                    loop ticks, NOT
+                                                    milliseconds - see
+                                                    BOARD_TICK_DELAY_MS
+                                                    just above, which
+                                                    defaults to 0/
+                                                    unthrottled) the
+                                                    tick loop below
+                                                    fires one short
+                                                    pulse. Real-world
+                                                    period is
+                                                    therefore
+                                                    approximate, not a
+                                                    precise timer -
+                                                    "still looping,
+                                                    roughly this
+                                                    often" is all this
+                                                    is meant to prove. */
 #endif
 
 /*
@@ -274,6 +333,44 @@ static int mission_link_handshake_round_trip_complete(void)
     return mission_link_handshake_build_local_reply(&scratch) != 0;
 }
 
+/*
+ * Onboard LED heartbeat helpers - see BOARD_LED_PIN's own doc above
+ * for why this exists. gpio_set_pin()/gpio_set_val() are the exact
+ * same <bsp/libbsp.h> calls board/Raspberry_Pi_Pico/sx1262_hal.c
+ * already uses for its own GPIO setup, just against a different pin.
+ */
+LOCAL void board_led_init(void)
+{
+    gpio_set_pin(BOARD_LED_PIN, GPIO_MODE_OUT);
+    gpio_set_val(BOARD_LED_PIN, 0);   /* start off, not left floating/undefined */
+}
+
+/* One on/off pulse, blocking for on_ms+off_ms via tk_dly_tsk (safe
+   here - always called from within sim_task(), a real µT-Kernel
+   task, never from an interrupt context). */
+LOCAL void board_led_pulse(UINT on_ms, UINT off_ms)
+{
+    gpio_set_val(BOARD_LED_PIN, 1);
+    if(on_ms > 0u)
+    {
+        tk_dly_tsk(on_ms);
+    }
+    gpio_set_val(BOARD_LED_PIN, 0);
+    if(off_ms > 0u)
+    {
+        tk_dly_tsk(off_ms);
+    }
+}
+
+LOCAL void board_led_blink_n(UINT count, UINT on_ms, UINT off_ms)
+{
+    UINT i;
+    for(i = 0u; i < count; i++)
+    {
+        board_led_pulse(on_ms, off_ms);
+    }
+}
+
 LOCAL void sim_task(INT stacd, void *exinf);
 LOCAL ID sim_tskid;
 LOCAL T_CTSK sim_ctsk = {
@@ -314,6 +411,14 @@ LOCAL void sim_task(INT stacd, void *exinf)
     (void)stacd;
     (void)exinf;
 
+    /* Heartbeat stage 1/3: one long pulse as soon as sim_task() is
+       actually running - proves the kernel booted and scheduled this
+       task at all, before anything below (including the radio init
+       just below, the riskiest untested step) gets a chance to hang.
+       See BOARD_LED_PIN's own doc above for full context. */
+    board_led_init();
+    board_led_pulse(300u, 200u);
+
     /* SX1262 hardware bring-up (SPI0 + GPIO config, DIO1 IRQ routing,
        first RX arm) - must happen before anything below tries to
        send/receive over LoRa, and doesn't depend on sim_runner_init()/
@@ -322,6 +427,15 @@ LOCAL void sim_task(INT stacd, void *exinf)
        ordering - see sx1262_hal.c's own top-of-file comment for the
        wiring this assumes. */
     sx1262_hal_init();
+
+    /* Heartbeat stage 2/3: three quick pulses once sx1262_hal_init()
+       has RETURNED - if this never appears (only stage 1's single
+       long pulse ever shows), radio bring-up hung, most likely on a
+       BUSY-pin wait if the SX1262 module isn't wired up yet (or
+       isn't wired up correctly - DIO1 in particular is still an
+       unconfirmed placeholder pin as of this writing, see
+       SX1262_PIN_DIO1's own doc in sx1262_hal.c). */
+    board_led_blink_n(3u, 120u, 120u);
 
     tm_putstring((UB*)"tron: sim_runner_init\n");
 
@@ -380,17 +494,55 @@ LOCAL void sim_task(INT stacd, void *exinf)
 
     tm_putstring((UB*)"tron: waiting on mission-link handshake\n");
 
+    {
+    /* Local, not file-scope: this counter only needs to survive
+       across iterations of ONE wait loop at a time (reused, reset to
+       0, for the roster-wait loop just below) - see BOARD_LED_
+       HEARTBEAT_TICK_INTERVAL's own doc above for why this is an
+       approximate period, not a precise timer, same caveat as the
+       per-tick loop's own copy of this pattern. Without this, a
+       real second-board mismatch (e.g. SF/BW/CR/sync word not
+       actually matching yet - a known open item) would look
+       IDENTICAL on the LED to this board correctly waiting alone:
+       both are "3 blinks then dark forever". This at least
+       distinguishes "still spinning, still trying" from "actually
+       hung", the same reason stage 3 exists in the tick loop below. */
+    UINT wait_pulse_counter = 0u;
+
     while (!mission_link_handshake_round_trip_complete())
     {
-        /* Pumps RX on whichever transport this board has, the same
-           function the per-tick loop below also calls — needed here
-           too, since the request that completes this board's own
-           readiness has to actually be received to unblock this
-           wait. Not gated behind the readiness check itself (that
-           would deadlock — this call is what MAKES the check
-           eventually true). */
+        /* Pumps RX so the handshake request that completes this
+           board's own readiness actually has a chance to arrive -
+           not gated behind the readiness check itself (that would
+           deadlock - this call is what MAKES the check eventually
+           true).
+           
+           sx1262_rx_poll() FIRST, then mission_link_task_step():
+           sx1262_rx_poll() is what actually reads the radio and
+           pushes any received frame into comms_transport's inbox
+           (via comms_transport_deliver_received() - see sx1262_hal.c);
+           mission_link_task_step() only reads FROM that inbox (via
+           comms_transport_poll_received() - see mission_link_task.c),
+           it does not touch the radio itself. This split was missed
+           here originally - this loop used to call only mission_
+           link_task_step()/comms_transport_dispatch_pending(), same
+           as the per-tick loop below, but sx1262_rx_poll() (added
+           later, once real RX ingestion existed) never got backfilled
+           into this loop or the roster-wait loop just below, so on
+           real hardware neither wait loop could ever see an incoming
+           LoRa frame regardless of what a peer board sent - confirmed
+           by tracing the call chain, not assumed; fixed here and in
+           the roster-wait loop below in the same pass. */
+        sx1262_rx_poll();
         mission_link_task_step();
         comms_transport_dispatch_pending();
+
+        if((wait_pulse_counter % BOARD_LED_HEARTBEAT_TICK_INTERVAL) == 0u)
+        {
+            board_led_pulse(30u, 0u);
+        }
+        wait_pulse_counter++;
+    }
     }
 
     tm_putstring((UB*)"tron: handshake ready\n");
@@ -399,21 +551,35 @@ LOCAL void sim_task(INT stacd, void *exinf)
      * Roster-arrival gate - see the mission_link_task_any_roster_
      * applied() extern's own doc above for why this is a distinct
      * condition from the handshake completing. Same shape as the
-     * handshake wait loop just above: block, pumping
-     * mission_link_task_step() so RX (and therefore the apply that
-     * flips this counter) actually gets a chance to run, until at
-     * least one team's real roster data has landed on this board. On
-     * real hardware today this blocks forever, for the same reason
-     * the handshake gate's own comment already documents (no wire
-     * type wired to a real TX/RX path yet) - once that lands, roster
-     * frames follow the handshake frames through the same pipe.
+     * handshake wait loop just above, including the same sx1262_rx_
+     * poll() requirement and the same reasoning for why it has to run
+     * here too - see that loop's own comment for the full story. On
+     * real hardware today this still blocks forever with only one
+     * board flashed (nothing to receive a roster FROM), but as of
+     * this fix it no longer blocks forever ONCE a second board
+     * exists, the way it would have with sx1262_rx_poll() missing
+     * from this loop.
      */
     tm_putstring((UB*)"tron: waiting on mission roster arrival\n");
 
+    {
+    UINT wait_pulse_counter = 0u;   /* fresh counter for this loop - see
+                                        the handshake wait loop's own
+                                        copy of this variable above for
+                                        why it exists. */
+
     while (mission_link_task_any_roster_applied() == 0u)
     {
+        sx1262_rx_poll();
         mission_link_task_step();
         comms_transport_dispatch_pending();
+
+        if((wait_pulse_counter % BOARD_LED_HEARTBEAT_TICK_INTERVAL) == 0u)
+        {
+            board_led_pulse(30u, 0u);
+        }
+        wait_pulse_counter++;
+    }
     }
 
     tm_putstring((UB*)"tron: roster received, starting seed loop\n");
@@ -460,6 +626,20 @@ LOCAL void sim_task(INT stacd, void *exinf)
             if((tick % BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL) == 0u)
             {
                 (void)board_snapshot_ring_drain();
+            }
+
+            /* Heartbeat stage 3/3: one short pulse every
+               BOARD_LED_HEARTBEAT_TICK_INTERVAL ticks, for as long as
+               the seed loop keeps running - proves the board is
+               still alive and looping, not just that it got here
+               once. If the board hangs somewhere later in this loop
+               (radio stuck waiting on BUSY, a fault path spinning,
+               etc.), this simply stops - the LED going dark and
+               staying dark after stage 1/2 already showed is itself
+               the signal. */
+            if((tick % BOARD_LED_HEARTBEAT_TICK_INTERVAL) == 0u)
+            {
+                board_led_pulse(30u, 0u);
             }
 
 #if BOARD_TICK_DELAY_MS > 0

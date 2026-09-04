@@ -36,8 +36,10 @@
     --font: 'Inter', -apple-system, "Segoe UI", sans-serif;
   }
   * { box-sizing: border-box; }
+  html, body { height:100%; }
   body { margin:0; font-family: var(--font); background: var(--bg); color: var(--text); font-size: 14px;
-         font-feature-settings: "tnum" 1; }
+         font-feature-settings: "tnum" 1; display:flex; flex-direction:column;
+         height:100vh; height:100dvh; overflow:hidden; }
   ::-webkit-scrollbar { width:8px; } ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius:4px; }
 
   /* ---------- Header ---------- */
@@ -83,6 +85,10 @@
   .field select { width:120px; }
   .btn { border:1px solid var(--border-strong); background:#fff; color: var(--text); padding:7px 15px;
     border-radius:6px; font-size:12.5px; font-weight:700; cursor:pointer; font-family: var(--font); }
+  .btn:disabled { opacity:0.55; cursor:not-allowed; }
+  .btn.primary:disabled { background: #5b6b7d; border-color:#5b6b7d; }
+  .btn-danger { border-color:#e3b3b3; color: var(--critical); }
+  .btn-danger:hover { background: var(--critical-bg); }
   .btn.primary { background: var(--header); border-color: var(--header); color:#fff; }
   .btn.primary:hover { filter: brightness(1.15); }
   .btn:hover { background: var(--surface-alt); }
@@ -100,20 +106,46 @@
   .score .val.ok { color: var(--ok); } .score .val.neutral { color: var(--text); }
 
   /* ---------- Main COP layout: map dominant ---------- */
-  .cop { display:grid; grid-template-columns: 1.9fr 1fr; gap:16px; padding: 16px 20px 24px; align-items:start; }
+  .cop { display:grid; grid-template-columns: 1.9fr minmax(0,1fr); grid-template-rows: minmax(0,1fr);
+    gap:16px; padding: 16px 20px 24px; align-items:stretch; flex:1 1 auto; min-height:0; }
   body.wallboard .cop { padding: 20px 28px 30px; gap:20px; }
   .panel { background: var(--surface); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
   .panel h3 { margin:0; padding: 13px 16px; font-size:12.5px; font-weight:800; text-transform:uppercase;
     letter-spacing:0.4px; color: var(--text-dim); border-bottom:1px solid var(--border); background: var(--surface-alt); }
   body.wallboard .panel h3 { font-size:16px; padding: 16px 20px; }
-  .mapwrap { padding:12px; }
-  canvas#mapD { width:100%; aspect-ratio: 1/1; display:block; border-radius:6px; }
+  .map-panel { display:flex; flex-direction:column; min-height:0; }
+  .mapwrap { padding:12px; flex:1; min-height:0; display:flex; align-items:center; justify-content:center; }
+  canvas#mapD { width:auto; height:100%; max-width:100%; max-height:100%; aspect-ratio: 1/1; display:block; border-radius:6px; }
   .legend { display:flex; flex-wrap:wrap; gap:14px; padding:6px 16px 14px; font-size:11.5px; color: var(--text-dim); }
   body.wallboard .legend { font-size:14px; gap:20px; }
   .legend span { display:flex; align-items:center; gap:6px; }
   .sw { width:10px; height:10px; border-radius:50%; display:inline-block; }
 
-  .sidecol { display:flex; flex-direction:column; gap:16px; }
+  .sidecol { display:flex; flex-direction:column; gap:16px; position:relative; min-width:0;
+    min-height:0; overflow-y:auto; scrollbar-width:none; -ms-overflow-style:none; }
+  .sidecol::-webkit-scrollbar { display:none; }
+  .sidecol > .panel { flex-shrink:0; }
+
+  .inspector-overlay {
+    display:none; position:absolute; inset:0; z-index:20; padding-top: 4px;
+    background: rgba(21,32,43,0.32); border-radius:10px;
+  }
+  .inspector-overlay.open { display:block; }
+  .inspector-card {
+    background: var(--surface); border:1px solid var(--border-strong); border-radius:10px;
+    box-shadow: 0 12px 32px rgba(15,23,32,0.28); max-height: 100%; overflow-y:auto;
+  }
+  .inspector-card-hdr {
+    display:flex; align-items:center; justify-content:space-between; padding: 12px 14px;
+    font-size:12.5px; font-weight:800; text-transform:uppercase; letter-spacing:0.4px; color: var(--text-dim);
+    border-bottom:1px solid var(--border); position:sticky; top:0; background: var(--surface);
+  }
+  .inspector-close {
+    border:none; background: var(--surface-alt); width:24px; height:24px; border-radius:6px; cursor:pointer;
+    font-size:12px; color: var(--text-dim); line-height:1;
+  }
+  .inspector-close:hover { background: var(--border); }
+  body.wallboard .inspector-overlay { display:none !important; } /* wallboard is passive, no click-to-inspect */
 
   table { width:100%; border-collapse:collapse; font-size:12.5px; }
   body.wallboard table { font-size:16px; }
@@ -124,19 +156,77 @@
   body.wallboard td { padding: 12px 18px; }
   tr:last-child td { border-bottom:none; }
 
-  .pill { padding:3px 9px; border-radius:99px; font-size:11px; font-weight:700; display:inline-block; }
-  body.wallboard .pill { font-size:13.5px; padding:5px 12px; }
-  .pill.available { background: var(--ok-bg); color: var(--ok); }
-  .pill.working { background: #e7edfb; color: #1a56db; }
-  .pill.resting { background: var(--caution-bg); color: var(--caution); }
-  .pill.degraded { background: var(--critical-bg); color: var(--critical); }
-  .pill.enroute { background: var(--inactive-bg); color: var(--inactive); }
+  .status-dot { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:7px; vertical-align:middle; }
+  body.wallboard .status-dot { width:13px; height:13px; margin-right:10px; }
+  .status-dot.available { background: var(--ok); }
+  .status-dot.working { background: #1a56db; }
+  .status-dot.resting { background: var(--caution); }
+  .status-dot.enroute { background: var(--inactive); }
 
-  .reassign-btn {
-    font-size:10.5px; font-weight:700; color: var(--text-faint); background:#fff; border:1px dashed var(--border-strong);
-    border-radius:5px; padding:3px 8px; cursor:not-allowed; opacity:0.7;
+  .stub-note { font-size:11px; color: var(--text-faint); padding: 6px 16px 4px; }
+
+  .override-card { margin: 10px 16px 14px; padding: 12px 14px; border-radius:8px; background: var(--urgent-bg);
+    border: 1px solid #f3c58a; }
+  .override-title { font-size:12px; font-weight:800; color: var(--urgent); margin-bottom:8px; }
+  .override-route { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:700; margin-bottom:6px; }
+  .override-route .arrow { color: var(--text-faint); }
+  .team-chip { background:#fff; border:1px solid var(--border-strong); border-radius:6px; padding:3px 9px; }
+  .override-note { font-size:11px; color: var(--text-dim); margin: 6px 0 10px; }
+  .override-actions { display:flex; gap:8px; }
+  .override-btn { border-radius:6px; padding:6px 14px; font-size:12px; font-weight:700; cursor:pointer; border:1px solid transparent; }
+  .override-btn.confirm { background: var(--critical); color:#fff; }
+  .override-btn.cancel { background:#fff; border-color: var(--border-strong); color: var(--text); }
+  .override-result { font-size:12px; margin-top:8px; padding:8px 10px; border-radius:6px; }
+  .override-result.ok { background: var(--ok-bg); color: var(--ok); }
+  .override-result.err { background: var(--critical-bg); color: var(--critical); }
+
+  .insp-title { font-size:15px; font-weight:800; margin: 2px 16px 2px; padding-top:12px; }
+  .insp-sub { font-size:11.5px; color: var(--text-faint); margin: 0 16px 10px; }
+  .insp-grid { display:grid; grid-template-columns: 1fr 1fr; gap:0; margin: 0 16px 14px; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .insp-row { display:contents; }
+  .insp-row .k { padding:7px 10px; font-size:11px; color: var(--text-faint); font-weight:700; background: var(--surface-alt); border-bottom:1px solid var(--border); }
+  .insp-row .v { padding:7px 10px; font-size:12.5px; color: var(--text); border-bottom:1px solid var(--border); font-variant-numeric: tabular-nums; }
+  .insp-row:last-child .k, .insp-row:last-child .v { border-bottom:none; }
+  .insp-flag { display:inline-block; margin: 0 16px 12px; padding:4px 10px; border-radius:6px; font-size:11.5px; font-weight:700; background: var(--critical-bg); color: var(--critical); }
+  tr.row-clickable { cursor:pointer; }
+  tr.row-clickable:hover { background: var(--surface-alt); }
+  tr.row-selected { background: #eef3fb; }
+
+  .panel-count { font-weight:600; color: var(--text-faint); text-transform:none; letter-spacing:0; font-size:11.5px; }
+
+  .slider-wrap { position:relative; padding: 2px 32px 4px; }
+  .incident-slider {
+    display:flex; overflow-x:auto; scroll-snap-type:x mandatory; scroll-behavior:smooth;
+    -webkit-overflow-scrolling:touch;
   }
-  .stub-note { font-size:10px; color: var(--text-faint); padding: 6px 14px 10px; font-style:italic; }
+  .incident-slider::-webkit-scrollbar { display:none; }
+  .incident-page {
+    flex: 0 0 100%; scroll-snap-align:start; display:grid; grid-template-columns: 1fr 1fr;
+    gap:8px; padding: 6px 4px 10px; min-height:128px; align-content:start;
+  }
+  body.wallboard .incident-page { min-height:200px; gap:14px; }
+  .incident-card { border:1px solid var(--border); border-left:4px solid var(--border); border-radius:8px; padding:9px 11px 9px 9px; cursor:pointer; background:#fff; }
+  .incident-card.degraded { border-left-color: var(--critical); }
+  .incident-card.urgent { border-left-color: var(--urgent); }
+  .incident-card.resting { border-left-color: var(--caution); }
+  .incident-card.enroute { border-left-color: var(--inactive); }
+  .incident-card:hover { background: var(--surface-alt); }
+  .incident-card.selected { background:#eef3fb; border-top-color:#7fa1d6; border-right-color:#7fa1d6; border-bottom-color:#7fa1d6; }
+  .incident-card .ic-id { font-size:10.5px; color: var(--text-faint); font-weight:700; }
+  body.wallboard .incident-card .ic-id { font-size:13px; }
+  .incident-card .ic-type { font-size:12.5px; font-weight:700; margin:2px 0 6px; line-height:1.25; }
+  body.wallboard .incident-card .ic-type { font-size:16px; }
+  .slider-nav {
+    position:absolute; top:50%; transform:translateY(-50%); width:26px; height:26px; border-radius:50%;
+    border:1px solid var(--border-strong); background:#fff; cursor:pointer; font-size:15px; line-height:1;
+    color: var(--text-dim); display:flex; align-items:center; justify-content:center;
+  }
+  .slider-nav.prev { left:2px; } .slider-nav.next { right:2px; }
+  .slider-nav:disabled { opacity:0.25; cursor:default; }
+  .slider-nav:not(:disabled):hover { background: var(--surface-alt); }
+  .slider-dots { display:flex; justify-content:center; gap:6px; padding: 0 0 12px; }
+  .slider-dot { width:6px; height:6px; border-radius:50%; background: var(--border-strong); cursor:pointer; border:none; padding:0; }
+  .slider-dot.active { background: var(--header); }
 
   .empty { color: var(--text-faint); font-size:13px; padding: 30px 16px; text-align:center; }
   body.wallboard .empty { font-size:17px; padding: 50px 16px; }
@@ -171,6 +261,8 @@
   <div class="field"><label>Fault profile</label><select id="fault"><option value="none">none</option><option value="random">random</option></select></div>
   <div class="field"><label>Tick delay (ms)</label><input id="delay" type="number" value="120"></div>
   <button class="btn primary" id="startLive">Start live run</button>
+  <button class="btn" id="pauseLive" style="display:none;">Pause</button>
+  <button class="btn btn-danger" id="endLive" style="display:none;">End run</button>
   <button class="btn" id="runBatch">Run full speed</button>
 </div>
 
@@ -183,7 +275,7 @@
 </div>
 
 <div class="cop">
-  <div class="panel">
+  <div class="panel map-panel">
     <h3>Region Map — 36×36</h3>
     <div class="mapwrap"><canvas id="mapD"></canvas></div>
     <div class="legend">
@@ -193,19 +285,36 @@
       <span><i class="sw" style="background:#b8860b"></i>Resting</span>
       <span><i class="sw" style="background:#2e7d32;border-radius:3px"></i>Safe zone</span>
     </div>
+    <div class="stub-note op-only" id="dragHint">Drag a team marker onto an incident to propose reassigning it to that board.</div>
+    <div id="overridePanel" class="op-only" style="display:none;"></div>
   </div>
 
-  <div class="sidecol">
+  <div class="sidecol" id="sidecol">
     <div class="panel">
       <h3>Team Status</h3>
-      <table id="teamTable"><thead><tr><th>Team</th><th>Status</th><th>Stamina</th><th class="op-only">Action</th></tr></thead>
-        <tbody><tr><td colspan="4" class="empty">Start a live run to populate team status.</td></tr></tbody></table>
-      <div class="stub-note op-only">"Reassign" is a placeholder — not wired to a backend action yet.</div>
+      <table id="teamTable"><thead><tr><th>Team</th><th>Stamina</th></tr></thead>
+        <tbody><tr><td colspan="2" class="empty">Start a live run to populate team status.</td></tr></tbody></table>
     </div>
     <div class="panel">
-      <h3>Active Incidents</h3>
-      <table id="incidentTable"><thead><tr><th>ID</th><th>Priority</th><th>Status</th></tr></thead>
-        <tbody><tr><td colspan="3" class="empty">No active incidents right now.</td></tr></tbody></table>
+      <h3>Active Incidents <span class="panel-count" id="incCount"></span></h3>
+      <div class="slider-wrap">
+        <button class="slider-nav prev" id="incPrev" aria-label="Previous incidents">‹</button>
+        <div class="incident-slider" id="incidentSlider">
+          <div class="incident-page"><div class="empty" style="grid-column:1/-1;">No active incidents right now.</div></div>
+        </div>
+        <button class="slider-nav next" id="incNext" aria-label="Next incidents">›</button>
+      </div>
+      <div class="slider-dots" id="incidentDots"></div>
+    </div>
+
+    <div class="inspector-overlay" id="inspectorOverlay">
+      <div class="inspector-card">
+        <div class="inspector-card-hdr">
+          <span>Inspector</span>
+          <button class="inspector-close" id="inspectorClose" aria-label="Close">✕</button>
+        </div>
+        <div id="inspectorBody"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -216,7 +325,7 @@
 const COLORS = {
   bg: '#f6f8fa', grid: '#e2e7eb', building: '#dfe4e9', buildingHazard: '#f6d9d6',
   road: '#dfe4e9', safezone: '#2e7d32', incidentCrit: '#d32f2f', incidentLow: '#ed6c02',
-  team: '#1a56db', teamResting: '#b8860b', epicenter: '#d32f2f', text: '#5b6572'
+  team: '#1a56db', teamResting: '#b8860b', epicenter: '#d32f2f', text: '#5b6572', selectRing: '#15202b'
 };
 
 function tick() { document.getElementById('clock').textContent = new Date().toLocaleTimeString(); }
@@ -224,15 +333,25 @@ tick(); setInterval(tick, 1000);
 
 document.getElementById('wallBtn').addEventListener('click', () => document.body.classList.add('wallboard'));
 document.getElementById('exitBtn').addEventListener('click', () => document.body.classList.remove('wallboard'));
-window.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.body.classList.remove('wallboard'); });
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (selectedMarker) { closeInspector(); return; }
+  document.body.classList.remove('wallboard');
+});
 
-function pillClass(status) { return ['available','enroute','working','resting','degraded'][status] || 'available'; }
+document.getElementById('inspectorClose').addEventListener('click', closeInspector);
+document.getElementById('inspectorOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'inspectorOverlay') closeInspector(); // click on the backdrop, not the card itself
+});
+
+function pillClass(status) { return ['available','enroute','working','resting'][status] || 'available'; }
 
 function updateScorecards(frame) {
   if (!frame) return;
   const incidents = frame.incidents || [];
   const teams = frame.teams || [];
-  const critical = incidents.filter(i => i.priority >= 2).length;
+  // Priority_t: 1=CRITICAL is the most severe (see core/mission_state.h) — NOT ">= 2".
+  const critical = incidents.filter(i => i.priority === 1).length;
   document.getElementById('scActive').textContent = incidents.length;
   document.getElementById('scCritical').textContent = critical;
   document.getElementById('scDeployed').textContent = teams.filter(t => t.status === 1 || t.status === 2).length;
@@ -253,39 +372,411 @@ function renderTeams(frame) {
   const tbody = document.querySelector('#teamTable tbody');
   if (!frame || !frame.teams || !frame.teams.length) return;
   tbody.innerHTML = frame.teams.map(t => `
-    <tr><td>${Bench.teamName(t)}</td><td><span class="pill ${pillClass(t.status)}">${Bench.statusName(t.status)}</span></td>
-    <td>${t.stamina.toFixed(0)}%</td><td class="op-only"><button class="reassign-btn" title="Not wired yet">Reassign</button></td></tr>`).join('');
+    <tr class="row-clickable" data-type="team" data-id="${t.id}">
+      <td><span class="status-dot ${pillClass(t.status)}" title="${Bench.statusName(t.status)}"></span>${Bench.teamName(t)}</td>
+      <td>${t.stamina.toFixed(0)}%</td></tr>`).join('');
+  markSelectedRows();
 }
+const INCIDENTS_PER_PAGE = 4; // 2x2 grid per page — fixed panel height regardless of how many incidents are active
+let incidentPage = 0;
+let incidentPageCount = 1;
+let programmaticScroll = false;
+const incidentSlider = document.getElementById('incidentSlider');
+
+function priorityBadgeClass(p) { return { 1:'degraded', 2:'urgent', 3:'resting', 4:'enroute' }[p] || 'enroute'; }
+
 function renderIncidents(frame) {
-  const tbody = document.querySelector('#incidentTable tbody');
-  if (!frame) return;
-  if (!frame.incidents || !frame.incidents.length) { tbody.innerHTML = '<tr><td colspan="3" class="empty">No active incidents right now.</td></tr>'; return; }
-  tbody.innerHTML = frame.incidents.map(i => `
-    <tr><td>#${i.id}</td><td>${i.priority >= 2 ? '<span class="pill degraded">Critical</span>' : '<span class="pill enroute">Low</span>'}</td>
-    <td>${i.status ?? '—'}</td></tr>`).join('');
+  const incidents = (frame && frame.incidents) || [];
+  document.getElementById('incCount').textContent = incidents.length ? `(${incidents.length})` : '';
+
+  if (!incidents.length) {
+    incidentSlider.innerHTML = '<div class="incident-page"><div class="empty" style="grid-column:1/-1;">No active incidents right now.</div></div>';
+    incidentPageCount = 1; incidentPage = 0;
+    renderSliderChrome();
+    return;
+  }
+
+  incidentPageCount = Math.max(1, Math.ceil(incidents.length / INCIDENTS_PER_PAGE));
+  incidentPage = Math.min(incidentPage, incidentPageCount - 1);
+
+  let html = '';
+  for (let p = 0; p < incidentPageCount; p++) {
+    const pageItems = incidents.slice(p * INCIDENTS_PER_PAGE, p * INCIDENTS_PER_PAGE + INCIDENTS_PER_PAGE);
+    // Priority is communicated by the card's left-edge color only (see .incident-card.<class> rules) —
+    // no text badge. Full priority name/status/etc. still live in the Inspector on click.
+    html += `<div class="incident-page">${pageItems.map(i => `
+      <div class="incident-card ${priorityBadgeClass(i.priority)}" data-type="incident" data-id="${i.id}" title="${Bench.priorityName(i.priority)} priority">
+        <div class="ic-id">#${i.id}</div>
+        <div class="ic-type">${Bench.incidentTypeName(i.type)}</div>
+      </div>`).join('')}</div>`;
+  }
+  incidentSlider.innerHTML = html;
+
+  document.querySelectorAll('.incident-card').forEach(card => {
+    card.addEventListener('click', () => selectMarker('incident', +card.dataset.id));
+    if (selectedMarker && selectedMarker.type === 'incident' && +card.dataset.id === selectedMarker.id) {
+      card.classList.add('selected');
+    }
+  });
+
+  renderSliderChrome();
+  programmaticScroll = true;
+  incidentSlider.scrollLeft = incidentPage * incidentSlider.clientWidth;
+  requestAnimationFrame(() => { programmaticScroll = false; });
 }
-function drawMap() { Bench.renderMap(document.getElementById('mapD'), COLORS); }
+
+function renderSliderChrome() {
+  document.getElementById('incPrev').disabled = incidentPage === 0;
+  document.getElementById('incNext').disabled = incidentPage >= incidentPageCount - 1;
+  const dots = document.getElementById('incidentDots');
+  if (incidentPageCount <= 1) { dots.innerHTML = ''; return; }
+  dots.innerHTML = Array.from({ length: incidentPageCount }, (_, p) =>
+    `<button class="slider-dot ${p === incidentPage ? 'active' : ''}" data-page="${p}" aria-label="Page ${p+1}"></button>`).join('');
+  dots.querySelectorAll('.slider-dot').forEach(dot => dot.addEventListener('click', () => goToIncidentPage(+dot.dataset.page)));
+}
+
+function goToIncidentPage(p) {
+  incidentPage = Math.max(0, Math.min(p, incidentPageCount - 1));
+  incidentSlider.scrollLeft = incidentPage * incidentSlider.clientWidth;
+  renderSliderChrome();
+}
+
+document.getElementById('incPrev').addEventListener('click', () => goToIncidentPage(incidentPage - 1));
+document.getElementById('incNext').addEventListener('click', () => goToIncidentPage(incidentPage + 1));
+incidentSlider.addEventListener('scroll', () => {
+  if (programmaticScroll) return;
+  const p = Math.round(incidentSlider.scrollLeft / Math.max(incidentSlider.clientWidth, 1));
+  if (p !== incidentPage) { incidentPage = p; renderSliderChrome(); }
+});
+function markSelectedRows() {
+  document.querySelectorAll('tr.row-clickable').forEach(row => {
+    const isSel = selectedMarker && row.dataset.type === selectedMarker.type && +row.dataset.id === selectedMarker.id;
+    row.classList.toggle('row-selected', !!isSel);
+  });
+  document.querySelectorAll('.incident-card').forEach(card => {
+    const isSel = selectedMarker && selectedMarker.type === 'incident' && +card.dataset.id === selectedMarker.id;
+    card.classList.toggle('selected', !!isSel);
+  });
+}
+document.querySelector('#teamTable tbody').addEventListener('click', (e) => {
+  const row = e.target.closest('tr.row-clickable'); if (!row) return;
+  selectMarker(row.dataset.type, +row.dataset.id);
+});
+let selectedMarker = null; // { type: 'team'|'incident', id } — drives the Inspector panel + map/table cross-highlight
+function drawMap() { Bench.renderMapV2(document.getElementById('mapD'), COLORS, 36, selectedMarker); }
+
+// ---- Drag a team marker onto an incident to propose reassigning it. ----
+// Mirrors the original index.html's canvas hit-testing / drag flow, wired to the
+// real /api/board/override endpoint (requires an actual connected, handshaked board).
+let dragState = null;
+let pendingOverride = null;
+const mapCanvas = document.getElementById('mapD');
+
+function canvasPos(evt) {
+  const rect = mapCanvas.getBoundingClientRect();
+  const scaleX = mapCanvas.clientWidth ? 1 : 1; // offsetX/Y already in CSS px via clientX-rect
+  return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
+}
+
+mapCanvas.addEventListener('mousedown', (evt) => {
+  if (pendingOverride) return; // finish/cancel current proposal first
+  const { x, y } = canvasPos(evt);
+  const hit = Bench.hitTest(x, y, 'team');
+  if (hit) dragState = { team: hit.data, startX: x, startY: y, curX: x, curY: y, wasDrag: false };
+});
+
+mapCanvas.addEventListener('mousemove', (evt) => {
+  if (!dragState) return;
+  const { x, y } = canvasPos(evt);
+  dragState.curX = x; dragState.curY = y;
+  if (Math.hypot(x - dragState.startX, y - dragState.startY) > (Bench.cellSize || 10) * 0.3) dragState.wasDrag = true;
+  drawMap();
+  const ctx = mapCanvas.getContext('2d');
+  ctx.save();
+  ctx.strokeStyle = '#ed6c02';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath();
+  ctx.moveTo(dragState.startX, dragState.startY);
+  ctx.lineTo(dragState.curX, dragState.curY);
+  ctx.stroke();
+  const dropHit = Bench.hitTest(x, y, 'incident');
+  if (dropHit) {
+    ctx.setLineDash([]);
+    ctx.strokeStyle = '#d32f2f';
+    ctx.beginPath();
+    ctx.arc(dropHit.cx, dropHit.cy, dropHit.r + 5, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+});
+
+mapCanvas.addEventListener('mouseup', (evt) => {
+  const { x, y } = canvasPos(evt);
+  if (dragState) {
+    const movedFarEnough = dragState.wasDrag;
+    const dropHit = Bench.hitTest(x, y, 'incident');
+    if (dropHit && movedFarEnough) {
+      pendingOverride = { team: dragState.team, incident: dropHit.data };
+      renderOverridePanel();
+    } else if (!movedFarEnough) {
+      // no real drag happened — treat as a plain click on the team marker
+      selectMarker('team', dragState.team.id);
+    }
+    dragState = null;
+    drawMap();
+    return;
+  }
+  // mousedown didn't hit a team (e.g. clicked straight on an incident/safezone marker) — try selecting it
+  const incHit = Bench.hitTest(x, y, 'incident');
+  if (incHit) { selectMarker('incident', incHit.data.id); return; }
+  const szHit = Bench.hitTest(x, y, 'safezone');
+  if (szHit) selectMarker('safezone', szHit.data.id);
+});
+
+function selectMarker(type, id) {
+  selectedMarker = { type, id };
+  markSelectedRows();
+  drawMap();
+  document.getElementById('inspectorOverlay').classList.add('open');
+  renderInspector();
+}
+
+function closeInspector() {
+  selectedMarker = null;
+  document.getElementById('inspectorOverlay').classList.remove('open');
+  markSelectedRows();
+  drawMap();
+}
+
+function humanizeKey(k) {
+  return k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+function formatValue(v) {
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+function renderInspector() {
+  const body = document.getElementById('inspectorBody');
+  if (!selectedMarker || !Bench.lastFrame) {
+    return;
+  }
+  if (selectedMarker.type === 'safezone') {
+    const s = (Bench.lastFrame.safezones || []).find(x => x.id === selectedMarker.id);
+    if (!s) { body.innerHTML = '<div class="empty">That safe zone is no longer in the current frame.</div>'; return; }
+    // NOTE: fields are read generically (whatever the live payload actually contains, minus
+    // x/y/id which are already shown above) since the real SafeZone_t/JSON schema isn't
+    // confirmed yet — see the ASSUMPTION comment in bench-common.js's renderMapV2.
+    const skip = new Set(['id', 'x', 'y']);
+    const rows = Object.keys(s).filter(k => !skip.has(k)).map(k => [humanizeKey(k), formatValue(s[k])]);
+    body.innerHTML = `
+      <div class="insp-title">Safe Zone</div>
+      <div class="insp-sub">Position ${s.x}, ${s.y}</div>
+      ${rows.length
+        ? `<div class="insp-grid">${rows.map(([k,v]) => `<div class="insp-row"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('')}</div>`
+        : `<div class="empty">No additional fields in this build's telemetry payload.</div>`}`;
+    return;
+  }
+  if (selectedMarker.type === 'team') {
+    const t = (Bench.lastFrame.teams || []).find(x => x.id === selectedMarker.id);
+    if (!t) { body.innerHTML = '<div class="empty">That team is no longer in the current frame.</div>'; return; }
+    const rows = [
+      ['Status', `${Bench.statusName(t.status)} (code ${t.status})`],
+      ['Specialization', TEAM_SPEC_NAMES[t.spec % TEAM_SPEC_NAMES.length]],
+      ['Stamina', `${t.stamina.toFixed(1)}%`],
+      ['Position', `${t.x}, ${t.y}`],
+      ['Shift hours', t.hours],
+      ['Has destination', t.has_dest ? `Yes → (${t.dest_x}, ${t.dest_y}) inc #${t.dest_id}` : 'No'],
+      ['Incidents resolved', t.incidents_resolved],
+      ['Stage completions', t.stage_completions],
+      ['Ticks resting', t.ticks_resting],
+      ['Ticks working', t.ticks_working],
+      ['Ticks available', t.ticks_available],
+      ['Fault mask', t.fault_mask],
+    ];
+    body.innerHTML = `
+      <div class="insp-title">${Bench.teamName(t)}</div>
+      <div class="insp-sub">Team ${t.id} · pool ${t.pool}${t.slot !== 255 ? ' · slot ' + t.slot : ''}</div>
+      ${t.degraded ? '<div class="insp-flag">⚠ Degraded — operating under a fault condition</div>' : ''}
+      <div class="insp-grid">${rows.map(([k,v]) => `<div class="insp-row"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('')}</div>`;
+  } else {
+    const i = (Bench.lastFrame.incidents || []).find(x => x.id === selectedMarker.id);
+    if (!i) { body.innerHTML = '<div class="empty">That incident is no longer active in the current frame.</div>'; return; }
+    const rows = [
+      ['Status', `${Bench.incidentStatusName(i.status)} (code ${i.status})`],
+      ['Priority', `${Bench.priorityName(i.priority)} (code ${i.priority})`],
+      ['Position', `${i.x}, ${i.y}`],
+      ['Assigned team', i.assigned_team === 255 ? '— none —' : `Team #${i.assigned_team}`],
+      ['Support team', i.support_team === 255 ? '— none —' : `Team #${i.support_team}`],
+      ['Required capability', TEAM_SPEC_NAMES[i.req_capability % TEAM_SPEC_NAMES.length] || i.req_capability],
+      ['Victims', i.victims],
+      ['Work remaining', i.work_remaining],
+      ['Discovered', i.discovered ? 'Yes' : 'Not yet discovered'],
+      ['Pool', i.pool],
+    ];
+    body.innerHTML = `
+      <div class="insp-title">${Bench.incidentTypeName(i.type)}</div>
+      <div class="insp-sub">Incident #${i.id}</div>
+      ${i.priority === 1 ? '<div class="insp-flag">⚠ Critical priority</div>' : ''}
+      <div class="insp-grid">${rows.map(([k,v]) => `<div class="insp-row"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('')}</div>`;
+  }
+}
+
+function renderOverridePanel() {
+  const panel = document.getElementById('overridePanel');
+  if (!pendingOverride) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  const { team, incident } = pendingOverride;
+  panel.style.display = 'block';
+  panel.innerHTML = `
+    <div class="override-card">
+      <div class="override-title">⚠ Proposed Override — Preview Only</div>
+      <div class="override-route">
+        <span class="team-chip">${Bench.teamName(team)}</span><span class="arrow">→</span>
+        <span class="team-chip">Incident #${incident.id}</span>
+      </div>
+      <div class="override-note">Requires a connected, handshaked board (USART1) — confirming sends this directly to the board's mission-link layer.</div>
+      <div class="override-actions">
+        <button class="override-btn confirm" id="ovConfirm">Confirm</button>
+        <button class="override-btn cancel" id="ovCancel">Cancel</button>
+      </div>
+      <div id="ovResult"></div>
+    </div>`;
+  document.getElementById('ovConfirm').addEventListener('click', confirmOverride);
+  document.getElementById('ovCancel').addEventListener('click', () => { pendingOverride = null; renderOverridePanel(); });
+}
+
+async function confirmOverride() {
+  const { team, incident } = pendingOverride;
+  const resEl = document.getElementById('ovResult');
+  resEl.innerHTML = '<div class="override-result" style="background:#eef0f2;color:#5b6572;">Sending…</div>';
+  try {
+    const r = await fetch('/api/board/override', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team_id: team.id, incident_id: incident.id }),
+    });
+    const data = await r.json();
+    if (data.status === 'success') {
+      resEl.innerHTML = `<div class="override-result ok">Sent — team ${team.id} → incident ${incident.id}</div>`;
+    } else {
+      resEl.innerHTML = `<div class="override-result err">${data.message || 'Override rejected'}</div>`;
+    }
+  } catch (e) {
+    resEl.innerHTML = `<div class="override-result err">Request failed: ${e}</div>`;
+  }
+  setTimeout(() => { pendingOverride = null; renderOverridePanel(); }, 3500);
+}
+
+function setRunButtonsEnabled(enabled) {
+  document.getElementById('startLive').disabled = !enabled;
+  document.getElementById('runBatch').disabled = !enabled;
+}
+
+let isPaused = false;
+
+function showLiveControls() {
+  document.getElementById('startLive').style.display = 'none';
+  document.getElementById('pauseLive').style.display = '';
+  document.getElementById('endLive').style.display = '';
+}
+function hideLiveControls() {
+  document.getElementById('startLive').style.display = '';
+  document.getElementById('startLive').textContent = 'Start live run';
+  document.getElementById('pauseLive').style.display = 'none';
+  document.getElementById('pauseLive').textContent = 'Pause';
+  document.getElementById('endLive').style.display = 'none';
+  isPaused = false;
+}
 
 document.getElementById('startLive').addEventListener('click', () => {
+  setRunButtonsEnabled(false);
+  showLiveControls();
   document.getElementById('connLabel').textContent = 'streaming…';
   document.getElementById('connDot').classList.add('live');
   const params = { seed:+document.getElementById('seed').value, ticks:+document.getElementById('ticks').value,
     fault_profile: document.getElementById('fault').value, tick_delay_ms:+document.getElementById('delay').value };
   Bench.startLive(params, {
     onStaticEnv: () => drawMap(),
-    onFrame: (frame) => { drawMap(); renderTeams(frame); renderIncidents(frame); updateScorecards(frame); },
+    onFrame: (frame) => { drawMap(); renderTeams(frame); renderIncidents(frame); updateScorecards(frame); renderInspector(); },
     onDiagLine: (line) => { document.getElementById('diagOut').textContent += line + '\n'; },
-    onDone: () => { document.getElementById('connLabel').textContent = 'idle'; document.getElementById('connDot').classList.remove('live'); },
-    onError: (e) => { document.getElementById('connLabel').textContent = 'error: ' + e.message; },
+    onDone: () => {
+      document.getElementById('connLabel').textContent = 'idle';
+      document.getElementById('connDot').classList.remove('live');
+      hideLiveControls();
+      setRunButtonsEnabled(true);
+    },
+    onError: (e) => {
+      document.getElementById('connLabel').textContent = 'error: ' + e.message;
+      document.getElementById('connDot').classList.remove('live');
+      hideLiveControls();
+      setRunButtonsEnabled(true);
+    },
   });
 });
+
+document.getElementById('pauseLive').addEventListener('click', async () => {
+  const btn = document.getElementById('pauseLive');
+  btn.disabled = true;
+  try {
+    if (!isPaused) {
+      const res = await Bench.pauseLive();
+      if (res.status === 'paused') {
+        isPaused = true;
+        btn.textContent = 'Resume';
+        document.getElementById('connLabel').textContent = 'paused';
+        document.getElementById('connDot').classList.remove('live');
+      } else {
+        document.getElementById('connLabel').textContent = res.message || 'pause failed';
+      }
+    } else {
+      const res = await Bench.resumeLive();
+      if (res.status === 'resumed') {
+        isPaused = false;
+        btn.textContent = 'Pause';
+        document.getElementById('connLabel').textContent = 'streaming…';
+        document.getElementById('connDot').classList.add('live');
+      } else {
+        document.getElementById('connLabel').textContent = res.message || 'resume failed';
+      }
+    }
+  } catch (e) {
+    document.getElementById('connLabel').textContent = 'request failed: ' + e;
+  }
+  btn.disabled = false;
+});
+
+document.getElementById('endLive').addEventListener('click', async () => {
+  const btn = document.getElementById('endLive');
+  btn.disabled = true;
+  btn.textContent = 'Ending…';
+  try {
+    await Bench.stopLive();
+    // The still-open SSE stream from startLive() will receive the resulting 'done' event
+    // and hideLiveControls()/setRunButtonsEnabled(true) run there — nothing else to do here.
+  } catch (e) {
+    document.getElementById('connLabel').textContent = 'stop failed: ' + e;
+  }
+  btn.disabled = false;
+  btn.textContent = 'End run';
+});
+
 document.getElementById('runBatch').addEventListener('click', () => {
+  setRunButtonsEnabled(false);
+  document.getElementById('runBatch').textContent = 'Running…';
   const params = { seed:+document.getElementById('seed').value, seed_count:1, ticks:+document.getElementById('ticks').value,
     fault_profile: document.getElementById('fault').value };
   document.getElementById('connLabel').textContent = 'running batch…';
   Bench.runBatch(params, (data) => {
     document.getElementById('connLabel').textContent = 'idle';
     document.getElementById('diagOut').textContent = (data.stdout_tail || '') + '\n' + (data.stderr_tail || '');
+    document.getElementById('runBatch').textContent = 'Run full speed';
+    setRunButtonsEnabled(true);
+  }).catch(() => {
+    document.getElementById('connLabel').textContent = 'batch run failed';
+    document.getElementById('runBatch').textContent = 'Run full speed';
+    setRunButtonsEnabled(true);
   });
 });
 

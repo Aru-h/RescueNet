@@ -40,6 +40,7 @@ trap cleanup EXIT
 
 echo "[check] building two_board_cbba_harness ..."
 gcc -std=gnu11 -Wall -Wextra -O1 \
+    -DCBBA_DEBUG_TIMING \
     -I"${REPO_ROOT}/core" -I"${REPO_ROOT}/laptop" \
     -o "${BINARY}" \
     "${REPO_ROOT}/laptop/tools/two_board_cbba_harness.c" \

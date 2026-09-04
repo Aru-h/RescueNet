@@ -443,8 +443,35 @@ uint32_t cbba_now_ms(void)
         s_started = 1;
     }
 
-    ms = (uint64_t)(ts.tv_sec - s_start.tv_sec) * 1000u +
-         (uint64_t)(ts.tv_nsec - s_start.tv_nsec) / 1000000u;
+    /* NOTE: this used to be a single unsigned expression -
+       (uint64_t)(ts.tv_sec - s_start.tv_sec) * 1000u +
+       (uint64_t)(ts.tv_nsec - s_start.tv_nsec) / 1000000u -
+       which is wrong whenever ts.tv_nsec < s_start.tv_nsec (i.e. on
+       whatever fraction of every second falls before s_start's own
+       ns offset - not a rare edge case, it recurs every second).
+       tv_nsec is signed, so that subtraction goes negative, but the
+       (uint64_t) cast wraps it to a huge unsigned value BEFORE the
+       divide, instead of borrowing a second from the tv_sec term.
+       The result was cbba_now_ms() occasionally returning a garbage
+       multi-billion-ms value - confirmed via CBBA_DEBUG_TIMING's
+       "waited=" log, which caught it directly - and that garbage
+       return, fed into cbba_ingest_remote_mesh_replies()'s
+       `(cbba_now_ms() - round_start) < CBBA_ROUND_TIMEOUT_MS` check,
+       makes the 530ms wait bail out almost instantly, mimicking a
+       real timeout when barely any wall-clock time had actually
+       passed. Do the subtraction with an explicit borrow instead. */
+    {
+        int64_t sec_diff = (int64_t)ts.tv_sec - (int64_t)s_start.tv_sec;
+        int64_t nsec_diff = (int64_t)ts.tv_nsec - (int64_t)s_start.tv_nsec;
+
+        if (nsec_diff < 0)
+        {
+            sec_diff -= 1;
+            nsec_diff += 1000000000L;
+        }
+
+        ms = (uint64_t)sec_diff * 1000u + (uint64_t)nsec_diff / 1000000u;
+    }
 
     return (uint32_t)ms;
 }

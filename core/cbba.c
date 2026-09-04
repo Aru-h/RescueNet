@@ -12,6 +12,21 @@
 #include "team.h"
 #include "comms_transport.h"
 
+/* CBBA_DEBUG_TIMING: opt-in diagnostic logging for
+   cbba_ingest_remote_mesh_replies()'s CBBA_ROUND_TIMEOUT_MS wait -
+   see the log line inside that function below. Off by default (not
+   defined anywhere in the board Makefiles), so it costs real boards
+   nothing; the laptop two-board CBBA harness build turns it on via
+   -DCBBA_DEBUG_TIMING so failing runs record whether the 530ms
+   deadline was actually hit. printf/stdio is safe to pull in here
+   only because this include is itself compiled out unless that flag
+   is set - CORE_SOURCES (this file included) is also compiled
+   straight into board firmware, which doesn't get a free pass on
+   stdio the way a host build does. */
+#ifdef CBBA_DEBUG_TIMING
+#include <stdio.h>
+#endif
+
 
 
 
@@ -956,6 +971,9 @@ void cbba_broadcast_local_teams(void)
 void cbba_ingest_remote_mesh_replies(void)
 {
     uint32_t round_start = cbba_now_ms();
+#ifdef CBBA_DEBUG_TIMING
+    bool reply_ingested_this_round = false;
+#endif
 
     while((cbba_now_ms() - round_start) < CBBA_ROUND_TIMEOUT_MS)
     {
@@ -988,6 +1006,10 @@ void cbba_ingest_remote_mesh_replies(void)
             separate board isn't on the wire at the comms_transport
             layer today, only inside CBBAMessage_t itself */
 
+#ifdef CBBA_DEBUG_TIMING
+        reply_ingested_this_round = true;
+#endif
+
         for(uint8_t receiver_id = 0; receiver_id < NUM_TEAMS; receiver_id++)
         {
             if(!cbba_team_is_local(receiver_id))
@@ -998,6 +1020,25 @@ void cbba_ingest_remote_mesh_replies(void)
             cbba_receive_and_update(receiver_id, &msg);
         }
     }
+
+#ifdef CBBA_DEBUG_TIMING
+    /* Fires exactly when the CBBA_ROUND_TIMEOUT_MS wait above ran out
+       without ever ingesting a single valid CBBA reply this round -
+       i.e. the 530ms deadline was hit dry. If a reply DID arrive
+       (reply_ingested_this_round true) but the boards still end up
+       disagreeing on the winner, this line stays silent and the bug
+       is in cbba_receive_and_update()'s tie-break logic instead, not
+       the timeout. */
+    if(!reply_ingested_this_round)
+    {
+        fprintf(stderr,
+                "[cbba] round timeout expired, no reply from peer "
+                "(board=%u, waited=%ums, CBBA_ROUND_TIMEOUT_MS=%ums)\n",
+                (unsigned)g_comms_transport_this_board_id,
+                (unsigned)(cbba_now_ms() - round_start),
+                (unsigned)CBBA_ROUND_TIMEOUT_MS);
+    }
+#endif
 }
 
 void cbba_consensus(void)

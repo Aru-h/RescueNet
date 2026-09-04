@@ -1849,3 +1849,42 @@ in effect (system task slot IDs now go past 10).
 core__mission_state.h               -> core/mission_state.h  (merged)
 core__incident.c                    -> core/incident.c        (updated,
                                         replaces the earlier core__incident.c)
+
+
+
+SEP 2nd:
+## check-two-board-cbba-harness intermittent-failure investigation
+
+- Instrumented `core/cbba.c`'s `cbba_ingest_remote_mesh_replies()` with a
+  `[cbba] round timeout expired, no reply from peer` log at the
+  CBBA_ROUND_TIMEOUT_MS (530ms) expiry point, gated behind
+  `CBBA_DEBUG_TIMING` (off by default, so real board builds are
+  unaffected; enabled only by the laptop harness build).
+- Stress-tested: 400 runs with no induced load + 400 runs with
+  background CPU load pinning all cores (`yes > /dev/null` x nproc).
+  Result: 800/800 passed. Did NOT reproduce the historical 1-3/40
+  intermittent failure. Not declaring it fixed on that basis alone -
+  logging this for the record per the "can't reproduce" branch.
+- The debug log line did surface a real, separate bug while
+  instrumenting: `two_board_cbba_harness.c`'s `cbba_now_ms()` computed
+  elapsed time as an unsigned subtraction that didn't borrow across a
+  tv_sec/tv_nsec boundary, so it periodically returned a garbage
+  multi-billion-ms value (confirmed via the new "waited=" field:
+  16.3% of timeout events in the no-load runs, 29.9% under CPU load).
+  That garbage value made the 530ms wait bail out almost instantly.
+  This never caused a visible test failure in the 800-run stress test
+  because the harness always runs a fixed 12 simulation ticks per
+  side regardless, so losing one round to a spurious early bailout
+  gets absorbed by later ticks' gossip - but it's a real bug and was
+  fixed (proper sec/nsec borrow) since it directly undermines the
+  530ms budget it's supposed to enforce, independent of whether it
+  happens to be masked today.
+- CBBA_ROUND_TIMEOUT_MS itself was left untouched - no evidence it's
+  the culprit, and it's a shared constant with real hardware code.
+- core/cbba.c's tie-break logic in cbba_receive_and_update() was not
+  touched - no run showed a reply arriving in time with boards still
+  disagreeing, so there's no evidence pointing at the consensus
+  algorithm itself.
+- The CBBA_DEBUG_TIMING log line stays in place for next time this
+  flakes on a real CI run - it's cheap, off by default, and now
+  reports trustworthy numbers.

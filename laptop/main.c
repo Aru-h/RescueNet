@@ -6,6 +6,7 @@
 #include <time.h>    /* nanosleep - desktop test tooling only, live-mode pacing */
 
 #include "allocator.h"
+#include "environment.h"
 #include "search_zones.h"
 #include "simulation.h"
 #include "scoring.h"
@@ -131,20 +132,35 @@ int main(int argc, char **argv)
         if(live_mode)
         {
             /* Static layout - buildings, roads, districts don't move once
-             * generated, so this is sent exactly once per run, not every
-             * tick, to keep LIVEFRAME payloads small. Per-tick hazard
-             * state (damage, active fires) is still streamed every tick
-             * inside LIVEFRAME itself, since that genuinely changes. */
+             * generated, so this is sent once per run, not every tick, to
+             * keep LIVEFRAME payloads small. LIVEFRAME itself carries no
+             * building/damage data at all (only teams + incidents) - so
+             * building damage is normally a safe one-time snapshot, EXCEPT
+             * for aftershocks (environment.c: apply_aftershocks()), which can
+             * destroy an already-damaged building mid-run. That mutation was
+             * previously never re-sent to the dashboard after this initial
+             * emit, so a collapsed building silently never updated on any
+             * client. See the aftershock_collapse_count check below, which
+             * re-emits this same static-env payload only on the ticks where
+             * that actually happens. */
             debug_emit_static_environment();
         }
 
         for(uint32_t tick = 0; tick < ticks_per_seed; ++tick)
         {
+            uint32_t collapse_count_before = g_environment_summary.aftershock_collapse_count;
             sim_tick();
 
             if(live_mode)
             {
                 debug_emit_live_frame(tick);
+                if(g_environment_summary.aftershock_collapse_count != collapse_count_before)
+                {
+                    /* An aftershock destroyed at least one building this tick -
+                     * re-send the (small) full building list so clients pick up
+                     * the new damage_state/hazard_flags instead of going stale. */
+                    debug_emit_static_environment();
+                }
                 if(tick_delay_ms > 0)
                 {
                     struct timespec delay;
