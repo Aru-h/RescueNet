@@ -1,6 +1,8 @@
 import pandas as pd
 
+# Keep in sync with EventType_t in core/mission_state.h
 EVENT_NAMES = {
+    0: "EVENT_NONE",
     1: "EVENT_NEW_INCIDENT",
     2: "EVENT_TEAM_ASSIGNED",
     3: "EVENT_TEAM_ON_SCENE",
@@ -8,6 +10,11 @@ EVENT_NAMES = {
     5: "EVENT_TEAM_REST",
     6: "EVENT_TEAM_AVAILABLE",
     7: "EVENT_INCIDENT_RESOLVED",
+    8: "EVENT_FAULT_INJECTED",
+    9: "EVENT_FAULT_RECOVERED",
+    10: "EVENT_WATCHDOG_ANOMALY_CHANGED",
+    11: "EVENT_RECOVERY_ACTION_CHANGED",
+    12: "EVENT_TICK",
 }
 
 df = pd.read_csv("tron_snapshot_dataset.csv")
