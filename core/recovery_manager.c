@@ -674,6 +674,31 @@ static RecoverySignal_t evaluate_stamina(
             RECOVERY_REASON_NONE,
             confidence);
 
+    /* Bug fix: evaluate_mobility()/evaluate_communication()/evaluate_
+     * equipment() all short-circuit here (their own comments cite this
+     * function as the precedent for doing so), but this function itself
+     * had no such guard - the gap the audit that found this flagged.
+     * The `else if` branch below fires RETURN_TO_SAFE_ZONE whenever
+     * `team->stamina < get_soft_stamina_floor(team)`, which is exactly
+     * the state a team sits in while it is RESTING *because* its
+     * stamina is low. The moment update_team()'s STATUS_RESTING handler
+     * (core/team.c) promotes RESTING -> AVAILABLE mid-tick (stamina/
+     * equipment-driven, no notion of "the recovery pipeline already has
+     * an opinion"), this function re-fires RETURN_TO_SAFE_ZONE,
+     * recovery_dispatch()'s only guard for that action
+     * (`status != STATUS_RESTING`) no longer blocks it, and
+     * abandon_task_for_recovery() sends the team straight back to the
+     * safe zone it just left - re-entering RESTING immediately and
+     * repeating for as long as stamina stays low. Same RESTING<->
+     * AVAILABLE bounce documented and fixed for mobility/communication/
+     * equipment above; a team already RESTING, or already routed toward
+     * its safe zone (heading_to_rest), is by definition already doing
+     * what this function would otherwise tell it to do. */
+    if(team->status == STATUS_RESTING || team->heading_to_rest)
+        return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
+            RECOVERY_REASON_NONE,
+            confidence);
+
     if(team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE)
     {
         if(team->degraded || team->stamina <= RECOVERY_MANAGER_STAMINA_CRITICAL_THRESHOLD)
