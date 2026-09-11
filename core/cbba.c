@@ -5,6 +5,7 @@
 #include <string.h>
 #include "mission_state.h"
 #include "mission_state_utils.h"
+#include "incident.h"
 #include "allocator.h"
 #include "scoring.h"
 #include "path.h"
@@ -77,6 +78,27 @@ bool cbba_team_is_local(uint8_t team_id)
     return comms_transport_board_id_for_team(team_id) ==
            g_comms_transport_this_board_id;
 }
+
+/* Self-contained lookup, same "each file keeps its own copy rather
+   than sharing" precedent core/mission_link.c's mission_link_find_
+   incident_slot() already established for this exact pattern
+   (incident_id is not a slot index - see that function's own
+   comment). Distinct name/static scope, not a re-export - this file
+   has no dependency on mission_link.c and shouldn't gain one just for
+   a five-line loop. */
+static uint8_t cbba_find_incident_slot_by_id(uint32_t incident_id)
+{
+    for(uint8_t i = 0; i < NUM_INCIDENTS; i++)
+    {
+        if(g_incidents[i].slot_occupied && g_incidents[i].incident_id == incident_id)
+        {
+            return i;
+        }
+    }
+
+    return NO_ASSIGNMENT;
+}
+
 
 static bool cbba_resolve_task_location(const TaskRef_t *task, int16_t *loc_x, int16_t *loc_y)
 {
@@ -210,7 +232,8 @@ static bool cbba_team_can_execute_task(uint8_t team_id, TaskRef_t task)
     IncidentState_t *incident = &g_incidents[task.slot];
     TeamState_t *team = &g_teams[team_id];
 
-    if(!incident->slot_occupied || incident->status != INC_OPEN)
+    if(!incident->slot_occupied || incident->status != INC_OPEN ||
+       incident->unreachable_streak >= INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD)
         return false;
 
     return team_can_accept_incident(team, incident) &&
@@ -237,8 +260,9 @@ static void cbba_two_opt_agent(uint8_t team_id)
         return;
 
     bool improved = true;
+    int max_iter = NUM_TEAMS * CBBA_MAX_BUNDLE_SIZE * 4;
 
-    while(improved)
+    while(improved && max_iter-- > 0)
     {
         improved = false;
         float current_utility = calculate_route_utility(
@@ -299,7 +323,17 @@ static bool cbba_try_best_relocate(void)
         if(donor->path_size < 2)
             continue;
 
-        for(uint8_t donor_index = 1; donor_index < donor->path_size; donor_index++)
+        /* Start at 0 unless path[0] is a pinned override — pinned tasks
+           must stay as the team's immediate next stop (see cbba_apply_
+           override_pin()'s own comment on why path[0] is the pin slot).
+           Non-pinned tasks at path[0] are valid relocation candidates. */
+        uint8_t donor_start = (donor->override_active &&
+                               donor->path_size > 0 &&
+                               donor->path[0].pool == TASK_POOL_INCIDENT &&
+                               donor->path[0].slot == cbba_find_incident_slot_by_id(
+                                   donor->override_incident_id)) ? 1u : 0u;
+
+        for(uint8_t donor_index = donor_start; donor_index < donor->path_size; donor_index++)
         {
             TaskRef_t task = donor->path[donor_index];
 
@@ -394,7 +428,8 @@ void cbba_improve_routes(void)
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
         cbba_two_opt_agent(team_id);
 
-    while(cbba_try_best_relocate())
+    int max_relocate = NUM_TEAMS * CBBA_MAX_BUNDLE_SIZE * 2;
+    while(max_relocate-- > 0 && cbba_try_best_relocate())
     {
         for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
             cbba_two_opt_agent(team_id);
@@ -462,25 +497,6 @@ void cbba_init(void)
     }
 }
 
-/* Self-contained lookup, same "each file keeps its own copy rather
-   than sharing" precedent core/mission_link.c's mission_link_find_
-   incident_slot() already established for this exact pattern
-   (incident_id is not a slot index - see that function's own
-   comment). Distinct name/static scope, not a re-export - this file
-   has no dependency on mission_link.c and shouldn't gain one just for
-   a five-line loop. */
-static uint8_t cbba_find_incident_slot_by_id(uint32_t incident_id)
-{
-    for(uint8_t i = 0; i < NUM_INCIDENTS; i++)
-    {
-        if(g_incidents[i].slot_occupied && g_incidents[i].incident_id == incident_id)
-        {
-            return i;
-        }
-    }
-
-    return NO_ASSIGNMENT;
-}
 
 /*
  * Force-injects team_id's active override pin (if any) into its own
@@ -545,29 +561,15 @@ static void cbba_apply_override_pin(uint8_t team_id)
     task.pool = TASK_POOL_INCIDENT;
     task.slot = pinned_slot;
 
-    if(agent->bundle_size >= CBBA_COMMITMENT_LIMIT || cbba_bundle_contains(team_id, task))
-        return; /* case 2 above, or already injected earlier this
-                    tick's repeat calls - nothing to do */
+        /* Guard against path overflow — use path_size, not bundle_size,
+       since it's the path array being written into */
+    if(agent->path_size >= CBBA_MAX_BUNDLE_SIZE || cbba_bundle_contains(team_id, task))
+        return;
 
     agent->bundle[agent->bundle_size] = task;
     agent->bundle_bid[agent->bundle_size] = CBBA_OVERRIDE_PIN_BID;
     agent->bundle_size++;
 
-    /* Front of the path: a forced assignment should be this team's
-       very next stop, not queued behind whatever it already committed
-       to earlier this same bidding cycle. This also piggybacks on an
-       existing invariant elsewhere in this file: cbba_try_best_
-       relocate()'s donor loop starts at donor_index = 1, never 0
-       (path[0] is this team's current/next destination - see cbba_
-       sync_team_execution_twin()'s own use of path[0] - and is
-       already treated as committed, not up for route-relocation). By
-       landing the pin at path[0], the post-convergence relocate pass
-       (cbba_improve_routes() -> cbba_try_best_relocate(), which runs
-       every cbba_run() after this function's round loop finishes)
-       can never pick it up as a donor candidate and hand it to a
-       different team for a route-utility gain - exactly the "don't
-       let normal [bidding OR route optimization] override it"
-       requirement this pin exists to satisfy. */
     for(uint8_t j = agent->path_size; j > 0; j--)
     {
         agent->path[j] = agent->path[j - 1];
@@ -590,13 +592,14 @@ void cbba_build_bundle(uint8_t team_id)
 
     while(agent->bundle_size < CBBA_COMMITMENT_LIMIT)
     {
-        float best_bid=-1;
+        float best_bid = 0.0f;
         bool found_task=false;
         uint8_t selected_insert_position = 0;
         for(int i=0;i<NUM_INCIDENTS;i++)
         {
             if(g_incidents[i].slot_occupied==0) continue;
             if(g_incidents[i].status!=INC_OPEN) continue;
+            if(g_incidents[i].unreachable_streak>=INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD) continue;
             IncidentState_t *incident=&g_incidents[i];
             task.pool=TASK_POOL_INCIDENT;
             task.slot=i;
@@ -626,23 +629,25 @@ void cbba_build_bundle(uint8_t team_id)
             return;
         }
         
-        agent->bundle[agent->bundle_size] = best_task;
+                agent->bundle[agent->bundle_size] = best_task;
         agent->bundle_bid[agent->bundle_size] = best_bid;
         agent->bundle_size++;
 
-        for(uint8_t j = agent->path_size;
-            j > selected_insert_position;
-            j--)
+        /* Guard path array using path_size, not bundle_size */
+        if(agent->path_size < CBBA_MAX_BUNDLE_SIZE)
         {
-            agent->path[j] = agent->path[j - 1];
+            for(uint8_t j = agent->path_size;
+                j > selected_insert_position;
+                j--)
+            {
+                agent->path[j] = agent->path[j - 1];
+            }
+            agent->path[selected_insert_position] = best_task;
+            agent->path_size++;
         }
-
-        agent->path[selected_insert_position] = best_task;
-        agent->path_size++;
 
         agent->winner[best_task.slot] = team_id;
         agent->winning_bid[best_task.slot] = best_bid;
-        
         
     }
 
@@ -693,6 +698,15 @@ static void cbba_release_lost_tasks(void)
                 path_index++)
             {
                 TaskRef_t path_task = agent->path[path_index];
+
+                /* System tasks are never in the bundle — always keep them */
+                if(path_task.pool == TASK_POOL_SYSTEM)
+                {
+                    agent->path[new_path_size] = path_task;
+                    new_path_size++;
+                    continue;
+                }
+
                 bool still_in_bundle = false;
 
                 for(uint8_t bundle_index = 0;
@@ -784,6 +798,7 @@ static void cbba_receive_and_update(uint8_t receiver_id, const CBBAMessage_t *ms
     {
         if(g_incidents[j].slot_occupied == 0) continue;
         if(g_incidents[j].status != INC_OPEN) continue;
+        if(g_incidents[j].unreachable_streak >= INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD) continue;
 
         uint8_t z_i = receiver->winner[j];
         float   y_i = receiver->winning_bid[j];
@@ -983,6 +998,20 @@ void cbba_ingest_remote_mesh_replies(void)
         uint8_t payload_len;
         CBBAMessage_t msg;
 
+        /* Peek first — skip frames owned by other consumers without
+           consuming them. Only dequeue once we know it's ours. */
+        uint8_t peeked_type;
+        if(!comms_transport_peek_frame_type(&peeked_type))
+            continue; /* inbox empty - keep waiting until timeout */
+
+        if(peeked_type != LORA_FRAME_TYPE_CBBA)
+        {
+            /* Not ours — leave it in the inbox for fault_comms or
+               mission_link to consume. Break out of the polling loop
+               so we don't spin on a non-CBBA frame forever. */
+            break;
+        }
+        
         if(!comms_transport_poll_received(&sender_team_id, &frame_type,
                                            payload, &payload_len))
         {
@@ -994,7 +1023,7 @@ void cbba_ingest_remote_mesh_replies(void)
         if(frame_type != LORA_FRAME_TYPE_CBBA)
             continue; /* mission-link's RX task (Prompt 3) owns those */
 
-        if(payload_len != (uint8_t)sizeof(CBBAMessage_t))
+        if(payload_len != sizeof(CBBAMessage_t))
             continue; /* protocol drift or a corrupt frame - drop it
                           and keep draining rather than aborting the
                           whole round over one bad message */
