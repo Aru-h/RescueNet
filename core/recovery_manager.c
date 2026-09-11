@@ -6,6 +6,8 @@
 #include <stdint.h>
 
 #include "allocator.h"
+#include "fault_buffer.h"
+#include "fault_predictor.h"
 #include "incident.h"
 #include "mission_execution_twin.h"
 #include "recovery_manager_config.h"
@@ -26,6 +28,9 @@ typedef struct
     RecoveryReason_t pending_reason;
     uint8_t pending_streak;
     uint8_t cooldown_ticks;
+    uint8_t last_assigned_task_pool;
+    uint8_t last_assigned_task_slot;
+    uint8_t last_status;
 } RecoveryManagerTeamState_t;
 
 typedef struct
@@ -752,6 +757,41 @@ static RecoverySignal_t evaluate_mobility(
             RECOVERY_REASON_NONE,
             confidence);
 
+    /* Bug fix: unlike evaluate_stamina() above (which explicitly branches
+     * on STATUS_RESTING), this function had no notion of "the team is
+     * already doing what I'm about to recommend." A mobility fault stays
+     * active[] for its full duration regardless of the team's status, so
+     * every tick that duration is up, this function re-derives the exact
+     * same RETURN_TO_SAFE_ZONE (or, if team->degraded, ABORT_MISSION/
+     * RETURN_TO_SAFE_ZONE) signal from scratch - correctly, in isolation,
+     * since the fault genuinely hasn't cleared yet.
+     *
+     * The problem is what happens once the team is actually RESTING:
+     * update_team()'s STATUS_RESTING handler (core/team.c) promotes
+     * RESTING -> AVAILABLE purely on stamina/equipment, with no idea a
+     * mobility fault is still open. The moment that promotion fires,
+     * this function's fresh (not stale - the fault is still active right
+     * now) RETURN_TO_SAFE_ZONE recommendation clears recovery_dispatch()'s
+     * only guard for that action (`status != STATUS_RESTING`, which an
+     * AVAILABLE team fails) and abandon_task_for_recovery() sends the
+     * team straight back out - to the safe zone it's already standing
+     * in or already en route to, which it reaches almost immediately,
+     * re-enters RESTING, gets re-promoted the moment stamina/equipment
+     * allow it again, and repeats for as long as the fault lasts.
+     * Confirmed empirically: this accounts for the large majority of the
+     * RESTING<->EN_ROUTE bounce still observed under `--fault-profile
+     * combined` after the two fixes above (which only address stale
+     * escalation state, not a fresh recommendation clashing with a
+     * fault-blind promotion). A team already RESTING, or already routed
+     * toward its safe zone (heading_to_rest), is by definition already
+     * doing what this function would otherwise tell it to do, so there
+     * is nothing new to recommend - same reasoning evaluate_stamina()
+     * already applies for the low-stamina case. */
+    if(team->status == STATUS_RESTING || team->heading_to_rest)
+        return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
+            RECOVERY_REASON_NONE,
+            confidence);
+
     if(team->degraded)
     {
         if(team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE)
@@ -800,6 +840,23 @@ static RecoverySignal_t evaluate_communication(
     }
 
     if(confidence < recovery_stage_action_floor(stage, RECOVERY_ACTION_REQUEST_TASK_REALLOCATION))
+        return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
+            RECOVERY_REASON_NONE,
+            confidence);
+
+    /* Same fix as evaluate_mobility() above, same reasoning: communication_
+     * health is tracked independently of team_set_available()'s stamina/
+     * equipment gate (core/team.c), so a team can clear that gate and get
+     * promoted RESTING -> AVAILABLE while still sitting on a severe comm
+     * fault. Without this, the SEVERE branch below re-fires RETURN_TO_
+     * SAFE_ZONE the instant that promotion happens, and recovery_dispatch()
+     * has no guard against it (status is AVAILABLE, not RESTING) -
+     * abandon_task_for_recovery() sends the team right back, it arrives
+     * almost immediately, re-enters RESTING, gets re-promoted, repeats for
+     * as long as the fault lasts. A team already RESTING or already
+     * routed toward its safe zone (heading_to_rest) has nothing further
+     * to be told here. */
+    if(team->status == STATUS_RESTING || team->heading_to_rest)
         return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
             RECOVERY_REASON_NONE,
             confidence);
@@ -864,6 +921,22 @@ static RecoverySignal_t evaluate_equipment(
             RECOVERY_REASON_NONE,
             confidence);
 
+    /* Same fix as evaluate_mobility()/evaluate_communication() above, same
+     * reasoning: an active FAULT_CLASS_RESOURCE fault keeps draining
+     * equipment_level even while RESTING (core/team.c's STATUS_RESTING
+     * handler applies the drain before the replenish), so a team can dip
+     * back under threshold again shortly after team_set_available()
+     * promoted it on a momentarily-full reading. Without this, the
+     * CRITICAL branch below re-fires RETURN_TO_SAFE_ZONE the instant
+     * that promotion happens, with no dispatch-level guard against it
+     * (status is AVAILABLE, not RESTING). A team already RESTING or
+     * already routed toward its safe zone (heading_to_rest) has nothing
+     * further to be told here. */
+    if(team->status == STATUS_RESTING || team->heading_to_rest)
+        return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
+            RECOVERY_REASON_NONE,
+            confidence);
+
     if(equipment_level <= RECOVERY_MANAGER_EQUIPMENT_CRITICAL_THRESHOLD)
     {
         if((team->degraded &&
@@ -892,6 +965,224 @@ static RecoverySignal_t evaluate_equipment(
 
     return recovery_make_signal(RECOVERY_ACTION_LOCAL_RECOVERY,
         RECOVERY_REASON_EQUIPMENT_FAULT,
+        confidence);
+}
+
+/*
+ * Sixth evaluator: cross-board Byzantine-fault-tolerant consensus on
+ * this team's fault state, fed by core/fault_buffer.c's per-class vote
+ * tally + dynamic-quorum Brooks-Iyengar fusion over incoming FAULT_
+ * BROADCAST/FAULT_VOTE frames (Prompt 1). Fusion runs independently
+ * per OperationalFaultClass_t (core/fault_config.h), but RecoverySignal_t
+ * carries one confidence/reason - so this evaluator reports whichever
+ * class currently has the highest weight/quorum ratio, using that
+ * ratio directly as confidence (no separate confidence formula) and
+ * RECOVERY_REASON_CONSENSUS_FAULT as the reason regardless of which
+ * class won.
+ *
+ * Known simplification, flagged not blocking: if two classes both
+ * clear quorum in the same round (plausible given fault_injector.c's
+ * confirmed concurrent-fault injection - fault_injector_step() has no
+ * mutual-exclusivity check between FAULT_CLASS_t values), only the
+ * higher-ratio class surfaces through this evaluator this tick. The
+ * other isn't lost - fault_buffer_fuse()'s class_weight[] still has
+ * it, and it'll surface as best_class on a later tick if it's
+ * genuinely still active - simultaneous-dual-alarm handling just
+ * isn't attempted here.
+ *
+ * Action mapping, scaled by weight/quorum ratio: 0 -> CONTINUE_
+ * MONITORING; 0 < ratio < 1 -> LOCAL_RECOVERY, confidence scaling
+ * toward 1.0; ratio == 1 (weight == quorum) -> REQUEST_TASK_
+ * REALLOCATION; ratio > 1 (weight above quorum, up to N_live) ->
+ * propose higher, same degraded/en-route-vs-idle split the other
+ * evaluators already use to choose ABORT_MISSION vs RETURN_TO_
+ * SAFE_ZONE for a team with nothing to abort. If N_live < 3,
+ * fault_buffer_fuse() skips fusion for the round and this evaluator
+ * reports confidence 0 - the other five evaluators' arbitration
+ * stands on its own that tick.
+ *
+ * PARKED: compiled out by RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT
+ * (recovery_manager_config.h, 0u by default) - see that macro's own
+ * comment for why. Not registered in evaluators[] below regardless of
+ * this guard; re-adding both is a two-line change once the underlying
+ * weighting-scheme concern is actually fixed.
+ */
+#if RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT
+static RecoverySignal_t evaluate_consensus_fault(
+    const TeamState_t *team,
+    const MissionExecutionTwin_t *twin,
+    const WatchdogStatus_t *watchdog)
+{
+    MissionStage_t stage = recovery_stage_for_team(team, twin);
+    FaultBufferFusionResult_t fusion = fault_buffer_fuse(team->team_id);
+    float confidence;
+    /* Weight accumulates as whole votes (one team contributes one
+       weight unit per class it flags, in the common unweighted case),
+       so round to the nearest whole vote before comparing against the
+       integer quorum - avoids float-equality fragility on "weight ==
+       quorum" while still reflecting exact vote counts. */
+    uint8_t weight_rounded;
+
+    (void)watchdog;
+
+    if(fusion.fusion_skipped)
+        return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
+            RECOVERY_REASON_NONE,
+            0.0f);
+
+    confidence = fusion.best_ratio;
+    weight_rounded = (uint8_t)(fusion.class_weight[fusion.best_class] + 0.5f);
+
+    if(weight_rounded == 0u)
+        return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
+            RECOVERY_REASON_NONE,
+            confidence);
+
+    if(confidence < recovery_stage_action_floor(stage, RECOVERY_ACTION_LOCAL_RECOVERY))
+        return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
+            RECOVERY_REASON_NONE,
+            confidence);
+
+    if(weight_rounded > fusion.quorum)
+    {
+        if(team->degraded &&
+           (team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE))
+        {
+            return recovery_make_signal(
+                recovery_downgrade_to_achievable_action(RECOVERY_ACTION_ABORT_MISSION, stage, confidence),
+                RECOVERY_REASON_CONSENSUS_FAULT,
+                confidence);
+        }
+
+        return recovery_make_signal(
+            recovery_downgrade_to_achievable_action(RECOVERY_ACTION_RETURN_TO_SAFE_ZONE, stage, confidence),
+            RECOVERY_REASON_CONSENSUS_FAULT,
+            confidence);
+    }
+
+    if(weight_rounded == fusion.quorum)
+    {
+        return recovery_make_signal(
+            recovery_downgrade_to_achievable_action(RECOVERY_ACTION_REQUEST_TASK_REALLOCATION, stage, confidence),
+            RECOVERY_REASON_CONSENSUS_FAULT,
+            confidence);
+    }
+
+    /* 0 < weight < quorum: below the Byzantine-safe bound - stay at the
+       lowest actionable tier and let confidence (the weight/quorum
+       ratio) do the scaling. */
+    return recovery_make_signal(RECOVERY_ACTION_LOCAL_RECOVERY,
+        RECOVERY_REASON_CONSENSUS_FAULT,
+        confidence);
+}
+#endif /* RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT */
+
+/*
+ * Sixth evaluator (current): single-team AI fault prediction, replacing
+ * evaluate_consensus_fault above in the registered lineup while cross-
+ * board consensus is parked (v4 architecture doc, Section 4/9). Runs
+ * core/fault_predictor.c's model against this team's own live evidence
+ * vector - watchdog_get_evidence_vector() for the 7 accumulated_evidence
+ * channels + confirmed_mobility_impairment, team->equipment_level/100.0f
+ * for the 9th - the exact same 9-feature shape core/fault_comms.c
+ * assembles for FAULT_BROADCAST, so this team's own inference input
+ * matches what gets broadcast about it.
+ *
+ * fault_predictor_run() returns 5 independent per-class scores (not a
+ * softmax - see fault_predictor.h). Per the doc's Section 2 ("collapse 5
+ * scores into one RecoverySignal_t: max score = confidence, its class =
+ * reason"), this reports the highest-scoring class's score directly as
+ * confidence - no separate formula - but uses one reason
+ * (RECOVERY_REASON_PREDICTED_FAULT) for all 5 classes rather than a
+ * per-class mapping, the same simplification evaluate_consensus_fault
+ * makes with RECOVERY_REASON_CONSENSUS_FAULT: RESOURCE and ENVIRONMENT
+ * don't have a clean existing RecoveryReason_t counterpart, and forcing
+ * one risks conflating them with MOBILITY/EQUIPMENT's existing reasons
+ * for a class that isn't actually either of those.
+ *
+ * Tiered trust (Section 3, thresholds explicitly still open per Section
+ * 8 item 2 - RECOVERY_MANAGER_PREDICTOR_REALLOCATE_CONFIDENCE/_ESCALATE_
+ * CONFIDENCE are placeholders, not tuned numbers): CONTINUE_MONITORING
+ * and LOCAL_RECOVERY are fine on the AI's word alone. Anything at or
+ * above REQUEST_TASK_REALLOCATION additionally requires watchdog
+ * corroboration (watchdog->anomaly_detected) - the doc's stated
+ * alternative path, "OR sustained AI persistence", is NOT implemented
+ * here (it needs new per-team streak state this pass doesn't add) - an
+ * uncorroborated high-confidence prediction is capped at LOCAL_RECOVERY
+ * rather than silently escalating, and that cap is a known gap, not an
+ * oversight.
+ */
+static RecoverySignal_t evaluate_fault_predictor(
+    const TeamState_t *team,
+    const MissionExecutionTwin_t *twin,
+    const WatchdogStatus_t *watchdog)
+{
+    MissionStage_t stage = recovery_stage_for_team(team, twin);
+    float evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES];
+    uint8_t confirmed_mobility_impairment = 0u;
+    FaultPredictorScores_t scores;
+    uint8_t best_class = 0u;
+    float confidence;
+    uint8_t corroborated;
+
+    (void)twin;
+
+    watchdog_get_evidence_vector(team->team_id, evidence, &confirmed_mobility_impairment);
+    evidence[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS] = (float)team->equipment_level / 100.0f;
+    evidence[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS + 1u] = (float)confirmed_mobility_impairment;
+
+    scores = fault_predictor_run(evidence);
+
+    for(uint8_t fault_class = 1u; fault_class < NUM_OPERATIONAL_FAULT_CLASSES; fault_class++)
+    {
+        if(scores.score[fault_class] > scores.score[best_class])
+            best_class = fault_class;
+    }
+
+    confidence = scores.score[best_class];
+
+    if(confidence <= 0.0f)
+        return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
+            RECOVERY_REASON_NONE,
+            confidence);
+
+    if(confidence < recovery_stage_action_floor(stage, RECOVERY_ACTION_LOCAL_RECOVERY))
+        return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
+            RECOVERY_REASON_NONE,
+            confidence);
+
+    corroborated = watchdog->anomaly_detected;
+
+    if(corroborated && confidence >= RECOVERY_MANAGER_PREDICTOR_ESCALATE_CONFIDENCE)
+    {
+        if(team->degraded &&
+           (team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE))
+        {
+            return recovery_make_signal(
+                recovery_downgrade_to_achievable_action(RECOVERY_ACTION_ABORT_MISSION, stage, confidence),
+                RECOVERY_REASON_PREDICTED_FAULT,
+                confidence);
+        }
+
+        return recovery_make_signal(
+            recovery_downgrade_to_achievable_action(RECOVERY_ACTION_RETURN_TO_SAFE_ZONE, stage, confidence),
+            RECOVERY_REASON_PREDICTED_FAULT,
+            confidence);
+    }
+
+    if(corroborated && confidence >= RECOVERY_MANAGER_PREDICTOR_REALLOCATE_CONFIDENCE)
+    {
+        return recovery_make_signal(
+            recovery_downgrade_to_achievable_action(RECOVERY_ACTION_REQUEST_TASK_REALLOCATION, stage, confidence),
+            RECOVERY_REASON_PREDICTED_FAULT,
+            confidence);
+    }
+
+    /* Uncorroborated, or corroborated but below the reallocate
+       threshold: AI-alone territory per the tiered-trust rule - cap at
+       LOCAL_RECOVERY. */
+    return recovery_make_signal(RECOVERY_ACTION_LOCAL_RECOVERY,
+        RECOVERY_REASON_PREDICTED_FAULT,
         confidence);
 }
 
@@ -1089,6 +1380,9 @@ void recovery_manager_init(void)
         g_recovery_state[team_id].pending_reason = RECOVERY_REASON_NONE;
         g_recovery_state[team_id].pending_streak = 0u;
         g_recovery_state[team_id].cooldown_ticks = 0u;
+        g_recovery_state[team_id].last_assigned_task_pool = g_teams[team_id].assigned_task_pool;
+        g_recovery_state[team_id].last_assigned_task_slot = g_teams[team_id].assigned_task_slot;
+        g_recovery_state[team_id].last_status = g_teams[team_id].status;
         g_recovery_dispatch_state[team_id] = (RecoveryDispatchState_t){0};
     }
     g_last_dispatch_tick = UINT32_MAX;
@@ -1102,7 +1396,8 @@ void recovery_manager_step(void)
         evaluate_stamina,
         evaluate_mobility,
         evaluate_communication,
-        evaluate_equipment
+        evaluate_equipment,
+        evaluate_fault_predictor
     };
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
@@ -1111,7 +1406,76 @@ void recovery_manager_step(void)
         const MissionExecutionTwin_t *twin = &g_mission_execution_twin[team_id];
         WatchdogStatus_t watchdog = watchdog_get_status(team_id);
         RecoverySignal_t signals[RECOVERY_MANAGER_EVALUATOR_COUNT];
-        MissionStage_t stage = recovery_stage_for_team(team, twin);
+        MissionStage_t stage;
+        RecoveryManagerTeamState_t *state = &g_recovery_state[team_id];
+
+        /* A team's assignment can legitimately change out from under a
+         * still-active recovery recommendation - most notably,
+         * team_can_accept_incident()'s "steal a resting team" path
+         * (core/allocator.c) pulling a RESTING team straight into a
+         * brand-new CRITICAL incident via assign_incident(), which runs
+         * in allocate_all_incidents() at the very start of sim_tick(),
+         * before this function or recovery_dispatch() run for the same
+         * tick (core/sim_runner.c). The escalation/hysteresis state
+         * below (pending_streak, cooldown_ticks, status.escalation_
+         * level) is intentionally sticky across ticks so a genuinely
+         * ongoing problem doesn't get dispatched, de-dispatched, and
+         * re-dispatched on every small fluctuation - see
+         * recovery_apply_hysteresis(). But that stickiness assumes the
+         * team's situation is continuous; it has no way to know the
+         * team it was tracking got reassigned entirely. Without this
+         * reset, a RETURN_TO_SAFE_ZONE (or LOCAL_RECOVERY) recommendation
+         * built up while the team was RESTING/idle survives the steal,
+         * gets recomputed as still active this same tick, and
+         * recovery_dispatch()'s only guard against acting on a RESTING
+         * team (`status != STATUS_RESTING`) does not catch this case -
+         * status is now EN_ROUTE with a legitimate fresh assignment, so
+         * the guard passes and abandon_task_for_recovery() cancels the
+         * brand-new incident and sends the team straight back to the
+         * safe zone it just left, which (since it's already standing
+         * there) re-enters RESTING the same tick, gets stolen again the
+         * moment allocate_all_incidents() next runs, and repeats - the
+         * RESTING<->EN_ROUTE bounce. Detecting the assignment change
+         * here and starting this team's recommendation fresh at
+         * CONTINUE_MONITORING gives the new mission an unbiased
+         * evaluation instead of inheriting a verdict about a mission it
+         * was never actually running. */
+        /* Second, related case: update_team()'s STATUS_RESTING handler
+         * (core/team.c) can promote a team straight to STATUS_AVAILABLE
+         * the instant its stamina/equipment clear team_set_available()'s
+         * bar - in the same tick, before this function or
+         * recovery_dispatch() run. assigned_task_pool/slot don't change
+         * for this transition (both stay TASK_POOL_NONE/NO_ASSIGNMENT
+         * across RESTING and idle AVAILABLE), so the pool/slot check
+         * above can't see it - but it's the exact same stale-escalation
+         * problem: a RETURN_TO_SAFE_ZONE (or LOCAL_RECOVERY) recommendation
+         * built up while this team was RESTING has no bearing on a team
+         * that has just finished resting and is now genuinely eligible
+         * again. Left unhandled, recovery_dispatch()'s RETURN_TO_SAFE_ZONE
+         * case (guarded only by `status != STATUS_RESTING`, which an
+         * AVAILABLE team fails) fires immediately, abandons the team right
+         * back toward the safe zone it's already standing in, which
+         * re-enters RESTING the same tick, gets promoted back to AVAILABLE
+         * the moment it's eligible again, and repeats every couple of
+         * ticks - observed directly via this exact seed/team. */
+        if(team->assigned_task_pool != state->last_assigned_task_pool ||
+           team->assigned_task_slot != state->last_assigned_task_slot ||
+           (state->last_status == STATUS_RESTING && team->status != STATUS_RESTING))
+        {
+            state->status.recommendation = RECOVERY_ACTION_CONTINUE_MONITORING;
+            state->status.reason = RECOVERY_REASON_NONE;
+            state->status.confidence = 0.0f;
+            state->status.escalation_level = RECOVERY_ACTION_CONTINUE_MONITORING;
+            state->pending_action = RECOVERY_ACTION_CONTINUE_MONITORING;
+            state->pending_reason = RECOVERY_REASON_NONE;
+            state->pending_streak = 0u;
+            state->cooldown_ticks = 0u;
+        }
+        state->last_assigned_task_pool = team->assigned_task_pool;
+        state->last_assigned_task_slot = team->assigned_task_slot;
+        state->last_status = team->status;
+
+        stage = recovery_stage_for_team(team, twin);
 
         for(size_t i = 0; i < RECOVERY_MANAGER_EVALUATOR_COUNT; i++)
             signals[i] = evaluators[i](team, twin, &watchdog);
@@ -1207,7 +1571,7 @@ void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
              * outside both safe zones. RESTING is supposed to mean "at a
              * safe zone"; use the exact same safe-zone-return machinery
              * RETURN_TO_SAFE_ZONE relies on (abandon_task_for_recovery ->
-             * create_return_to_safe_zone_task) so LOCAL_RECOVERY actually
+             * begin_return_to_safe_zone) so LOCAL_RECOVERY actually
              * sends the team home (EN_ROUTE) instead of freezing it in
              * place. abandon_task_for_recovery already no-ops safely when
              * there's nothing to abandon (the common AVAILABLE case here)

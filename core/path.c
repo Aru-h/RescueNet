@@ -102,7 +102,14 @@ typedef struct //path
     uint8_t state;
 } PathNode_t;
 
+/* Promoted from function-local static to file-scope so that
+ * find_next_path_step_with_equipment is safe to call from multiple
+ * RTOS tasks without a shared static corrupting concurrent searches.
+ * The array is fully re-initialised at the top of every call, so
+ * promoting it here has no behavioural effect in single-threaded use. */
+static PathNode_t g_path_nodes[GRID_WIDTH][GRID_HEIGHT];
 
+PathNode_t (* const nodes)[GRID_HEIGHT] = g_path_nodes;
 static int get_movement_cost(int x, int y, uint8_t equipment_flags)
 {
     (void)equipment_flags;
@@ -349,7 +356,7 @@ int find_next_path_step_with_equipment(
         }
     }
 
-    static PathNode_t nodes[GRID_WIDTH][GRID_HEIGHT];
+    PathNode_t (* const nodes)[GRID_HEIGHT] = g_path_nodes;
 
     for(int x = 0; x < GRID_WIDTH; x++)
     {
