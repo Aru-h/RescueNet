@@ -6,6 +6,7 @@
 
 #include "random.h"
 #include "search_zones.h"
+#include "mission_state.h"   /* g_safezones / g_incidents, for post-quake reachability repair */
 
 typedef struct {
     uint16_t district_id;
@@ -47,6 +48,11 @@ enum {
     NAV_NODE_BRIDGE
 };
 
+/* Promoted from stack to BSS to eliminate the ~11.7 KB stack frame in
+ * carve_path_between(). Called only from stage_generate_roads() which
+ * is single-threaded and non-reentrant, so a file-scope static is safe. */
+static PathNode_t g_carve_nodes[GRID_WIDTH][GRID_HEIGHT];
+static uint8_t    g_carve_visited[GRID_WIDTH][GRID_HEIGHT];
 EnvironmentCell_t g_environment[GRID_WIDTH][GRID_HEIGHT];
 EnvironmentBuilding_t g_environment_buildings[MAX_ENV_BUILDINGS];
 EnvironmentSummary_t g_environment_summary;
@@ -199,6 +205,15 @@ static uint8_t is_water_cell(int x, int y)
 {
     if(!in_bounds(x, y))
         return 0;
+
+    /* flood=1 is the definitive physical-water marker, set once during
+       terrain generation and never cleared. A safe zone or road placed
+       on a water cell sets navigable=1 and infrastructure_type, which
+       would make the old logic return 0 (not water) for a cell that is
+       physically still underwater — causing wrong fire spread, path
+       costs, and incident spawning. Check flood first. */
+    if(g_environment[x][y].flood)
+        return 1;
 
     return !g_environment[x][y].navigable &&
            g_environment[x][y].road_class == ROAD_NONE &&
@@ -439,6 +454,8 @@ static void reset_generation_state(void)
             g_environment[x][y].navigable = 1;
             g_environment[x][y].travel_cost = 6;
             g_environment[x][y].base_safety = 80;
+            g_environment[x][y].env_fault_ref_count = 0;
+            g_environment[x][y].env_fault_base_cost = 0;
         }
     }
 }
@@ -871,8 +888,9 @@ static uint16_t connection_cost(int x, int y, int tx, int ty, uint8_t road_class
 
 static uint8_t carve_path_between(GridPoint_t start, GridPoint_t end, uint8_t road_class, int width, uint8_t allow_bridge)
 {
-    PathNode_t nodes[GRID_WIDTH][GRID_HEIGHT];
-    uint8_t visited[GRID_WIDTH][GRID_HEIGHT] = {{0}};
+    PathNode_t (* const nodes)[GRID_HEIGHT] = g_carve_nodes;
+    uint8_t    (* const visited)[GRID_HEIGHT] = g_carve_visited;
+    memset(g_carve_visited, 0, sizeof(g_carve_visited));
     uint16_t road_id = next_road_id();
 
     for(int x = 0; x < GRID_WIDTH; x++)
@@ -1269,6 +1287,24 @@ static void mark_safe_zone_candidate(int x, int y)
     g_environment[x][y].safe_zone_candidate = 1;
 }
 
+/* Diagnostic: per-seed count of worlds where the 3 evacuation gateways did
+ * NOT resolve to 3 distinct valid cells (the pre-fix bug collapsed all 3
+ * onto the single best-scoring border cell). Process-cumulative; the P1
+ * sweep captures before/after deltas. Expected to stay 0. */
+unsigned long g_diag_gateway_degenerate_worlds = 0;
+/* Cumulative count of evacuation-gateway candidates that needed
+ * carve_repair_to_nearest_road() (not already road-connected when chosen).
+ * Process-cumulative; the P1 sweep captures before/after deltas. */
+unsigned long g_diag_gateway_repaired = 0;
+
+/* Forward declarations: stage_generate_infrastructure() needs the road-
+ * reachability trio (defined further down this file, where stage_validate_
+ * and_build_navigation() already uses them) to repair a gateway candidate
+ * that isn't road-connected yet. */
+static uint8_t road_reachable_map(uint8_t reachable[GRID_WIDTH][GRID_HEIGHT]);
+static uint8_t lot_reachable(const uint8_t reachable[GRID_WIDTH][GRID_HEIGHT], int x, int y);
+static void carve_repair_to_nearest_road(int x, int y);
+
 /* Stage 7: Infrastructure highlights bridges, intersections, and open-space nodes
  * that later become safe-zone or gateway candidates. */
 static void stage_generate_infrastructure(void)
@@ -1309,6 +1345,12 @@ static void stage_generate_infrastructure(void)
         }
     }
 
+    /* Reachability snapshot for gateway repair below. Built once, up front -
+     * rebuilt only when a repair actually carves a new road, same pattern
+     * as environment_validate_hazard_reachability(). */
+    uint8_t gw_reachable[GRID_WIDTH][GRID_HEIGHT];
+    road_reachable_map(gw_reachable);
+
     for(uint8_t i = 0; i < NUM_EVACUATION_GATEWAYS; i++)
     {
         GatewaySite_t *gateway = &g_gateway_sites[i];
@@ -1319,12 +1361,37 @@ static void stage_generate_infrastructure(void)
         {
             for(int y = 0; y < GRID_HEIGHT; y++)
             {
-                if(!has_road(x, y))
+                /* No has_road() requirement here - most worlds have 0-1
+                 * border cells that already sit on a road (measured
+                 * directly), so requiring one left this loop with nothing
+                 * to pick in the large majority of worlds. Any non-water
+                 * border cell is now a candidate; road_class still feeds
+                 * the score below, so an existing road cell wins over a
+                 * bare one when both are available, and the repair pass
+                 * after this loop connects whichever cell is actually
+                 * picked. */
+                if(is_water_cell(x, y))
                     continue;
                 if(x != 0 && y != 0 && x != GRID_WIDTH - 1 && y != GRID_HEIGHT - 1)
                     continue;
 
-                int score = (int)g_environment[x][y].road_class * 25 - g_environment[x][y].terrain_slope;
+                /* Skip cells already claimed by an earlier gateway */
+                int already_used = 0;
+                for(uint8_t k = 0; k < i; k++)
+                {
+                    if(g_gateway_sites[k].valid &&
+                       g_gateway_sites[k].x == (int16_t)x &&
+                       g_gateway_sites[k].y == (int16_t)y)
+                    {
+                        already_used = 1;
+                        break;
+                    }
+                }
+                if(already_used)
+                    continue;
+
+                int score = (int)g_environment[x][y].road_class * 25
+                            - g_environment[x][y].terrain_slope;
                 if(score > best_score)
                 {
                     best_score = score;
@@ -1334,7 +1401,68 @@ static void stage_generate_infrastructure(void)
                 }
             }
         }
+
+        /* Repair access if the chosen candidate isn't already road-connected.
+         * "Connected" covers both shapes a candidate can take now that
+         * has_road() is no longer required above: the cell itself is a
+         * reachable road, or it's a bare lot adjacent to one (lot_reachable(),
+         * same check environment_validate_hazard_reachability() uses for
+         * safe zones/incidents). carve_repair_to_nearest_road() paints a
+         * road onto the cell itself as part of carving to it, so this
+         * handles "no road at all" (the dominant case) the same way it
+         * handles "has a road but it's an isolated fragment". */
+        if(gateway->valid)
+        {
+            uint8_t already_connected =
+                (has_road(gateway->x, gateway->y) && gw_reachable[gateway->x][gateway->y]) ||
+                lot_reachable(gw_reachable, gateway->x, gateway->y);
+
+            if(!already_connected)
+            {
+                g_diag_gateway_repaired++;
+                carve_repair_to_nearest_road(gateway->x, gateway->y);
+                road_reachable_map(gw_reachable);
+            }
+        }
     }
+
+    /* Verify the "skip cells already claimed by an earlier gateway" scan
+     * above actually produced 3 distinct valid cells - the pre-fix code
+     * had no such exclusion and collapsed all NUM_EVACUATION_GATEWAYS
+     * onto one coordinate every run. */
+    for(uint8_t a = 0; a < NUM_EVACUATION_GATEWAYS; a++)
+    {
+        if(!g_gateway_sites[a].valid)
+        {
+            g_diag_gateway_degenerate_worlds++;
+            break;
+        }
+        uint8_t dup = 0;
+        for(uint8_t b = a + 1; b < NUM_EVACUATION_GATEWAYS; b++)
+        {
+            if(g_gateway_sites[b].valid &&
+               g_gateway_sites[a].x == g_gateway_sites[b].x &&
+               g_gateway_sites[a].y == g_gateway_sites[b].y)
+            {
+                dup = 1;
+                break;
+            }
+        }
+        if(dup)
+        {
+            g_diag_gateway_degenerate_worlds++;
+            break;
+        }
+    }
+    /* NOTE (verified via g_diag_gateway_degenerate_worlds - ~47/50 P1 seeds):
+     * the "skip already-claimed cells" scan above is correct but rarely has
+     * >1 candidate to work with - the road generator almost never carves a
+     * road to the map edge, so has_road() && on-border yields 0-1 cells per
+     * world. g_gateway_sites[1..2] therefore stay invalid and
+     * initialize_evacuation_gateways() (incident.c) falls back to *random,
+     * un-road-checked* edge cells. Fixing that (relax the border-road
+     * requirement / carve a short edge spur / validate the random fallback)
+     * is a placement-policy decision, deliberately left for review. */
 }
 
 static uint8_t road_reachable_map(uint8_t reachable[GRID_WIDTH][GRID_HEIGHT])
@@ -1346,16 +1474,47 @@ static uint8_t road_reachable_map(uint8_t reachable[GRID_WIDTH][GRID_HEIGHT])
 
     memset(reachable, 0, sizeof(uint8_t) * GRID_WIDTH * GRID_HEIGHT);
 
-    for(int x = 0; x < GRID_WIDTH && !found_start; x++)
+    /* Seed from anchors[0] (DISTRICT_RESCUE_BASE, g_districts[0]) instead of
+     * an arbitrary row-major-first road cell. stage_generate_roads() carves
+     * an explicit, always-succeeding (allow_bridge=1, so connection_cost()
+     * never fails in-bounds) 9-anchor chain starting at anchors[0], and
+     * carve_path_between() always paints a road onto its own start cell -
+     * so anchors[0] is provably part of the map's one guaranteed-connected
+     * component. A row-major scan has no such guarantee: measured directly,
+     * it lands on a disconnected 1-2 cell fragment from the probabilistic
+     * secondary road fill (stage_generate_roads()'s hline/vline pass) in
+     * roughly 3 of 5 sampled worlds, making every "is X reachable" check
+     * built on that map meaningless for that call - including every prior
+     * use of this function (building/district validation, and Priority-1's
+     * post-earthquake safe-zone/incident pass). Falls back to the old
+     * row-major scan only if anchors[0]'s own cell isn't usable (e.g.
+     * earthquake damage road-blocked it) - still better than refusing to
+     * build a map at all. */
+    if(g_environment_summary.district_total > 0)
     {
-        for(int y = 0; y < GRID_HEIGHT; y++)
+        int sx = g_districts[0].center_x;
+        int sy = g_districts[0].center_y;
+        if(in_bounds(sx, sy) && has_road(sx, sy) && !g_environment[sx][sy].road_blocked)
         {
-            if(has_road(x, y) && !g_environment[x][y].road_blocked)
+            queue[tail++] = (GridPoint_t){(int16_t)sx, (int16_t)sy};
+            reachable[sx][sy] = 1;
+            found_start = 1;
+        }
+    }
+
+    if(!found_start)
+    {
+        for(int x = 0; x < GRID_WIDTH && !found_start; x++)
+        {
+            for(int y = 0; y < GRID_HEIGHT; y++)
             {
-                queue[tail++] = (GridPoint_t){(int16_t)x, (int16_t)y};
-                reachable[x][y] = 1;
-                found_start = 1;
-                break;
+                if(has_road(x, y) && !g_environment[x][y].road_blocked)
+                {
+                    queue[tail++] = (GridPoint_t){(int16_t)x, (int16_t)y};
+                    reachable[x][y] = 1;
+                    found_start = 1;
+                    break;
+                }
             }
         }
     }
@@ -1418,11 +1577,19 @@ static uint8_t lot_reachable(const uint8_t reachable[GRID_WIDTH][GRID_HEIGHT], i
     return 0;
 }
 
+/* Diagnostic: how many times carve_repair_to_nearest_road() actually fired
+ * (i.e. a lot was flagged unreachable and a repair path was carved).
+ * Process-cumulative; the priority-1 sweep captures before/after deltas. */
+unsigned long g_diag_carve_repair_count = 0;
+unsigned long g_diag_carve_repair_failed = 0;   /* carve_path_between() returned 0 */
+
 static void carve_repair_to_nearest_road(int x, int y)
 {
     GridPoint_t start = {(int16_t)x, (int16_t)y};
     GridPoint_t best = start;
     int best_dist = INT_MAX;
+
+    g_diag_carve_repair_count++;
 
     for(int cx = 0; cx < GRID_WIDTH; cx++)
     {
@@ -1440,7 +1607,8 @@ static void carve_repair_to_nearest_road(int x, int y)
         }
     }
 
-    carve_path_between(start, best, ROAD_LOCAL, 0, 1);
+    if(!carve_path_between(start, best, ROAD_LOCAL, 0, 1))
+        g_diag_carve_repair_failed++;
 }
 
 static void ensure_hospital_redundancy(void)
@@ -1775,6 +1943,50 @@ void environment_apply_earthquake(uint32_t seed)
     apply_road_damage();
     apply_infrastructure_damage();
     g_environment_summary.earthquake_applied = 1;
+}
+
+/* Post-earthquake reachability repair for hazard placements.
+ * Safe zones and incidents are placed in generate_world() BEFORE
+ * environment_apply_earthquake() runs (an intentional ordering - see
+ * simulation.c / TRON_FIX_PLAN), so quake road/building damage can strand
+ * one on a lot with no adjacent reachable road. Mirror the building/
+ * district pass in stage_validate_and_build_navigation(): build the
+ * reachable map, and for any stranded location carve a repair path to the
+ * nearest road and rebuild the map.
+ *
+ * World-gen only. Extending this to mid-run incident spawns was tried and
+ * reverted: road_reachable_map()'s road-only connectivity model doesn't
+ * match the pathfinder's navigable-cell model, and carve_repair_to_
+ * nearest_road() targets the nearest road without checking it's reachable,
+ * so on a post-quake fragmented network it "repairs" incidents onto
+ * stranded road fragments and inflates re-bid/abandon churn. */
+void environment_validate_hazard_reachability(void)
+{
+    uint8_t reachable[GRID_WIDTH][GRID_HEIGHT];
+
+    road_reachable_map(reachable);
+
+    for(int i = 0; i < g_num_safe_zones; i++)
+    {
+        SafeZone_t *zone = &g_safezones[i];
+        if(!lot_reachable(reachable, zone->loc_x, zone->loc_y))
+        {
+            carve_repair_to_nearest_road(zone->loc_x, zone->loc_y);
+            road_reachable_map(reachable);
+        }
+    }
+
+    for(uint16_t i = 0; i < NUM_INCIDENTS; i++)
+    {
+        IncidentState_t *incident = &g_incidents[i];
+        if(!incident->slot_occupied || incident->status == INC_RESOLVED)
+            continue;
+        if(!lot_reachable(reachable, incident->loc_x, incident->loc_y))
+        {
+            carve_repair_to_nearest_road(incident->loc_x, incident->loc_y);
+            road_reachable_map(reachable);
+        }
+    }
 }
 
 uint8_t environment_cell_is_navigable(int x, int y)
@@ -2270,13 +2482,16 @@ static void propagate_fire(uint32_t tick)
                 probability = 95;
 
             if(deterministic_percent_roll(tick, source->building_id, target->building_id, 11) < probability)
-                ignite[target->building_id] = 1;
+            {
+                if(target->building_id < MAX_ENV_BUILDINGS)
+                    ignite[target->building_id] = 1;
+            }
         }
     }
 
     for(uint16_t i = 0; i < g_environment_summary.building_count; i++)
     {
-        if(!ignite[i])
+        if(i >= MAX_ENV_BUILDINGS || !ignite[i])
             continue;
 
         g_environment_buildings[i].hazard_flags |= ENV_HAZARD_FIRE;
