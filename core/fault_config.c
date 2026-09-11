@@ -29,7 +29,7 @@ void fault_config_apply_profile(FaultProfile_t profile)
     {
         case FAULT_PROFILE_MOBILITY:
             g_fault_config.class_probability[FAULT_CLASS_MOBILITY] = 14;
-            g_fault_config.effect_strength[FAULT_CLASS_MOBILITY] = 2;
+            g_fault_config.effect_strength[FAULT_CLASS_MOBILITY] = 3;
             set_duration_range(FAULT_CLASS_MOBILITY, 8, 18);
             break;
 
@@ -51,7 +51,7 @@ void fault_config_apply_profile(FaultProfile_t profile)
             g_fault_config.class_probability[FAULT_CLASS_RESOURCE] = 8;
             g_fault_config.class_probability[FAULT_CLASS_ENVIRONMENT] = 7;
             g_fault_config.class_probability[FAULT_CLASS_MISSION] = 7;
-            g_fault_config.effect_strength[FAULT_CLASS_MOBILITY] = 2;
+            g_fault_config.effect_strength[FAULT_CLASS_MOBILITY] = 3;
             g_fault_config.effect_strength[FAULT_CLASS_COMMUNICATION] = 2;
             g_fault_config.effect_strength[FAULT_CLASS_RESOURCE] = 2;
             g_fault_config.effect_strength[FAULT_CLASS_ENVIRONMENT] = 3;
@@ -69,7 +69,7 @@ void fault_config_apply_profile(FaultProfile_t profile)
             g_fault_config.class_probability[FAULT_CLASS_RESOURCE] = 10;
             g_fault_config.class_probability[FAULT_CLASS_ENVIRONMENT] = 10;
             g_fault_config.class_probability[FAULT_CLASS_MISSION] = 10;
-            g_fault_config.effect_strength[FAULT_CLASS_MOBILITY] = 2;
+            g_fault_config.effect_strength[FAULT_CLASS_MOBILITY] = 3;
             g_fault_config.effect_strength[FAULT_CLASS_COMMUNICATION] = 3;
             g_fault_config.effect_strength[FAULT_CLASS_RESOURCE] = 3;
             g_fault_config.effect_strength[FAULT_CLASS_ENVIRONMENT] = 4;
