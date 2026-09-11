@@ -603,7 +603,7 @@ void mission_link_apply_incident(const MissionLinkIncident_t *msg)
         incident->passive_effect = 0u;
         incident->passive_timer = 0u;
         incident->spawned_by = 0u;
-        incident->support_team = 0u;
+        incident->support_team = NO_ASSIGNMENT;
         incident->mission_fault_active_count = 0u;
         incident->mission_fault_original_priority = 0u;
         incident->mission_fault_original_victim_count = 0u;
