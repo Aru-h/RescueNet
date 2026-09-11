@@ -8,6 +8,9 @@
 #include "debug.h"
 #include "simulation.h"
 #include "environment.h"
+#include "sim_runner.h"
+#include "fault_config.h"
+#include "path.h"
 
 /*
  * Laptop implementation of the debug_trace() sink declared in debug.h.
@@ -425,6 +428,7 @@ void initialize_test_scenario(void)         //debug
         g_teams[i].equipment_flags = 0;
         g_teams[i].last_heartbeat_tick = 0;
         g_teams[i].resting_zone_id = 0;
+        g_teams[i].heading_to_rest = 0;
         g_teams[i].equipment_level = EQ_MAX_LEVEL;
 
         switch(g_teams[i].specialization)
@@ -481,4 +485,300 @@ void initialize_test_scenario(void)         //debug
     environment_apply_earthquake(g_world_seed);
     initialize_grid();
     initialize_evacuation_teams();
+}
+
+int debug_run_priority1_repro(void)         //debug
+{
+    initialize_test_scenario();
+
+    /* initialize_test_scenario() parks team 0 ON_SCENE at the same
+     * cell as its incident (2,2) - fine for other debug uses, but this
+     * harness needs a team actually traveling so it can have its path
+     * cut mid-route. Retarget the incident somewhere far across the
+     * generated map and put the team EN_ROUTE to it. */
+    g_incidents[0].loc_x = 25;
+    g_incidents[0].loc_y = 25;
+    g_teams[0].status = STATUS_EN_ROUTE;
+    g_teams[0].heading_to_rest = 0;
+
+    TeamState_t *team = &g_teams[0];
+    IncidentState_t *task = &g_incidents[0];
+
+    int nx, ny;
+    int initial_cost = find_next_path_step(team->loc_x, team->loc_y, task->loc_x, task->loc_y, 0, &nx, &ny);
+    printf("[REPRO P1] sanity: path (2,2)->(25,25) cost=%d before any wall-off\n", initial_cost);
+    if(initial_cost <= 0)
+    {
+        printf("[REPRO P1] INVALID: no path even before wall-off on this map - can't run repro.\n");
+        return 2;
+    }
+
+    /* Let the team actually travel for a few real ticks on the still-
+     * open path first, so this matches "a road gets damaged while a
+     * team's already traveling" rather than "destination was
+     * unreachable from the moment it was assigned". */
+    g_current_tick = 1;
+    for(int t = 0; t < 5; t++)
+    {
+        move_team(team);
+        g_current_tick++;
+    }
+    printf("[REPRO P1] after 5 real ticks of travel: team now at (%d,%d) (started at (2,2))\n",
+           team->loc_x, team->loc_y);
+    if(team->loc_x == 2 && team->loc_y == 2)
+    {
+        printf("[REPRO P1] INVALID: team never left the start cell in 5 ticks.\n");
+        return 4;
+    }
+
+    /* Sever the path out from under the already-traveling team: wall
+     * off a full ring around the destination so no route through it
+     * survives, regardless of where the team currently stands. */
+    for(int x = 20; x <= 30; x++)
+    {
+        for(int y = 20; y <= 30; y++)
+        {
+            if(x == 20 || x == 30 || y == 20 || y == 30)
+                g_environment[x][y].navigable = 0;
+        }
+    }
+
+    int post_wall_cost = find_next_path_step(team->loc_x, team->loc_y, task->loc_x, task->loc_y, 0, &nx, &ny);
+    printf("[REPRO P1] after mid-route wall-off: find_next_path_step returns %d (<=0 = unreachable, as intended)\n",
+           post_wall_cost);
+    if(post_wall_cost > 0)
+    {
+        printf("[REPRO P1] INVALID: destination still reachable after wall-off - widen the ring.\n");
+        return 3;
+    }
+
+    uint8_t start_pool = team->assigned_task_pool;
+    uint8_t start_slot = team->assigned_task_slot;
+    int start_x = team->loc_x, start_y = team->loc_y;
+    uint8_t start_status = team->status;
+
+    extern unsigned long g_probe_no_path_hits;
+    extern uint32_t g_diag_safezone_fallback_count;
+
+    int recovered_at_tick = -1;
+    for(uint32_t t = 1; t <= 2000; t++)
+    {
+        g_current_tick++;
+        move_team(team);
+
+        int moved = (team->loc_x != start_x || team->loc_y != start_y);
+        int pool_changed = (team->assigned_task_pool != start_pool || team->assigned_task_slot != start_slot);
+        int status_changed = (team->status != start_status);
+
+        if(moved || pool_changed || status_changed)
+        {
+            recovered_at_tick = (int)t;
+            break;
+        }
+    }
+
+    printf("[REPRO P1] g_probe_no_path_hits=%lu g_diag_safezone_fallback_count=%u\n",
+           g_probe_no_path_hits, g_diag_safezone_fallback_count);
+    printf("[REPRO P1] final: status=%u (was %u) pool/slot=%u/%u (was %u/%u) loc=(%d,%d) (was (%d,%d))\n",
+           team->status, start_status, team->assigned_task_pool, team->assigned_task_slot,
+           start_pool, start_slot, team->loc_x, team->loc_y, start_x, start_y);
+
+    if(recovered_at_tick > 0)
+    {
+        printf("[REPRO P1] VERDICT: FIXED - un-stuck at tick %d (within 2000-tick cap).\n", recovered_at_tick);
+        return 0;
+    }
+
+    printf("[REPRO P1] VERDICT: BUG REPRODUCED - frozen for the full 2000-tick budget.\n");
+    return 10;
+}
+
+/* Any single cell's travel_cost is a uint8_t (max 255) and A* takes at
+ * most one cell's cost worth of ticks to clear a single step. 600 ticks
+ * frozen at the same (x,y) while EN_ROUTE is therefore not "an
+ * unusually expensive step" under any cost value this codebase can
+ * produce - it can only mean the team stopped making progress, which
+ * is exactly the pre-fix move_team() task-branch signature. Padding
+ * well above the theoretical max (255) rather than cutting it close
+ * avoids flagging a legitimately slow-but-moving team as frozen. */
+#define P1_SWEEP_STUCK_TICKS_THRESHOLD 10
+#define P1_SWEEP_MAX_REPORTED_STREAKS 64
+
+typedef struct
+{
+    uint32_t seed;
+    uint8_t team_id;
+    uint32_t start_tick;
+    uint32_t streak_len;
+} FrozenStreak_t;
+
+int debug_run_priority1_sweep(uint32_t first_seed, uint32_t seed_count, uint32_t ticks_per_seed, int fault_profile_int)
+{
+    FaultProfile_t fault_profile = (FaultProfile_t)fault_profile_int;
+
+    extern unsigned long g_probe_no_path_hits;
+    extern uint32_t g_diag_safezone_fallback_count;
+    extern unsigned long g_diag_carve_repair_count;
+    extern unsigned long g_diag_carve_repair_failed;
+    extern unsigned long g_diag_incidents_quarantined;
+    extern uint32_t g_diag_sweep_cross_district_cells;
+    extern unsigned long g_diag_gateway_degenerate_worlds;
+    extern unsigned long g_diag_gateway_repaired;
+    extern unsigned long g_diag_safezone_maxattempts_fallback;
+    extern unsigned long g_diag_team_score_ties;
+
+    uint32_t per_team_streak[NUM_TEAMS];
+    int16_t per_team_last_x[NUM_TEAMS];
+    int16_t per_team_last_y[NUM_TEAMS];
+    uint32_t per_team_streak_start[NUM_TEAMS];
+
+    FrozenStreak_t flagged[P1_SWEEP_MAX_REPORTED_STREAKS];
+    uint32_t flagged_count = 0;
+    uint32_t max_streak_seen = 0;
+
+    unsigned long probe_hits_before_sweep = g_probe_no_path_hits;
+    uint32_t fallback_before_sweep = g_diag_safezone_fallback_count;
+    unsigned long carve_repair_before_sweep = g_diag_carve_repair_count;
+    unsigned long carve_failed_before_sweep = g_diag_carve_repair_failed;
+    unsigned long quarantined_before_sweep = g_diag_incidents_quarantined;
+    uint32_t cross_district_before_sweep = g_diag_sweep_cross_district_cells;
+    unsigned long gateway_degenerate_before_sweep = g_diag_gateway_degenerate_worlds;
+    unsigned long gateway_repaired_before_sweep = g_diag_gateway_repaired;
+    unsigned long safezone_fallback_before_sweep = g_diag_safezone_maxattempts_fallback;
+    unsigned long team_score_ties_before_sweep = g_diag_team_score_ties;
+
+    printf("[SWEEP P1] starting: seeds %u..%u (%u seeds), %u ticks/seed, fault_profile=%d\n",
+           first_seed, first_seed + seed_count - 1, seed_count, ticks_per_seed, (int)fault_profile);
+    printf("[SWEEP P1] stuck threshold: %u consecutive ticks EN_ROUTE at the same (x,y)\n",
+           P1_SWEEP_STUCK_TICKS_THRESHOLD);
+
+    for(uint32_t seed = first_seed; seed < first_seed + seed_count; seed++)
+    {
+        sim_start_seed(seed, fault_profile);
+
+        for(uint8_t t = 0; t < NUM_TEAMS; t++)
+        {
+            per_team_streak[t] = 0;
+            per_team_last_x[t] = -1;
+            per_team_last_y[t] = -1;
+            per_team_streak_start[t] = 0;
+        }
+
+        for(uint32_t tick = 0; tick < ticks_per_seed; tick++)
+        {
+            sim_tick();
+
+            for(uint8_t t = 0; t < NUM_TEAMS; t++)
+            {
+                const TeamState_t *team = &g_teams[t];
+
+                if(team->status != STATUS_EN_ROUTE)
+                {
+                    per_team_streak[t] = 0;
+                    per_team_last_x[t] = -1;
+                    per_team_last_y[t] = -1;
+                    continue;
+                }
+
+                if(team->loc_x == per_team_last_x[t] && team->loc_y == per_team_last_y[t])
+                {
+                    per_team_streak[t]++;
+                }
+                else
+                {
+                    per_team_last_x[t] = team->loc_x;
+                    per_team_last_y[t] = team->loc_y;
+                    per_team_streak[t] = 1;
+                    per_team_streak_start[t] = tick;
+                }
+
+                if(per_team_streak[t] > max_streak_seen)
+                    max_streak_seen = per_team_streak[t];
+
+                if(per_team_streak[t] == P1_SWEEP_STUCK_TICKS_THRESHOLD)
+                {
+                    printf("[SWEEP P1] FROZEN: seed=%u team=%u stuck at (%d,%d) since tick=%u, "
+                           "still EN_ROUTE with no movement at tick=%u (%u ticks and counting)\n",
+                           seed, t, team->loc_x, team->loc_y, per_team_streak_start[t], tick,
+                           per_team_streak[t]);
+
+                    if(flagged_count < P1_SWEEP_MAX_REPORTED_STREAKS)
+                    {
+                        flagged[flagged_count].seed = seed;
+                        flagged[flagged_count].team_id = t;
+                        flagged[flagged_count].start_tick = per_team_streak_start[t];
+                        flagged[flagged_count].streak_len = per_team_streak[t];
+                        flagged_count++;
+                    }
+                }
+            }
+        }
+
+        sim_end_seed();
+
+        if((seed - first_seed + 1) % 10 == 0 || seed == first_seed + seed_count - 1)
+        {
+            printf("[SWEEP P1] progress: %u/%u seeds done, %u frozen streaks so far, "
+                   "max streak so far=%u, cumulative no_path_hits=%lu, safezone_fallback=%u\n",
+                   seed - first_seed + 1, seed_count, flagged_count, max_streak_seen,
+                   g_probe_no_path_hits, g_diag_safezone_fallback_count);
+        }
+    }
+
+    unsigned long probe_hits_in_sweep = g_probe_no_path_hits - probe_hits_before_sweep;
+    uint32_t fallback_in_sweep = g_diag_safezone_fallback_count - fallback_before_sweep;
+
+    printf("\n[SWEEP P1] === SUMMARY ===\n");
+    printf("[SWEEP P1] seeds run: %u (seed %u..%u), ticks/seed: %u, total team-ticks scanned: %llu\n",
+           seed_count, first_seed, first_seed + seed_count - 1, ticks_per_seed,
+           (unsigned long long)seed_count * ticks_per_seed * NUM_TEAMS);
+    printf("[SWEEP P1] task-branch no-path hits this sweep:  %lu (cumulative process total: %lu)\n",
+           probe_hits_in_sweep, g_probe_no_path_hits);
+    printf("[SWEEP P1] safezone fallback count this sweep:   %u (cumulative process total: %u)\n",
+           fallback_in_sweep, g_diag_safezone_fallback_count);
+    printf("[SWEEP P1] carve_repair_to_nearest_road fires this sweep: %lu (of which carve failed: %lu)\n",
+           g_diag_carve_repair_count - carve_repair_before_sweep,
+           g_diag_carve_repair_failed - carve_failed_before_sweep);
+    printf("[SWEEP P1] incidents quarantined this sweep (unreachable_streak >= %u): %lu (cumulative process total: %lu)\n",
+           INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD,
+           g_diag_incidents_quarantined - quarantined_before_sweep,
+           g_diag_incidents_quarantined);
+    printf("[SWEEP P1] passive-sweep cells straddling a district boundary (M37 misattribution, fix shelved) this sweep: %u (cumulative process total: %u)\n",
+           g_diag_sweep_cross_district_cells - cross_district_before_sweep,
+           g_diag_sweep_cross_district_cells);
+    printf("[SWEEP P1] worlds with non-distinct evacuation gateways this sweep: %lu (expected 0; cumulative process total: %lu)\n",
+           g_diag_gateway_degenerate_worlds - gateway_degenerate_before_sweep,
+           g_diag_gateway_degenerate_worlds);
+    printf("[SWEEP P1] evacuation gateways repaired (not road-connected when chosen) this sweep: %lu (cumulative process total: %lu)\n",
+           g_diag_gateway_repaired - gateway_repaired_before_sweep,
+           g_diag_gateway_repaired);
+    printf("[SWEEP P1] safe zones placed via MAX_ATTEMPTS fallback this sweep: %lu (expected 0; cumulative process total: %lu)\n",
+           g_diag_safezone_maxattempts_fallback - safezone_fallback_before_sweep,
+           g_diag_safezone_maxattempts_fallback);
+    printf("[SWEEP P1] select_best_team score ties this sweep: %lu (cumulative process total: %lu)\n",
+           g_diag_team_score_ties - team_score_ties_before_sweep,
+           g_diag_team_score_ties);
+    printf("[SWEEP P1] longest EN_ROUTE-same-location streak observed anywhere: %u ticks "
+           "(flag threshold: %u)\n", max_streak_seen, P1_SWEEP_STUCK_TICKS_THRESHOLD);
+    printf("[SWEEP P1] frozen streaks flagged (>= threshold): %u\n", flagged_count);
+
+    for(uint32_t i = 0; i < flagged_count; i++)
+    {
+        printf("[SWEEP P1]   #%u: seed=%u team=%u first stuck at tick=%u, streak>=%u ticks\n",
+               i + 1, flagged[i].seed, flagged[i].team_id, flagged[i].start_tick, flagged[i].streak_len);
+    }
+    if(flagged_count == P1_SWEEP_MAX_REPORTED_STREAKS)
+        printf("[SWEEP P1]   (further streaks not individually listed - cap of %u reached)\n",
+               P1_SWEEP_MAX_REPORTED_STREAKS);
+
+    if(flagged_count == 0)
+    {
+        printf("[SWEEP P1] VERDICT: PASS - no team was ever stuck EN_ROUTE at one location for "
+               "%u+ ticks across %u seeds x %u ticks.\n", P1_SWEEP_STUCK_TICKS_THRESHOLD, seed_count, ticks_per_seed);
+        return 0;
+    }
+
+    printf("[SWEEP P1] VERDICT: FAIL - %u frozen streak(s) detected. The task-branch no-path "
+           "fallback is not preventing every freeze.\n", flagged_count);
+    return (int)(flagged_count > 255 ? 255 : flagged_count);
 }
