@@ -15,24 +15,27 @@ void initialize_grid(void) //grid
 }
 
 
-static void degrade_grid_area(int centre_x,int centre_y,int radius,int base_degradation) //grid
+static void degrade_grid_area(int centre_x, int centre_y, int radius, int base_degradation)
 {
-    for(int x=centre_x-radius;x<=centre_x+radius;x++)
+    for(int x = centre_x - radius; x <= centre_x + radius; x++)
     {
-        for(int y=centre_y-radius;y<=centre_y+radius;y++)
+        for(int y = centre_y - radius; y <= centre_y + radius; y++)
         {
-            if(x<0 || x>=GRID_WIDTH || y<0 || y>=GRID_HEIGHT)
-            {
+            if(x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT)
                 continue;
-            }
-            int distance=abs(x-centre_x)+abs(y-centre_y);
-            if(distance>radius) continue;
-            int degradation=base_degradation-base_degradation*distance/(radius+1);
-            if(degradation<0) continue;
-            int safety=g_grid[x][y].safety_level-=degradation;
-            if(safety<0) g_grid[x][y].safety_level=0;
-            else
-            g_grid[x][y].safety_level=safety;
+
+            int distance = abs(x - centre_x) + abs(y - centre_y);
+            if(distance > radius) continue;
+
+            int degradation = base_degradation - base_degradation * distance / (radius + 1);
+            if(degradation <= 0) continue;
+
+            /* safety_level is uint8_t — compute in int first to avoid
+               the compound-assignment wrapping the uint8_t before the
+               < 0 guard can fire */
+            int current = (int)g_grid[x][y].safety_level;
+            int result  = current - degradation;
+            g_grid[x][y].safety_level = (uint8_t)(result < 0 ? 0 : result);
         }
     }
 }
