@@ -10,36 +10,57 @@
 #include "search_zones.h"
 #include "team.h"
 #include <string.h>
+#include "random.h"
 
 
 static uint8_t count_available_teams_for_capability(uint8_t capability);
 static uint8_t count_open_incidents_for_capability(uint8_t capability);
 static void allocate_support_team(void);
 
+/* Diagnostic: how many times select_best_team() hit an exact score tie
+ * between two candidate teams (i.e. the tie-break branch fired). Process-
+ * cumulative; the P1 sweep captures before/after deltas. Measures how often
+ * the tie-break policy actually matters for the training distribution. */
+unsigned long g_diag_team_score_ties = 0;
+
 uint8_t select_best_team(const IncidentState_t *incident)
 {
-    float best_score=-1.0f;
-    uint8_t best_team=NO_ASSIGNMENT;
-    for(int i=0;i<NUM_TEAMS;i++)
+    float best_score = -1.0f;
+    uint8_t best_team = NO_ASSIGNMENT;
+
+    for(int i = 0; i < NUM_TEAMS; i++)
     {
-        if (!team_can_accept_incident(&g_teams[i], incident))
-        {
+        if(!team_can_accept_incident(&g_teams[i], incident))
             continue;
+
+        float score = calculate_score(&g_teams[i], incident);
+        if(g_simulation_trace_enabled)
+            printf("Team %d -> Score = %.3f\n", i, score);
+
+        if(score > best_score)
+        {
+            best_score = score;
+            best_team = (uint8_t)i;
         }
-        float score=calculate_score(&g_teams[i],incident);
-        if(g_simulation_trace_enabled) printf("Team %d -> Score = %.3f\n", i, score);
-        if(best_score<score){
-            best_score=score;
-            best_team=i;
+        else if(score == best_score && best_team != NO_ASSIGNMENT)
+        {
+            g_diag_team_score_ties++;
+            /* Random tie-break: replace current best with 50% probability
+               so no team has a systematic advantage from iteration order */
+            if(random_range_stream(STREAM_INCIDENTS, 0, 1) == 0)
+                best_team = (uint8_t)i;
         }
     }
     return best_team;
-
-
 }
 
 void assign_incident(uint8_t team_id, uint8_t incident_slot)
 {
+    if(team_id >= NUM_TEAMS || incident_slot >= NUM_INCIDENTS)
+    {
+        return;
+    }
+
     TeamState_t *team = &g_teams[team_id];
     IncidentState_t *incident = &g_incidents[incident_slot];
 
@@ -51,9 +72,8 @@ void assign_incident(uint8_t team_id, uint8_t incident_slot)
     team->assigned_task_slot = incident_slot;
     incident->status = INC_ASSIGNED;
     incident->assigned_team = team_id;
-    /* World state is now fully updated */
     cbba_sync_mission_execution_twin();
-    snapshot_record(g_current_tick, EVENT_TEAM_ASSIGNED, team_id);
+    snapshot_record(g_sim_step_tick, EVENT_TEAM_ASSIGNED, team_id);
 }
 
 void allocate_all_incidents(void)
@@ -65,6 +85,12 @@ void allocate_all_incidents(void)
      * freshly-generated task can be picked up in the same tick rather
      * than sitting open for one extra cycle. */
     search_generate_sweep_tasks(g_current_tick);
+
+    /* Same idea for EVACUEE_OFFBOARD: tops up any safe zone that has a
+     * waiting backlog and no run already in flight. This was previously
+     * dead code - create_evacuee_offboard_incident() existed but had no
+     * caller anywhere, so evacuees just piled up at safe zones forever. */
+    generate_evacuee_offboard_incidents();
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
@@ -114,7 +140,8 @@ void allocate_all_incidents(void)
     {
         IncidentState_t *task = &g_system_tasks[i];
 
-        if(!task->slot_occupied || task->status != INC_OPEN)
+        if(!task->slot_occupied || task->status != INC_OPEN ||
+           task->unreachable_streak >= INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD)
             continue;
 
         uint8_t team_id = select_best_team(task);
@@ -133,7 +160,7 @@ void allocate_all_incidents(void)
         task->status = INC_ASSIGNED;
         task->assigned_team = team_id;
         cbba_sync_mission_execution_twin();
-        snapshot_record(g_current_tick, EVENT_TEAM_ASSIGNED, team_id);
+        snapshot_record(g_sim_step_tick, EVENT_TEAM_ASSIGNED, team_id);
     }
     allocate_support_team();
     cbba_sync_mission_execution_twin();
@@ -201,6 +228,37 @@ bool team_can_accept_incident(const TeamState_t *team, const IncidentState_t *in
     if(team->equipment_level != EQ_MAX_LEVEL)
         return false;
 
+    /* Same class of bug as the STATUS_AVAILABLE branch's ABORT_MISSION
+     * check above (see its comment), one door down: this path can steal
+     * a RESTING team the instant stamina/equipment clear, with no idea
+     * an active mobility/communication/resource fault (independent of
+     * both) is still open. Stealing it anyway hands it a real assignment
+     * that recovery_manager_step() immediately, correctly recommends
+     * abandoning - and unlike a stale recommendation, this one is fresh
+     * and genuinely still true, so it isn't something the reset in
+     * recovery_manager_step() (core/recovery_manager.c) can or should
+     * suppress. Confirmed empirically under `--fault-profile combined`:
+     * a team at ~100% stamina/equipment got stolen straight from RESTING
+     * into EN_ROUTE and straight back out every 2 ticks, never actually
+     * reaching the incident, for as long as its mobility fault lasted -
+     * team_set_available()'s own equivalent gate (core/team.c) never
+     * even ran, since this path bypasses it entirely.
+     *
+     * Checks LOCAL_RECOVERY too, not just RETURN_TO_SAFE_ZONE - same
+     * reason as team.c's equivalent gate: recovery_manager downgrades
+     * what would otherwise be RETURN_TO_SAFE_ZONE to the milder
+     * LOCAL_RECOVERY while the team is still RESTING (returning to a
+     * safe zone you're already at is meaningless), so the literal
+     * RETURN_TO_SAFE_ZONE value essentially never appears for a RESTING
+     * team - checking only for it here would never actually catch
+     * anything. recovery_dispatch()'s LOCAL_RECOVERY case (core/
+     * recovery_manager.c) has the identical abandon-and-return effect
+     * once a team reaches STATUS_AVAILABLE, so both values need the
+     * same treatment. */
+    if(recovery_manager_get_recommendation(team->team_id) == RECOVERY_ACTION_RETURN_TO_SAFE_ZONE ||
+       recovery_manager_get_recommendation(team->team_id) == RECOVERY_ACTION_LOCAL_RECOVERY)
+        return false;
+
     /*
      * Fix for a real bug (confirmed empirically this session, see
      * get_ready_stamina()'s own doc comment in core/team.h for the
@@ -248,6 +306,7 @@ static uint8_t count_open_incidents_for_capability(uint8_t capability)
     {
         if(g_incidents[i].slot_occupied &&
            g_incidents[i].status == INC_OPEN &&
+           g_incidents[i].unreachable_streak < INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD &&
            g_incidents[i].req_capability == capability &&
            g_incidents[i].discovered)
         {
@@ -259,6 +318,7 @@ static uint8_t count_open_incidents_for_capability(uint8_t capability)
     {
         if(g_system_tasks[i].slot_occupied &&
            g_system_tasks[i].status == INC_OPEN &&
+           g_system_tasks[i].unreachable_streak < INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD &&
            g_system_tasks[i].req_capability == capability)
         {
             count++;
@@ -291,17 +351,23 @@ float get_soft_stamina_floor(const TeamState_t *team)
 
 static void allocate_support_team(void)
 {
-    TeamState_t *support=NULL;
-    for(uint8_t i=0;i<NUM_TEAMS;i++)
+    TeamState_t *support = NULL;
+    for(uint8_t i = 0; i < NUM_TEAMS; i++)
     {
-        if(g_teams[i].specialization==SPEC_SUPPORT && g_teams[i].status==STATUS_AVAILABLE)
+        if(g_teams[i].specialization == SPEC_SUPPORT &&
+           g_teams[i].status == STATUS_AVAILABLE)
         {
-            support=&g_teams[i];
+            support = &g_teams[i];
             break;
         }
     }
-    if(support==NULL) return;
-    for(uint8_t i=0;i<NUM_INCIDENTS;i++)
+    if(support == NULL) return;
+
+    /* Find highest-priority incident needing support, not just the first */
+    int8_t best_slot = -1;
+    Priority_t best_priority = (Priority_t)0;
+
+    for(uint8_t i = 0; i < NUM_INCIDENTS; i++)
     {
         IncidentState_t *incident = &g_incidents[i];
         if(!incident->slot_occupied)
@@ -314,10 +380,21 @@ static void allocate_support_team(void)
             continue;
         if(!incident_needs_support(incident))
             continue;
-        incident->support_team = support->team_id;
-        support->assigned_task_pool = TASK_POOL_INCIDENT;
-        support->assigned_task_slot = i;
-        support->status = STATUS_EN_ROUTE;
-        return;
+        if(best_slot == -1 || incident->priority > best_priority)
+        {
+            best_slot = (int8_t)i;
+            best_priority = incident->priority;
+        }
     }
+
+    if(best_slot < 0) return;
+
+    IncidentState_t *incident = &g_incidents[best_slot];
+    incident->support_team = support->team_id;
+    support->assigned_task_pool = TASK_POOL_INCIDENT;
+    support->assigned_task_slot = (uint8_t)best_slot;
+    support->status = STATUS_EN_ROUTE;
+
+    /* Keep the execution twin consistent with the new assignment */
+    cbba_sync_mission_execution_twin();
 }

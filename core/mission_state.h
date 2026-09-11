@@ -49,7 +49,11 @@ typedef enum {
     EVENT_FAULT_INJECTED,
     EVENT_FAULT_RECOVERED,
     EVENT_WATCHDOG_ANOMALY_CHANGED,
-    EVENT_RECOVERY_ACTION_CHANGED
+    EVENT_RECOVERY_ACTION_CHANGED,
+    /* Unconditional per-team, per-tick snapshot row (logged in
+     * simulation_step()'s logging pass). Appended last so existing event
+     * codes keep their values. */
+    EVENT_TICK
 } EventType_t;
 
 typedef enum {
@@ -239,8 +243,9 @@ typedef struct
     uint32_t recovery_tick[NUM_OPERATIONAL_FAULT_CLASSES];
     uint8_t severity[NUM_OPERATIONAL_FAULT_CLASSES];
     uint8_t target_team[NUM_OPERATIONAL_FAULT_CLASSES];
-    int16_t target_x[NUM_OPERATIONAL_FAULT_CLASSES];
-    int16_t target_y[NUM_OPERATIONAL_FAULT_CLASSES];
+    int16_t  target_x[NUM_OPERATIONAL_FAULT_CLASSES];
+    int16_t  target_y[NUM_OPERATIONAL_FAULT_CLASSES];
+    uint32_t target_incident_id[NUM_OPERATIONAL_FAULT_CLASSES]; /* add this */
     uint8_t original_travel_cost[NUM_OPERATIONAL_FAULT_CLASSES];
     uint8_t original_road_blocked[NUM_OPERATIONAL_FAULT_CLASSES];
     uint8_t original_navigable[NUM_OPERATIONAL_FAULT_CLASSES];
@@ -283,7 +288,8 @@ typedef struct {
     uint8_t  equipment_flags;      // EQ_* bitmask
     uint32_t last_heartbeat_tick;  // µT-Kernel tk_get_tim() value
     uint8_t  fitness_tier;         // 0=ARDUOUS, 1=MODERATE, 2=LIGHT
-    uint8_t  resting_zone_id;      // Safezone_id currently at, 0xFF if not resting
+    uint8_t  resting_zone_id;      // current zone if RESTING, destination zone if heading there (heading_to_rest)
+    uint8_t  heading_to_rest;      // 1 while EN_ROUTE specifically to rest at resting_zone_id (no task slot backs this - see begin_return_to_safe_zone())
     uint8_t  equipment_level;
     TeamFaultState_t fault_state;
     uint16_t cached_remaining_path_cost;
@@ -320,8 +326,28 @@ typedef struct {
     uint16_t work_remaining;
     uint8_t discovered;                          /* Fog-of-war reveal flag */
     uint8_t mission_fault_active_count;          /* Fault injection tracking */
+    uint8_t unreachable_streak;                  /* consecutive no-path abandons; quarantines a
+                                                   structurally unreachable incident instead of
+                                                   re-bidding it forever */
     uint8_t mission_fault_original_priority;     /* Backup for priority override */
     uint8_t mission_fault_original_victim_count; /* Backup for victim count override */
+    /* INCIDENT_EVACUEE_OFFBOARD only - folds what used to live in the
+     * single global EvacuationTeam_t (g_evacuation_teams[0]) directly
+     * onto the task, so each safe zone's offboard run is its own task
+     * instead of all zones fighting over one shared singleton. Not
+     * reused from hazard_flags/structure_type/passive_effect on
+     * purpose - those are written into the training CSV (laptop/
+     * snapshot.c) and explicitly zeroed on the receiving side of a
+     * mission_link sync (core/mission_link.c), so repurposing them
+     * would silently corrupt CSV columns and cross-board state for
+     * this incident type. victim_count IS reused for the live evacuee
+     * headcount currently being carried, and loc_x/loc_y for the
+     * current destination (safe zone while loading, then the gateway
+     * once en route) - both already transmitted normally, unlike the
+     * three above. */
+    uint8_t evac_safezone_id;      /* which safe zone this run is for */
+    uint8_t evac_gateway_id;       /* NO_EVAC_TARGET until a gateway is picked */
+    uint8_t evac_capacity;         /* max evacuees this run can carry per trip */
 } IncidentState_t;
 
 /* One board-side cache slot: a single MissionLinkIncident_t frame
@@ -360,15 +386,6 @@ typedef struct {
     int16_t loc_x;
     int16_t loc_y;
 } EvacuationGateway_t;
-
-typedef struct{
-    uint8_t evacuation_team_id;
-    int16_t loc_x,loc_y;
-    uint8_t target_safezone;
-    uint8_t gateway_id;
-    uint8_t evacuee_capacity;
-    uint8_t evacuee_count;
-} EvacuationTeam_t;
 
 typedef struct {
     uint8_t safety_level;
@@ -525,10 +542,10 @@ extern IncidentState_t g_system_tasks[NUM_SYSTEM_TASKS];
 extern SafeZone_t g_safezones[MAX_SAFE_ZONES];
 extern uint8_t g_num_safe_zones;
 extern GridCell_t g_grid[GRID_WIDTH][GRID_HEIGHT];
-extern EvacuationTeam_t g_evacuation_teams[1];
 extern EvacuationGateway_t g_evacuation_gateways[NUM_EVACUATION_GATEWAYS];
 extern uint8_t g_safezone_evacuation_active[MAX_SAFE_ZONES];
 extern uint32_t g_current_tick;
+extern uint32_t g_sim_step_tick;   /* see mission_state.c - event-logging cycle */
 extern uint32_t g_world_seed;
 extern CBBAAgentState_t g_cbba_agent_state[NUM_TEAMS];
 extern MissionExecutionTwin_t g_mission_execution_twin[NUM_TEAMS];

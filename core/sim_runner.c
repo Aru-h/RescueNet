@@ -6,6 +6,7 @@
 #include "simulation.h"
 #include "allocator.h"
 #include "snapshot.h"
+#include "mission_state.h"
 
 int sim_runner_init(void)
 {
@@ -57,6 +58,11 @@ void sim_start_seed_board(uint32_t seed, FaultProfile_t fault_profile)
 
 void sim_tick(void)
 {
+    /* fault_injector_step() and allocate_all_incidents() run before
+     * simulation_step() increments g_current_tick, so events they log
+     * belong to the step about to be processed - g_current_tick + 1.
+     * simulation_step() re-syncs this to g_current_tick after its ++. */
+    g_sim_step_tick = g_current_tick + 1u;
     fault_injector_step();
     allocate_all_incidents();
     simulation_step();
