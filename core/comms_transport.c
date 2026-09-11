@@ -571,15 +571,21 @@ int comms_transport_poll_received(uint8_t *out_sender_team_id,
     return 1;
 }
 
+int comms_transport_peek_frame_type(uint8_t *out_frame_type)
+{
+    if(g_inbox_count == 0u)
+        return 0;
+    *out_frame_type = g_inbox[g_inbox_tail].frame_type;
+    return 1;
+}
+
 int comms_transport_deliver_received(uint8_t frame_type, const uint8_t *payload,
                                       uint8_t payload_len)
 {
-    /* See comms_transport.h's own doc on this function: the real
-       physical-RX counterpart to comms_transport_send()'s same-board
-       path above (that path: pack -> lora_frame_try_parse() -> push;
-       this path: caller already parsed via lora_frame_try_parse()
-       itself -> push here). COMMS_TRANSPORT_UNKNOWN_SENDER, not a
-       real sender_team_id - see that macro's own doc for why. */
+    if(payload_len > LORA_FRAME_MAX_PAYLOAD)
+    {
+        return -1;
+    }
     return comms_transport_inbox_push(COMMS_TRANSPORT_UNKNOWN_SENDER, frame_type,
                                        payload, payload_len);
 }

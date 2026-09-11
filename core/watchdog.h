@@ -25,6 +25,19 @@ enum
     WATCHDOG_EVIDENCE_TIMEOUT = 1u << 6
 };
 
+typedef enum
+{
+    WATCHDOG_EVIDENCE_SLOT_PROGRESS = 0,
+    WATCHDOG_EVIDENCE_SLOT_STAMINA,
+    WATCHDOG_EVIDENCE_SLOT_COMMUNICATION,
+    WATCHDOG_EVIDENCE_SLOT_OPERATING_STATE,
+    WATCHDOG_EVIDENCE_SLOT_PATH,
+    WATCHDOG_EVIDENCE_SLOT_ASSIGNMENT,
+    WATCHDOG_EVIDENCE_SLOT_TIMEOUT,
+
+    NUM_WATCHDOG_EVIDENCE_SLOTS
+} WatchdogEvidenceSlot_t;
+
 typedef struct
 {
     uint8_t anomaly_detected;
@@ -37,5 +50,21 @@ typedef struct
 void watchdog_init(void);
 void watchdog_step(void);
 WatchdogStatus_t watchdog_get_status(uint8_t team_id);
+
+/* Board's own view of team_id's raw evidence vector + confirmed-mobility
+   flag - neither is in WatchdogStatus_t above (that's the classifier's
+   summarized output, not its inputs). Needed by core/fault_comms.c
+   (FAULT_BROADCAST payload assembly) and core/fault_predictor.c (model
+   input), both outside this file. 7 is NUM_WATCHDOG_EVIDENCE_SLOTS
+   (watchdog.c, private) mirrored here by value, same as core/
+   fault_buffer.h's FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS does - not the
+   same constant, just the same number by coincidence of what the
+   watchdog happens to track. out_evidence must have room for 7 floats;
+   either output pointer may be NULL if the caller doesn't need it. An
+   out-of-range team_id zeros both outputs rather than leaving them
+   unset. */
+void watchdog_get_evidence_vector(uint8_t team_id,
+    float out_evidence[NUM_WATCHDOG_EVIDENCE_SLOTS],
+    uint8_t *out_confirmed_mobility_impairment);
 
 #endif

@@ -251,4 +251,10 @@ int comms_transport_poll_received(uint8_t *out_sender_team_id,
    confirm every send actually pays a cost, not just same-board ones. */
 uint32_t comms_transport_channel_busy_until_tick(void);
 
+/* Non-destructive peek at the next inbox entry's frame_type.
+ * Returns 1 and sets *out_frame_type if at least one frame is waiting;
+ * returns 0 if the inbox is empty.  Does NOT remove the frame.
+ * Use this to check ownership before calling comms_transport_poll_received(). */
+int comms_transport_peek_frame_type(uint8_t *out_frame_type);
+
 #endif /* COMMS_TRANSPORT_H */
