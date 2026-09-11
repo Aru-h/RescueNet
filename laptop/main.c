@@ -52,6 +52,41 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* Priority 1 verification tooling - handled as a dedicated pre-pass
+     * so flag order doesn't matter (e.g. `--sweep-priority1 1 200
+     * 20000 --fault-profile=combined` and `--fault-profile=combined
+     * --sweep-priority1 1 200 20000` both work), and so it can exit
+     * before the normal run loop below ever starts. Not part of the
+     * move_team() fix itself - see debug_run_priority1_sweep()'s doc
+     * comment for what it checks. */
+    for(int i = 1; i < argc; i++)
+    {
+        if(strcmp(argv[i], "--repro-priority1") == 0)
+        {
+            return debug_run_priority1_repro();
+        }
+
+        if(strcmp(argv[i], "--sweep-priority1") == 0)
+        {
+            uint32_t first_seed = (uint32_t)((i + 1 < argc && is_number_arg(argv[i + 1])) ? strtoul(argv[i + 1], NULL, 10) : 1);
+            uint32_t seed_count = (uint32_t)((i + 2 < argc && is_number_arg(argv[i + 2])) ? strtoul(argv[i + 2], NULL, 10) : 50);
+            uint32_t ticks_per_seed = (uint32_t)((i + 3 < argc && is_number_arg(argv[i + 3])) ? strtoul(argv[i + 3], NULL, 10) : 10000);
+            FaultProfile_t sweep_profile = FAULT_PROFILE_COMBINED;
+
+            for(int j = 1; j < argc; j++)
+            {
+                if(is_fault_profile_flag(argv[j]))
+                {
+                    sweep_profile = strcmp(argv[j], "--fault-profile") == 0 && j + 1 < argc
+                                         ? fault_profile_from_string(argv[j + 1])
+                                         : parse_fault_profile_value(argv[j]);
+                }
+            }
+
+            return debug_run_priority1_sweep(first_seed, seed_count, ticks_per_seed, sweep_profile);
+        }
+    }
+
     FaultProfile_t fault_profile = FAULT_PROFILE_NONE;
     int live_mode = 0;
     int diag_mode = 0;  /* off by default - see --diag below */
@@ -223,6 +258,9 @@ int main(int argc, char **argv)
     }
 
     print_world_state();
+
+    extern unsigned long g_probe_no_path_hits;
+    fprintf(stderr, "[PROBE] task_branch_no_path_hits=%lu\n", g_probe_no_path_hits);
 
     return 0;
 }

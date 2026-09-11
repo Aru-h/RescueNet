@@ -27,6 +27,37 @@ void initialize_test_scenario(void);
 void debug_emit_static_environment(void);
 void debug_emit_live_frame(uint32_t tick);
 
+/*
+ * Priority 1 repro/verification harness: deterministically reproduces
+ * "path lost mid-route" for a team on an active TASK_POOL_INCIDENT/
+ * TASK_POOL_SYSTEM task (the move_team() branch that historically had
+ * no `else` for find_next_path_step() returning "no path") and reports
+ * whether the team recovers. Returns 0 if the team was un-stuck within
+ * the tick budget, non-zero if it froze for the whole run (bug present).
+ * Desktop test tooling only, invoked via `--repro-priority1`.
+ */
+int debug_run_priority1_repro(void);
+
+/*
+ * Large-scale natural-condition sweep for the Priority 1 fix: runs
+ * `seed_count` seeds of `ticks_per_seed` ticks each (via the same
+ * sim_start_seed()/sim_tick()/sim_end_seed() path a normal run uses -
+ * no synthetic wall-off), and after every tick checks every team for
+ * a "frozen" signature: STATUS_EN_ROUTE with no location change for
+ * far longer than the highest possible single-cell travel cost. Any
+ * such streak means a team is stuck exactly the way the pre-fix
+ * move_team() task branch used to leave it. Prints a running progress
+ * line, flags each frozen streak as it's found (seed, team, tick
+ * range, length), and ends with a PASS/FAIL verdict plus totals for
+ * g_probe_no_path_hits and g_diag_safezone_fallback_count. Returns 0
+ * if no freeze was ever detected, non-zero (count of frozen streaks
+ * found, capped at 255) otherwise. Desktop test tooling only, invoked
+ * via `--sweep-priority1 [first_seed] [seed_count] [ticks_per_seed]
+ * [--fault-profile=...]` (all positional args optional, defaulting to
+ * 1 / 50 / 10000 / combined).
+ */
+int debug_run_priority1_sweep(uint32_t first_seed, uint32_t seed_count, uint32_t ticks_per_seed, int fault_profile);
+
 void debug_print_generator_evaluation(uint32_t tick,
                                       uint8_t load,
                                       uint32_t probability,
