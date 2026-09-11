@@ -124,11 +124,12 @@ def pack_override(team_id: int, incident_id: int) -> bytes:
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
+# Index = EventType_t value in core/mission_state.h
 EVENT_NAMES = [
     "NONE", "NEW_INCIDENT", "TEAM_ASSIGNED", "TEAM_ON_SCENE",
     "STAGE_COMPLETE", "TEAM_REST", "TEAM_AVAILABLE", "INCIDENT_RESOLVED",
     "FAULT_INJECTED", "FAULT_RECOVERED", "WATCHDOG_ANOMALY_CHANGED",
-    "RECOVERY_ACTION_CHANGED",
+    "RECOVERY_ACTION_CHANGED", "TICK",
 ]
 
 RECOVERY_ACTION_NAMES = [
@@ -524,6 +525,11 @@ def bench_b():
 @app.route("/bench/c")
 def bench_c():
     return render_template("bench_c.html")
+
+
+@app.route("/bench/d")
+def bench_d():
+    return render_template("bench_d.html")
 
 
 @app.route("/")
