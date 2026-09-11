@@ -83,48 +83,63 @@ static void inject_mobility_fault(uint8_t team_id)
 {
     TeamFaultState_t *fault_state = &g_teams[team_id].fault_state;
 
+    if(fault_state->active[FAULT_CLASS_MOBILITY])
+        return; /* already active — don't reset duration mid-fault */
+
     fault_state->active[FAULT_CLASS_MOBILITY] = 1;
     fault_state->start_tick[FAULT_CLASS_MOBILITY] = g_current_tick;
-    fault_state->duration_ticks[FAULT_CLASS_MOBILITY] = fault_duration_for_class(FAULT_CLASS_MOBILITY);
+    fault_state->duration_ticks[FAULT_CLASS_MOBILITY] =
+        fault_duration_for_class(FAULT_CLASS_MOBILITY);
     fault_state->recovery_tick[FAULT_CLASS_MOBILITY] =
         g_current_tick + fault_state->duration_ticks[FAULT_CLASS_MOBILITY];
-    fault_state->severity[FAULT_CLASS_MOBILITY] = fault_severity_for_class(FAULT_CLASS_MOBILITY);
+    fault_state->severity[FAULT_CLASS_MOBILITY] =
+        fault_severity_for_class(FAULT_CLASS_MOBILITY);
     fault_state->target_team[FAULT_CLASS_MOBILITY] = team_id;
     fault_state->active_mask |= (1u << FAULT_CLASS_MOBILITY);
     mark_last_fault(fault_state, FAULT_CLASS_MOBILITY);
-    snapshot_record(g_current_tick, EVENT_FAULT_INJECTED, team_id);
+    snapshot_record(g_sim_step_tick, EVENT_FAULT_INJECTED, team_id);
 }
 
 static void inject_communication_fault(uint8_t team_id)
 {
     TeamFaultState_t *fault_state = &g_teams[team_id].fault_state;
 
+    if(fault_state->active[FAULT_CLASS_COMMUNICATION])
+        return;
+
     fault_state->active[FAULT_CLASS_COMMUNICATION] = 1;
     fault_state->start_tick[FAULT_CLASS_COMMUNICATION] = g_current_tick;
-    fault_state->duration_ticks[FAULT_CLASS_COMMUNICATION] = fault_duration_for_class(FAULT_CLASS_COMMUNICATION);
+    fault_state->duration_ticks[FAULT_CLASS_COMMUNICATION] =
+        fault_duration_for_class(FAULT_CLASS_COMMUNICATION);
     fault_state->recovery_tick[FAULT_CLASS_COMMUNICATION] =
         g_current_tick + fault_state->duration_ticks[FAULT_CLASS_COMMUNICATION];
-    fault_state->severity[FAULT_CLASS_COMMUNICATION] = fault_severity_for_class(FAULT_CLASS_COMMUNICATION);
+    fault_state->severity[FAULT_CLASS_COMMUNICATION] =
+        fault_severity_for_class(FAULT_CLASS_COMMUNICATION);
     fault_state->target_team[FAULT_CLASS_COMMUNICATION] = team_id;
     fault_state->active_mask |= (1u << FAULT_CLASS_COMMUNICATION);
     mark_last_fault(fault_state, FAULT_CLASS_COMMUNICATION);
-    snapshot_record(g_current_tick, EVENT_FAULT_INJECTED, team_id);
+    snapshot_record(g_sim_step_tick, EVENT_FAULT_INJECTED, team_id);
 }
 
 static void inject_resource_fault(uint8_t team_id)
 {
     TeamFaultState_t *fault_state = &g_teams[team_id].fault_state;
 
+    if(fault_state->active[FAULT_CLASS_RESOURCE])
+        return;
+
     fault_state->active[FAULT_CLASS_RESOURCE] = 1;
     fault_state->start_tick[FAULT_CLASS_RESOURCE] = g_current_tick;
-    fault_state->duration_ticks[FAULT_CLASS_RESOURCE] = fault_duration_for_class(FAULT_CLASS_RESOURCE);
+    fault_state->duration_ticks[FAULT_CLASS_RESOURCE] =
+        fault_duration_for_class(FAULT_CLASS_RESOURCE);
     fault_state->recovery_tick[FAULT_CLASS_RESOURCE] =
         g_current_tick + fault_state->duration_ticks[FAULT_CLASS_RESOURCE];
-    fault_state->severity[FAULT_CLASS_RESOURCE] = fault_severity_for_class(FAULT_CLASS_RESOURCE);
+    fault_state->severity[FAULT_CLASS_RESOURCE] =
+        fault_severity_for_class(FAULT_CLASS_RESOURCE);
     fault_state->target_team[FAULT_CLASS_RESOURCE] = team_id;
     fault_state->active_mask |= (1u << FAULT_CLASS_RESOURCE);
     mark_last_fault(fault_state, FAULT_CLASS_RESOURCE);
-    snapshot_record(g_current_tick, EVENT_FAULT_INJECTED, team_id);
+    snapshot_record(g_sim_step_tick, EVENT_FAULT_INJECTED, team_id);
 }
 
 static void inject_environment_fault(uint8_t team_id)
@@ -157,25 +172,58 @@ static void inject_environment_fault(uint8_t team_id)
     fault_state->target_team[FAULT_CLASS_ENVIRONMENT] = team_id;
     fault_state->target_x[FAULT_CLASS_ENVIRONMENT] = (int16_t)next_x;
     fault_state->target_y[FAULT_CLASS_ENVIRONMENT] = (int16_t)next_y;
-    fault_state->original_travel_cost[FAULT_CLASS_ENVIRONMENT] =
-        environment_cell_travel_cost(next_x, next_y);
-    fault_state->original_road_blocked[FAULT_CLASS_ENVIRONMENT] =
-        g_environment[next_x][next_y].road_blocked;
-    fault_state->original_navigable[FAULT_CLASS_ENVIRONMENT] =
-        g_environment[next_x][next_y].navigable;
 
+    EnvironmentCell_t *cell = &g_environment[next_x][next_y];
+
+    /* Fix 2 (snapshot): only capture the true pre-fault ground truth when
+     * this is the FIRST injection onto this cell (ref_count == 0). If
+     * another team already injected here, the cell's cost is already
+     * elevated; snapshotting that as "original" would make this team's
+     * recovery restore to the elevated value instead of the real baseline.
+     * The cell-level env_fault_base_cost holds the ground truth regardless
+     * of how many subsequent teams pile on, so use that when available. */
+    if(cell->env_fault_ref_count == 0)
+    {
+        cell->env_fault_base_cost = cell->travel_cost;
+        fault_state->original_travel_cost[FAULT_CLASS_ENVIRONMENT]  = cell->travel_cost;
+        fault_state->original_road_blocked[FAULT_CLASS_ENVIRONMENT] = cell->road_blocked;
+        fault_state->original_navigable[FAULT_CLASS_ENVIRONMENT]    = cell->navigable;
+    }
+    else
+    {
+        /* Not the first owner: snapshot the cell-level base (pre-all-faults
+         * ground truth) so the last recoverer can restore correctly, and
+         * record the current elevated cost so our recovery peels back only
+         * our own severity contribution. */
+        fault_state->original_travel_cost[FAULT_CLASS_ENVIRONMENT]  = cell->env_fault_base_cost;
+        fault_state->original_road_blocked[FAULT_CLASS_ENVIRONMENT] = cell->road_blocked;
+        fault_state->original_navigable[FAULT_CLASS_ENVIRONMENT]    = cell->navigable;
+    }
+    cell->env_fault_ref_count++;
+
+    /* Fix 1 (cost-only): bump travel_cost but preserve navigable.
+     * The previous code hard-wired navigable=0, which made A*'s
+     * get_movement_cost() return -1 for this cell — a complete graph cut,
+     * not a weighted detour. Teams routed to safe zones would find zero
+     * reachable nodes when any chokepoint on their path was faulted.
+     * road_blocked=1 is kept: it is used by scoring/telemetry only and
+     * does not affect pathfinding. */
+    uint8_t severity = fault_state->severity[FAULT_CLASS_ENVIRONMENT];
+    uint8_t new_cost = cell->travel_cost + severity;
+    if(new_cost < cell->travel_cost)   /* uint8_t overflow guard */
+        new_cost = 255u;
     environment_set_cell_operational_state(
         next_x,
         next_y,
-        (uint8_t)(g_environment[next_x][next_y].travel_cost +
-                  fault_state->severity[FAULT_CLASS_ENVIRONMENT]),
-        0,
-        1);
+        new_cost,
+        cell->navigable,   /* preserve — do not sever the graph */
+        1);                /* road_blocked=1 for telemetry/scoring */
 
     fault_state->active_mask |= (1u << FAULT_CLASS_ENVIRONMENT);
     mark_last_fault(fault_state, FAULT_CLASS_ENVIRONMENT);
-    snapshot_record(g_current_tick, EVENT_FAULT_INJECTED, team_id);
+    snapshot_record(g_sim_step_tick, EVENT_FAULT_INJECTED, team_id);
 }
+
 
 static void inject_mission_fault(uint8_t team_id)
 {
@@ -210,8 +258,9 @@ static void inject_mission_fault(uint8_t team_id)
         g_current_tick + fault_state->duration_ticks[FAULT_CLASS_MISSION];
     fault_state->severity[FAULT_CLASS_MISSION] = fault_severity_for_class(FAULT_CLASS_MISSION);
     fault_state->target_team[FAULT_CLASS_MISSION] = team_id;
-    fault_state->target_x[FAULT_CLASS_MISSION] = task->loc_x;
-    fault_state->target_y[FAULT_CLASS_MISSION] = task->loc_y;
+    fault_state->target_x[FAULT_CLASS_MISSION]           = task->loc_x;
+    fault_state->target_y[FAULT_CLASS_MISSION]           = task->loc_y;
+    fault_state->target_incident_id[FAULT_CLASS_MISSION] = task->incident_id; 
 
     /* Remember the incident's true pre-fault state exactly once - the
      * first time any mission fault lands on it while none is already
@@ -225,74 +274,108 @@ static void inject_mission_fault(uint8_t team_id)
     }
     task->mission_fault_active_count++;
 
-    if(task->priority > PRIORITY_CRITICAL)
-        task->priority--;
+    /* Worsen priority: increment toward LOW (4), not toward CRITICAL (1).
+       PRIORITY_CRITICAL=1 is the most urgent — faults make things worse,
+       so we move away from it. */
+    if(task->priority < PRIORITY_LOW)
+        task->priority = (Priority_t)((uint8_t)task->priority + 1u);
 
-    if(task->victim_count < 25)
-        task->victim_count = (uint8_t)(task->victim_count + fault_state->severity[FAULT_CLASS_MISSION]);
+    /* Cap victim_count with a post-add clamp, not a pre-add threshold */
+    {
+        uint8_t new_count = (uint8_t)(task->victim_count +
+                             fault_state->severity[FAULT_CLASS_MISSION]);
+        task->victim_count = (new_count > 25u) ? 25u : new_count;
+    }
 
     fault_state->active_mask |= (1u << FAULT_CLASS_MISSION);
     mark_last_fault(fault_state, FAULT_CLASS_MISSION);
-    snapshot_record(g_current_tick, EVENT_FAULT_INJECTED, team_id);
+    snapshot_record(g_sim_step_tick, EVENT_FAULT_INJECTED, team_id);
 }
 
 static void recover_environment_fault(uint8_t team_id)
 {
     TeamFaultState_t *fault_state = &g_teams[team_id].fault_state;
     OperationalFaultClass_t fault_class = FAULT_CLASS_ENVIRONMENT;
+    int x = fault_state->target_x[fault_class];
+    int y = fault_state->target_y[fault_class];
+    EnvironmentCell_t *cell = &g_environment[x][y];
 
-    environment_set_cell_operational_state(
-        fault_state->target_x[fault_class],
-        fault_state->target_y[fault_class],
-        fault_state->original_travel_cost[fault_class],
-        fault_state->original_navigable[fault_class],
-        fault_state->original_road_blocked[fault_class]);
+    if(cell->env_fault_ref_count > 0)
+        cell->env_fault_ref_count--;
+
+    if(cell->env_fault_ref_count == 0)
+    {
+        /* Fix 2 (last owner): restore to the true pre-fault baseline that
+         * was captured when the very first injection landed on this cell.
+         * env_fault_base_cost is immune to subsequent injectors' snapshots,
+         * so this always recovers to the correct pre-fault value regardless
+         * of how many teams stacked faults here. */
+        environment_set_cell_operational_state(
+            x, y,
+            cell->env_fault_base_cost,
+            fault_state->original_navigable[fault_class],
+            fault_state->original_road_blocked[fault_class]);
+    }
+    else
+    {
+        /* Fix 2 (not last owner): peel back only this team's severity
+         * contribution. Other teams' cost bumps remain active, so subtracting
+         * just our severity leaves the cell at the correct elevated-but-
+         * partially-recovered cost. Guard against underflow — if somehow cost
+         * is already at or below base, snap back to base rather than going
+         * negative (uint8_t would wrap). */
+        uint8_t severity = fault_state->severity[fault_class];
+        uint8_t new_cost = (cell->travel_cost > severity)
+                           ? (cell->travel_cost - severity)
+                           : cell->env_fault_base_cost;
+        environment_set_cell_operational_state(
+            x, y,
+            new_cost,
+            cell->navigable,
+            cell->road_blocked);
+    }
 
     fault_state->recovery_tick[fault_class] = g_current_tick;
     mark_last_fault(fault_state, fault_class);
-    snapshot_record(g_current_tick, EVENT_FAULT_RECOVERED, team_id);
+    snapshot_record(g_sim_step_tick, EVENT_FAULT_RECOVERED, team_id);
     clear_fault_summary(fault_state, fault_class);
 }
+
 
 static void recover_mission_fault(uint8_t team_id)
 {
     TeamFaultState_t *fault_state = &g_teams[team_id].fault_state;
     OperationalFaultClass_t fault_class = FAULT_CLASS_MISSION;
+    uint32_t target_id = fault_state->target_incident_id[fault_class];
 
     for(uint8_t i = 0; i < NUM_INCIDENTS; i++)
     {
         IncidentState_t *task = &g_incidents[i];
 
-        if(task->slot_occupied &&
-           task->loc_x == fault_state->target_x[fault_class] &&
-           task->loc_y == fault_state->target_y[fault_class] &&
-           task->status == INC_OPEN)
+        if(!task->slot_occupied)
+            continue;
+
+        /* Match by incident_id — location matching is unsafe because a
+           resolved incident's cell can be reused by a new, unrelated one */
+        if(task->incident_id != target_id)
+            continue;
+
+        if(task->mission_fault_active_count == 0)
+            break; /* not tracking this incident — don't corrupt it */
+
+        task->mission_fault_active_count--;
+
+        if(task->mission_fault_active_count == 0)
         {
-            /* The (x,y) match can land on a different incident than the
-             * one actually faulted, if the real target already resolved
-             * and something unrelated now occupies the same cell. That
-             * incident was never tracked here (active_count still its
-             * default 0) - touching its priority/victim_count would
-             * corrupt an incident this fault never touched. Only ever
-             * decrement/restore an incident this mechanism is actually
-             * tracking (active_count > 0 already, from inject time). */
-            if(task->mission_fault_active_count == 0)
-                break;
-
-            task->mission_fault_active_count--;
-
-            if(task->mission_fault_active_count == 0)
-            {
-                task->priority = (Priority_t)task->mission_fault_original_priority;
-                task->victim_count = task->mission_fault_original_victim_count;
-            }
-            break;
+            task->priority     = (Priority_t)task->mission_fault_original_priority;
+            task->victim_count = task->mission_fault_original_victim_count;
         }
+        break;
     }
 
     fault_state->recovery_tick[fault_class] = g_current_tick;
     mark_last_fault(fault_state, fault_class);
-    snapshot_record(g_current_tick, EVENT_FAULT_RECOVERED, team_id);
+    snapshot_record(g_sim_step_tick, EVENT_FAULT_RECOVERED, team_id);
     clear_fault_summary(fault_state, fault_class);
 }
 
@@ -307,7 +390,7 @@ static void recover_fault(uint8_t team_id, OperationalFaultClass_t fault_class)
         case FAULT_CLASS_RESOURCE:
             fault_state->recovery_tick[fault_class] = g_current_tick;
             mark_last_fault(fault_state, fault_class);
-            snapshot_record(g_current_tick, EVENT_FAULT_RECOVERED, team_id);
+            snapshot_record(g_sim_step_tick, EVENT_FAULT_RECOVERED, team_id);
             clear_fault_summary(fault_state, fault_class);
             break;
 
@@ -394,6 +477,25 @@ void fault_injector_step(void)
 
             if(team->fault_state.active[fault_class])
             {
+                /* Fix 3: environment faults bypass the two-stage confirm delay
+                 * entirely. The 33-tick PAR-interval delay models human
+                 * operator sign-off — appropriate for logical faults (mobility,
+                 * comms, resource) where accountability reporting makes sense.
+                 * Physical grid state should not stay walled for an extra
+                 * 33 ticks after the fault duration expires: that inflated the
+                 * effective block window from the configured 5–12 ticks to
+                 * 38–45, causing the combined profile to disconnect the graph
+                 * far more than intended. Recover environment faults directly
+                 * at recovery_tick, then fall through to the shared immunity. */
+                if(class_id == FAULT_CLASS_ENVIRONMENT &&
+                   g_current_tick >= team->fault_state.recovery_tick[fault_class])
+                {
+                    recover_fault(team_id, class_id);
+                    team->fault_state.immune_until_tick[fault_class] =
+                        g_current_tick + FAULT_POST_REPAIR_IMMUNITY_TICKS;
+                    continue;
+                }
+
                 /* Stage 1: the underlying technical fix is complete at
                  * recovery_tick, but the fault stays fully active until a
                  * separate confirmation delay elapses - modeling that nothing

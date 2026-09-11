@@ -8,6 +8,7 @@
 #include "random.h"
 #include "simulation.h"
 #include "incident.h"
+#include "search_zones.h"
 #include "grid.h"
 #include "path.h"
 #include "team.h"
@@ -18,6 +19,7 @@
 #include "watchdog.h"
 #include "recovery_manager.h"
 #include "fault_injector.h"
+#include "fault_comms.h"
 #include "mission_execution_twin.h"
 
 uint8_t g_simulation_trace_enabled = 1;
@@ -31,6 +33,9 @@ void generate_world(uint32_t seed)   //simulation
 {
     g_world_seed = seed;
     g_current_tick = 0;
+    g_sim_step_tick = 0;   /* sim_tick() advances this; keep it sane for
+                              harnesses that call allocate_all_incidents()
+                              directly without going through sim_tick() */
     random_seed_all(seed);
     generate_environment(seed);
     initialize_incidents();
@@ -41,6 +46,13 @@ void generate_world(uint32_t seed)   //simulation
     }
     initialize_evacuation_gateways(seed);
     environment_apply_earthquake(seed);
+    environment_validate_hazard_reachability();
+    /* Per-seed reset of search-zone coverage / cycle / reclaim state.
+     * search_zones_init() otherwise has no caller, so an in-process
+     * multi-seed run (the training-data pipeline, the P1 sweep tool) runs
+     * every seed after the first with the previous seed's g_search_zones[]
+     * and g_cell_last_covered_tick[][] still in place. */
+    search_zones_init();
     initialize_grid();
     generate_teams(seed);
     initialize_evacuation_teams();
@@ -49,6 +61,7 @@ void generate_world(uint32_t seed)   //simulation
     mission_execution_twin_reset();
     cbba_reset_improvement_counters();
     recovery_manager_init();
+    fault_comms_init();
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
@@ -64,6 +77,7 @@ void generate_world(uint32_t seed)   //simulation
 void simulation_step(void) //simulation
 {
     g_current_tick++;
+    g_sim_step_tick = g_current_tick;   /* keep in sync now that the step's tick is live */
     environment_update_hazard_propagation(g_current_tick);
     generate_incidents_if_needed();
     update_all_teams();
@@ -75,10 +89,23 @@ void simulation_step(void) //simulation
     mission_execution_twin_step();
     watchdog_step();
     recovery_manager_step();
+
+    /* Two passes, deliberately. Pass 1 records every team's snapshot rows
+     * for this tick BEFORE any recovery_dispatch() runs, so a team's logged
+     * row can never reflect another team's same-tick dispatch side effects
+     * (dispatch can call allocate_all_incidents(), reassign tasks, etc.).
+     * Pass 2 then runs the dispatches (unchanged order t=0..NUM_TEAMS-1, so
+     * simulation behaviour is identical) plus the post-dispatch status
+     * tracing that genuinely needs to read state after dispatch. */
+    RecoveryAction_t action_now[NUM_TEAMS];
+
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
         uint8_t anomaly_now = watchdog_get_status(team_id).anomaly_detected;
-        RecoveryAction_t action_now = recovery_manager_get_status(team_id).recommendation;
+        action_now[team_id] = recovery_manager_get_status(team_id).recommendation;
+
+        /* Unconditional per-team, per-tick snapshot row. */
+        snapshot_record(g_current_tick, EVENT_TICK, team_id);
 
         if(anomaly_now != g_prev_anomaly_detected[team_id])
         {
@@ -86,13 +113,16 @@ void simulation_step(void) //simulation
             g_prev_anomaly_detected[team_id] = anomaly_now;
         }
 
-        if((uint8_t)action_now != g_prev_recovery_action[team_id])
+        if((uint8_t)action_now[team_id] != g_prev_recovery_action[team_id])
         {
             snapshot_record(g_current_tick, EVENT_RECOVERY_ACTION_CHANGED, team_id);
-            g_prev_recovery_action[team_id] = (uint8_t)action_now;
+            g_prev_recovery_action[team_id] = (uint8_t)action_now[team_id];
         }
+    }
 
-        recovery_dispatch(team_id, action_now);
+    for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+    {
+        recovery_dispatch(team_id, action_now[team_id]);
 
         /* Rest-cycle and status-transition tracing for the dashboard's
          * Recovery/Rest tab (app.py's DIAG_STATUS_RE / DIAG_RESTED_RE).
@@ -137,6 +167,7 @@ void simulation_step(void) //simulation
     }
 }
 
+unsigned long g_probe_no_path_hits = 0;
 void move_team(TeamState_t *team) //simulation
 {
     if(team->status != STATUS_EN_ROUTE)
@@ -151,6 +182,68 @@ void move_team(TeamState_t *team) //simulation
 
         if(severity >= 4 && (g_current_tick % 3u) != 0u)
             return;
+    }
+
+    if(team->heading_to_rest)
+    {
+        SafeZone_t *safezone = &g_safezones[team->resting_zone_id];
+
+        int next_x, next_y;
+        int pre_step_cost = find_next_path_step(team->loc_x, team->loc_y, safezone->loc_x, safezone->loc_y, 0, &next_x, &next_y);
+
+        if(pre_step_cost <= 0)
+        {
+            /* The route this team was given (at begin_return_to_safe_zone()
+             * time) has since become unreachable - almost always a hazard
+             * (aftershock collapse, road damage) cutting the path after the
+             * fact, not at selection time (find_nearest_safe_zone() already
+             * checks reachability then). Without this, the team simply
+             * freezes here forever: stamina pinned at whatever it was,
+             * heading_to_rest never clears, EVENT_TEAM_REST fires every
+             * remaining tick of the run. This is not new to heading_to_rest
+             * - the old task-based RETURN_TO_SAFE_ZONE had the identical
+             * gap (move_team()'s old task-based branch below has the same
+             * "if no path, do nothing" shape) - it's just easier to hit
+             * once a route can be lost mid-trip under active fault
+             * injection, which is when this was actually caught. */
+            uint8_t alternate = find_nearest_safe_zone(team);
+
+            if(alternate != NO_SAFE_ZONE)
+            {
+                team->resting_zone_id = alternate;
+            }
+            else
+            {
+                /* True dead end - nowhere reachable at all. Same last-resort
+                 * reasoning team.c's STATUS_AVAILABLE case already uses when
+                 * begin_return_to_safe_zone() itself returns NO_ASSIGNMENT:
+                 * let the team recover in place rather than sit frozen and
+                 * unable to ever reach STATUS_RESTING. */
+                complete_return_to_rest(team);
+            }
+
+            return;
+        }
+
+        team->loc_x = next_x;
+        team->loc_y = next_y;
+        if(g_simulation_trace_enabled) debug_trace(" -> (%d,%d)", team->loc_x, team->loc_y);
+        uint16_t step_cost = environment_cell_travel_cost(next_x, next_y);
+        if(step_cost >= (uint16_t)pre_step_cost)
+            team->cached_remaining_path_cost = 0;
+        else
+            team->cached_remaining_path_cost = (uint16_t)((uint16_t)pre_step_cost - step_cost);
+
+        team->cached_remaining_path_cost_tick = g_current_tick;
+
+        if(g_simulation_trace_enabled) debug_trace(" | Destination: (%d,%d)\n", safezone->loc_x, safezone->loc_y);
+
+        if(team->loc_x == safezone->loc_x && team->loc_y == safezone->loc_y)
+        {
+            complete_return_to_rest(team);
+        }
+
+        return;
     }
 
     IncidentState_t *task = NULL;
@@ -189,16 +282,52 @@ void move_team(TeamState_t *team) //simulation
 
         team->cached_remaining_path_cost_tick = g_current_tick;
     }
+    else
+    {
+        /* Same gap the heading_to_rest branch above had, and for the
+         * same reason: the route this team was given at assignment time
+         * (allocate_all_incidents()/create_equipment_cache_incident()/
+         * search_sweep_step()'s UNSEARCHED_SECTOR dispatch/etc.) has
+         * since become unreachable - a hazard cutting the path after
+         * the fact. Without this, the team freezes here forever: never
+         * arrives, task never completes or gets released, status stuck
+         * at EN_ROUTE indefinitely with nothing active to explain it in
+         * telemetry.
+         *
+         * Unlike the heading_to_rest case there's no alternate route to
+         * try - this destination is a specific incident/system task, not
+         * "any safe zone" - so there's nothing to re-target the way
+         * find_nearest_safe_zone() re-targets a safe zone. The
+         * equivalent move is to give up on this task exactly like every
+         * other "task became unreachable/lost mid-EN_ROUTE" path in this
+         * codebase already does (team.c's STATUS_EN_ROUTE stamina-
+         * exhaustion case is the same shape): release it back to
+         * INC_OPEN via abandon_task_for_recovery(), which itself tries
+         * begin_return_to_safe_zone() and only falls back to
+         * team_set_available() - tracked via g_diag_safezone_fallback_
+         * count, not silently - if no safe zone is reachable either.
+         * That fallback chain is what already backs every task-loss path
+         * here, so this doesn't touch fault_state timing (start_tick/
+         * duration_ticks/immunity windows live entirely in
+         * fault_injector.c, untouched by abandon_task_for_recovery()) and
+         * is the same EN_ROUTE->pool-change transition the watchdog's
+         * assignment_evidence() is already built to score rather than
+         * something novel for confirmed_mobility_impairment to trip on. */
+        { extern unsigned long g_probe_no_path_hits; g_probe_no_path_hits++; }
+        /* Track consecutive no-path abandons so abandon_task_for_recovery()
+         * can quarantine a structurally-unreachable incident instead of
+         * re-opening it for another doomed bid/abandon cycle. */
+        if(task->unreachable_streak < 255)
+            task->unreachable_streak++;
+        abandon_task_for_recovery(team);
+        return;
+    }
 
     if(g_simulation_trace_enabled) debug_trace(" | Destination: (%d,%d)\n", task->loc_x, task->loc_y);
 
     if(team->loc_x == task->loc_x && team->loc_y == task->loc_y)
     {
-        if(task->incident_type == INCIDENT_RETURN_TO_SAFE_ZONE)
-        {
-            complete_return_to_safe_zone_task(team, task);
-            return;
-        }
+        task->unreachable_streak = 0;   /* reached it - not unreachable */
 
         if(team->status != STATUS_ON_SCENE)
         {
