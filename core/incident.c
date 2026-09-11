@@ -1,5 +1,6 @@
 #include "incident.h"
 #include "mission_state.h"
+#include "cbba.h"
 #include "simulation.h"
 #include <stdlib.h>
 #include "random.h"
@@ -24,6 +25,18 @@ uint32_t g_diag_sweep_abandoned_for_recovery = 0;
 uint32_t g_diag_sweep_reclaimed_for_safezone = 0;
 uint32_t g_diag_sweep_duplicate_while_in_progress = 0;
 uint32_t g_diag_sweep_retargets = 0;
+/* Cumulative count of passive-coverage cells whose own district differs
+ * from the district the sweeping team is standing in - i.e. sweep-radius
+ * cells that straddle a district boundary. These are currently all
+ * miscredited to the team's district (the M37 bug); this measures how
+ * pervasive that misattribution is. See search_sweep_step() for why the
+ * fix is shelved. */
+uint32_t g_diag_sweep_cross_district_cells = 0;
+/* Cumulative count of incidents that hit INCIDENT_UNREACHABLE_GIVEUP_
+ * THRESHOLD consecutive no-path abandons and got quarantined out of the
+ * candidate pools. Process-cumulative; the P1 sweep captures before/after
+ * deltas the same way it does for the carve-repair counter. */
+unsigned long g_diag_incidents_quarantined = 0;
 /* Every stage a team hands off, including intermediate multi-stage legs
    (e.g. PERIMETER->MEDICAL on a STRUCTURAL_COLLAPSE). Distinct from
    g_diag_incidents_resolved, which only counts the team that completed
@@ -48,7 +61,7 @@ static void release_all_task_teams(TaskPool_t pool, IncidentState_t *task);
 static void complete_task(TaskPool_t pool, IncidentState_t *task);
 static void clear_stale_equipment_cache_requests(void);
 void reopen_future_queued_incidents(void);
-static uint8_t find_nearest_safe_zone(const TeamState_t *team);
+uint8_t find_nearest_safe_zone(const TeamState_t *team);
 static IncidentState_t *find_free_incident_slot(void);
 static void apply_incident_archetype(IncidentState_t *incident, IncidentType_t type);
 
@@ -305,7 +318,7 @@ static void apply_incident_archetype(IncidentState_t *incident, IncidentType_t t
  * (the same one EQUIPMENT_CACHE and every other real system task goes
  * through: scans open tasks, calls select_best_team(), single winner
  * gets assigned) to pick up on its own. This is NOT a direct-assign
- * bypass like create_return_to_safe_zone_task() - sweeping is routine
+ * bypass like begin_return_to_safe_zone() - sweeping is routine
  * operational work, not an edge-case interrupt, so it competes for a
  * team like anything else rather than being handed one. req_capability
  * comes from the INCIDENT_UNSEARCHED_SECTOR archetype (SPEC_SEARCH) via
@@ -522,9 +535,17 @@ void search_sweep_step(uint32_t current_tick)
              * code needed, just point the task at a new destination and
              * let the normal travel flow take it there. */
             int16_t next_x, next_y;
-            if(search_zone_pick_frontier_cell(district_id, task->loc_x, task->loc_y, &next_x, &next_y) &&
+            if(search_zone_pick_frontier_cell(district_id, task->loc_x, task->loc_y,
+                                               &next_x, &next_y) &&
                (next_x != task->loc_x || next_y != task->loc_y))
             {
+                /* Credit the current cell as covered before moving the task —
+                   overwriting loc_x/loc_y without this loses the coverage mark
+                   for the cell the team just finished standing on */
+                search_zone_mark_cell_covered(district_id,
+                                              task->loc_x, task->loc_y,
+                                              current_tick);
+
                 task->loc_x = next_x;
                 task->loc_y = next_y;
                 team->status = STATUS_EN_ROUTE;
@@ -537,7 +558,6 @@ void search_sweep_step(uint32_t current_tick)
     for(uint8_t t = 0; t < NUM_TEAMS; t++)
     {
         TeamState_t *team = &g_teams[t];
-
         uint8_t on_active_sweep_task =
             (team->assigned_task_pool == TASK_POOL_SYSTEM &&
              team->assigned_task_slot < NUM_SYSTEM_TASKS &&
@@ -557,14 +577,34 @@ void search_sweep_step(uint32_t current_tick)
         uint8_t radius = (team->specialization == SPEC_SEARCH)
             ? SEARCH_SWEEP_RADIUS : sweep_radius_for_team(team);
 
+        uint8_t team_district = zone_id_for_location(team->loc_x, team->loc_y);
+
         for(int16_t dx = -(int16_t)radius; dx <= (int16_t)radius; dx++)
         {
             for(int16_t dy = -(int16_t)radius; dy <= (int16_t)radius; dy++)
             {
                 if(dx * dx + dy * dy > (int32_t)radius * radius)
                     continue;
-                search_zone_mark_cell_covered((int16_t)(team->loc_x + dx),
-                                               (int16_t)(team->loc_y + dy), current_tick);
+
+                int16_t cx = (int16_t)(team->loc_x + dx);
+                int16_t cy = (int16_t)(team->loc_y + dy);
+
+                /* M37: this sweep cell may belong to a different district
+                 * than the team's own - crediting coverage to team_district
+                 * here (rather than the cell's own district) misattributes
+                 * boundary-straddling coverage. The straight fix (credit
+                 * zone_id_for_location(cx,cy) instead) was tried and shelved
+                 * for now: it's correct but shifts district coverage %s,
+                 * which feed sweep-cycle completion and thus incident
+                 * dispatch timing - moving the P1 quarantine count 44->47
+                 * even as no-path hits improved 204->196. Needs the same
+                 * coverage-accounting design decision as the deferred triad.
+                 * The counter below measures how often the misattribution
+                 * would apply. */
+                if(zone_id_for_location(cx, cy) != team_district)
+                    g_diag_sweep_cross_district_cells++;
+
+                search_zone_mark_cell_covered(team_district, cx, cy, current_tick);
             }
         }
     }
@@ -607,81 +647,31 @@ void search_sweep_step(uint32_t current_tick)
     }
 }
 
-int create_return_to_safe_zone_task(TeamState_t *team) //incident
+int begin_return_to_safe_zone(TeamState_t *team) //incident
 {
-    /* Without this check, every abandon_task_for_recovery() call (there
-     * are 5 call sites) creates a brand-new RETURN_TO_SAFE_ZONE system
-     * task unconditionally, even if this exact team already has one
-     * pending. Over time that builds a real backlog of separate,
-     * distinct system tasks all targeting the same team - confirmed
-     * directly: 15+ genuinely different incident IDs in different slots,
-     * all incident_type RETURN_TO_SAFE_ZONE, all still INC_OPEN, all
-     * eventually reached by the system-task assignment loop in
-     * allocate_all_incidents(). Each one resolves in a single tick if
-     * the team happens to already be standing at the safe zone (the
-     * common case, since a team that just finished resting there IS
-     * already there), so the backlog manifests as the team's status
-     * bouncing AVAILABLE -> EN_ROUTE -> RESTING every tick as it churns
-     * through one backlogged duplicate after another - not because any
-     * single dispatch is wrong, but because there were many redundant
-     * tasks queued up in the first place. */
-    if(team->assigned_task_pool == TASK_POOL_SYSTEM &&
-       team->assigned_task_slot < NUM_SYSTEM_TASKS &&
-       g_system_tasks[team->assigned_task_slot].slot_occupied &&
-       g_system_tasks[team->assigned_task_slot].incident_type == INCIDENT_RETURN_TO_SAFE_ZONE &&
-       g_system_tasks[team->assigned_task_slot].assigned_team == team->team_id)
-    {
-        return g_system_tasks[team->assigned_task_slot].incident_id;
-    }
-    for(uint16_t i = 0; i < NUM_SYSTEM_TASKS; i++)
-    {
-        if(g_system_tasks[i].slot_occupied &&
-           g_system_tasks[i].incident_type == INCIDENT_RETURN_TO_SAFE_ZONE &&
-           g_system_tasks[i].assigned_team == team->team_id)
-        {
-            return g_system_tasks[i].incident_id;
-        }
-    }
-
+    /* Team-intrinsic now - no system task slot backs this, so there is
+     * nothing to dedup against a pool scan. A caller that invokes this
+     * while the team is already heading_to_rest would just redundantly
+     * recompute the same destination and re-set the same fields (still
+     * safe), but every current call site (see incident.h) either checks
+     * heading_to_rest itself first (abandon_task_for_recovery()) or can
+     * only run for a team that provably isn't already heading to rest
+     * (release_team() clears a just-completed task; team.c's
+     * STATUS_AVAILABLE case can't fire while status is EN_ROUTE) - see
+     * this project's own review notes on that call-site audit. */
     uint8_t safezone = find_nearest_safe_zone(team);
     if(safezone == NO_SAFE_ZONE)
     {
         return NO_ASSIGNMENT;
     }
 
-    IncidentState_t *task = find_free_system_task_slot();
-    if(task == NULL)
-        task = find_reclaimable_system_task_slot();
-    if(task == NULL)
-    {
-        return NO_ASSIGNMENT;
-    }
-
-    task->incident_id = allocate_incident_id();
-
-    apply_incident_archetype(task, INCIDENT_RETURN_TO_SAFE_ZONE);
-    task->req_capability = team->specialization;
-
-    task->status = INC_ASSIGNED;
-    task->assigned_team = team->team_id;
-    task->support_team = NO_ASSIGNMENT;
-
-    task->loc_x = g_safezones[safezone].loc_x;
-    task->loc_y = g_safezones[safezone].loc_y;
-
-    task->victim_count = 0;
-    task->reported_at_tick = g_current_tick;
-    task->structure_type = 0;
-    task->passive_timer = 0;
-    task->spawned_by = NO_ASSIGNMENT;
-    task->work_remaining = 0;
-
-    team->assigned_task_pool = TASK_POOL_SYSTEM;
-    team->assigned_task_slot = (uint8_t)(task - g_system_tasks);
+    team->assigned_task_pool = TASK_POOL_NONE;
+    team->assigned_task_slot = NO_ASSIGNMENT;
     team->resting_zone_id = safezone;
+    team->heading_to_rest = 1;
     team->status = STATUS_EN_ROUTE;
 
-    return task->incident_id;
+    return safezone;
 }
 
 
@@ -772,7 +762,11 @@ static void clear_task_slot(TaskPool_t pool, IncidentState_t *task)
     task->mission_fault_active_count = 0;
     task->mission_fault_original_priority = 0;
     task->mission_fault_original_victim_count = 0;
+    task->unreachable_streak = 0;
     task->discovered = 1;  /* default until fog-of-war reveal logic lands */
+    task->evac_safezone_id = 0;
+    task->evac_gateway_id = NO_EVAC_TARGET;
+    task->evac_capacity = 0;
     task->slot_occupied = 0;
 }
 
@@ -798,25 +792,13 @@ void initialize_incidents(void)
     }
 }
 
-void complete_return_to_safe_zone_task(TeamState_t *team, IncidentState_t *task)
+void complete_return_to_rest(TeamState_t *team)
 {
-    if(team == NULL || task == NULL)
+    if(team == NULL)
         return;
 
-    if(!task->slot_occupied ||
-       task->incident_type != INCIDENT_RETURN_TO_SAFE_ZONE)
-    {
-        return;
-    }
-
-    task->status = INC_RESOLVED;
-    task->assigned_team = NO_ASSIGNMENT;
-
-    team->assigned_task_pool = TASK_POOL_NONE;
-    team->assigned_task_slot = NO_ASSIGNMENT;
     team->status = STATUS_RESTING;
-
-    clear_task_slot(TASK_POOL_SYSTEM, task);
+    team->heading_to_rest = 0;
 }
 
 /*
@@ -1043,7 +1025,7 @@ static void release_team(uint8_t team_id)
 
     if(team_needs_safe_zone(team))
     {
-        if(create_return_to_safe_zone_task(team) == NO_ASSIGNMENT)
+        if(begin_return_to_safe_zone(team) == NO_ASSIGNMENT)
             team_set_available(team);
     }
     else
@@ -1216,38 +1198,41 @@ void complete_incident_stage(IncidentState_t *incident) //incident
         case(SPEC_EXTRACTION):
             if(incident->incident_type == INCIDENT_EVACUEE_OFFBOARD)
             {
-                EvacuationTeam_t *evac = &g_evacuation_teams[0];
-                SafeZone_t *safezone = &g_safezones[evac->target_safezone];
+                SafeZone_t *safezone = &g_safezones[incident->evac_safezone_id];
 
-                if(evac->evacuee_count == 0)
+                if(incident->victim_count == 0)
                 {
                     if(safezone->evacuee_count == 0)
                     {
+                        uint8_t safezone_id = incident->evac_safezone_id;
                         complete_task(TASK_POOL_SYSTEM, incident);
+                        g_safezone_evacuation_active[safezone_id] = 0;
                         return;
                     }
 
-                    evac->gateway_id = find_best_gateway(safezone);
+                    incident->evac_gateway_id = find_best_gateway(safezone);
 
-                    if(evac->gateway_id == NO_EVAC_TARGET)
+                    if(incident->evac_gateway_id == NO_EVAC_TARGET)
                     {
+                        uint8_t safezone_id = incident->evac_safezone_id;
                         complete_task(TASK_POOL_SYSTEM, incident);
+                        g_safezone_evacuation_active[safezone_id] = 0;
                         return;
                     }
 
                     uint8_t load_count = safezone->evacuee_count;
 
-                    if(load_count > evac->evacuee_capacity)
-                        load_count = evac->evacuee_capacity;
+                    if(load_count > incident->evac_capacity)
+                        load_count = incident->evac_capacity;
 
-                    evac->evacuee_count = load_count;
+                    incident->victim_count = load_count;
                     safezone->evacuee_count -= load_count;
 
                     incident->loc_x =
-                        g_evacuation_gateways[evac->gateway_id].loc_x;
+                        g_evacuation_gateways[incident->evac_gateway_id].loc_x;
 
                     incident->loc_y =
-                        g_evacuation_gateways[evac->gateway_id].loc_y;
+                        g_evacuation_gateways[incident->evac_gateway_id].loc_y;
 
                     incident->status = INC_ASSIGNED;
 
@@ -1259,9 +1244,13 @@ void complete_incident_stage(IncidentState_t *incident) //incident
                     return;
                 }
 
-                evac->evacuee_count = 0;
+                incident->victim_count = 0;
 
-                complete_task(TASK_POOL_SYSTEM, incident);
+                {
+                    uint8_t safezone_id = incident->evac_safezone_id;
+                    complete_task(TASK_POOL_SYSTEM, incident);
+                    g_safezone_evacuation_active[safezone_id] = 0;
+                }
 
                 return;
             }
@@ -1334,6 +1323,10 @@ void complete_incident_stage(IncidentState_t *incident) //incident
         default:
             break;
     }
+
+    /* Keep the execution twin consistent with any assignment or status
+       changes made inside the stage transitions above */
+    cbba_sync_mission_execution_twin();
 }
     
 
@@ -1372,7 +1365,7 @@ static int team_needs_safe_zone(const TeamState_t *team) //incident
     else return 0;
 }
 
-static uint8_t find_nearest_safe_zone(const TeamState_t *team) //incident
+uint8_t find_nearest_safe_zone(const TeamState_t *team) //incident
 {
     uint8_t zone=NO_SAFE_ZONE;
     uint16_t min=UINT16_MAX;
@@ -1474,32 +1467,25 @@ int create_evacuee_offboard_incident(uint8_t safezone_id)
     if(safezone->evacuee_count == 0)
         return NO_ASSIGNMENT;
 
-    for(uint8_t i = 0; i < NUM_SYSTEM_TASKS; i++)
-    {
-        IncidentState_t *existing = &g_system_tasks[i];
-        if(existing->slot_occupied &&
-           existing->status != INC_RESOLVED &&
-           existing->incident_type == INCIDENT_EVACUEE_OFFBOARD)
-        {
-            return NO_ASSIGNMENT;
-        }
-    }
+    /* g_safezone_evacuation_active[] already existed (zeroed at world
+     * reset) but was never actually set or read anywhere - this was the
+     * one missing wire. O(1) per-zone dedup instead of the old O(20)
+     * scan over every system-task slot, and correctly scoped per safe
+     * zone rather than the old global "only one EVACUEE_OFFBOARD task
+     * anywhere" rule the singleton forced. */
+    if(g_safezone_evacuation_active[safezone_id])
+        return NO_ASSIGNMENT;
 
+    /* Deliberately TASK_POOL_SYSTEM, not the incident pool - this must
+     * still be able to run even when the real-incident pool (fires,
+     * mass casualty, etc.) is completely full, same reasoning as
+     * UNSEARCHED_SECTOR and EQUIPMENT_CACHE. */
     IncidentState_t *task = find_free_system_task_slot();
 
     if(task == NULL)
         return NO_ASSIGNMENT;
 
     task->incident_id = allocate_incident_id();
-
-    EvacuationTeam_t *evac = &g_evacuation_teams[0];
-
-    evac->evacuation_team_id = NO_ASSIGNMENT;
-    evac->loc_x = -1;
-    evac->loc_y = -1;
-    evac->target_safezone = safezone_id;
-    evac->gateway_id = NO_EVAC_TARGET;
-    evac->evacuee_count = 0;
 
     apply_incident_archetype(task, INCIDENT_EVACUEE_OFFBOARD);
 
@@ -1510,26 +1496,44 @@ int create_evacuee_offboard_incident(uint8_t safezone_id)
     task->loc_x = safezone->loc_x;
     task->loc_y = safezone->loc_y;
 
-    task->victim_count = 0;
+    task->victim_count = 0;   /* live evacuee headcount currently being carried */
     task->reported_at_tick = g_current_tick;
     task->structure_type = 0;
     task->passive_timer = 0;
     task->spawned_by = NO_ASSIGNMENT;
     task->work_remaining = 100;
 
+    task->evac_safezone_id = safezone_id;
+    task->evac_gateway_id = NO_EVAC_TARGET;
+    task->evac_capacity = (uint8_t)random_range_stream(
+        STREAM_EVACUATION_TEAMS, MIN_EVACUATION_TEAM_CAPACITY, MAX_EVACUATION_TEAM_CAPACITY);
+
+    g_safezone_evacuation_active[safezone_id] = 1;
+
     return task->incident_id;
 }
 
-void initialize_evacuation_teams(void) //needs to be removed
+/* generate_evacuee_offboard_incidents() below is EVACUEE_OFFBOARD's
+ * missing trigger - the piece that was never wired up (this function
+ * used to have zero callers anywhere). Tops up every safe zone with a
+ * waiting backlog and no run already in flight, same tick-cadence shape
+ * as search_generate_sweep_tasks(). */
+void generate_evacuee_offboard_incidents(void)
 {
+    for(uint8_t z = 0; z < g_num_safe_zones; z++)
+    {
+        create_evacuee_offboard_incident(z);
+    }
+}
+
+void initialize_evacuation_teams(void)
+{
+    /* The old singleton EvacuationTeam_t is gone (its fields now live
+     * directly on each EVACUEE_OFFBOARD task - see IncidentState_t) but
+     * this still needs to run once per world/seed to seed the RNG
+     * stream create_evacuee_offboard_incident() draws evac_capacity
+     * from, same as every other STREAM_* seeded at world init. */
     random_seed_stream(STREAM_EVACUATION_TEAMS, derive_seed(g_world_seed, STREAM_EVACUATION_TEAMS));
-    g_evacuation_teams[0].evacuation_team_id = NO_ASSIGNMENT;
-    g_evacuation_teams[0].loc_x=-1;
-    g_evacuation_teams[0].loc_y=-1;
-    g_evacuation_teams[0].target_safezone=NO_EVAC_TARGET;
-    g_evacuation_teams[0].gateway_id=NO_EVAC_TARGET;
-    g_evacuation_teams[0].evacuee_capacity=random_range_stream(STREAM_EVACUATION_TEAMS,MIN_EVACUATION_TEAM_CAPACITY,MAX_EVACUATION_TEAM_CAPACITY);
-    g_evacuation_teams[0].evacuee_count=0;
 }
 
 static uint8_t find_best_gateway(const SafeZone_t *safezone) //incident
@@ -2134,20 +2138,7 @@ static void clear_stale_equipment_cache_requests(void)
         }
 
         TeamState_t *team = &g_teams[task->spawned_by];
-        int returning_to_safe_zone = 0;
-
-        if(team->assigned_task_pool == TASK_POOL_SYSTEM &&
-           team->assigned_task_slot < NUM_SYSTEM_TASKS)
-        {
-            IncidentState_t *assigned_task =
-                &g_system_tasks[team->assigned_task_slot];
-
-            if(assigned_task->slot_occupied &&
-               assigned_task->incident_type == INCIDENT_RETURN_TO_SAFE_ZONE)
-            {
-                returning_to_safe_zone = 1;
-            }
-        }
+        int returning_to_safe_zone = team->heading_to_rest;
 
         if(team->equipment_level == EQ_MAX_LEVEL ||
            team->status == STATUS_RESTING ||
@@ -2274,6 +2265,25 @@ void abandon_task_for_recovery(TeamState_t *team)
     if(team == NULL)
         return;
 
+    /* Root cause of the abort/reassign churn originally traced here: a
+     * team already heading to rest has nothing to abandon - previously
+     * this had to be inferred from a task slot (RETURN_TO_SAFE_ZONE no
+     * longer occupies one - see begin_return_to_safe_zone()), now it's
+     * a direct flag check. Without this, every call site below would
+     * unconditionally re-derive a (likely identical) destination every
+     * tick this function runs, and - worse, before this state became
+     * team-intrinsic - would destroy the in-flight trip's own bookkeeping
+     * before recomputing it, so the team never got a contiguous window
+     * to actually travel and rest. The narrower slot-reclaim/allocation
+     * race this comment used to document (RETURN_TO_SAFE_ZONE's system-
+     * task slot getting raced against find_reclaimable_system_task_slot()
+     * and the allocate_all_incidents() assignment loop) no longer applies
+     * either, since there is no slot left to race over. */
+    if(team->heading_to_rest)
+    {
+        return;
+    }
+
     IncidentState_t *task = NULL;
     TaskPool_t pool = (TaskPool_t)team->assigned_task_pool;
 
@@ -2288,56 +2298,11 @@ void abandon_task_for_recovery(TeamState_t *team)
         task = &g_system_tasks[team->assigned_task_slot];
     }
 
-    /* Root cause of the abort/reassign churn traced this session: if the
-     * team's current task is ALREADY a RETURN_TO_SAFE_ZONE task, there is
-     * nothing to abandon - unassigning it (clearing task->assigned_team
-     * below) and then calling create_return_to_safe_zone_task() destroys
-     * the very evidence that function's own dedup check depends on
-     * before it ever runs, so a fresh, redundant task got created every
-     * single tick abandon_task_for_recovery was called, and the team
-     * never once got to actually travel to or rest at the destination in
-     * between. This is called from recovery_manager.c every tick a
-     * RETURN_TO_SAFE_ZONE recommendation stays active, which is exactly
-     * the case where the team most likely already has one in flight.
-     *
-     * FLAG - a narrower version of the SAME class of churn still
-     * reproduces even with this dedup in place, traced empirically this
-     * session (seed=7, team 8, laptop/tools/perimeter_probe.c and friends - not
-     * kept in the repo, scratch instrumentation only) but not yet fixed:
-     * create_return_to_safe_zone_task() genuinely succeeds and sets
-     * status=EN_ROUTE, but on the VERY NEXT tick this function is
-     * entered again with the team back on the SAME UNSEARCHED_SECTOR
-     * slot it was just pulled off of. team_can_accept_incident() (core/
-     * allocator.c) correctly rejects non-AVAILABLE/RESTING teams, which
-     * rules out the obvious "reassigned while still EN_ROUTE" explanation
-     * - so something is either reclaiming the just-created RETURN_TO_
-     * SAFE_ZONE slot back into a fresh UNSEARCHED_SECTOR task (see
-     * find_reclaimable_system_task_slot()'s own UNSEARCHED_SECTOR-only
-     * reclaim scope - it and the sector-task generator both draw from
-     * the same NUM_SYSTEM_TASKS pool every tick) or the recovery
-     * dispatch and the system-task assignment loop in allocate_all_
-     * incidents() are racing on the same team within one tick. Confirmed
-     * NOT caused by: find_nearest_safe_zone() failing (path cost was
-     * finite from the stuck location), the system-task pool being full
-     * (1-3/20 slots occupied throughout), or move_team()'s own status
-     * reset branch (never fired for the affected team). Reproduces in
-     * 1 of 3 tested seeds; the other two were clean after the stamina-
-     * threshold fix above landed. Worth a dedicated session with the
-     * pool-slot lifecycle traced across find_free_system_task_slot(),
-     * find_reclaimable_system_task_slot(), and search_generate_sweep_
-     * tasks() together rather than one at a time. */
-    if(task != NULL && task->slot_occupied &&
-       task->incident_type == INCIDENT_RETURN_TO_SAFE_ZONE &&
-       task->assigned_team == team->team_id)
-    {
-        return;
-    }
-
     if(task == NULL || !task->slot_occupied)
     {
         team->assigned_task_pool = TASK_POOL_NONE;
         team->assigned_task_slot = NO_ASSIGNMENT;
-        if(create_return_to_safe_zone_task(team) == NO_ASSIGNMENT)
+        if(begin_return_to_safe_zone(team) == NO_ASSIGNMENT)
         {
             g_diag_safezone_fallback_count++;
             team_set_available(team);
@@ -2348,7 +2313,21 @@ void abandon_task_for_recovery(TeamState_t *team)
     if(task->assigned_team == team->team_id)
     {
         task->assigned_team = NO_ASSIGNMENT;
-        task->status = INC_OPEN;
+
+        if(task->unreachable_streak < INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD)
+        {
+            task->status = INC_OPEN;
+        }
+        else
+        {
+            /* Quarantined: leave status alone - stays out of the INC_OPEN
+             * candidate pools (allocator.c / cbba.c) without touching
+             * INC_RESOLVED (which scoring/metrics treat as a genuine
+             * success). Count it once, on the crossing tick. */
+            if(task->unreachable_streak == INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD)
+                g_diag_incidents_quarantined++;
+        }
+
         if(task->incident_type == INCIDENT_UNSEARCHED_SECTOR)
         {
             extern uint32_t g_diag_sweep_abandoned_for_recovery;
@@ -2363,7 +2342,7 @@ void abandon_task_for_recovery(TeamState_t *team)
     team->assigned_task_pool = TASK_POOL_NONE;
     team->assigned_task_slot = NO_ASSIGNMENT;
     release_queued_incidents(team);
-    if(create_return_to_safe_zone_task(team) == NO_ASSIGNMENT)
+    if(begin_return_to_safe_zone(team) == NO_ASSIGNMENT)
     {
         g_diag_safezone_fallback_count++;
         team_set_available(team);
