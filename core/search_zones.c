@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <string.h>
 #include "search_zones.h"
 
 SearchZoneState_t g_search_zones[NUM_SEARCH_ZONES];
@@ -24,6 +25,60 @@ void search_zones_init(void)
     for(int x = 0; x < GRID_WIDTH; x++)
         for(int y = 0; y < GRID_HEIGHT; y++)
             g_cell_last_covered_tick[x][y] = 0;
+}
+
+/* GridPoint_t is private to environment.c and not shared via a header -
+ * this mirrors it locally rather than adding a cross-module type
+ * dependency for one BFS queue. */
+typedef struct { int16_t x, y; } SearchZonePoint_t;
+
+/* Navigable-cell reachability flood, anchored at (from_x, from_y) - NOT
+ * environment.c's road_reachable_map(), which floods road cells only.
+ * The actual pathfinder (path.c's find_next_path_step_with_equipment())
+ * routes over any navigable cell, road or not, so a road-only reachability
+ * check systematically mismatches what a search team can actually reach -
+ * this is why the frontier-picker fix was deferred until a navigable-cell
+ * version existed (see TRON_FIX_PLAN.md). Rebuilt fresh on every call:
+ * search_zone_pick_frontier_cell() and search_zone_coverage_percent() are
+ * together called well under 2 times per tick across every team combined
+ * (measured directly), so a fresh full-grid BFS per call is cheap, not a
+ * hot path - no caching/invalidation machinery needed. */
+static void navigable_reachable_map(int16_t from_x, int16_t from_y,
+                                     uint8_t reach[GRID_WIDTH][GRID_HEIGHT])
+{
+    SearchZonePoint_t queue[GRID_WIDTH * GRID_HEIGHT];
+    int head = 0;
+    int tail = 0;
+
+    memset(reach, 0, sizeof(uint8_t) * GRID_WIDTH * GRID_HEIGHT);
+
+    if(from_x < 0 || from_y < 0 || from_x >= GRID_WIDTH || from_y >= GRID_HEIGHT)
+        return;
+    if(!g_environment[from_x][from_y].navigable)
+        return;   /* anchor itself unreachable-from - caller decides the fallback */
+
+    reach[from_x][from_y] = 1;
+    queue[tail++] = (SearchZonePoint_t){from_x, from_y};
+
+    while(head < tail)
+    {
+        SearchZonePoint_t current = queue[head++];
+        static const int dx[4] = {1, -1, 0, 0};
+        static const int dy[4] = {0, 0, 1, -1};
+
+        for(int dir = 0; dir < 4; dir++)
+        {
+            int nx = current.x + dx[dir];
+            int ny = current.y + dy[dir];
+            if(nx < 0 || ny < 0 || nx >= GRID_WIDTH || ny >= GRID_HEIGHT)
+                continue;
+            if(!g_environment[nx][ny].navigable || reach[nx][ny])
+                continue;
+
+            reach[nx][ny] = 1;
+            queue[tail++] = (SearchZonePoint_t){(int16_t)nx, (int16_t)ny};
+        }
+    }
 }
 
 uint8_t zone_id_for_location(int16_t x, int16_t y)
@@ -61,12 +116,11 @@ uint8_t search_zone_trust(uint8_t district_id, uint32_t current_tick)
     return (uint8_t)trust;
 }
 
-void search_zone_mark_cell_covered(int16_t x, int16_t y, uint32_t current_tick)
+void search_zone_mark_cell_covered(uint8_t district_id ,int16_t x, int16_t y, uint32_t current_tick)
 {
     if(x < 0 || y < 0 || x >= GRID_WIDTH || y >= GRID_HEIGHT)
         return;
 
-    uint8_t district_id = g_environment[x][y].district_id;
     if(district_id >= NUM_SEARCH_ZONES)
         return;
 
@@ -86,23 +140,59 @@ uint8_t search_zone_coverage_percent(uint8_t district_id)
     if(district_id >= NUM_SEARCH_ZONES)
         return 0;
 
+    /* Anchor the reachability flood at the district's own center - falling
+     * back to the first navigable cell belonging to this district if the
+     * center itself isn't navigable (e.g. a building ended up on it during
+     * world-gen; districts are assigned before buildings are placed). Same
+     * "degrade gracefully rather than refuse to build a map" fallback
+     * shape as environment.c's road_reachable_map() anchor fix. */
+    int16_t anchor_x = 0, anchor_y = 0;
+    environment_get_district_center(district_id, &anchor_x, &anchor_y);
+
+    if(anchor_x < 0 || anchor_y < 0 || anchor_x >= GRID_WIDTH || anchor_y >= GRID_HEIGHT ||
+       !g_environment[anchor_x][anchor_y].navigable)
+    {
+        uint8_t located = 0;
+        for(int x = 0; x < GRID_WIDTH && !located; x++)
+        {
+            for(int y = 0; y < GRID_HEIGHT && !located; y++)
+            {
+                if(g_environment[x][y].district_id == district_id && g_environment[x][y].navigable)
+                {
+                    anchor_x = (int16_t)x;
+                    anchor_y = (int16_t)y;
+                    located = 1;
+                }
+            }
+        }
+    }
+
+    uint8_t reach[GRID_WIDTH][GRID_HEIGHT];
+    navigable_reachable_map(anchor_x, anchor_y, reach);
+
+    /* Denominator excludes cells unreachable from that same flood - a
+     * navigable-but-boxed-in pocket (surrounded by rubble/water with no
+     * path in) was previously counted against the district forever,
+     * capping its coverage % below 100 no matter how thoroughly the
+     * REACHABLE part gets swept, and corrupting that number for anything
+     * downstream that trains on it. */
     uint32_t navigable_total = 0;
     for(int x = 0; x < GRID_WIDTH; x++)
     {
         for(int y = 0; y < GRID_HEIGHT; y++)
         {
             EnvironmentCell_t *cell = &g_environment[x][y];
-            if(cell->district_id == district_id && cell->navigable)
+            if(cell->district_id == district_id && cell->navigable && reach[x][y])
                 navigable_total++;
         }
     }
 
     if(navigable_total == 0)
-        return 100;  /* nothing to cover - trivially complete, avoids div-by-zero */
+        return 100;  /* nothing reachable to cover - trivially complete, avoids div-by-zero */
 
     uint32_t covered = g_search_zones[district_id].covered_cells;
     if(covered > navigable_total)
-        covered = navigable_total;  /* covered_cells can include now-non-navigable cells */
+        covered = navigable_total;  /* covered_cells can include now-non-navigable/now-unreachable cells */
 
     return (uint8_t)((covered * 100u) / navigable_total);
 }
@@ -183,6 +273,9 @@ uint8_t search_zone_pick_frontier_cell(uint8_t district_id, int16_t from_x, int1
 
     uint32_t cycle_start = g_search_zones[district_id].cycle_started_tick;
 
+    uint8_t reach[GRID_WIDTH][GRID_HEIGHT];
+    navigable_reachable_map(from_x, from_y, reach);
+
     uint8_t found = 0;
     int32_t best_dist_sq = 0;
     int16_t best_x = 0, best_y = 0;
@@ -196,6 +289,10 @@ uint8_t search_zone_pick_frontier_cell(uint8_t district_id, int16_t from_x, int1
                 continue;
             if(g_cell_last_covered_tick[x][y] >= cycle_start)
                 continue;  /* already covered this cycle */
+            if(!reach[x][y])
+                continue;  /* navigable but not actually reachable from
+                              (from_x, from_y) - don't send a team at a cell
+                              it can never path to */
 
             int32_t dx = x - from_x;
             int32_t dy = y - from_y;

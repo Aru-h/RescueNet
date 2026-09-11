@@ -108,7 +108,7 @@ uint8_t search_zone_trust(uint8_t district_id, uint32_t current_tick);
  * Also increments active_sweep_ticks for the district containing
  * (x,y) - called once per covering team per tick, not once per cell,
  * see search_mark_radius_covered() in simulation.c. */
-void search_zone_mark_cell_covered(int16_t x, int16_t y, uint32_t current_tick);
+void search_zone_mark_cell_covered(uint8_t district_id ,int16_t x, int16_t y, uint32_t current_tick);
 
 /* Live-computed against currently-navigable cells (not cached - see
  * the fault-injection navigability note from earlier design). */
