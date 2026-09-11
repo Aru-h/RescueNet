@@ -89,6 +89,18 @@ typedef struct {
     uint8_t district_density;
     uint8_t road_damage;
     uint8_t road_blocked;
+    /* Fix 2: reference-count for concurrent environment fault injections.
+     * env_fault_ref_count tracks how many active FAULT_CLASS_ENVIRONMENT
+     * faults are targeting this cell right now (can be > 1 when different
+     * teams each pick this cell as their chokepoint in the same tick).
+     * env_fault_base_cost is the travel_cost snapshot taken once when
+     * ref_count transitions 0→1: it is the only accurate pre-fault value,
+     * since any snapshot taken while ref_count > 0 would capture an already-
+     * elevated cost.  Together they let recover_environment_fault() restore
+     * the true original cost when the last owner clears, rather than the
+     * corrupted value the TOCTOU bug caused previously. */
+    uint8_t env_fault_ref_count;
+    uint8_t env_fault_base_cost;
     uint8_t infrastructure_damage;
     uint8_t hazard_flags;
     uint32_t spawned_incident_mask;
@@ -193,6 +205,7 @@ extern HazardPropagationConfig_t g_hazard_config;
 
 void generate_environment(uint32_t seed);
 void environment_apply_earthquake(uint32_t seed);
+void environment_validate_hazard_reachability(void);
 uint8_t environment_cell_is_navigable(int x, int y);
 uint8_t environment_cell_is_flood(int x, int y);
 uint8_t environment_cell_travel_cost(int x, int y);
