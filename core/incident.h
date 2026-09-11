@@ -4,6 +4,12 @@
 #include "mission_state.h"
 #include <stdint.h>
 
+/* Consecutive no-path abandons after which an incident is quarantined:
+ * left out of the INC_OPEN candidate pools (allocator.c / cbba.c) instead
+ * of being re-bid and re-abandoned every cycle forever. See
+ * abandon_task_for_recovery() and IncidentState_t.unreachable_streak. */
+#define INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD 3u
+
 typedef enum
 {
     PASSIVE_NONE = 0,
@@ -32,7 +38,7 @@ uint32_t allocate_incident_id(void);
 void update_all_incident_work(void);
 void update_all_passive_effects(void);
 void complete_incident_stage(IncidentState_t *incident);
-void complete_return_to_safe_zone_task(TeamState_t *team, IncidentState_t *incident);
+void complete_return_to_rest(TeamState_t *team);
 int incident_needs_support(const IncidentState_t *incident);
 /* Board-hosted-team work rate: deterministic, fault-adjusted (equipment_
  * level + fault_state.severity[]-derived, same spirit as core/team.c's
@@ -65,7 +71,9 @@ void search_generate_sweep_tasks(uint32_t current_tick);
 void search_sweep_step(uint32_t current_tick);
 int create_equipment_cache_incident(TeamState_t *team);
 int create_evacuee_offboard_incident(uint8_t safezone_id);
-int create_return_to_safe_zone_task(TeamState_t *team);
+void generate_evacuee_offboard_incidents(void);
+int begin_return_to_safe_zone(TeamState_t *team);
+uint8_t find_nearest_safe_zone(const TeamState_t *team);
 void abandon_task_for_recovery(TeamState_t *team);
 void reopen_future_queued_incidents(void);
 
