@@ -1141,6 +1141,25 @@ static RecoverySignal_t evaluate_fault_predictor(
 
     confidence = scores.score[best_class];
 
+    /* This early return is why WATCHDOG_ANOMALY_THRESHOLD (core/watchdog.c)
+     * is currently risk-free to keep tuned aggressively (0.10, lowered
+     * from 0.35 this pass - 43.3% fault-active detection / 9.5% no-fault
+     * false-positive rate at that value, combined fault profile, 5
+     * seeds x 3000 ticks): fault_predictor_run() is still the untrained
+     * placeholder (FAULT_MODEL_LOADED undefined, core/fault_predictor.c
+     * returns all-zero scores), so confidence is always <= 0 here and
+     * this function always returns CONTINUE_MONITORING before ever
+     * reaching the corroborated = watchdog->anomaly_detected check
+     * below - a 9.5% false-positive rate on that flag has zero live
+     * effect on any dispatched RecoveryAction_t today, only on logging
+     * (core/simulation.c's EVENT_WATCHDOG_ANOMALY_CHANGED) and the
+     * dashboard's anomaly counter (laptop/tools/app.py). Once a real
+     * trained-weights header lands and FAULT_MODEL_LOADED is defined,
+     * this early return stops firing unconditionally and
+     * WATCHDOG_ANOMALY_THRESHOLD's false-positive rate starts actually
+     * gating escalation past LOCAL_RECOVERY (below) - re-evaluate the
+     * threshold's FPR/TPR tradeoff at that point, don't assume today's
+     * "good enough" verdict still holds. */
     if(confidence <= 0.0f)
         return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
             RECOVERY_REASON_NONE,
