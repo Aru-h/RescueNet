@@ -188,6 +188,24 @@
 #endif
 
 /*
+ * Wait-loop heartbeat cadence/pattern - separate from
+ * BOARD_LED_HEARTBEAT_TICK_INTERVAL above on purpose. The handshake
+ * and roster wait loops (see sim_task() below) have NO
+ * BOARD_TICK_DELAY_MS-style pacing at all - they spin as fast as
+ * sx1262_rx_poll()/mission_link_task_step()/comms_transport_
+ * dispatch_pending() themselves take, unthrottled - so a much larger
+ * iteration count is needed here than in the tick loop just to get a
+ * human-readable blink rate, and even then it's still just "roughly
+ * this often", not a real timer. Each wait loop also gets its own
+ * DISTINCT blink pattern (single vs double) so "still waiting on the
+ * handshake" and "still waiting on the roster" don't look identical
+ * on the LED - see board_led_wait_pulse_handshake()/
+ * board_led_wait_pulse_roster() below. */
+#ifndef BOARD_LED_WAIT_PULSE_TICK_INTERVAL
+#define BOARD_LED_WAIT_PULSE_TICK_INTERVAL 4000u
+#endif
+
+/*
  * Not part of snapshot.h's public interface (core/ never calls
  * this) -- same status as board_snapshot_ring_pending(), which is
  * also forward-declared at its one call site rather than added to
@@ -371,6 +389,36 @@ LOCAL void board_led_blink_n(UINT count, UINT on_ms, UINT off_ms)
     }
 }
 
+/* Handshake-wait pattern: ONE blink, then a long pause - visually
+   distinct from board_led_wait_pulse_roster()'s double blink just
+   below, and from the tick loop's own much-more-frequent single
+   pulse (BOARD_LED_HEARTBEAT_TICK_INTERVAL). "Long pause" here is a
+   real blocking tk_dly_tsk() delay (via board_led_pulse()'s off_ms),
+   not just a larger iteration-count gate - unlike the tick loop's
+   heartbeat, this is fine to let block briefly: these wait loops
+   have no other pacing at all today (no BOARD_TICK_DELAY_MS
+   equivalent), so a short deliberate pause here doesn't compete with
+   anything, and 400ms is still far faster than any realistic LoRa
+   RX turnaround, so it doesn't meaningfully delay noticing an
+   incoming frame either. */
+LOCAL void board_led_wait_pulse_handshake(void)
+{
+    board_led_pulse(80u, 400u);
+}
+
+/* Roster-wait pattern: TWO quick blinks back to back, then the same
+   long pause - see board_led_wait_pulse_handshake()'s own doc just
+   above for the reasoning; only the blink count differs. */
+LOCAL void board_led_wait_pulse_roster(void)
+{
+    board_led_blink_n(2u, 80u, 120u);
+    tk_dly_tsk(280u);   /* top up to the same ~400ms tail pause the
+                           handshake pattern uses, so both patterns
+                           repeat at roughly the same overall rate -
+                           only the blink shape differs, not the
+                           cadence. */
+}
+
 LOCAL void sim_task(INT stacd, void *exinf);
 LOCAL ID sim_tskid;
 LOCAL T_CTSK sim_ctsk = {
@@ -498,7 +546,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
     /* Local, not file-scope: this counter only needs to survive
        across iterations of ONE wait loop at a time (reused, reset to
        0, for the roster-wait loop just below) - see BOARD_LED_
-       HEARTBEAT_TICK_INTERVAL's own doc above for why this is an
+       WAIT_PULSE_TICK_INTERVAL's own doc above for why this is an
        approximate period, not a precise timer, same caveat as the
        per-tick loop's own copy of this pattern. Without this, a
        real second-board mismatch (e.g. SF/BW/CR/sync word not
@@ -537,9 +585,9 @@ LOCAL void sim_task(INT stacd, void *exinf)
         mission_link_task_step();
         comms_transport_dispatch_pending();
 
-        if((wait_pulse_counter % BOARD_LED_HEARTBEAT_TICK_INTERVAL) == 0u)
+        if((wait_pulse_counter % BOARD_LED_WAIT_PULSE_TICK_INTERVAL) == 0u)
         {
-            board_led_pulse(30u, 0u);
+            board_led_wait_pulse_handshake();
         }
         wait_pulse_counter++;
     }
@@ -574,9 +622,9 @@ LOCAL void sim_task(INT stacd, void *exinf)
         mission_link_task_step();
         comms_transport_dispatch_pending();
 
-        if((wait_pulse_counter % BOARD_LED_HEARTBEAT_TICK_INTERVAL) == 0u)
+        if((wait_pulse_counter % BOARD_LED_WAIT_PULSE_TICK_INTERVAL) == 0u)
         {
-            board_led_pulse(30u, 0u);
+            board_led_wait_pulse_roster();
         }
         wait_pulse_counter++;
     }
