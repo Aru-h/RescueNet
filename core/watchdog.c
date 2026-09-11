@@ -456,10 +456,23 @@ static WatchdogFailureMode_t classify_failure_mode(
 static uint8_t recommend_action(
     const WatchdogStatus_t *status)
 {
-    if(status->anomaly_confidence < WATCHDOG_INVESTIGATE_THRESHOLD)
+    /* WATCHDOG_ANOMALY_THRESHOLD and WATCHDOG_INVESTIGATE_THRESHOLD are
+     * tuned independently (see core/watchdog.c's history), so this can't
+     * assume which one is numerically lower - it must compose whichever
+     * is the lower/earlier "something's off" bar with whichever is the
+     * higher/stricter "confirmed enough to name a specific action" bar,
+     * not assume investigate < anomaly holds after either is retuned. */
+    const float lower_threshold =
+        (WATCHDOG_ANOMALY_THRESHOLD < WATCHDOG_INVESTIGATE_THRESHOLD) ?
+            WATCHDOG_ANOMALY_THRESHOLD : WATCHDOG_INVESTIGATE_THRESHOLD;
+    const float upper_threshold =
+        (WATCHDOG_ANOMALY_THRESHOLD < WATCHDOG_INVESTIGATE_THRESHOLD) ?
+            WATCHDOG_INVESTIGATE_THRESHOLD : WATCHDOG_ANOMALY_THRESHOLD;
+
+    if(status->anomaly_confidence < lower_threshold)
         return 2u;
 
-    if(status->anomaly_confidence < WATCHDOG_ANOMALY_THRESHOLD)
+    if(status->anomaly_confidence < upper_threshold)
         return 1u;
 
     switch(status->dominant_failure_mode)
