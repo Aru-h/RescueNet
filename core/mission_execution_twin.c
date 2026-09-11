@@ -9,9 +9,6 @@
 #include "mission_state_utils.h"
 #include "path.h"
 
-#define NOMINAL_WORK_RATE_MIN 1u
-#define NOMINAL_WORK_RATE_MAX 5u
-
 static int task_ref_equal(TaskRef_t left, TaskRef_t right)
 {
     return left.pool == right.pool && left.slot == right.slot;
@@ -76,15 +73,27 @@ static uint8_t resolve_communication_health(const TeamState_t *team)
     return team->fault_state.severity[FAULT_CLASS_COMMUNICATION];
 }
 
-static uint16_t nominal_work_rate(const IncidentState_t *task)
+/* Fault-free baseline work rate: mirrors update_incident_work()'s
+ * (core/incident.c) real two-call structure exactly - the primary
+ * team's own equipment-scaled rate, plus (if a support team is on
+ * scene) that support team's own independently equipment-scaled
+ * rate, both via team_base_work_rate() (core/incident.h) - rather
+ * than doubling the primary's rate as a stand-in for a support
+ * team's real, possibly-different equipment level. No fault term:
+ * this is deliberately what the team(s) would produce with no fault
+ * active, so twin_progress_error stays sensitive to a real
+ * RESOURCE/MOBILITY-fault-induced slowdown instead of partly
+ * absorbing it into an already-too-low, equipment-blind constant. */
+static uint16_t nominal_work_rate(const IncidentState_t *task, const TeamState_t *team)
 {
-    uint16_t rate = (NOMINAL_WORK_RATE_MIN + NOMINAL_WORK_RATE_MAX) / 2u;
+    uint16_t rate = team != NULL ? team_base_work_rate(team->equipment_level) : WORK_RATE_MIN;
 
     if(task != NULL &&
        task->support_team != NO_ASSIGNMENT &&
-       task->support_team < NUM_TEAMS)
+       task->support_team < NUM_TEAMS &&
+       g_teams[task->support_team].status == STATUS_ON_SCENE)
     {
-        rate += (NOMINAL_WORK_RATE_MIN + NOMINAL_WORK_RATE_MAX) / 2u;
+        rate += team_base_work_rate(g_teams[task->support_team].equipment_level);
     }
 
     return rate;
@@ -366,14 +375,15 @@ static void twin_advance_expected_position(MissionExecutionTwin_t *twin, const T
 
 static void twin_advance_expected_work(
     MissionExecutionTwin_t *twin,
-    const IncidentState_t *task)
+    const IncidentState_t *task,
+    const TeamState_t *team)
 {
     uint16_t rate;
 
     if(twin->expected_work_remaining == 0u)
         return;
 
-    rate = nominal_work_rate(task);
+    rate = nominal_work_rate(task, team);
 
     if(rate >= twin->expected_work_remaining)
         twin->expected_work_remaining = 0;
@@ -621,7 +631,7 @@ void mission_execution_twin_step(void)
         else
         {
             if(!twin_just_reset)
-                twin_advance_expected_work(twin, expected_task);
+                twin_advance_expected_work(twin, expected_task, team);
             twin->expected_operating_state = STATUS_ON_SCENE;
         }
 

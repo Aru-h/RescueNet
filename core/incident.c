@@ -831,18 +831,22 @@ void complete_return_to_rest(TeamState_t *team)
  * idle teams, since the field documents "currently-effective rate",
  * not "rate currently being applied to something".
  */
+uint8_t team_base_work_rate(uint8_t equipment_level)
+{
+    uint32_t base_range = (uint32_t)(WORK_RATE_MAX - WORK_RATE_MIN);
+    uint32_t scaled = ((uint32_t)equipment_level * base_range) / (uint32_t)EQ_MAX_LEVEL;
+
+    return (uint8_t)(WORK_RATE_MIN + scaled);
+}
+
 uint8_t team_effective_work_rate(const TeamState_t *team)
 {
-    uint32_t base_range;
-    uint32_t scaled;
     uint8_t rate;
 
     if(team == NULL)
         return WORK_RATE_MIN;
 
-    base_range = (uint32_t)(WORK_RATE_MAX - WORK_RATE_MIN);
-    scaled = ((uint32_t)team->equipment_level * base_range) / (uint32_t)EQ_MAX_LEVEL;
-    rate = (uint8_t)(WORK_RATE_MIN + scaled);
+    rate = team_base_work_rate(team->equipment_level);
 
     if(team->fault_state.active[FAULT_CLASS_RESOURCE])
     {
