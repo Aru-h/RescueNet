@@ -1,17 +1,51 @@
-build/
-bin/
-obj/
+# ---- STM32CubeIDE / Eclipse CDT build output ----
+Debug/
+Release/
+**/Debug/
+**/Release/
+*.o
+*.d
 *.elf
 *.bin
 *.hex
 *.map
-*.log
-tron_telemetry*.log
-tron_snapshot_dataset*.csv
-.vscode/
+*.list
+*.su
+*.cyclo
+
+# Eclipse CDT project state (keep .project/.cproject if you want the IDE config tracked;
+# these are the parts that are machine-specific / regenerated)
+.metadata/
 .settings/
-.project
-.cproject
+.launch
+*.launch
+
+# ---- Pico / arm-none-eabi-gcc build ----
+build/
+**/build/
+pico_rp2040.elf
+pico_rp2040.uf2
+*.uf2
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+!Makefile.am
+
+# ---- Generic object/binary noise ----
+*.obj
+*.exe
+*.out
+*.a
+*.lib
+
+# ---- OS / editor cruft ----
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+
 # Vendored T-License 2.2 BSPs — fetch separately per board vendor/README.md,
 # do not commit (not a redistribution-friendly license to bundle verbatim)
 board/STM32N6570-DK/vendor/mtk3_bsp2/
