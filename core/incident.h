@@ -51,6 +51,15 @@ int incident_needs_support(const IncidentState_t *incident);
  * independently-computed figure that could silently disagree with it -
  * see mission_link.h's MissionLinkStatus_t doc. */
 uint8_t team_effective_work_rate(const TeamState_t *team);
+/* The fault-free component of team_effective_work_rate() above: pure
+ * equipment_level -> rate scaling, no fault_state term. Exposed
+ * (not static) so core/mission_execution_twin.c's nominal_work_rate()
+ * can compute a true fault-free baseline using the exact same
+ * equipment-scaling formula the real, fault-adjusted rate is built
+ * from, instead of an independently-guessed flat constant that could
+ * silently drift from what team_effective_work_rate() actually does -
+ * see this function's definition for the formula. */
+uint8_t team_base_work_rate(uint8_t equipment_level);
 void initialize_evacuation_gateways(uint32_t seed);
 void initialize_evacuation_teams(void);
 void generate_incidents_if_needed(void);
