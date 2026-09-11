@@ -1,6 +1,7 @@
 #include "watchdog.h"
 
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "mission_state.h"
@@ -23,18 +24,7 @@
 #define WATCHDOG_MOBILITY_CONFIRM_TICKS 3u
 #define WATCHDOG_MOBILITY_PROGRESS_MARGIN 0.02f
 
-typedef enum
-{
-    WATCHDOG_EVIDENCE_SLOT_PROGRESS = 0,
-    WATCHDOG_EVIDENCE_SLOT_STAMINA,
-    WATCHDOG_EVIDENCE_SLOT_COMMUNICATION,
-    WATCHDOG_EVIDENCE_SLOT_OPERATING_STATE,
-    WATCHDOG_EVIDENCE_SLOT_PATH,
-    WATCHDOG_EVIDENCE_SLOT_ASSIGNMENT,
-    WATCHDOG_EVIDENCE_SLOT_TIMEOUT,
 
-    NUM_WATCHDOG_EVIDENCE_SLOTS
-} WatchdogEvidenceSlot_t;
 
 typedef struct
 {
@@ -45,6 +35,7 @@ typedef struct
     uint8_t last_assigned_task_pool;
     uint8_t last_assigned_task_slot;
     uint8_t last_status;
+    uint8_t last_mission_stage;
     uint8_t has_last_sample;
     uint8_t path_stagnation_streak;
     uint8_t timeout_streak;
@@ -219,9 +210,16 @@ static float path_evidence(
     const MissionExecutionTwin_t *twin,
     WatchdogTeamState_t *watchdog)
 {
-    if(twin->mission_stage != MISSION_STAGE_TRAVEL ||
-       twin->assigned_task_pool == TASK_POOL_NONE ||
-       twin->assigned_task_slot == NO_ASSIGNMENT)
+    /* mission_stage is recomputed every tick regardless of whether the
+     * team has a real task slot (mission_execution_twin.c's heading_to_
+     * rest branch sets MISSION_STAGE_TRAVEL while a team is returning to
+     * a safe zone, same as a task-backed trip) - so gating on it alone
+     * is sufficient and correctly covers both cases. The old additional
+     * assigned_task_pool/slot check used to be needed because a team
+     * heading to a safe zone had no other way to be distinguished from
+     * genuinely idle without inspecting the task pool; it now has one
+     * (heading_to_rest), and mission_stage reflects it. */
+    if(twin->mission_stage != MISSION_STAGE_TRAVEL)
     {
         watchdog->path_stagnation_streak = 0;
         return 0.0f;
@@ -275,8 +273,26 @@ static float assignment_evidence(
     if(!watchdog->has_last_sample)
         return 0.0f;
 
-    if(watchdog->last_assigned_task_pool == TASK_POOL_NONE ||
-       watchdog->last_assigned_task_slot == NO_ASSIGNMENT)
+    /* Same reasoning as path_evidence()/timeout_evidence(): the old
+     * last_assigned_task_pool == TASK_POOL_NONE check was a proxy for
+     * "the previous sample was genuinely idle, nothing to compare
+     * against" - but heading_to_rest also leaves assigned_task_pool/
+     * slot at TASK_POOL_NONE/NO_ASSIGNMENT for its entire duration
+     * (it doesn't occupy a poolable slot), so that proxy was
+     * indistinguishable from "was heading to rest last tick" and this
+     * evidence channel went silent for the whole window - same blind
+     * spot the other two evidence functions had, just still open
+     * here. last_mission_stage says "genuinely idle" directly: it's
+     * only MISSION_STAGE_IDLE when there was truly no mission last
+     * tick (heading_to_rest sets TRAVEL, on-scene work sets WORK,
+     * physically resting sets RECOVERY - see
+     * reset_twin_for_current_mission()). A team continuously
+     * heading_to_rest still correctly produces 0 evidence below (pool/
+     * slot stay NONE/NO_ASSIGNMENT tick over tick, so the "unchanged"
+     * check two lines down still matches) - this only stops
+     * suppressing evidence for the case that actually matters: an
+     * assignment change that happens *during* that window. */
+    if(watchdog->last_mission_stage == MISSION_STAGE_IDLE)
     {
         return 0.0f;
     }
@@ -300,8 +316,16 @@ static float timeout_evidence(
 {
     float evidence = 0.0f;
 
-    if(twin->assigned_task_pool == TASK_POOL_NONE ||
-       twin->assigned_task_slot == NO_ASSIGNMENT)
+    /* Same reasoning as path_evidence(): the old assigned_task_pool/slot
+     * guard was a proxy for "genuinely idle, nothing to time out on".
+     * mission_stage now says that directly and also correctly stays open
+     * for a team heading_to_rest (MISSION_STAGE_TRAVEL/RECOVERY), which
+     * used to look identical to genuinely idle from this check's point of
+     * view. A truly idle team still can't trigger either branch below
+     * regardless (expected_operating_state won't be ON_SCENE and
+     * expected_progress stays 0.0), so this is a tightening, not a
+     * behavior change, for every case except heading_to_rest. */
+    if(twin->mission_stage == MISSION_STAGE_IDLE)
     {
         watchdog->timeout_streak = 0;
         return 0.0f;
@@ -470,6 +494,7 @@ void watchdog_init(void)
         watchdog->last_remaining_cost = UINT16_MAX;
         watchdog->last_assigned_task_pool = TASK_POOL_NONE;
         watchdog->last_assigned_task_slot = NO_ASSIGNMENT;
+        watchdog->last_mission_stage = MISSION_STAGE_IDLE;
         watchdog->status.recommended_action = 0u;
         watchdog->status.dominant_failure_mode = WATCHDOG_FAILURE_NONE;
     }
@@ -529,6 +554,7 @@ void watchdog_step(void)
         watchdog->last_assigned_task_pool = (uint8_t)twin->assigned_task_pool;
         watchdog->last_assigned_task_slot = twin->assigned_task_slot;
         watchdog->last_status = team->status;
+        watchdog->last_mission_stage = (uint8_t)twin->mission_stage;
         watchdog->has_last_sample = 1;
 
         /* Suspected-but-not-yet-determined: watchdog confidence has crossed
@@ -571,4 +597,31 @@ WatchdogStatus_t watchdog_get_status(uint8_t team_id)
         return (WatchdogStatus_t){0};
 
     return g_watchdog_state[team_id].status;
+}
+
+void watchdog_get_evidence_vector(uint8_t team_id,
+    float out_evidence[NUM_WATCHDOG_EVIDENCE_SLOTS],
+    uint8_t *out_confirmed_mobility_impairment)
+{
+    uint8_t i;
+
+    if(team_id >= NUM_TEAMS)
+    {
+        if(out_evidence != NULL)
+            for(i = 0u; i < NUM_WATCHDOG_EVIDENCE_SLOTS; i++)
+                out_evidence[i] = 0.0f;
+
+        if(out_confirmed_mobility_impairment != NULL)
+            *out_confirmed_mobility_impairment = 0u;
+
+        return;
+    }
+
+    if(out_evidence != NULL)
+        for(i = 0u; i < NUM_WATCHDOG_EVIDENCE_SLOTS; i++)
+            out_evidence[i] = g_watchdog_state[team_id].accumulated_evidence[i];
+
+    if(out_confirmed_mobility_impairment != NULL)
+        *out_confirmed_mobility_impairment =
+            g_watchdog_state[team_id].confirmed_mobility_impairment;
 }

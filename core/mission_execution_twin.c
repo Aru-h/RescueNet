@@ -234,6 +234,14 @@ static int twin_current_task_changed(
 {
     if(task == NULL)
     {
+        if(team->heading_to_rest)
+        {
+            const SafeZone_t *safezone = &g_safezones[team->resting_zone_id];
+            return twin->mission_stage != MISSION_STAGE_TRAVEL ||
+                   twin->destination_x != safezone->loc_x ||
+                   twin->destination_y != safezone->loc_y;
+        }
+
         return twin->observed_task_id != 0 ||
                twin->assigned_task_pool != TASK_POOL_NONE ||
                twin->assigned_task_slot != NO_ASSIGNMENT;
@@ -278,6 +286,24 @@ static void reset_twin_for_current_mission(
 
     if(task == NULL)
     {
+        if(team->heading_to_rest)
+        {
+            const SafeZone_t *safezone = &g_safezones[team->resting_zone_id];
+            uint16_t remaining = resolve_actual_remaining_path_cost(
+                team->loc_x, team->loc_y, safezone->loc_x, safezone->loc_y);
+
+            twin->destination_x = safezone->loc_x;
+            twin->destination_y = safezone->loc_y;
+            twin->remaining_path_cost = remaining;
+            twin->baseline_path_cost = (remaining == UINT16_MAX) ? 0 : remaining;
+            twin->baseline_work_remaining = 0;
+            twin->expected_work_remaining = 0;
+            twin->expected_remaining_path_cost = twin->baseline_path_cost;
+            twin->expected_arrival_tick = g_current_tick + twin->baseline_path_cost;
+            twin->mission_stage = MISSION_STAGE_TRAVEL;
+            return;
+        }
+
         twin->mission_stage = team->status == STATUS_RESTING
             ? MISSION_STAGE_RECOVERY
             : MISSION_STAGE_IDLE;
@@ -422,6 +448,22 @@ void mission_execution_twin_step(void)
                     team->loc_x, team->loc_y, actual_task->loc_x, actual_task->loc_y);
             }
         }
+        else if(team->heading_to_rest)
+        {
+            const SafeZone_t *safezone = &g_safezones[team->resting_zone_id];
+
+            if(team->cached_remaining_path_cost_tick == g_current_tick)
+            {
+                current_remaining_path_cost = team->cached_remaining_path_cost;
+            }
+            else
+            {
+                current_remaining_path_cost = resolve_actual_remaining_path_cost(
+                    team->loc_x, team->loc_y, safezone->loc_x, safezone->loc_y);
+            }
+        }
+
+        int twin_just_reset = 0;
 
         if(twin_current_task_changed(twin, team, actual_task))
         {
@@ -430,6 +472,7 @@ void mission_execution_twin_step(void)
                 team,
                 actual_task,
                 current_remaining_path_cost);
+            twin_just_reset = 1;
         }
 
         twin->team_id = team_id;
@@ -441,6 +484,54 @@ void mission_execution_twin_step(void)
 
         if(actual_task == NULL)
         {
+            if(team->heading_to_rest)
+            {
+                const SafeZone_t *safezone = &g_safezones[team->resting_zone_id];
+
+                twin->destination_x = safezone->loc_x;
+                twin->destination_y = safezone->loc_y;
+
+                if(twin->expected_remaining_path_cost > 0u)
+                {
+                    /* Skip the advance on the exact tick reset_twin_for_
+                     * current_mission() just (re)synced expected to the
+                     * team's current actual position (current_remaining_
+                     * path_cost, captured post-move this tick via
+                     * cached_remaining_path_cost - see above). Advancing
+                     * here too would predict a SECOND step of travel
+                     * within the same tick the mission started, one tick
+                     * ahead of what the real team has actually done -
+                     * see the fuller writeup on the equivalent branch
+                     * below, which hits this same construction. */
+                    if(!twin_just_reset)
+                        twin_advance_expected_position(twin, team);
+                    twin->expected_operating_state = STATUS_EN_ROUTE;
+                    twin->mission_stage = MISSION_STAGE_TRAVEL;
+                }
+                else
+                {
+                    /* Twin expects arrival: mirrors complete_return_to_rest()'s
+                     * own transition, one tick ahead of the real team if the
+                     * estimate is exact. */
+                    twin->expected_operating_state = STATUS_RESTING;
+                    twin->mission_stage = MISSION_STAGE_RECOVERY;
+                }
+
+                twin->expected_progress = compute_progress_ratio(
+                    twin->baseline_path_cost,
+                    twin->baseline_work_remaining,
+                    twin->expected_remaining_path_cost,
+                    twin->expected_work_remaining);
+                twin->actual_progress = compute_progress_ratio(
+                    twin->baseline_path_cost,
+                    twin->baseline_work_remaining,
+                    current_remaining_path_cost,
+                    0);
+                twin->progress_error = twin->expected_progress - twin->actual_progress;
+                twin->stamina_error = twin->expected_stamina - twin->actual_stamina;
+                continue;
+            }
+
             twin->destination_x = team->loc_x;
             twin->destination_y = team->loc_y;
             twin->expected_loc_x = team->loc_x;
@@ -478,12 +569,59 @@ void mission_execution_twin_step(void)
 
         if(twin->expected_remaining_path_cost > 0u)
         {
-            twin_advance_expected_position(twin, team);
+            /* Bug fix: reset_twin_for_current_mission() (called just
+             * above, this same tick, whenever twin_current_task_changed()
+             * fires) sets both baseline_path_cost and
+             * expected_remaining_path_cost from current_remaining_path_cost
+             * - the team's ACTUAL remaining distance as of THIS tick
+             * (post-move, via cached_remaining_path_cost from move_team()
+             * earlier in simulation_step()). twin->remaining_path_cost
+             * (the "actual" side of the comparison below) is set to that
+             * exact same current_remaining_path_cost a few lines up. So
+             * right after a reset, expected and actual already agree
+             * perfectly for this tick - correctly, since nothing new has
+             * happened yet.
+             *
+             * But this advance call runs unconditionally afterward,
+             * stepping the EXPECTED side forward by one more tick's worth
+             * of travel, while the ACTUAL side (current_remaining_path_cost)
+             * isn't recomputed again until NEXT tick. That leaves expected
+             * permanently one tick ahead of actual for the rest of the
+             * mission - a roughly constant absolute gap of about one
+             * step's path cost, since both sides advance in lockstep
+             * after this. For a long mission that's noise (a couple of
+             * percent of the total). For a short one - exactly the kind
+             * team_can_accept_incident()'s "steal a resting team" path
+             * (core/allocator.c) and natural RESTING->AVAILABLE promotion
+             * (core/team.c) hand out to a team that only just cleared its
+             * stamina floor - that same fixed absolute gap is a large
+             * fraction of a small total (baseline_path_cost +
+             * baseline_work_remaining), enough for evaluate_progress()
+             * (core/recovery_manager.c) to read it as a genuine deviation
+             * and, after a few ticks of hysteresis, dispatch
+             * RETURN_TO_SAFE_ZONE - cancelling a mission the team was
+             * actually completing exactly on schedule, sending it back to
+             * the safe zone it just left, and (once it's barely rested
+             * again) re-triggering the same short-mission assignment and
+             * the same false deviation call. Confirmed via instrumented
+             * trace: a fresh short mission (baseline_path_cost=55,
+             * baseline_work_remaining=15) showed a 6-7 unit expected/
+             * actual gap from the tick of assignment onward, purely from
+             * this double-step, with no real problem underneath it.
+             *
+             * Skipping the advance on the reset tick itself removes the
+             * extra step: expected and actual start the mission in exact
+             * agreement and then advance once per tick together from the
+             * next tick on, same as any team whose mission wasn't just
+             * reassigned. */
+            if(!twin_just_reset)
+                twin_advance_expected_position(twin, team);
             twin->expected_operating_state = STATUS_EN_ROUTE;
         }
         else
         {
-            twin_advance_expected_work(twin, expected_task);
+            if(!twin_just_reset)
+                twin_advance_expected_work(twin, expected_task);
             twin->expected_operating_state = STATUS_ON_SCENE;
         }
 

@@ -5,6 +5,7 @@
 #include "snapshot.h"
 #include "mission_state_utils.h"
 #include "allocator.h"
+#include "recovery_manager.h"
 #include "recovery_manager_config.h"
 #include <stddef.h>
 #include <string.h>
@@ -179,11 +180,10 @@ void update_team(TeamState_t *team) //team
                 break;
             }
 
-            if(create_return_to_safe_zone_task(team) == NO_ASSIGNMENT)
+            if(begin_return_to_safe_zone(team) == NO_ASSIGNMENT)
             {
-                /* True last resort: even the safe-zone task machinery
-                 * couldn't route this team anywhere (system-task pool
-                 * exhausted, or no reachable safe zone). STATUS_RESTING
+                /* True last resort: couldn't route this team anywhere
+                 * (no reachable safe zone). STATUS_RESTING
                  * recovers stamina and equipment unconditionally
                  * regardless of location in this simulator's model (see
                  * the STATUS_RESTING case below - no position check),
@@ -255,7 +255,7 @@ void update_team(TeamState_t *team) //team
                  *
                  * abandon_task_for_recovery() instead tries to route the
                  * team to a real safe zone (RESTING, which DOES recover
-                 * stamina) via create_return_to_safe_zone_task(), and
+                 * stamina) via begin_return_to_safe_zone(), and
                  * only falls back to team_set_available() if that
                  * genuinely can't be created (tracked separately via
                  * g_diag_safezone_fallback_count) - matching how every
@@ -362,14 +362,74 @@ void update_team(TeamState_t *team) //team
 
                 if(team->stamina >= required_stamina && team->equipment_level == EQ_MAX_LEVEL)
                 {
+                    /* Bug fix: stamina/equipment are the only two things
+                     * this promotion has ever checked, but they're not
+                     * the only reasons a team could need to stay put -
+                     * an active FAULT_CLASS_MOBILITY, communication, or
+                     * resource fault is independent of both and doesn't
+                     * clear on its own schedule. Without this check,
+                     * promoting straight to AVAILABLE the instant stamina/
+                     * equipment allow it, regardless of an unresolved
+                     * fault, hands the team straight back to
+                     * recovery_manager_step() (core/recovery_manager.c),
+                     * which - correctly, given the fault is still active -
+                     * recommends RETURN_TO_SAFE_ZONE again. recovery_
+                     * dispatch()'s guard against acting on a RESTING team
+                     * doesn't apply once status is AVAILABLE, so
+                     * abandon_task_for_recovery() sends the team right
+                     * back out, it arrives almost immediately, re-enters
+                     * RESTING, and this same promotion fires again next
+                     * tick the thresholds are met - a RESTING<->AVAILABLE
+                     * <->EN_ROUTE bounce for as long as the fault lasts.
+                     * Confirmed empirically under `--fault-profile
+                     * combined`: a team sitting at ~100% stamina/equipment
+                     * cycled every 2 ticks, never actually working,
+                     * because its mobility fault kept it CONTINUE_
+                     * MONITORING/RETURN_TO_SAFE_ZONE while team.c kept
+                     * re-promoting it regardless.
+                     *
+                     * recovery_manager_get_recommendation() reflects LAST
+                     * tick's evaluation (recovery_manager_step() runs
+                     * later in this same tick, after update_all_teams())
+                     * - a one-tick-stale read, not this tick's fresh one.
+                     * That's an acceptable approximation here: fault
+                     * durations run many ticks (core/fault_injector.c),
+                     * so "was recommending RETURN_TO_SAFE_ZONE as of last
+                     * tick" is a reliable proxy for "still is," and the
+                     * cost of being wrong is only a one-tick delay in an
+                     * otherwise-legitimate promotion, not a correctness
+                     * issue.
+                     *
+                     * Also checks LOCAL_RECOVERY, not just RETURN_TO_
+                     * SAFE_ZONE: confirmed empirically that the plain
+                     * RETURN_TO_SAFE_ZONE check alone had zero effect on
+                     * the target bounce. The reason is recovery_manager's
+                     * own downgrade logic - while a team is still RESTING
+                     * (MISSION_STAGE_RECOVERY), an evaluator that would
+                     * otherwise recommend RETURN_TO_SAFE_ZONE gets
+                     * downgraded to the milder LOCAL_RECOVERY instead,
+                     * since "return to the safe zone" is meaningless for
+                     * a team already there. So the recommendation this
+                     * check reads back for a RESTING team is essentially
+                     * never literally RETURN_TO_SAFE_ZONE - checking only
+                     * for it structurally could never catch the case it
+                     * was meant to catch. recovery_dispatch()'s own
+                     * RECOVERY_ACTION_LOCAL_RECOVERY case (core/
+                     * recovery_manager.c) confirms LOCAL_RECOVERY has the
+                     * identical effect on a STATUS_AVAILABLE team as
+                     * RETURN_TO_SAFE_ZONE does - both call
+                     * abandon_task_for_recovery() - so both need to be
+                     * treated the same way here. */
+                    if(recovery_manager_get_recommendation(team->team_id) == RECOVERY_ACTION_RETURN_TO_SAFE_ZONE ||
+                       recovery_manager_get_recommendation(team->team_id) == RECOVERY_ACTION_LOCAL_RECOVERY)
+                        break;
+
                     if(team->stamina >= MAX_STAMINA)
                         team->partial_rest_cycles = 0;
 
                     team_set_available(team);
                 }
             }
-            break;
-        default:
             break;
     }
     if(team->status != STATUS_RESTING)

@@ -111,6 +111,13 @@ void team_set_available(TeamState_t *team)
     if(team->status == STATUS_AVAILABLE)
         return;
 
+    /* Clear rest-routing state — if this team was heading to a safe zone
+       but got rerouted to AVAILABLE (no path found), the stale flag would
+       cause move_team() to keep trying to navigate to the old zone even
+       though the team is now available for new assignments */
+    team->heading_to_rest  = 0;
+    team->resting_zone_id  = NO_ASSIGNMENT;
+
     team->status = STATUS_AVAILABLE;
     snapshot_record(g_current_tick, EVENT_TEAM_AVAILABLE, team->team_id);
 }
