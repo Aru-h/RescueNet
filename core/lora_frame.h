@@ -127,6 +127,28 @@
                                              above for why that's safe
                                              (static PSK, no handshake-
                                              derived-key circularity). */
+#define LORA_FRAME_TYPE_FAULT_BROADCAST 3u /* core/fault_comms.c (Prompt 1):
+                                             board->board, one team_id +
+                                             a FAULT_BUFFER_REMOTE_EVIDENCE_
+                                             FEATURES-shaped evidence
+                                             vector per locally-hosted
+                                             team, every tick. Feeds
+                                             core/fault_buffer.c's remote
+                                             evidence ring
+                                             (fault_buffer_record_remote_
+                                             evidence()) on the receiving
+                                             side. */
+#define LORA_FRAME_TYPE_FAULT_VOTE      4u /* core/fault_comms.c (Prompt 1):
+                                             board->board, one vote per
+                                             board per target team (not
+                                             per locally-hosted team -
+                                             see fault_comms.c's sender
+                                             doc on why), carrying a
+                                             class_mask + weight. Feeds
+                                             core/fault_buffer.c's vote
+                                             tally (fault_buffer_record_
+                                             remote_vote()) on the
+                                             receiving side. */
 
 /*
  * CBBAMessage_t (core/cbba.c, private to that file) is the largest
