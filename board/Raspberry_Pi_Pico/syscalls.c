@@ -59,6 +59,18 @@ void *_sbrk(int incr)
         return (void *)-1;
     }
 
+    /* Bug fix: only the upper bound was checked. newlib's actual
+       nano-malloc never calls sbrk with a negative increment in
+       practice, so this wasn't reachable via the real allocator, but
+       the stub itself had no defense of its own - a negative incr
+       would have walked heap_end back into .bss/.data with nothing to
+       stop it, corrupting live static state. */
+    if (heap_end + incr < &__end)
+    {
+        errno = ENOMEM;
+        return (void *)-1;
+    }
+
     heap_end += incr;
     return (void *)prev_heap_end;
 }
@@ -91,6 +103,16 @@ int _close(int file)
 int _fstat(int file, struct stat *st)
 {
     (void)file;
+    /* Bug fix: st was dereferenced with no NULL check, unlike every
+       other stub in this file, which avoids touching its pointer args
+       at all. In practice only newlib's internal stdio init calls this
+       with a valid on-stack struct, so this was theoretical, not
+       reachable - but cheap to guard regardless. */
+    if (st == 0)
+    {
+        errno = EFAULT;
+        return -1;
+    }
     st->st_mode = S_IFCHR;
     return 0;
 }
