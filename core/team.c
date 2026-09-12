@@ -120,6 +120,14 @@ void generate_teams(uint32_t seed) //team
             case SPEC_EXTRACTION:
                 g_teams[i].fitness_tier = ARDUOUS;
                 break;
+
+            default:
+                /* Matches fitness_speed_multiplier()'s (core/mission_
+                   state_utils.c) own default-to-MODERATE convention for
+                   an unhandled specialization, rather than leaving
+                   fitness_tier at whatever memset left it. */
+                g_teams[i].fitness_tier = MODERATE;
+                break;
         }
     }
 }
