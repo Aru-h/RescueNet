@@ -986,6 +986,26 @@ static void mission_link_handshake_tx_step(void)
         uint8_t board_count = comms_transport_board_count();
         uint8_t peer;
 
+        /* Bug fix: g_relay_reply_sent[]/g_relay_reply_last_sent[] above
+         * are fixed-size arrays capped at HANDSHAKE_MAX_BOARDS, but this
+         * loop was bounded only by comms_transport_board_count() with no
+         * clamp against that cap - the same class of out-of-bounds write
+         * already fixed this session in core/mission_link_handshake.c's
+         * own per-peer arrays (every accessor there now bounds-checks
+         * peer_board_id). That fix never propagated to this file's own
+         * local duplicate arrays. Unreachable today (NUM_TEAMS=10,
+         * COMMS_TRANSPORT_TEAMS_PER_BOARD=5 => board_count=2, safely
+         * under the cap of 8), but this file's own comment right above
+         * explicitly anticipates board_count growing ("Adding a board is
+         * a NUM_TEAMS/COMMS_TRANSPORT_TEAMS_PER_BOARD change, not a code
+         * change here") without mentioning HANDSHAKE_MAX_BOARDS also
+         * needs to grow to match - clamp defensively instead of trusting
+         * that to always be remembered. */
+        if (board_count > HANDSHAKE_MAX_BOARDS)
+        {
+            board_count = HANDSHAKE_MAX_BOARDS;
+        }
+
         for (peer = 1u; peer < board_count; peer++)
         {
             if (mission_link_handshake_should_send_relay_req(peer, now_ms))
