@@ -125,6 +125,28 @@ void lora_crypto_accept_counter(uint8_t sender_board_id, uint32_t counter)
         return;
     }
 
+    /* Bug fix: this used to overwrite g_rx_last_counter unconditionally,
+     * trusting whatever counter lora_crypto_reconstruct_counter() handed
+     * back. That function's own 32-bit-wrap fallback (see its comment)
+     * can, in an astronomically unlikely edge case, return a candidate
+     * <= last_accepted - and a replayed old (but still AEAD-valid)
+     * frame at exactly that point would then roll this sender's
+     * anti-replay floor backward, reopening the window for every
+     * counter between the new (lower) floor and the old one. In every
+     * other path through reconstruct_counter(), the candidate it
+     * returns is already > last_accepted by construction, so this
+     * monotonic check has no effect on normal operation - it only
+     * forecloses that one edge case. Safe to enforce here regardless of
+     * what reconstruct_counter() computes: this function is only ever
+     * called after the AEAD tag has already verified (see lora_frame_
+     * try_parse()), so refusing to lower the floor never rejects a
+     * frame - it only guards the bookkeeping this floor exists to
+     * protect. */
+    if (g_rx_seen[sender_board_id] && counter <= g_rx_last_counter[sender_board_id])
+    {
+        return;
+    }
+
     g_rx_last_counter[sender_board_id] = counter;
     g_rx_seen[sender_board_id] = 1u;
 }
