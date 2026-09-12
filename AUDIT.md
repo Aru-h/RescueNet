@@ -62,6 +62,7 @@ NONE — `team_id`/`incident_slot` bounds-checked against `NUM_TEAMS`/`NUM_INCID
 **SEVERITY: LOW**
 The inner loop searching `agent->path[j]` only ever assigns `team->incident_queue_slot[0]`/`incident_queue_id[0]` (hardcoded index 0) and immediately `break`s after the first matching task, so a team's `incident_queue_*` arrays (sized `CBBA_MAX_BUNDLE_SIZE`=3) never get more than one entry populated even when the team's CBBA path holds multiple incident tasks — extra capacity silently unused, a stale assumption if downstream code expects more than one queued incident.
 - **Connects to:** cbba_run, search_generate_sweep_tasks, generate_evacuee_offboard_incidents, assign_incident, select_best_team, cbba_sync_mission_execution_twin, snapshot_record, allocate_support_team
+   **RESOLVED** — commit `d044a24`. Now queues every qualifying task instead of hardcoding index 0/breaking after the first.
 
 ### 11. `team_can_accept_incident` global — L173
 **SEVERITY: NONE**
@@ -537,6 +538,7 @@ NONE — iterates `min_x..max_x`/`min_y..max_y` guarded by `in_bounds` inside th
 **SEVERITY: LOW**
 The outer `radius` loop (up to 72) re-scans the entire `(2*radius+1)²` box every iteration instead of only the new ring — an O(radius³) performance smell, not a correctness bug, and only called 9 times at world-gen time (not a hot ISR/task path). If no unique probe is ever found, it silently falls back to returning the original `candidate` unmodified, permitting a duplicate/overlapping anchor without any signal.
 - **Connects to:** `in_bounds`, `is_water_cell`, `abs_i`; called by `stage_generate_districts`.
+   **RESOLVED** — commit `d044a24`. Added `g_diag_duplicate_anchor_fallback` diagnostic counter; no better fallback exists (every reachable cell was already tried).
 
 ### 103. `stage_generate_districts` static — L668
 **SEVERITY: NONE**
@@ -794,6 +796,7 @@ NONE — loop bounded by `building_count`; all writes go through already-validat
 **SEVERITY: LOW**
 Performs a cross-module, unguarded read-modify-write increment on `g_search_zones[building->district_id].aftershock_hits_since_swept` (a field owned by `search_zones.c`). The bounds check (`< NUM_SEARCH_ZONES`) is correct, but there is no visible synchronization; if that counter is also touched by a Search-team task concurrently, this is an unprotected shared-counter race. Exploitability depends on `search_zones.c`'s threading model (outside this file), but the direct cross-module field mutation itself is a coupling/consistency risk.
 - **Connects to:** `deterministic_percent_roll`, `clamp_u8`, `queue_hazard_event`, external `g_search_zones`; called by `environment_update_hazard_propagation`.
+   **RESOLVED (re-scoped, not a live race)** — commit `d044a24`. Confirmed both board targets run exactly one simulation task; documented the invariant rather than adding a lock nothing needs yet.
 
 ### 153. `degrade_blocked_roads` static — L2611
 **SEVERITY: NONE**
@@ -1346,6 +1349,7 @@ Early-returns if `heading_to_rest`. If `task` resolves non-NULL but the team is 
 **SEVERITY: LOW**
 Reads and increments the file-scope `g_tx_counter` (plain, non-`volatile` `uint32_t`) with a non-atomic read-then-increment. If ever called from both an ISR and task context (or two preemptible task contexts) for LoRa TX, this would produce a repeated (key, nonce) pair and a catastrophic AEAD break (keystream reuse). All current call sites (comms_transport.c) are task-context only, single-threaded dispatch, so not currently triggered, but there is no lock/disable-IRQ and no `volatile`.
 - **Connects to:** lora_frame_pack, lora_crypto_reset
+   **RESOLVED (re-scoped, not a live race)** — commit `d044a24`. Same single-task confirmation as item #15; documented the invariant.
 
 ### 258. `lora_crypto_reset` [global] — L41
 **SEVERITY: NONE**
@@ -1720,16 +1724,19 @@ Correct one-shot lazy-seed pattern via a valid-flag guard.
 **SEVERITY: MEDIUM**
 Writes `g_relay_req_sent_once[peer_board_id]`, `g_relay_req_last_sent_valid[peer_board_id]`, `g_relay_req_last_sent_tick[peer_board_id]` with **no bounds check** that `peer_board_id < HANDSHAKE_MAX_BOARDS`. Only called from `mission_link_handshake_should_send_relay_req()`, which has the same gap (#75) — a caller passing an out-of-range `peer_board_id` (e.g. via `comms_transport_board_count()` drift if `NUM_TEAMS`/`COMMS_TRANSPORT_TEAMS_PER_BOARD` is raised past `HANDSHAKE_MAX_BOARDS` without updating that macro — exactly the drift scenario the header's own comment warns about) causes an out-of-bounds **write** to these static arrays — real memory corruption on an MMU-less embedded target. Contrasts with `lora_crypto.c`'s and this same file's own `mission_link_handshake_note_remote_reply()` defensive `>= CAP` checks elsewhere — an inconsistent trust boundary.
 - **Connects to:** mission_link_handshake_should_send_relay_req
+   **RESOLVED** — commit `d044a24`. Fixed as one cluster with item #26 and its three siblings below - all five now bounds-check `peer_board_id` before indexing.
 
 ### 331. `mission_link_handshake_should_send_relay_req` [global] — L438
 **SEVERITY: MEDIUM**
 Indexes five `[peer_board_id]`-keyed arrays and calls `mission_link_handshake_note_relay_req_sent(peer_board_id, now)` with none of it bounds-checked against `HANDSHAKE_MAX_BOARDS`, unlike `mission_link_handshake_note_remote_reply()` in the same file which does check. Same out-of-bounds read/write risk as #74 if `peer_board_id` is ever out of range.
 - **Connects to:** mission_link_handshake_seed_timeout_clock_if_needed, mission_link_handshake_note_relay_req_sent
+   **RESOLVED** — commit `d044a24`. See item #26/`mission_link_handshake_note_relay_req_sent` above - fixed as one cluster.
 
 ### 332. `mission_link_handshake_relay_timed_out` [global] — L479
 **SEVERITY: MEDIUM**
 Indexes and writes `g_relay_timed_out[peer_board_id]` with no bounds check, same class of issue as #74/#75. Logic itself (sticky timeout, shared clock, "reply-seen wins over timeout" ordering) is otherwise correct.
 - **Connects to:** mission_link_handshake_seed_timeout_clock_if_needed, mission_link_handshake_get_relay_reply
+   **RESOLVED** — commit `d044a24`. See item #26/`mission_link_handshake_note_relay_req_sent` above - fixed as one cluster.
 
 ### 333. `mission_link_handshake_note_remote_reply` [global] — L502
 **SEVERITY: NONE**
@@ -1740,11 +1747,13 @@ Correctly bounds-checks `reply->board_id >= HANDSHAKE_MAX_BOARDS` before indexin
 **SEVERITY: MEDIUM**
 Indexes `g_relay_reply_seen`/`g_relay_reply` with no bounds check before calling into `mission_link_handshake_relay_timed_out()` (also unguarded) — same class of issue as #74-#76, compounding through the call chain.
 - **Connects to:** mission_link_handshake_relay_timed_out, mission_link_handshake_pack_reply
+   **RESOLVED** — commit `d044a24`. See item #26/`mission_link_handshake_note_relay_req_sent` above - fixed as one cluster.
 
 ### 335. `mission_link_handshake_relay_reply_seen` [global] — L542
 **SEVERITY: LOW**
 Read-only, single-array access with no bounds check — same missing-guard pattern as #74-#78 but lower severity since it's a read, not a write.
 - **Connects to:** (external caller: laptop/tools/two_board_harness.c, board mission_link_task.c)
+   **RESOLVED** — commit `d044a24`. Fixed together with its MEDIUM-rated siblings below (same root cause: bounds-checked all five now).
 
 ## core/mission_link_override.c
 
@@ -2037,6 +2046,7 @@ Standard clamp to [0,1]; no caller feeds NaN.
 **SEVERITY: LOW**
 `team->fault_state.active_mask` is `uint32_t` but shifted left by 52 bits into the `uint64_t signature` — only the low 12 bits survive; bits 12-31 are lost. Currently harmless because only `NUM_OPERATIONAL_FAULT_CLASSES==5` fault classes exist, but the signature (used by `recovery_dispatch` to dedupe repeated dispatch calls) would silently fail to detect a change confined to bits 12+ if that field's bit layout ever grows.
 - **Connects to:** recovery_dispatch
+   **RESOLVED** — commit `d044a24`. Added a `_Static_assert(NUM_OPERATIONAL_FAULT_CLASSES <= 12)` tripwire rather than re-deriving the whole bit-packing scheme for a currently-theoretical concern.
 
 ### 391. `recovery_metrics_reset` [static] — L97
 **SEVERITY: NONE**
