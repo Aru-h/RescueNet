@@ -53,8 +53,18 @@
  */
 static void fmt_fixed3(char *buf, uint32_t bufsz, float value, int decimals)
 {
-    if(bufsz < 2)
+    /* Bug fix: this used to return without touching buf at all when
+       bufsz < 2, leaving it uninitialized/non-terminated for any future
+       caller that passes a smaller buffer than today's callers do (all
+       currently pass 16). Zero-terminate the one byte that is actually
+       safe to write instead of leaving buf in an undefined state. */
+    if(bufsz == 0)
         return;
+    if(bufsz < 2)
+    {
+        buf[0] = '\0';
+        return;
+    }
 
     uint32_t pos = 0;
     int32_t sign = 1;
