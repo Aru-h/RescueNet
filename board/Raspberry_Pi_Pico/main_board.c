@@ -249,7 +249,7 @@ extern void mission_link_task_step(void);
  * incoming frame doesn't sit unread for a whole seed's worth of
  * ticks.
  */
-extern void sx1262_hal_init(void);
+extern int sx1262_hal_init(void);
 extern void sx1262_rx_poll(void);
 
 /*
@@ -474,7 +474,12 @@ LOCAL void sim_task(INT stacd, void *exinf)
        STM32N6570-DK/main_board.c's own sx1262_hal_init() call
        ordering - see sx1262_hal.c's own top-of-file comment for the
        wiring this assumes. */
-    sx1262_hal_init();
+    if(sx1262_hal_init() != 0)
+    {
+        tm_putstring((UB*)"tron: sx1262_hal_init FAILED\n");
+        tk_slp_tsk(TMO_FEVR);
+        return;
+    }
 
     /* Heartbeat stage 2/3: three quick pulses once sx1262_hal_init()
        has RETURNED - if this never appears (only stage 1's single
@@ -698,12 +703,21 @@ LOCAL void sim_task(INT stacd, void *exinf)
         /* Final drain: flush whatever the last partial interval left
          * pending so a run's last few events aren't stuck in the
          * ring until the next seed's ticks happen to drain them (or
-         * lost if this was the last seed). One call is enough as
-         * long as BOARD_SNAPSHOT_DRAIN_MAX_FRAMES_PER_CALL >=
-         * BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL's worth of typical
-         * per-tick snapshot_record() volume; if that assumption ever
-         * stops holding, this would need a loop instead of one call. */
-        (void)board_snapshot_ring_drain();
+         * lost if this was the last seed).
+         * Bug fix: this used to be a single call, only correct as
+         * long as BOARD_SNAPSHOT_DRAIN_MAX_FRAMES_PER_CALL (32) covers
+         * whatever accumulated since the last periodic drain - the
+         * comment itself flagged this as an assumption, not a
+         * guarantee. If exceeded, snapshot_begin_run()'s unconditional
+         * ring reset at the start of the next seed would have silently
+         * and permanently discarded the remainder (worse on the very
+         * last seed, since nothing drains after sim_runner_shutdown()
+         * at all). Loop until the ring is actually empty instead of
+         * assuming one call is enough - board_snapshot_ring_drain()
+         * returns 0 once there's nothing left to drain. */
+        while(board_snapshot_ring_drain() > 0u)
+        {
+        }
 
         sim_end_seed();
         tm_printf((UB*)"tron: seed %lu done\n", (unsigned long)seed);

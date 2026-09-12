@@ -188,6 +188,14 @@ static bool g_sx1262_spi_ready = false;
 static volatile int g_lora_tx_busy = 0;
 static uint32_t g_lora_tx_busy_poll_count = 0u;
 
+/* Diagnostic: how many times sx1262_enter_rx()'s post-TX re-arm (in
+ * sx1262_rx_poll() below) has failed. This file deliberately doesn't
+ * mirror the DK HAL's lazy g_radio_configured retry-gate pattern (see
+ * sx1262_hal_init()'s own doc on why), so a failed re-arm here has no
+ * automatic retry - counting it at least makes the failure visible
+ * instead of silently leaving the radio deaf until the next TX. */
+static uint32_t g_sx1262_rx_rearm_failures = 0u;
+
 #ifndef SX1262_TX_BUSY_POLL_LIMIT
 #define SX1262_TX_BUSY_POLL_LIMIT 100000u
 #endif
@@ -404,8 +412,24 @@ sx126x_hal_status_t sx126x_hal_wakeup(const void* context)
 
     /* SX126x reference wakeup sequence: a brief NSS low pulse pulls
        the radio out of sleep, then wait for BUSY to clear before
-       issuing any real command. */
+       issuing any real command.
+       Bug fix: this used to pulse NSS low then immediately high with
+       NO delay at all between the two calls, and no pre-emptive BUSY
+       wait before starting the pulse - unlike this board's own
+       sx126x_hal_reset() (same file) and the DK's equivalent wakeup
+       function, both of which insert a real delay and wait on BUSY
+       first. Back-to-back gpio_set_val() calls give no guaranteed
+       minimum NSS-low pulse width, risking a pulse too short for the
+       SX126x to register the wake trigger. No usec-granularity delay
+       exists on this BSP (see this file's header comment), so
+       tk_dly_tsk(1) - the same coarse-but-only-available primitive
+       sx126x_hal_reset() already uses - is the best available here
+       too. Currently dead code (nothing in this codebase calls
+       sx126x_wakeup()/sx126x_set_sleep()), but wrong regardless of
+       whether it's exercised today. */
+    sx1262_wait_not_busy();
     gpio_set_val(SX1262_PIN_NSS, 0);
+    tk_dly_tsk(1);
     gpio_set_val(SX1262_PIN_NSS, 1);
 
     sx1262_wait_not_busy();
@@ -532,11 +556,26 @@ static int sx1262_dio1_is_asserted(void)
  * sx1262_rx_poll() below) - NOT after a successful RxDone, since with
  * continuous mode the chip is already still listening on its own
  * after a reception; see sx1262_rx_poll()'s own doc on that split. */
-void sx1262_enter_rx(void)
+/* Bug fix: both sx126x_ calls below used to discard their return codes.
+ * A failed call here left the radio silently not actually listening,
+ * with no diagnostic and no retry - called both from sx1262_hal_init()
+ * (bring-up) and sx1262_rx_poll() (after every TX completion/timeout),
+ * so a single failed call could silently deafen the radio for the rest
+ * of the run. Now returns 0 on success, 1 on the first failure, so
+ * callers can decide whether to retry. Same fix as the DK's identical
+ * function. */
+int sx1262_enter_rx(void)
 {
     sx1262_spi_init();
-    (void)sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC);
-    (void)sx126x_set_rx_with_timeout_in_rtc_step(NULL, SX126X_RX_CONTINUOUS);
+    if (sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC) != SX126X_STATUS_OK)
+    {
+        return 1;
+    }
+    if (sx126x_set_rx_with_timeout_in_rtc_step(NULL, SX126X_RX_CONTINUOUS) != SX126X_STATUS_OK)
+    {
+        return 1;
+    }
+    return 0;
 }
 
 /* Call every tick, same cadence as mission_link_task_step() in
@@ -665,7 +704,10 @@ void sx1262_rx_poll(void)
            dispatcher gates on. See g_lora_tx_busy's own doc above. */
         g_lora_tx_busy = 0;
         g_lora_tx_busy_poll_count = 0u;
-        sx1262_enter_rx();
+        if (sx1262_enter_rx() != 0)
+        {
+            g_sx1262_rx_rearm_failures++;
+        }
     }
 }
 
@@ -696,10 +738,19 @@ void sx1262_rx_poll(void)
  * refactor this into a DK-style lazy/guarded helper "for consistency
  * between the two boards," that's the RX re-arm issue above to
  * resolve first, not a shape mismatch to paper over here. */
-void sx1262_hal_init(void)
+/* Bug fix: every sx126x_ call below used to discard its return code,
+ * so a failed call during this one-time bring-up (plausible given
+ * this file's own header notes the pin assignments are still
+ * placeholders) left the radio incompletely/incorrectly configured
+ * with zero diagnostic anywhere - silent total-comms failure for the
+ * entire run. Now returns 0 on success, 1 on the first failure, so
+ * the caller (main_board.c) can fail loudly at boot the same way it
+ * already does for sim_runner_init(), instead of running an entire
+ * seed loop against a radio that was never actually configured. */
+int sx1262_hal_init(void)
 {
     sx1262_spi_init();
-    (void)sx126x_hal_reset(NULL);
+    if (sx126x_hal_reset(NULL) != SX126X_HAL_STATUS_OK) return 1;
 
     /* TxDone | RxDone | Timeout -> DIO1. Same mask as board/
        STM32N6570-DK/sx1262_hal.c's own sx126x_set_dio_irq_params()
@@ -710,16 +761,16 @@ void sx1262_hal_init(void)
        DIO3 unused by this HAL (DIO2 in particular is deliberately
        NOT used for RF-switch auto-control here, matching the DK's
        own wiring note on that same point). */
-    (void)sx126x_set_dio_irq_params(NULL, 0x0203u, 0x0203u, 0x0000u, 0x0000u);
+    if (sx126x_set_dio_irq_params(NULL, 0x0203u, 0x0203u, 0x0000u, 0x0000u) != SX126X_STATUS_OK) return 1;
 
     /* LOCKED PHY bring-up - values from core/lora_radio_params.h, the
        single source of truth shared with the DK's own
        ensure_radio_configured(). Order matches the DK's: pkt type,
        RF frequency, buffer base address, then mod params, then pkt
        params, then sync word, then TX power/ramp. */
-    (void)sx126x_set_pkt_type(NULL, SX126X_PKT_TYPE_LORA);
-    (void)sx126x_set_rf_freq(NULL, LORA_RF_FREQ_HZ);
-    (void)sx126x_set_buffer_base_address(NULL, 0u, 0u);
+    if (sx126x_set_pkt_type(NULL, SX126X_PKT_TYPE_LORA) != SX126X_STATUS_OK) return 1;
+    if (sx126x_set_rf_freq(NULL, LORA_RF_FREQ_HZ) != SX126X_STATUS_OK) return 1;
+    if (sx126x_set_buffer_base_address(NULL, 0u, 0u) != SX126X_STATUS_OK) return 1;
 
     {
         sx126x_mod_params_lora_t mod_params;
@@ -728,7 +779,7 @@ void sx1262_hal_init(void)
         mod_params.bw = LORA_BANDWIDTH;
         mod_params.cr = LORA_CODING_RATE;
         mod_params.ldro = LORA_LDRO;
-        (void)sx126x_set_lora_mod_params(NULL, &mod_params);
+        if (sx126x_set_lora_mod_params(NULL, &mod_params) != SX126X_STATUS_OK) return 1;
     }
 
     {
@@ -742,13 +793,15 @@ void sx1262_hal_init(void)
         pkt_params.pld_len_in_bytes = 0u;
         pkt_params.crc_is_on = LORA_CRC_IS_ON;
         pkt_params.invert_iq_is_on = LORA_INVERT_IQ_IS_ON;
-        (void)sx126x_set_lora_pkt_params(NULL, &pkt_params);
+        if (sx126x_set_lora_pkt_params(NULL, &pkt_params) != SX126X_STATUS_OK) return 1;
     }
 
-    (void)sx126x_set_lora_sync_word(NULL, LORA_SYNC_WORD);
-    (void)sx126x_set_tx_params(NULL, LORA_TX_POWER_DBM, LORA_RAMP_TIME);
+    if (sx126x_set_lora_sync_word(NULL, LORA_SYNC_WORD) != SX126X_STATUS_OK) return 1;
+    if (sx126x_set_tx_params(NULL, LORA_TX_POWER_DBM, LORA_RAMP_TIME) != SX126X_STATUS_OK) return 1;
 
-    sx1262_enter_rx();
+    if (sx1262_enter_rx() != 0) return 1;
+
+    return 0;
 }
 
 #endif /* CPU_RP2040 */
