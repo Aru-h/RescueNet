@@ -173,6 +173,32 @@ static uint32_t g_inbox_head;  /* next slot to write */
 static uint32_t g_inbox_tail;  /* next slot to read */
 static uint32_t g_inbox_count;
 
+/* Concurrency invariant, CURRENT build only: g_inbox_head/g_inbox_tail/
+ * g_inbox_count (and every CommsInboxEntry_t slot) are read and/or written
+ * by this function, comms_transport_poll_received(), comms_transport_
+ * peek_frame_type(), and comms_transport_deliver_received() (all below) -
+ * and today that's safe ONLY because none of the four is ever called from
+ * a real interrupt. Confirmed against both currently-implemented boards:
+ * board/STM32N6570-DK/sx1262_hal.c and board/Raspberry_Pi_Pico/sx1262_hal.c
+ * both poll the radio's DIO1 line from an ordinary task/superloop
+ * (sx1262_poll_rx(), called out of main_board.c's single sim_task on the
+ * DK) rather than servicing it from a real GPIO/EXTI interrupt, and
+ * comms_transport_deliver_received()'s own comment below already flags
+ * its real IRQ entry point as "still pending bring-up." None of this
+ * state is `volatile`, and none of these four functions take a critical
+ * section or disable interrupts, because nothing preempts them today.
+ *
+ * THIS STOPS BEING SAFE the moment DIO1 is rewired to a real interrupt
+ * (EXTI on the DK, gpio_set_irq_enabled() on the Pico) instead of being
+ * polled from sx1262_poll_rx()/the Pico's equivalent: comms_transport_
+ * deliver_received() would then run in interrupt context while
+ * comms_transport_poll_received()/peek_frame_type() keep running in task
+ * context, and this non-atomic three-field read-modify-write sequence can
+ * desynchronize under a mid-poll interrupt (lost/duplicated frames, or the
+ * queue wedging at a wrong count). Add a critical section around the
+ * read-modify-write in all four functions (or move to a lock-free SPSC
+ * ring) BEFORE that rewiring happens - do not assume this file is already
+ * safe for it just because it compiles clean for the board today. */
 static int comms_transport_inbox_push(uint8_t sender_team_id,
                                        uint8_t frame_type,
                                        const uint8_t *payload,
@@ -541,6 +567,9 @@ void comms_transport_dispatch_pending(void)
     (void)lora_spi_transmit(wire_buf, wire_len);
 }
 
+/* Shares g_inbox_head/tail/count with comms_transport_inbox_push() - see
+ * that function's concurrency-invariant comment above. Not yet safe to
+ * call from a real ISR context caller pushing concurrently. */
 int comms_transport_poll_received(uint8_t *out_sender_team_id,
                                    uint8_t *out_frame_type,
                                    uint8_t *out_payload,
@@ -571,6 +600,9 @@ int comms_transport_poll_received(uint8_t *out_sender_team_id,
     return 1;
 }
 
+/* Shares g_inbox_head/tail/count with comms_transport_inbox_push() - see
+ * that function's concurrency-invariant comment above. Not yet safe to
+ * call from a real ISR context caller pushing concurrently. */
 int comms_transport_peek_frame_type(uint8_t *out_frame_type)
 {
     if(g_inbox_count == 0u)
@@ -579,6 +611,14 @@ int comms_transport_peek_frame_type(uint8_t *out_frame_type)
     return 1;
 }
 
+/* Calls comms_transport_inbox_push() - see that function's concurrency-
+ * invariant comment above. This is the function core/comms_transport.h's
+ * own doc comment on this prototype calls "a real SPI/IRQ RX handler
+ * (still pending bring-up)": today it is only ever invoked from polled
+ * task context (sx1262_poll_rx() on the DK, the Pico's equivalent), never
+ * from a real interrupt - do not add a real ISR caller here without first
+ * adding the synchronization core/comms_transport_inbox_push()'s comment
+ * above describes. */
 int comms_transport_deliver_received(uint8_t frame_type, const uint8_t *payload,
                                       uint8_t payload_len)
 {
