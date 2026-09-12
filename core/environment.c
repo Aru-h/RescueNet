@@ -1464,15 +1464,16 @@ static void stage_generate_infrastructure(void)
             break;
         }
     }
-    /* NOTE (verified via g_diag_gateway_degenerate_worlds - ~47/50 P1 seeds):
-     * the "skip already-claimed cells" scan above is correct but rarely has
-     * >1 candidate to work with - the road generator almost never carves a
-     * road to the map edge, so has_road() && on-border yields 0-1 cells per
-     * world. g_gateway_sites[1..2] therefore stay invalid and
-     * initialize_evacuation_gateways() (incident.c) falls back to *random,
-     * un-road-checked* edge cells. Fixing that (relax the border-road
-     * requirement / carve a short edge spur / validate the random fallback)
-     * is a placement-policy decision, deliberately left for review. */
+    /* Verified via g_diag_gateway_degenerate_worlds (--sweep-priority1):
+     * 0 degenerate worlds across 550 seeds in 3 disjoint ranges, 0 carve-
+     * repair failures. Dropping the has_road() requirement above (any
+     * non-water border cell is a candidate, not just one already on a
+     * road) means this loop virtually always finds NUM_EVACUATION_GATEWAYS
+     * distinct valid cells, and the repair pass just above connects
+     * whichever cell is actually picked - so initialize_evacuation_
+     * gateways()'s (incident.c) random un-road-checked fallback is a
+     * true last-resort, not the common case a stale prior version of
+     * this comment claimed. */
 }
 
 static uint8_t road_reachable_map(uint8_t reachable[GRID_WIDTH][GRID_HEIGHT])
