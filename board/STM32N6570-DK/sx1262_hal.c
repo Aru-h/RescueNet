@@ -199,10 +199,26 @@ static void spi5_init(void)
 
     /* CFG2: master mode, SPI motorola mode (COMM already 0 = full
        duplex by reset default), CPOL=0/CPHA=0 (SPI mode 0, per
-       datasheet), software NSS management (SSM/SSOE off - we drive
+       datasheet), software NSS management (SSM on, SSOE off - we drive
        NSS ourselves via GPIO), AFCNTR off (GPIOs stay under our own
-       control, not the peripheral's). */
-    SX1262_SPI->CFG2 = SPI_CFG2_MASTER;
+       control, not the peripheral's).
+       Bug fix: this used to write only SPI_CFG2_MASTER, leaving SSM at
+       its reset value of 0 - which is *hardware* NSS management, the
+       opposite of this comment's own stated intent, and with NSS routed
+       as a plain GPIO output (not the SPI5 AF) rather than a real NSS
+       pin, the peripheral's internal hardware NSS input is left
+       floating/disconnected. Cross-checked against ST's SPIv3 (this
+       family, same block as STM32H7) reference-manual guidance and
+       community documentation, not just this comment's stated intent:
+       setting SPI_CFG2_SSM alone is not sufficient either - in software
+       NSS mode the *internal* NSS level comes from SPI_CR1_SSI, and
+       leaving SSI at its reset value of 0 in master mode means the
+       internal NSS reads as "selected" (low), which triggers exactly
+       the same MODF (mode fault) condition SSM was meant to avoid. Both
+       bits are required together for master mode with software-managed
+       NSS: SPI_CFG2_SSM=1 (this line) and SPI_CR1_SSI=1 (set below,
+       alongside enabling SPE). */
+    SX1262_SPI->CFG2 = SPI_CFG2_MASTER | SPI_CFG2_SSM;
 
     /* CFG1: 8-bit data size, conservative baud-rate prescaler. SPI5 is
        on APB2; exact APB2 clock depends on the DK's final clock tree
@@ -217,7 +233,11 @@ static void spi5_init(void)
 
     SX1262_SPI->CR2 = 0u; /* TSIZE managed per-transfer if needed; 0 = unlimited/continuous, fine for byte-at-a-time polling */
 
-    SX1262_SPI->CR1 = SPI_CR1_SPE; /* enable */
+    /* SSI must be set alongside SPE, not after: with SSM=1, the
+       internal NSS level is whatever SSI says at the moment mode-fault
+       detection evaluates it, so this must never be enabled with SSI
+       still 0 - see the CFG2 comment above for why. */
+    SX1262_SPI->CR1 = SPI_CR1_SSI | SPI_CR1_SPE; /* enable, NSS forced high internally */
 }
 
 static uint8_t spi5_xfer_byte(uint8_t out)
