@@ -3003,7 +3003,7 @@ Correct IDR bit test.
 **SEVERITY: MEDIUM**
 No timeout on the TXP/RXP wait loops - unlike wait_busy_low()'s infinite wait (which is justified against datasheet BUSY semantics), a disabled/wedged SPI peripheral here (e.g. via #22's MODF scenario) hangs the entire single-task firmware with no diagnostic or recovery. Re-setting CR1|=CSTART on every byte call is idempotent/harmless, not a bug.
 - **Connects to:** called by sx126x_hal_write, sx126x_hal_read
-   **NEEDS OWN LOOK, not fixed.** Adding a timeout requires picking a value against SPI peripheral timing and deciding recovery behavior (retry? reset the peripheral? propagate an error up through `ensure_radio_configured`'s now-checked return path?) - genuine design work, not a mechanical guard. Flagged for a dedicated pass; bundled with #43 (same root class) and the Pico's #105/#106.
+   **RESOLVED** — commit `7b3957b`. Design decided: fixed iteration-count timeout (no calibrated timer exists at this call depth; the actual APB2 clock is still unresolved per this file's own CFG1 comment, so a wall-clock deadline can't be computed here either), sized against the SPI5 config actually chosen (CFG1's /256 prescaler) and the SX126x datasheet's own Tswmode (~3.5ms max BUSY-high duration, cross-checked via WebSearch, matching this file's existing "~3ms post-reset BUSY stretch" figure) at the Cortex-M55's rated max clock (800MHz) as the fastest plausible clock the bound must survive without a false timeout. On timeout: returns failure (SX126X_HAL_STATUS_ERROR), does not retry in-place and does not reset the peripheral from this leaf function - propagates up through the return-code-checking path already added this session (`ensure_radio_configured`/`sx1262_enter_rx`/`lora_spi_transmit` all already check and act on this). Traced: every caller already handles a HAL failure correctly (verified, not assumed) - no new silent-ignore path introduced. Applied identically to #43 and the Pico's #105/#106.
 
 ### 42. `crude_delay_cycles` [static] — L251
 **SEVERITY: NONE**
@@ -3014,7 +3014,7 @@ Volatile loop counter prevents optimization-away; explicitly documented as an un
 **SEVERITY: MEDIUM**
 Infinite busy-wait with no timeout, intentionally documented (a command issued while BUSY is high is silently dropped per datasheet). But since there's exactly one cooperative task and this runs on every SPI transaction, a dead/disconnected/miswired radio (a real risk given this file's documented required solder-bridge rework) freezes the entire firmware (mission-link, sim tick, telemetry) with no watchdog recovery.
 - **Connects to:** gpio_read; called by sx126x_hal_reset, sx126x_hal_wakeup, sx126x_hal_write, sx126x_hal_read
-   **NEEDS OWN LOOK, not fixed** - see #41's note (same bundle).
+   **RESOLVED** — commit `7b3957b` - see #41's note (same bundle, same fix).
 
 ### 44. `sx1262_hal_init` [global] — L277
 **SEVERITY: NONE**
@@ -3041,11 +3041,13 @@ Opcode constants cross-checked against sx126x.c's private enum; switch correctly
 ### 48. `sx126x_hal_write` [global] — L370
 **SEVERITY: NONE**
 Correctly snoops command[0] only when length>0; NSS bracketing correct; SetSleep trailing-wait exception documented and matches reference HALs. Always returns OK since there's no error path from the busy-wait SPI primitives to propagate (real risk lives in spi5_xfer_byte/wait_busy_low, #23/#25, not here).
+   **CORRECTED** — commit `7b3957b`. The "always returns OK" premise above no longer holds: fixing #41/#43's timeouts (see those entries) required this function to actually check `spi5_xfer_byte`/`wait_busy_low`'s new return codes and propagate `SX126X_HAL_STATUS_ERROR` on timeout (deasserting NSS first, same cleanup the success path already does). Not a defect in this function's original logic — just a description that stopped being accurate once its callees gained a real failure path.
 - **Connects to:** apply_rf_switch_for_opcode, wait_busy_low, gpio_write, spi5_xfer_byte; called by the vendored sx126x_driver core for every command
 
 ### 49. `sx126x_hal_read` [global] — L411
 **SEVERITY: NONE**
 Correctly clocks NOP bytes during data-read phase; wait_busy_low bracketing correct. Same "always OK" caveat as #30, not a defect specific to this function.
+   **CORRECTED** — commit `7b3957b` - same fix and same reasoning as #48 above.
 - **Connects to:** wait_busy_low, gpio_write, spi5_xfer_byte; called by the vendored sx126x_driver core
 
 ### 50. `sx1262_enter_rx` [static] — L496
@@ -3357,13 +3359,13 @@ Idempotency guard correct for single-task use; reset/idle-level sequencing corre
 **SEVERITY: LOW**
 Busy-waits on local PL022 FIFO status bits with no timeout - resolves almost immediately in normal operation (not dependent on the external radio), same class as the DK's spi5_xfer_byte.
 - **Connects to:** sx126x_hal_write, sx126x_hal_read
-   **NEEDS OWN LOOK, not fixed** - see DK's #41 note (same bundle, same reasoning).
+   **RESOLVED** — commit `7b3957b` - see DK's #41 note (same bundle, same fix).
 
 ### 106. `sx1262_wait_not_busy` [static] — L282
 **SEVERITY: NONE**
 Deliberate no-timeout busy-wait on the SX126x BUSY line, matching the DK's wait_busy_low() and its documented datasheet rationale.
 - **Connects to:** sx126x_hal_write, sx126x_hal_read, sx126x_hal_wakeup
-   **NEEDS OWN LOOK, not fixed** - see DK's #41 note (same bundle, same reasoning).
+   **RESOLVED** — commit `7b3957b` - see DK's #41 note (same bundle, same fix).
 
 ### 107. `apply_rf_switch_for_opcode` [static] — L299
 **SEVERITY: NONE**
@@ -3373,11 +3375,13 @@ Ported verbatim from the DK's identical function, correct switch coverage.
 ### 108. `sx126x_hal_write` [global] — L326
 **SEVERITY: NONE**
 Opcode snoop correctly guarded; BUSY-wait before NSS assert; loop bounds correct. Always returns OK (no failure path to detect at this level), consistent with the DK's identical HAL.
+   **CORRECTED** — commit `7b3957b` - same fix and same reasoning as the DK's #48 entry: this function's callees (#105/#106) gained a real failure path, so this function now checks and propagates it.
 - **Connects to:** sx1262_spi_init, apply_rf_switch_for_opcode, sx1262_wait_not_busy, sx1262_spi_xfer_byte
 
 ### 109. `sx126x_hal_read` [global] — L358
 **SEVERITY: NONE**
 Same structure as write, correct NOP-byte clocking, no bounds issues.
+   **CORRECTED** — commit `7b3957b` - same fix as #108 above.
 - **Connects to:** sx1262_spi_init, sx1262_wait_not_busy, sx1262_spi_xfer_byte
 
 ### 110. `sx126x_hal_reset` [global] — L384
