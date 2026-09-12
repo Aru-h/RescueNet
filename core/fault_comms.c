@@ -38,20 +38,22 @@ _Static_assert(sizeof(FaultBroadcastPayload_t) <= LORA_FRAME_MAX_PAYLOAD,
 
 /* Audit #163: the fault_buffer local ring must store the exact same
    evidence vector that goes out on the wire. fault_comms_broadcast_local_
-   teams() assembles all FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES (9) into
-   payload.evidence - 7 watchdog slots plus equipment_level and
-   confirmed_mobility_impairment written directly - THEN passes the whole
-   thing to fault_buffer_record_local_evidence(), and sends that same
-   struct on the wire. These asserts pin the three widths so a future edit
-   to any one of them can't silently re-open the 7-vs-9 mismatch. */
+   teams() assembles all FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES (11) into
+   payload.evidence - 7 watchdog slots plus equipment_level,
+   confirmed_mobility_impairment, incident_priority and victim_count
+   written directly - THEN passes the whole thing to fault_buffer_record_
+   local_evidence(), and sends that same struct on the wire. These asserts
+   pin the three widths so a future edit to any one of them can't silently
+   re-open the 7-vs-11 mismatch. */
 _Static_assert(sizeof(((FaultBroadcastPayload_t *)0)->evidence) ==
                sizeof(((FaultBufferLocalSample_t *)0)->evidence),
     "wire evidence[] and fault_buffer local-sample evidence[] must be the "
     "same width (audit #163)");
-_Static_assert(FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS + 2u ==
+_Static_assert(FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS + 4u ==
                FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES,
-    "wire feature count must be watchdog evidence slots + 2 extras "
-    "(equipment_level, confirmed_mobility_impairment) - audit #163");
+    "wire feature count must be watchdog evidence slots + 4 extras "
+    "(equipment_level, confirmed_mobility_impairment, incident_priority, "
+    "victim_count) - audit #163");
 _Static_assert((unsigned)NUM_WATCHDOG_EVIDENCE_SLOTS ==
                FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS,
     "watchdog_get_evidence_vector() fills the first "
@@ -245,7 +247,28 @@ void fault_comms_broadcast_local_teams(void)
         payload.evidence[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS] = (float)g_teams[team_id].equipment_level / 100.0f;
         payload.evidence[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS + 1u] = (float)confirmed_mobility_impairment;
 
-        /* Record after all 9 features are populated so the ring stores
+        /* Same incident lookup as recovery_manager.c's evaluate_fault_
+           predictor() - kept as an independent copy here rather than a
+           shared helper, per audit #163's requirement that this call
+           site assembles its own evidence vector for the wire. */
+        {
+            const IncidentState_t *task = NULL;
+            TeamState_t *team = &g_teams[team_id];
+
+            if(team->assigned_task_pool == TASK_POOL_INCIDENT &&
+               team->assigned_task_slot < NUM_INCIDENTS)
+                task = &g_incidents[team->assigned_task_slot];
+            else if(team->assigned_task_pool == TASK_POOL_SYSTEM &&
+                    team->assigned_task_slot < NUM_SYSTEM_TASKS)
+                task = &g_system_tasks[team->assigned_task_slot];
+
+            payload.evidence[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS + 2u] =
+                (task != NULL) ? (float)task->priority : 0.0f;
+            payload.evidence[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS + 3u] =
+                (task != NULL) ? (float)task->victim_count : 0.0f;
+        }
+
+        /* Record after all 11 features are populated so the ring stores
            the full vector, not just the 7-slot watchdog subset. Same
            struct is sent on the wire below, so fault_buffer_get_local_
            sample() and the FAULT_BROADCAST frame carry byte-identical
@@ -259,7 +282,7 @@ void fault_comms_broadcast_local_teams(void)
            fault_comms_cast_vote()'s branch). Reuses payload.evidence
            directly rather than re-fetching from fault_buffer_get_local_
            sample() - the buffered sample now carries the identical
-           9-feature vector (audit #163), so this is a shortcut, not a
+           11-feature vector (audit #163), so this is a shortcut, not a
            correctness requirement. */
         fault_comms_cast_vote(team_id, payload.evidence);
 

@@ -52,7 +52,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity
 
 all: $(TARGET) $(LABELER)
 
@@ -247,7 +247,7 @@ check-board-link: check-board-compile
 clean:
 	rm -f $(TARGET) $(LABELER) tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv tron_telemetry.log
 	rm -rf $(BOARD_OBJ_DIR) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
-	rm -f $(TWO_BOARD_HARNESS_BIN)
+	rm -f $(TWO_BOARD_HARNESS_BIN) $(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN)
 
 # --- Pico compile check --------------------------------------------------
 # Mirrors check-board-compile/-link above, same class of check now that
@@ -495,4 +495,22 @@ check-two-board-harness:
 check-two-board-cbba-harness:
 	@chmod +x $(TOOLS_DIR)/check-two-board-cbba-harness.sh
 	@$(TOOLS_DIR)/check-two-board-cbba-harness.sh
+
+# --- Evidence-vector parity selftest ---------------------------------------
+# Confirms core/recovery_manager.c's evaluate_fault_predictor() and core/
+# fault_comms.c's fault_comms_broadcast_local_teams() build byte-identical
+# FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES vectors for the same team/tick
+# (audit #163) - see laptop/tools/evidence_vector_parity_selftest.c's own
+# doc for why this needs the whole core/ directory linked, same pattern as
+# laptop/tools/recovery_manager_persistence_selftest.c.
+EVIDENCE_VECTOR_PARITY_SELFTEST_BIN = build/evidence_vector_parity_selftest
+
+check-evidence-vector-parity:
+	@mkdir -p build
+	@echo "  CC      $(TOOLS_DIR)/evidence_vector_parity_selftest.c"
+	@$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) \
+		-o $(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN) \
+		$(TOOLS_DIR)/evidence_vector_parity_selftest.c \
+		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@./$(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN)
 
