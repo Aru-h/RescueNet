@@ -15,7 +15,7 @@ FaultPredictorScores_t fault_predictor_run(const float evidence[FAULT_BUFFER_REM
        FAULT_MODEL_LOADED-guard hand-off pattern CONCORD's doc proposed).
        Not written yet - see fault_predictor.h's own doc on why this
        module's input shape is deliberately the smaller, already-locked
-       9-feature vector rather than the still-unsettled bigger raw-
+       11-feature vector rather than the still-unsettled bigger raw-
        telemetry set. */
 #else
     (void)evidence;

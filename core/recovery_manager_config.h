@@ -141,4 +141,56 @@
 #define RECOVERY_MANAGER_PREDICTOR_REALLOCATE_CONFIDENCE 0.50f
 #define RECOVERY_MANAGER_PREDICTOR_ESCALATE_CONFIDENCE 0.80f
 
+/*
+ * "OR sustained AI persistence" (v4 doc Section 3's stated alternative to
+ * watchdog corroboration - previously NOT implemented, see this file's
+ * evaluate_fault_predictor() comment history). This is a hard-consecutive-
+ * tick streak counter on the AI's own confidence (fault_predictor_run()'s
+ * scores.score[best_class], NOT watchdog->anomaly_confidence - "sustained
+ * AI persistence" means the complex controller's own signal, distinct from
+ * the safety controller's), reset to 0 on any tick confidence drops below
+ * FAULT_PERSISTENCE_FLOOR.
+ *
+ * A cumulative up/down counter (decay a small amount on a bad tick instead
+ * of hard-resetting to 0, matching evidence_channels.py's own RISE/DECAY
+ * asymmetry) was designed and measured as an alternative and REJECTED: on
+ * 60 seeds x 10 teams x 400 ticks (--fault-profile combined) with the same
+ * false-reject/false-accept overlap methodology, no DOWN_STEP choice
+ * (tested 1.0/0.5/0.3/0.15 x UP_STEP) improved separation over the hard-
+ * streak version - at matched false-reject rates the hard streak's
+ * false-accept was consistently as good or better (e.g. ~34.5%/28.1% FR/FA
+ * for hard-streak at H=6 vs. ~42.1%/22.1% for the best up/down variant at
+ * its nearest matched point, interpolating the hard-streak curve to the
+ * same FR gives ~17.3% FA - still better). Reason: the up/down counter's
+ * forgiveness applies just as generously to bursty, intermittent NOISE
+ * (common under FAULT_PROFILE_COMBINED's concurrent-fault-class background
+ * churn) as it does to a real fault's brief dips, canceling the intended
+ * benefit on this dataset. Hard-consecutive-streak is therefore the
+ * mechanism actually implemented - simpler, and not worse, not "the
+ * fallback because the better idea didn't work out."
+ *
+ * FAULT_PERSISTENCE_FLOOR = 0.20, NOT WATCHDOG_ANOMALY_THRESHOLD (0.10,
+ * core/watchdog.c) and NOT the 0.35 in evidence_channels.py's
+ * ANOMALY_THRESHOLD (that 0.35 is STALE - core/watchdog.c's own comment
+ * confirms 0.35 was WATCHDOG_ANOMALY_THRESHOLD's value before an empirical
+ * retune to 0.10 this pass; evidence_channels.py was never updated to
+ * match and needs a separate fix). 0.20 instead reuses core/watchdog.c's
+ * real, current per-channel evidence_flags_from_values() threshold,
+ * applied here to the combined confidence score - a deliberate choice,
+ * not a copy of either watchdog threshold, and deliberately NOT
+ * FAULT_EVIDENCE_ONSET_LAG_TICKS=20 either (that constant answers a
+ * different question - ticks to first detection, not sustained-ticks
+ * required to trust the detection - and must not be reused here).
+ *
+ * FAULT_PERSISTENCE_TRIP_TICKS = 8 is calibrated specifically to the hard-
+ * consecutive-streak mechanism at that exact floor: 48.5% false-reject
+ * (real sustained episodes not yet trusted at 8 ticks) / 8.2% false-accept
+ * (noise episodes wrongly trusted) in the same measurement. Not a strong
+ * classifier - both rates are real and non-zero - which is why this stays
+ * gating only CONTINUE_MONITORING/LOCAL_RECOVERY (Section 3's existing AI-
+ * alone tier), not extended to justify AI-alone trust any higher.
+ */
+#define FAULT_PERSISTENCE_FLOOR 0.20f
+#define FAULT_PERSISTENCE_TRIP_TICKS 8u
+
 #endif

@@ -31,6 +31,12 @@ typedef struct
     uint8_t last_assigned_task_pool;
     uint8_t last_assigned_task_slot;
     uint8_t last_status;
+    /* evaluate_fault_predictor()'s "sustained AI persistence" streak - see
+       core/recovery_manager_config.h's FAULT_PERSISTENCE_FLOOR/_TRIP_TICKS
+       doc for the mechanism and why it's a hard-consecutive-tick counter,
+       not a cumulative up/down one. Separate from pending_streak above,
+       which debounces action-candidate arbitration, not AI confidence. */
+    uint8_t predictor_persistence_streak;
 } RecoveryManagerTeamState_t;
 
 typedef struct
@@ -1124,10 +1130,10 @@ static RecoverySignal_t evaluate_consensus_fault(
  * board consensus is parked (v4 architecture doc, Section 4/9). Runs
  * core/fault_predictor.c's model against this team's own live evidence
  * vector - watchdog_get_evidence_vector() for the 7 accumulated_evidence
- * channels + confirmed_mobility_impairment, team->equipment_level/100.0f
- * for the 9th - the exact same 9-feature shape core/fault_comms.c
- * assembles for FAULT_BROADCAST, so this team's own inference input
- * matches what gets broadcast about it.
+ * channels + confirmed_mobility_impairment, team->equipment_level/100.0f,
+ * plus incident_priority/victim_count - the exact same 11-feature shape
+ * core/fault_comms.c assembles for FAULT_BROADCAST, so this team's own
+ * inference input matches what gets broadcast about it.
  *
  * fault_predictor_run() returns 5 independent per-class scores (not a
  * softmax - see fault_predictor.h). Per the doc's Section 2 ("collapse 5
@@ -1146,13 +1152,66 @@ static RecoverySignal_t evaluate_consensus_fault(
  * CONFIDENCE are placeholders, not tuned numbers): CONTINUE_MONITORING
  * and LOCAL_RECOVERY are fine on the AI's word alone. Anything at or
  * above REQUEST_TASK_REALLOCATION additionally requires watchdog
- * corroboration (watchdog->anomaly_detected) - the doc's stated
- * alternative path, "OR sustained AI persistence", is NOT implemented
- * here (it needs new per-team streak state this pass doesn't add) - an
- * uncorroborated high-confidence prediction is capped at LOCAL_RECOVERY
- * rather than silently escalating, and that cap is a known gap, not an
- * oversight.
+ * corroboration (watchdog->anomaly_detected) OR sustained AI persistence
+ * (predictor_persistence_streak_update() below, gated at
+ * FAULT_PERSISTENCE_TRIP_TICKS consecutive ticks >= FAULT_PERSISTENCE_
+ * FLOOR - see core/recovery_manager_config.h for the mechanism choice and
+ * calibration this constant is cited to). An uncorroborated, not-yet-
+ * sustained high-confidence prediction is still capped at LOCAL_RECOVERY
+ * rather than silently escalating.
  */
+uint8_t recovery_manager_persistence_streak_step(uint8_t streak, float confidence)
+{
+    if(confidence >= FAULT_PERSISTENCE_FLOOR)
+    {
+        if(streak < UINT8_MAX)
+            streak++;
+    }
+    else
+    {
+        streak = 0u;
+    }
+
+    return streak;
+}
+
+static uint8_t predictor_persistence_streak_update(uint8_t team_id, float confidence)
+{
+    RecoveryManagerTeamState_t *state = &g_recovery_state[team_id];
+
+    state->predictor_persistence_streak =
+        recovery_manager_persistence_streak_step(state->predictor_persistence_streak, confidence);
+
+    return state->predictor_persistence_streak;
+}
+
+void recovery_manager_build_predictor_evidence(
+    uint8_t team_id, float evidence_out[/* FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES */])
+{
+    const TeamState_t *team = &g_teams[team_id];
+    uint8_t confirmed_mobility_impairment = 0u;
+
+    watchdog_get_evidence_vector(team_id, evidence_out, &confirmed_mobility_impairment);
+    evidence_out[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS] = (float)team->equipment_level / 100.0f;
+    evidence_out[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS + 1u] = (float)confirmed_mobility_impairment;
+
+    {
+        const IncidentState_t *task = NULL;
+
+        if(team->assigned_task_pool == TASK_POOL_INCIDENT &&
+           team->assigned_task_slot < NUM_INCIDENTS)
+            task = &g_incidents[team->assigned_task_slot];
+        else if(team->assigned_task_pool == TASK_POOL_SYSTEM &&
+                team->assigned_task_slot < NUM_SYSTEM_TASKS)
+            task = &g_system_tasks[team->assigned_task_slot];
+
+        evidence_out[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS + 2u] =
+            (task != NULL) ? (float)task->priority : 0.0f;
+        evidence_out[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS + 3u] =
+            (task != NULL) ? (float)task->victim_count : 0.0f;
+    }
+}
+
 static RecoverySignal_t evaluate_fault_predictor(
     const TeamState_t *team,
     const MissionExecutionTwin_t *twin,
@@ -1160,17 +1219,15 @@ static RecoverySignal_t evaluate_fault_predictor(
 {
     MissionStage_t stage = recovery_stage_for_team(team, twin);
     float evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES];
-    uint8_t confirmed_mobility_impairment = 0u;
     FaultPredictorScores_t scores;
     uint8_t best_class = 0u;
     float confidence;
+    uint8_t sustained;
     uint8_t corroborated;
 
     (void)twin;
 
-    watchdog_get_evidence_vector(team->team_id, evidence, &confirmed_mobility_impairment);
-    evidence[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS] = (float)team->equipment_level / 100.0f;
-    evidence[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS + 1u] = (float)confirmed_mobility_impairment;
+    recovery_manager_build_predictor_evidence(team->team_id, evidence);
 
     scores = fault_predictor_run(evidence);
 
@@ -1181,6 +1238,14 @@ static RecoverySignal_t evaluate_fault_predictor(
     }
 
     confidence = scores.score[best_class];
+
+    /* Updated unconditionally, ahead of both early returns below, so a
+       low-confidence tick still resets the streak even though this
+       function returns CONTINUE_MONITORING for it - the streak must
+       reflect every tick's confidence, not just the ticks that reach the
+       corroboration check further down. */
+    sustained = predictor_persistence_streak_update(team->team_id, confidence)
+                    >= FAULT_PERSISTENCE_TRIP_TICKS;
 
     /* This early return is why WATCHDOG_ANOMALY_THRESHOLD (core/watchdog.c)
      * is currently risk-free to keep tuned aggressively (0.10, lowered
@@ -1211,7 +1276,7 @@ static RecoverySignal_t evaluate_fault_predictor(
             RECOVERY_REASON_NONE,
             confidence);
 
-    corroborated = watchdog->anomaly_detected;
+    corroborated = watchdog->anomaly_detected || sustained;
 
     if(corroborated && confidence >= RECOVERY_MANAGER_PREDICTOR_ESCALATE_CONFIDENCE)
     {
@@ -1439,6 +1504,7 @@ void recovery_manager_init(void)
         g_recovery_state[team_id].pending_action = RECOVERY_ACTION_CONTINUE_MONITORING;
         g_recovery_state[team_id].pending_reason = RECOVERY_REASON_NONE;
         g_recovery_state[team_id].pending_streak = 0u;
+        g_recovery_state[team_id].predictor_persistence_streak = 0u;
         g_recovery_state[team_id].cooldown_ticks = 0u;
         g_recovery_state[team_id].last_assigned_task_pool = g_teams[team_id].assigned_task_pool;
         g_recovery_state[team_id].last_assigned_task_slot = g_teams[team_id].assigned_task_slot;

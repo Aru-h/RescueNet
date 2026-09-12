@@ -39,10 +39,11 @@
 
 /* Wire feature count for a FAULT_BROADCAST payload (core/fault_comms.h,
    Prompt 1): 7 accumulated_evidence[] floats + equipment_level/100.0f +
-   confirmed_mobility_impairment. Defined here (not in fault_comms.h)
-   because this module needs it to size the remote evidence ring, and
-   fault_comms.c already depends on this header. */
-#define FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES 9u
+   confirmed_mobility_impairment + incident_priority + victim_count.
+   Defined here (not in fault_comms.h) because this module needs it to
+   size the remote evidence ring, and fault_comms.c already depends on
+   this header. */
+#define FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES 11u
 
 /*
  * ---------------------------------------------------------------
@@ -120,7 +121,7 @@ _Static_assert(FAULT_BUFFER_TEAMS_PER_BOARD < FAULT_BUFFER_FULL_STRENGTH_QUORUM,
 
 typedef struct
 {
-    float    evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES]; /* full 9-feature vector */
+    float    evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES]; /* full 11-feature vector */
     uint32_t tick;
     uint8_t  known;
 } FaultBufferLocalSample_t;
@@ -247,6 +248,27 @@ void fault_buffer_round_reset(void);
 /* Current running vote weight for one (target team, class) pair
    within the current round. */
 float fault_buffer_get_vote_weight(uint8_t target_team_id, OperationalFaultClass_t fault_class);
+
+/*
+ * Graded (0.0-1.0) liveness confidence for board_id at tick `now`, built
+ * on the same last-heard timestamp board_is_live() (private to fault_
+ * buffer.c) already tracks internally - not a second/duplicate liveness
+ * mechanism. This is the primitive consensus_weighting.c's caller uses
+ * to decide whether a board's vote is even eligible for submission this
+ * round (see consensus_weighting.h's "Liveness vs disagreement" section
+ * for the full rule and consensus_gate_submit_vote_if_live()).
+ *
+ * Deadline-based simplified approximation of the general phi-accrual
+ * failure-detector pattern (Hayashibara et al., SRDS 2004) - appropriate
+ * for this fixed-tick RTOS rather than the full statistical version; see
+ * this function's own definition in fault_buffer.c for the exact ramp
+ * and the FLP-impossibility caveat (perfectly distinguishing "crashed"
+ * from "merely slow" is provably impossible in an asynchronous system -
+ * this is a bounded-risk approximation, not a certainty).
+ *
+ * Returns 0.0f for an out-of-range board_id or a board never heard from.
+ */
+float fault_buffer_board_liveness_confidence(uint8_t board_id, uint32_t now);
 
 /*
  * Brooks-Iyengar fusion, run independently per class, against a

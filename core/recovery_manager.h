@@ -49,6 +49,52 @@ typedef struct
     uint32_t evaluation_ticks;
 } RecoveryMetrics_t;
 
+/*
+ * Pure hard-consecutive-tick persistence-streak step for evaluate_fault_
+ * predictor()'s "sustained AI persistence" corroboration path (core/
+ * recovery_manager_config.h's FAULT_PERSISTENCE_FLOOR/_TRIP_TICKS - see
+ * that header for the mechanism choice, why a cumulative up/down counter
+ * was tried and rejected, and what this constant is calibrated against).
+ *
+ * Exposed here (not static in recovery_manager.c) purely so it can be
+ * unit-tested directly with synthetic confidence sequences (laptop/tools/
+ * recovery_manager_persistence_selftest.c) without needing a trained
+ * fault_predictor model or the rest of this module's per-team state -
+ * the real call site (recovery_manager.c's predictor_persistence_streak_
+ * update(), private to that file) is the only production caller.
+ *
+ * streak: the caller's current per-team streak value (0 on a cold start).
+ * confidence: this tick's AI confidence (fault_predictor_run()'s
+ * scores.score[best_class] - NOT watchdog->anomaly_confidence).
+ * Returns the updated streak: incremented (saturating at UINT8_MAX) if
+ * confidence >= FAULT_PERSISTENCE_FLOOR, reset to 0 otherwise - a single
+ * below-floor tick fully resets progress, deliberately (see this
+ * function's config header doc for why the alternative - a cumulative
+ * up/down counter that forgives a bad tick - was measured and rejected).
+ */
+uint8_t recovery_manager_persistence_streak_step(uint8_t streak, float confidence);
+
+/*
+ * Builds the FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES-wide evidence vector
+ * evaluate_fault_predictor() feeds to fault_predictor_run() for team_id:
+ * watchdog_get_evidence_vector()'s 7 accumulated_evidence[] channels,
+ * team->equipment_level/100.0f, confirmed_mobility_impairment, then
+ * incident_priority/victim_count looked up from whichever task pool
+ * team_id is currently assigned to (0.0f for both when unassigned).
+ *
+ * Exposed here (not static/inlined in evaluate_fault_predictor(), same
+ * rationale as recovery_manager_persistence_streak_step() above) purely
+ * so a test can call it directly and compare its output byte-for-byte
+ * against what core/fault_comms.c's fault_comms_broadcast_local_teams()
+ * independently assembles for the wire (audit #163: the two call sites
+ * must produce identical vectors for the same team/tick, but are kept as
+ * separate copies rather than sharing code - see fault_comms.c's own
+ * comment on that call site). evaluate_fault_predictor() itself is the
+ * only production caller.
+ */
+void recovery_manager_build_predictor_evidence(
+    uint8_t team_id, float evidence_out[/* FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES */]);
+
 void recovery_manager_init(void);
 void recovery_manager_step(void);
 void recovery_dispatch(uint8_t team_id, RecoveryAction_t action);
