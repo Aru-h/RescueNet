@@ -2368,6 +2368,7 @@ static void release_queued_incidents(TeamState_t *team)
 }
 
 uint32_t g_diag_safezone_fallback_count = 0;
+uint32_t g_diag_abandon_task_ownership_mismatch = 0;
 
 void abandon_task_for_recovery(TeamState_t *team)
 {
@@ -2446,6 +2447,25 @@ void abandon_task_for_recovery(TeamState_t *team)
     else if(task->support_team == team->team_id)
     {
         task->support_team = NO_ASSIGNMENT;
+    }
+    else
+    {
+        /* Bug fix: invariant violation - task is occupied but neither
+           assigned_team nor support_team matches this team, meaning
+           team->assigned_task_pool/slot was pointing somewhere this
+           team no longer (or never actually did) own. Not asserted
+           anywhere before this, so it happened silently: the task's
+           own bookkeeping was left untouched (arguably correct, since
+           it isn't this team's task to clean up) while this team's
+           pool/slot still got cleared and it still got sent to rest
+           below - same outcome as every other branch, just with no
+           signal that the "shouldn't happen" case was actually hit.
+           Diagnostic-only; see AUDIT.md item #23 for why this wasn't
+           given the heavier fix (cross-checking against a remembered
+           incident_id, which would need a new TeamState_t field and
+           updates at every assignment site). */
+        extern uint32_t g_diag_abandon_task_ownership_mismatch;
+        g_diag_abandon_task_ownership_mismatch++;
     }
 
     team->assigned_task_pool = TASK_POOL_NONE;
