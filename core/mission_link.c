@@ -517,6 +517,23 @@ void mission_link_apply_roster(const MissionLinkRoster_t *msg)
         return;
     }
 
+    if (msg->loc_x < 0 || msg->loc_x >= GRID_WIDTH ||
+        msg->loc_y < 0 || msg->loc_y >= GRID_HEIGHT)
+    {
+        /* Out-of-range location: same defensive-only posture and same
+           whole-message reject as the team_id check above (mission
+           generation on the laptop side guarantees valid loc_x/loc_y in
+           practice) - added because loc_x/loc_y is written straight to
+           team->loc_x/loc_y below with no other validation anywhere
+           downstream, and every core/path.c pathfinding call keys off
+           team->loc_x/loc_y as its start coordinate. Without this, a
+           corrupted roster frame (bit-flip surviving the checksum, or
+           any future bug upstream) would silently become an out-of-
+           bounds array index the first time this team tries to path
+           anywhere. */
+        return;
+    }
+
     team = &g_teams[msg->team_id];
 
     team->team_id = msg->team_id;

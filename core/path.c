@@ -315,6 +315,23 @@ int find_next_path_step_with_equipment(
     int *next_x,
     int *next_y) //path
 {
+    /* Bug fix: start_x/start_y were used raw below (nodes[start_x]
+     * [start_y], path_heap_push()'s path_cell_index()) with no bounds
+     * check at all, unlike dest_x/dest_y just below. A corrupted
+     * caller-supplied location (e.g. a team's loc_x/loc_y written
+     * straight from wire data with no validation - see mission_link.c's
+     * mission_link_apply_roster()) would be an out-of-bounds write into
+     * the file-scope g_path_nodes/g_heap_pos statics. Deliberately just
+     * an in-bounds check, NOT can_traverse_cell() like the destination
+     * gets below: a team must always be able to attempt to leave its
+     * current cell even if that cell just became non-navigable (see the
+     * destination check's own comment for why), so start only needs to
+     * be a valid array index, not a valid place to stand. */
+    if(!path_in_bounds(start_x, start_y))
+    {
+        return -1;
+    }
+
     /* Only the destination needs to be traversable here - a team must
      * always be able to attempt to leave its current cell, even if that
      * cell just became hazardous/blocked (e.g. road/infrastructure damage
