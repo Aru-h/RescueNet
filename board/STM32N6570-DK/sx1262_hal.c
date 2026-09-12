@@ -345,10 +345,21 @@ sx126x_hal_status_t sx126x_hal_wakeup(const void *context)
 
     /* Standard SX126x wake-from-sleep sequence: a brief NSS low/high
        pulse, then wait for BUSY to clear the internal wake-up
-       procedure. */
+       procedure.
+       Bug fix: the NSS-low pulse width used to be crude_delay_cycles
+       (10u) - an arbitrarily tiny, uncalibrated cycle count with no
+       basis shown for satisfying the SX126x's minimum wake-pulse
+       timing, and inconsistent with sx126x_hal_reset()'s own reset-
+       pulse delay of crude_delay_cycles(10000u) in this same file (a
+       1000x difference with no documented reason). Matched to that
+       same generous, already-established margin instead of leaving a
+       second, smaller "generous margin" placeholder that isn't
+       actually generous. Currently dead code (nothing in this
+       codebase calls sx126x_wakeup()/sx126x_set_sleep()), but wrong
+       regardless of whether it's exercised today. */
     wait_busy_low();
     gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 0);
-    crude_delay_cycles(10u);
+    crude_delay_cycles(10000u);
     gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 1);
     wait_busy_low();
 
@@ -513,10 +524,24 @@ static volatile int g_lora_tx_busy;
  * fresh standby->set_rx cycle after every packet would only reopen a
  * listening gap this mode exists to avoid, for no benefit.
  */
-static void sx1262_enter_rx(void)
+/* Bug fix: both calls below used to discard their return codes. A
+ * failed call here left the radio silently not actually listening,
+ * with no diagnostic and no retry - called both from ensure_radio_
+ * configured() (bring-up) and sx1262_poll_rx() (after every TX
+ * completion/timeout), so a single failed call could silently deafen
+ * the radio for the rest of the run. Now returns 0 on success, 1 on
+ * the first failure, so callers can decide whether to retry. */
+static int sx1262_enter_rx(void)
 {
-    (void)sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC);
-    (void)sx126x_set_rx_with_timeout_in_rtc_step(NULL, SX126X_RX_CONTINUOUS);
+    if (sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC) != SX126X_STATUS_OK)
+    {
+        return 1;
+    }
+    if (sx126x_set_rx_with_timeout_in_rtc_step(NULL, SX126X_RX_CONTINUOUS) != SX126X_STATUS_OK)
+    {
+        return 1;
+    }
+    return 0;
 }
 
 /*
@@ -536,30 +561,43 @@ static void sx1262_enter_rx(void)
  * of truth both boards' HALs read from, so this file no longer needs
  * (or gets) its own copy of these values to keep in sync by hand.
  */
-static void ensure_radio_configured(void)
+/* Bug fix: every call below used to discard its return code, and
+ * g_radio_configured was set to 1 unconditionally afterward regardless
+ * of whether any of them actually failed - a partial/failed bring-up
+ * (bad frequency, an SPI glitch corrupting an opcode byte) was
+ * undetectable, and the radio would be believed fully configured while
+ * running against whatever partial state actually landed on the chip.
+ * Now returns 0 on success, 1 on the first failure - g_radio_
+ * configured is only set once every call has actually succeeded, so a
+ * failed attempt leaves it false and this function will legitimately
+ * retry (rather than skip, believing itself already done) on its next
+ * call from lora_spi_transmit()/sx1262_poll_rx(). Mirrors the return-
+ * code-checking pattern lora_spi_transmit() below already uses for its
+ * own critical calls. */
+static int ensure_radio_configured(void)
 {
     sx126x_mod_params_lora_t mod_params;
     sx126x_pkt_params_lora_t pkt_params;
 
     if (g_radio_configured)
     {
-        return;
+        return 0;
     }
 
-    (void)sx126x_hal_reset(NULL);
-    (void)sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC);
-    (void)sx126x_set_pkt_type(NULL, SX126X_PKT_TYPE_LORA);
-    (void)sx126x_set_rf_freq(NULL, LORA_RF_FREQ_HZ);
-    (void)sx126x_set_buffer_base_address(NULL, 0u, 0u);
-    (void)sx126x_set_dio_irq_params(NULL, 0x0203u /* TxDone|RxDone|Timeout */,
-                                     0x0203u /* -> DIO1 */, 0x0000u, 0x0000u);
+    if (sx126x_hal_reset(NULL) != SX126X_HAL_STATUS_OK) return 1;
+    if (sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC) != SX126X_STATUS_OK) return 1;
+    if (sx126x_set_pkt_type(NULL, SX126X_PKT_TYPE_LORA) != SX126X_STATUS_OK) return 1;
+    if (sx126x_set_rf_freq(NULL, LORA_RF_FREQ_HZ) != SX126X_STATUS_OK) return 1;
+    if (sx126x_set_buffer_base_address(NULL, 0u, 0u) != SX126X_STATUS_OK) return 1;
+    if (sx126x_set_dio_irq_params(NULL, 0x0203u /* TxDone|RxDone|Timeout */,
+                                   0x0203u /* -> DIO1 */, 0x0000u, 0x0000u) != SX126X_STATUS_OK) return 1;
 
     /* LOCKED - see comment above. Values from core/lora_radio_params.h. */
     mod_params.sf = LORA_SPREADING_FACTOR;
     mod_params.bw = LORA_BANDWIDTH;
     mod_params.cr = LORA_CODING_RATE;
     mod_params.ldro = LORA_LDRO;
-    (void)sx126x_set_lora_mod_params(NULL, &mod_params);
+    if (sx126x_set_lora_mod_params(NULL, &mod_params) != SX126X_STATUS_OK) return 1;
 
     /* LOCKED - see comment above. pld_len_in_bytes gets overwritten
        per-send in lora_spi_transmit() below (explicit header mode
@@ -570,14 +608,14 @@ static void ensure_radio_configured(void)
     pkt_params.pld_len_in_bytes = 0u;
     pkt_params.crc_is_on = LORA_CRC_IS_ON;
     pkt_params.invert_iq_is_on = LORA_INVERT_IQ_IS_ON;
-    (void)sx126x_set_lora_pkt_params(NULL, &pkt_params);
+    if (sx126x_set_lora_pkt_params(NULL, &pkt_params) != SX126X_STATUS_OK) return 1;
 
     /* Sync word and TX power/ramp - both LOCKED in core/lora_radio_params.h
        and, like mod/pkt params above, not previously called anywhere, so
        TX power was whatever the chip's reset default happened to be. Must
        run before g_radio_configured is set, same as mod/pkt params above. */
-    (void)sx126x_set_lora_sync_word(NULL, LORA_SYNC_WORD);
-    (void)sx126x_set_tx_params(NULL, LORA_TX_POWER_DBM, LORA_RAMP_TIME);
+    if (sx126x_set_lora_sync_word(NULL, LORA_SYNC_WORD) != SX126X_STATUS_OK) return 1;
+    if (sx126x_set_tx_params(NULL, LORA_TX_POWER_DBM, LORA_RAMP_TIME) != SX126X_STATUS_OK) return 1;
 
     g_radio_configured = 1;
 
@@ -600,7 +638,13 @@ static void ensure_radio_configured(void)
        uses, since all three share one dio_irq_params mask above - see
        that function's own doc on why it re-arms on those two bits and
        not on RxDone). */
-    sx1262_enter_rx();
+    if (sx1262_enter_rx() != 0)
+    {
+        g_radio_configured = 0;
+        return 1;
+    }
+
+    return 0;
 }
 
 int lora_spi_transmit(const uint8_t *frame_bytes, uint32_t frame_len)
@@ -612,7 +656,10 @@ int lora_spi_transmit(const uint8_t *frame_bytes, uint32_t frame_len)
         return 1; /* can't represent this frame's length in one LoRa payload byte */
     }
 
-    ensure_radio_configured();
+    if (ensure_radio_configured() != 0)
+    {
+        return 1;
+    }
 
     /* pld_len_in_bytes has to match this specific send - re-set it
        rather than assume ensure_radio_configured()'s one-time value
@@ -680,7 +727,13 @@ void sx1262_poll_rx(void)
     uint8_t out_payload[LORA_FRAME_MAX_PAYLOAD];
     uint8_t out_payload_len;
 
-    ensure_radio_configured();
+    if (ensure_radio_configured() != 0)
+    {
+        /* g_radio_configured stays 0 on failure, so the next poll
+           retries the whole bring-up sequence rather than proceeding
+           against a possibly-unconfigured radio. */
+        return;
+    }
 
     if (gpio_read(SX1262_DIO1_PORT, SX1262_DIO1_PIN) == 0)
     {
@@ -717,7 +770,13 @@ void sx1262_poll_rx(void)
            flight either way - clears the busy flag comms_transport.c's
            dispatcher gates on. See g_lora_tx_busy's own doc above. */
         g_lora_tx_busy = 0;
-        sx1262_enter_rx();
+        if (sx1262_enter_rx() != 0)
+        {
+            /* Force a full re-bring-up on the next poll rather than
+               silently leaving the radio deaf until the next TX -
+               reuses ensure_radio_configured()'s own retry gate. */
+            g_radio_configured = 0;
+        }
         return;
     }
 
