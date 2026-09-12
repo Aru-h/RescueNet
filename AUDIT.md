@@ -2942,11 +2942,13 @@ Correctly filters to locally-hosted teams; four should_send triggers checked in 
 **SEVERITY: MEDIUM**
 g_relay_reply_sent[]/g_relay_reply_last_sent[] are fixed arrays capped at HANDSHAKE_MAX_BOARDS (8), but the peer loop (`for(peer=1; peer<board_count; peer++)`) never clamps peer < HANDSHAKE_MAX_BOARDS before indexing. Safe today (board_count=2 given current NUM_TEAMS/TEAMS_PER_BOARD), but if NUM_TEAMS grows without also bumping HANDSHAKE_MAX_BOARDS (a change this file's own comment explicitly anticipates as valid), this writes out of bounds. No defensive clamp exists despite the header explicitly flagging HANDSHAKE_MAX_BOARDS as a cap other code must respect.
 - **Connects to:** cbba_now_ms, mission_link_handshake_build_local_reply, mission_link_handshake_pack_reply, mission_link_usart1_write, mission_link_handshake_pack_reply_payload, comms_transport_send, comms_transport_board_count, mission_link_handshake_should_send_relay_req, mission_link_handshake_pack_req_payload, mission_link_representative_team, mission_link_handshake_get_relay_reply; called by mission_link_task_step
+   **RESOLVED** — commit `1eab9d9`. Clamped `board_count` against `HANDSHAKE_MAX_BOARDS` before the peer loop, on both boards.
 
 ### 32. `mission_link_task_init` [global] — L1045
 **SEVERITY: MEDIUM**
 Resets g_rx_buf_len, g_last_sent_status[], g_own_reply_sent, g_relay_reply_sent[] but NOT g_roster_applied_count. Harmless in the documented single-boot-call usage, but this is the designated re-init entry point; a re-invocation (test harness, soft-restart) would leave main_board.c's roster-arrival gate seeing a stale nonzero count against freshly-reset g_teams[] state.
 - **Connects to:** writes g_rx_buf_len/g_last_sent_status[]/g_own_reply_sent/g_relay_reply_sent[]; does not touch g_roster_applied_count (read by mission_link_task_any_roster_applied)
+   **RECONCILED to NONE** (was rated MEDIUM here vs NONE on the Pico's identical function). Verified against this file's own top-of-file handoff notes and both boards' `main_board.c`: `mission_link_task_init()` is documented and actually called exactly once, before the seed loop starts, on both boards — never re-invoked. The MEDIUM rating's premise ("any caller that re-invokes it later") isn't supported by the actual documented/verified call pattern. The Pico audit's NONE rating is correct; no fix needed.
 
 ### 33. `mission_link_task_step` [global] — L1070
 **SEVERITY: NONE**
@@ -2989,6 +2991,7 @@ Correct IDR bit test.
 **SEVERITY: HIGH**
 `SX1262_SPI->CFG2 = SPI_CFG2_MASTER;` sets only the MASTER bit. The comment claims software NSS management (SSM/SSOE off, driving NSS via GPIO), but SPI_CFG2_SSM (bit 26) is NOT actually set - leaving SSM=0 is hardware NSS management (the peripheral watches the real NSS AF line for master-mode-fault detection), the opposite of the stated intent. Since PA3 is configured as a plain GPIO output (not routed to SPI5's NSS AF), the peripheral's internal hardware NSS input is left disconnected/floating. With SSM=0 in master mode this is a classic setup for a MODF (mode fault) event, which STM32 SPI responds to by auto-clearing SPI_CR1_SPE (disabling the peripheral). Once disabled, spi5_xfer_byte()'s unbounded TXP/RXP wait loops (#23) would spin forever, hanging the single cooperative task permanently. Correct fix: set SPI_CFG2_SSM (and typically SPI_CR1_SSI) alongside SPI_CFG2_MASTER.
 - **Connects to:** gpio_set_af, RCC registers; called by sx1262_hal_init
+   **RESOLVED** — commit `67840b5`. Verified against ST's SPIv3 reference-manual guidance (not just this file's own comment) before fixing: setting `SPI_CFG2_SSM` alone is insufficient — `SPI_CR1_SSI` must also be set, or the internal NSS level defaults to "selected" (low) and triggers the same MODF condition SSM was meant to prevent. Both bits now set. Confirmed DK-specific: the Pico's PL022 SPI controller has no SSM/SSOE/MODF concept at all. Confirmed this failure mode is a hang (inside `spi5_xfer_byte()`'s untimed wait loop), not something the separately-flagged discarded-SPI-return-code pattern would have made silent — the two findings are independent, not connected.
 
 ### 41. `spi5_xfer_byte` [static] — L223
 **SEVERITY: MEDIUM**
@@ -3039,6 +3042,7 @@ Correctly clocks NOP bytes during data-read phase; wait_busy_low bracketing corr
 **SEVERITY: LOW**
 Both underlying calls' return codes discarded via (void). Dormant given the HAL always reports success today, but a genuine unchecked-return-value instance if real error detection is ever added.
 - **Connects to:** sx126x_set_standby, sx126x_set_rx_with_timeout_in_rtc_step; called by ensure_radio_configured, sx1262_poll_rx
+   **RECONCILED to MEDIUM** (was rated LOW here vs MEDIUM on the Pico's identical function for the same reasoning the Pico audit gave). Verified: this DK function is called from both `ensure_radio_configured()` (boot) AND `sx1262_poll_rx()` (every tick, after TX completion/timeout) — identical reachability to the Pico's version. The LOW rating undercounted the per-tick call site; MEDIUM is correct on both boards. Not yet fixed.
 
 ### 51. `ensure_radio_configured` [static] — L519
 **SEVERITY: MEDIUM**
@@ -3306,6 +3310,7 @@ Loop bound and ownership filter correct; unsigned-subtraction wraparound handlin
 **SEVERITY: MEDIUM**
 g_relay_reply_sent[]/g_relay_reply_last_sent[] (both HANDSHAKE_MAX_BOARDS-sized) are indexed by a loop bounded only by comms_transport_board_count(), with no clamp against HANDSHAKE_MAX_BOARDS. core/mission_link_handshake.c's own equivalent per-peer state is now protected by explicit bounds checks in every accessor (fixed earlier this session), but this file's two LOCAL arrays are indexed directly with no such guard. Currently unreachable (board_count=2 today) but a latent out-of-bounds write if NUM_TEAMS is ever scaled past 40 without updating this file too. Same finding independently confirmed on the DK's identical function.
 - **Connects to:** cbba_now_ms, mission_link_handshake_build_local_reply, mission_link_handshake_pack_reply, mission_link_usart1_write, mission_link_handshake_pack_reply_payload, comms_transport_send, comms_transport_board_count, mission_link_handshake_should_send_relay_req, mission_link_handshake_pack_req_payload, mission_link_representative_team, mission_link_handshake_get_relay_reply
+   **RESOLVED** — commit `1eab9d9`. Clamped `board_count` against `HANDSHAKE_MAX_BOARDS` before the peer loop, on both boards.
 
 ### 102. `mission_link_task_init` [global] — L1045
 **SEVERITY: NONE**
