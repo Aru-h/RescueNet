@@ -225,7 +225,14 @@ uint32_t mission_link_task_any_roster_applied(void)
    deliver to, not to pick a specific team within it. */
 static uint8_t mission_link_representative_team(uint8_t board_id)
 {
-    return (uint8_t)(board_id * 5u);
+    /* Bug fix: this used to hardcode the board-assignment divisor as a
+       bare literal 5u instead of comms_transport_representative_team_
+       for_board(), which wraps the actual COMMS_TRANSPORT_TEAMS_PER_
+       BOARD value (private to core/comms_transport.c, overridable via
+       -D). A future change to that divisor without also updating this
+       literal would have silently misrouted incident/handshake relays
+       to the wrong board. */
+    return comms_transport_representative_team_for_board(board_id);
 }
 
 /*

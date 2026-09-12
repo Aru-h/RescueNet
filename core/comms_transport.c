@@ -429,6 +429,24 @@ uint8_t comms_transport_board_count(void)
                       / COMMS_TRANSPORT_TEAMS_PER_BOARD);
 }
 
+/*
+ * Inverse of comms_transport_board_id_for_team(): given a board, one
+ * team_id that resolves back to it (the lowest one, board*TEAMS_PER_
+ * BOARD). Added because each board's own mission_link_task.c's own mission_
+ * link_representative_team() was hardcoding this same divisor as a
+ * bare literal, duplicating COMMS_TRANSPORT_TEAMS_PER_BOARD's value
+ * without being able to reference it directly (that macro is private
+ * to this file, by design, for the same reason comms_transport_board_
+ * count() above is a function rather than a header macro) - a future
+ * change to the divisor would silently desync the two. A function
+ * here, not a header macro, for the identical reasoning that comment
+ * already gives.
+ */
+uint8_t comms_transport_representative_team_for_board(uint8_t board_id)
+{
+    return (uint8_t)(board_id * COMMS_TRANSPORT_TEAMS_PER_BOARD);
+}
+
 int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
                           uint8_t frame_type, CommsPrecedence_t precedence,
                           const uint8_t *payload, uint8_t payload_len)
