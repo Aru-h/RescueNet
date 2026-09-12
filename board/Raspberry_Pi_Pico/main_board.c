@@ -746,7 +746,18 @@ EXPORT INT usermain(void)
         return 1;
     }
 
-    tk_sta_tsk(sim_tskid, 0);
+    /* Bug fix: this return value used to be discarded, unlike
+       tk_cre_tsk()'s just above. Since this starts the only task in
+       the whole system, a failed tk_sta_tsk() with no check would have
+       left the board silently parked forever at tk_slp_tsk() below,
+       indistinguishable from a normally-running-but-quiet system - no
+       diagnostic, no simulation activity, ever. */
+    ER sta_ercd = tk_sta_tsk(sim_tskid, 0);
+    if(sta_ercd < E_OK)
+    {
+        tm_putstring((UB*)"tron: tk_sta_tsk FAILED\n");
+        return 1;
+    }
 
     /* usermain's own task stays parked forever; sim_task does the
      * actual work. Per BSP (v1) manual: if usermain returns, µT-Kernel
