@@ -2729,3 +2729,669 @@ Call ordering correctly places `update_mobility_confirmation()` before the evide
    **RESOLVED, `reconstruct_counter` untouched by design.** Confirmed the wrap-guard fallback in `reconstruct_counter` (line 100-113) is the only path that can ever hand `accept_counter` a candidate `<= last_accepted` — every other path returns a value already `> last_accepted` by construction — and confirmed that fallback requires `last_accepted` within `0x10000` of `UINT32_MAX` (billions of prior frames from one sender; ~136 years at an optimistic sustained 1 frame/sec), genuinely not reachable in this project's lifetime. Left `reconstruct_counter` as-is and fixed the actual state-commit point instead: added a monotonic check to `lora_crypto_accept_counter()` (`!g_rx_seen[sender] || counter > g_rx_last_counter[sender]`) before overwriting the floor. Zero effect on normal operation (every legitimate counter presented to this function is already increasing), fully closes the floor-regression regardless of what upstream computes, and can't cause a false rejection since this function only ever runs after the AEAD tag has already verified — it's bookkeeping, not a gate. Commit `7e733ab`. Verified clean on all three targets.
 
 *(Honorable mentions just outside the top 10: `random_range`/`random_range_stream` modulo-by-zero on a full `[0,UINT32_MAX]` range; `mission_link_handshake_*` relay-bookkeeping functions indexing `peer_board_id` with no bounds check; `road_reachable_map`'s ~5KB stack-allocated BFS queue on an embedded target that already had a sibling function's stack frame moved to BSS for the same reason; `generate_incidents_if_needed` silently dropping a hazard event when the incident pool is full.)*
+
+# board/ Function-by-Function Audit (STM32N6570-DK and Raspberry Pi Pico)
+
+Scope: all 11 `board/STM32N6570-DK/*.c` and `board/Raspberry_Pi_Pico/*.c` files, outside `CORE_SOURCES` and never covered by the original `core/`-only audit above. That gap is what surfaced the live bug fixed in `mission_link_comms_transport_rx_step()` earlier this session (see that item's note in the core/ audit) — this pass closes it properly.
+
+Both boards run micro T-Kernel 3.0 and were confirmed (independently, per-board, not assumed by inheritance) to create exactly **one** simulation task (`tk_cre_tsk`) with no RTOS preemption, and to poll the LoRa radio's DIO1 line rather than servicing a real hardware interrupt. Findings that would otherwise read as "ISR/task race" concerns are qualified against that confirmed single-task model rather than assumed to be theoretical or assumed to be live.
+
+Files audited, in order:
+`board/STM32N6570-DK/dk_debug.c`, `main_board.c`, `snapshot.c`, `mission_link_task.c`, `sx1262_hal.c`; `board/Raspberry_Pi_Pico/debug.c`, `snapshot.c`, `syscalls.c`, `main_board.c`, `mission_link_task.c`, `sx1262_hal.c`.
+
+`mission_link_comms_transport_rx_step()`'s inbox-draining fix (applied earlier this session, both boards) was explicitly excluded from re-flagging per the audit brief, but every other function — including the rest of that same function — was audited fresh.
+
+**Audit-only, per instruction — nothing below has been fixed yet.**
+
+---
+
+## Severity Summary
+
+| Severity | Count |
+|---|---|
+| CRITICAL | 0 |
+| HIGH | 1 |
+| MEDIUM | 15 |
+| LOW | 11 |
+| NONE | 90 |
+| **Total functions audited** | **117** |
+
+## Prioritized list (fix first, pending your triage)
+
+1. **`spi5_init`** (board/STM32N6570-DK/sx1262_hal.c:189) — HIGH. Sets only `SPI_CFG2_MASTER`, never `SPI_CFG2_SSM`, despite the comment claiming software NSS management. With `SSM=0` in master mode and NSS routed as a plain GPIO (not the SPI5 AF), the peripheral's internal hardware NSS input floats — a classic MODF (mode fault) setup that STM32 SPI answers by auto-clearing `SPI_CR1_SPE`, disabling the peripheral. Once disabled, `spi5_xfer_byte()`'s unbounded TXP/RXP wait loops (finding below) spin forever, hanging the entire single-task firmware. This is a concrete, plausible boot-time hang on real DK hardware, not a theoretical concern — the DK board's most serious finding in this pass. Fix: set `SPI_CFG2_SSM` (and typically `SPI_CR1_SSI`) alongside `SPI_CFG2_MASTER`.
+
+2. **`sx126x_hal_wakeup`** (both boards: `board/STM32N6570-DK/sx1262_hal.c:322`, `board/Raspberry_Pi_Pico/sx1262_hal.c:400`) — MEDIUM on both, but for different specific reasons. DK: uses an uncalibrated 10-cycle delay for the NSS-low wake pulse, 1000x smaller than the reset pulse's 10,000-cycle delay in the same file — internally inconsistent, no basis shown for 10 cycles satisfying the SX126x's minimum wake timing. Pico: has **no delay at all** between asserting and deasserting NSS, and skips the pre-emptive BUSY wait the DK's version has. Both currently dead code — nothing in this codebase calls `sx126x_wakeup()`/`sx126x_set_sleep()` — but both are real bugs waiting for sleep mode to ever get wired in, and the Pico's version is strictly worse than the DK's.
+
+3. **`ensure_radio_configured`** (DK, `sx1262_hal.c:519`) / **`sx1262_hal_init`** (Pico, `sx1262_hal.c:699`) — MEDIUM on both. Every one of the ~9 one-time radio-configuration SPI calls (frequency, packet params, sync word, IRQ mask, etc.) discards its return code, and the "configured" flag is set unconditionally afterward. A single failed call during bring-up — plausible on both boards, especially the Pico, whose own header comment says pin assignments are "still placeholders" — silently leaves the radio partially configured with zero diagnostic anywhere, for the entire run. This runs on every single boot, unlike most of the other findings here.
+
+4. **`sx1262_enter_rx`** (DK, `sx1262_hal.c:496`, LOW there) / **`sx1262_enter_rx`** (Pico, `sx1262_hal.c:535`, MEDIUM there) — same underlying issue on both boards (two agents independently rated it differently — DK's is called from fewer places, Pico's is called after every TX completion/timeout too, which is likely why it was rated higher there; worth reconciling to one severity during triage). Return codes discarded; a failed call leaves the radio silently not listening, with no retry.
+
+5. **`mission_link_handshake_tx_step`** (both boards, same file/line: `mission_link_task.c:919`) — MEDIUM on both, independently confirmed by both agents. `g_relay_reply_sent[]`/`g_relay_reply_last_sent[]` (both `HANDSHAKE_MAX_BOARDS`-sized) are indexed by a loop bounded only by `comms_transport_board_count()`, with no clamp. This is the exact same root cause already fixed this session in `core/mission_link_handshake.c`'s own per-peer arrays (bounds-checked in every accessor now) — but that fix was never propagated to these board-local duplicate arrays. Currently unreachable (`board_count=2` today) but a real latent out-of-bounds write if `NUM_TEAMS` ever scales past 40 without also updating this file.
+
+6. **`usermain`** (DK, `main_board.c:461`) — MEDIUM. `tk_sta_tsk()`'s return value isn't checked (unlike `tk_cre_tsk()`'s, which is). Since this starts the only task in the whole system, a failure here means total, silent, undiagnosable firmware inactivity. Note: the Pico's equivalent `usermain` was checked and found to correctly check `tk_cre_tsk` (the DK's own `tk_cre_tsk` check is also fine) — this is specifically about the unchecked `tk_sta_tsk` call, and it's unclear from the two independent audits whether the Pico's `tk_sta_tsk` call has the same gap or not; worth a quick specific check before fixing.
+
+7. **`snapshot_begin_run`**/**`board_snapshot_ring_drain`**/**`sim_task`**'s telemetry-ring interaction (both boards) — MEDIUM, independently found on both boards with slightly different severity splits across the two functions involved. The final post-seed drain is capped at 32 frames per call and only called once; if per-seed telemetry volume exceeds that, `snapshot_begin_run()`'s unconditional ring reset silently and permanently discards the remainder — worse on the last seed of a run, since nothing drains after `sim_runner_shutdown()`. Explicitly a debug/telemetry side channel, not the authoritative record, which is why neither agent rated it above MEDIUM.
+
+8. **`spi5_xfer_byte`** (DK) / **`sx1262_spi_xfer_byte`** (Pico) and **`wait_busy_low`** (DK) / **`sx1262_wait_not_busy`** (Pico) — MEDIUM/LOW split across boards for materially the same pattern: no-timeout busy-waits on SPI/radio status. The BUSY-line wait is intentionally undocumented-timeout per the datasheet (a command issued while BUSY is high is silently dropped, so waiting it out is the only correct policy) — that part is fine. The FIFO-status wait (`spi5_xfer_byte`/`sx1262_spi_xfer_byte`) has no such justification and would hang the single-task firmware if the SPI peripheral itself ever wedges (e.g. exactly the MODF scenario in finding #1) — the two issues compound on the DK specifically.
+
+9. **`mission_link_representative_team`** (both boards, LOW/MEDIUM split) — hardcodes the board-assignment divisor as a bare `5u` literal instead of referencing `COMMS_TRANSPORT_TEAMS_PER_BOARD`. Unreachable at current constants, but silently produces a wrong team-to-board mapping if that macro is ever changed without updating this literal too.
+
+10. **`mission_link_task_init`** (DK rated MEDIUM, Pico rated NONE for the *same underlying code* — the two agents weighted "is this ever actually re-invoked" differently) — doesn't reset `g_roster_applied_count`. Worth resolving to one severity: the function is documented as a re-init entry point regardless of whether anything currently calls it more than once.
+
+*(Remaining LOW items — `fmt_fixed3`'s tiny-buffer/large-value edge cases, `debug_trace`'s intentional no-op, `_sbrk`'s missing lower-bound check, `_fstat`'s unchecked NULL, `board_led_init`/`board_led_pulse`'s unchecked BSP return values, `sx126x_hal_reset`'s missing post-reset settle delay — are all either explicitly-documented-as-intentional stubs or narrow, low-probability edge cases at current call patterns. Full detail in the numbered findings above.)*
+## board/STM32N6570-DK/dk_debug.c
+
+### 1. `fmt_fixed3` [static] — L45
+**SEVERITY: LOW**
+Correct for its actual call sites (stamina 0-100, decimals=3, bufsz=16): traced digit extraction, sign handling, and every `pos+1 < bufsz` guard before each write. Two latent (currently unreachable) issues: (1) `if(bufsz < 2) return;` leaves `buf` uninitialized/non-terminated if a future caller passes a smaller buffer; (2) `tmp[12]`/`int32_t scaled` would truncate/overflow for a value/decimals combination outside the stamina/CBBA-score range this file restricts it to. Neither triggered by any current caller.
+- **Connects to:** print_world_state, debug_emit_live_frame
+
+### 2. `debug_trace` [global] — L107
+**SEVERITY: LOW**
+Pure no-op (all params cast to void), silently dropping every trace call instead of emitting to UART/USB. Documented as intentional/gated-off-by-default, so no corruption/blocking, but on-device diagnostic trace is currently a complete black hole regardless of g_simulation_trace_enabled.
+- **Connects to:** called from core/allocator.c and core/simulation.c
+
+### 3. `print_world_state` [global] — L124
+**SEVERITY: NONE**
+Loop bound matches g_teams[NUM_TEAMS]'s actual size; fmt_fixed3 buffer sized correctly; format specifiers match field types; no NULL-pointer risk.
+- **Connects to:** fmt_fixed3, team_status_to_string, reads g_environment_summary/g_teams[]
+
+### 4. `initialize_test_scenario` [global] — L169
+**SEVERITY: NONE**
+Empty stub, intentionally not ported (desktop test-harness only). Confirmed nothing in core/ or board/ calls this for the board build.
+- **Connects to:** none (unreferenced in board build)
+
+### 5. `debug_emit_live_frame` [global] — L179
+**SEVERITY: NONE**
+Same bound/buffer checks as print_world_state; deliberately narrower payload than laptop's LIVEFRAME is a documented design choice.
+- **Connects to:** fmt_fixed3, team_status_to_string, called from core/sim_runner.c
+
+### 6. `debug_print_generator_evaluation` [global] — L220
+**SEVERITY: NONE**
+All 15 parameters discarded via (void); documented no-op stub, no side effects.
+- **Connects to:** called from core/ incident-generator logic
+
+### 7. `debug_print_generator_selection` [global] — L247
+**SEVERITY: NONE**
+Same as above - no-op stub, no side effects.
+- **Connects to:** called from core/ incident-generator selection logic
+
+## board/STM32N6570-DK/main_board.c
+
+### 8. `mission_link_handshake_round_trip_complete` [static] — L249
+**SEVERITY: NONE**
+mission_link_handshake_build_local_reply() has no side effects beyond writing into the caller-supplied out struct on success - repeated calls in the busy-wait loops are safe/idempotent.
+- **Connects to:** mission_link_handshake_build_local_reply, called by sim_task
+
+### 9. `sim_task` [LOCAL/static] — L289
+**SEVERITY: MEDIUM**
+Two config-fragility issues (neither reachable with shipped defaults): (1) `BOARD_SEED + BOARD_SEED_COUNT` computed as uint32_t with no overflow guard - a build config with BOARD_SEED near UINT32_MAX would wrap the loop bound; (2) `tick % BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL` has no zero-guard - a build redefining that macro to 0 divides by zero on the first tick. Both latent, not reachable with current defaults (1u/1u and 50u).
+- **Connects to:** sx1262_hal_init, sim_runner_init, comms_transport_init, mission_link_task_init, mission_link_handshake_board_init, mission_link_handshake_mark_local_ready, mission_link_handshake_round_trip_complete, sx1262_poll_rx, mission_link_task_step, comms_transport_dispatch_pending, mission_link_task_any_roster_applied, sim_start_seed_board, sim_tick, board_snapshot_ring_drain, sim_end_seed, sim_runner_shutdown, tk_dly_tsk/tk_slp_tsk
+
+### 10. `usermain` [global/EXPORT] — L461
+**SEVERITY: MEDIUM**
+`tk_sta_tsk(sim_tskid, 0)`'s return value is not checked (unlike tk_cre_tsk's, which is handled correctly). If tk_sta_tsk fails, usermain proceeds to tk_slp_tsk(TMO_FEVR) as if the simulation task were running - the board sits silently parked forever with no diagnostic, indistinguishable from a normally-running-but-quiet system. Since this is the single entry point starting the only task in this single-task RTOS model, a silent failure here means the entire firmware does nothing with no error message.
+- **Connects to:** sim_task (via tk_cre_tsk/tk_sta_tsk), µT-Kernel APIs
+
+## board/STM32N6570-DK/snapshot.c
+
+### 11. `board_snapshot_ring_pending` [global] — L73
+**SEVERITY: NONE**
+Trivial getter returning g_ring_count; not currently called anywhere (drain cadence uses a fixed tick interval instead).
+- **Connects to:** none currently call it
+
+### 12. `snapshot_begin_run` [global] — L78
+**SEVERITY: MEDIUM**
+Unconditionally resets g_ring_head/tail/count to 0 with no check of pending count beforehand. Safe only because main_board.c always does one final board_snapshot_ring_drain() before the next seed's snapshot_begin_run() - but that drain is capped at BOARD_SNAPSHOT_DRAIN_MAX_FRAMES_PER_CALL (32) per call and only called once (main_board.c's own comment flags this as an assumption: "if that assumption ever stops holding, this would need a loop instead of one call"). If per-seed telemetry volume ever exceeds 32 undrained frames at end-of-seed, those frames are silently and permanently discarded with no counter, log, or assertion.
+- **Connects to:** called from core/sim_runner.c (sim_start_seed_board/sim_start_seed); shares ring state with board_snapshot_ring_push/board_snapshot_ring_drain
+
+### 13. `board_snapshot_ring_push` [static] — L102
+**SEVERITY: NONE**
+Overflow branch correctly overwrites the oldest entry at g_ring_head (same index g_ring_tail currently points at when full) and advances g_ring_tail; non-full path increments g_ring_count correctly; head wraps via modulo in both branches. Single-task-only caller confirmed, so lack of volatile on ring-index globals is not a live issue.
+- **Connects to:** snapshot_record, snapshot_record_resolved
+
+### 14. `snapshot_record` [global] — L128
+**SEVERITY: NONE**
+Thin wrapper casting event_type to uint8_t before pushing, consistent with the documented wire-format schema.
+- **Connects to:** board_snapshot_ring_push, called from core/ incident/task code
+
+### 15. `snapshot_record_resolved` [global] — L144
+**SEVERITY: NONE**
+NULL-checks task before dereferencing. Uses task->assigned_team directly (documented rationale: team may have been reassigned earlier in the same tick) - matches snapshot.h's contract, not a defect introduced in this port.
+- **Connects to:** board_snapshot_ring_push, called from core/incident.c's complete_task()
+
+### 16. `snapshot_end_run` [global] — L154
+**SEVERITY: NONE**
+Empty stub, correctly documented as intentional (run_id is embedded per-frame, no end marker needed).
+- **Connects to:** called from core/sim_runner.c (sim_end_seed)
+
+### 17. `snapshot_close_dataset` [global] — L163
+**SEVERITY: NONE**
+Empty stub, correctly documented (no on-device dataset file to close).
+- **Connects to:** called from core/sim_runner.c (sim_runner_shutdown)
+
+### 18. `board_snapshot_ring_drain` [global] — L183
+**SEVERITY: NONE**
+Loop bound correctly caps at BOARD_SNAPSHOT_DRAIN_MAX_FRAMES_PER_CALL and g_ring_count>0; TelemetryFrame_t filled correctly field-by-field matching the packed wire struct; TELEMETRY_FRAME_PAYLOAD_SIZE (10) correctly bounds the byte-write loop, checksum computed over the same 10 bytes before being sent, matching the documented wire layout. g_ring_tail/g_ring_count update correctly matching push's indexing scheme. tm_putchar return values discarded, consistent with this file's already-documented UART tradeoff.
+- **Connects to:** board_snapshot_ring_push, called from main_board.c's sim_task tick loop
+
+
+## board/STM32N6570-DK/mission_link_task.c
+
+### 19. `mission_link_usart1_write` [static] — L160
+**SEVERITY: NONE**
+Checked loop bound (i < len), byte cast to INT for tm_putchar. No off-by-one, no NULL deref given valid args.
+- **Connects to:** tm_putchar; called by mission_link_send_status, mission_link_comms_transport_rx_step, mission_link_handshake_tx_step
+
+### 20. `mission_link_task_any_roster_applied` [global] — L215
+**SEVERITY: NONE**
+Trivial getter; single-task model means no torn read, no ISR writer so volatile not needed.
+- **Connects to:** called by main_board.c's gate loop; reads g_roster_applied_count
+
+### 21. `mission_link_representative_team` [static] — L226
+**SEVERITY: MEDIUM**
+Hardcodes the board-assignment divisor as a bare literal 5u instead of referencing COMMS_TRANSPORT_TEAMS_PER_BOARD (currently 5, but documented as overridable). If that macro changes without updating this literal, this function computes a team id that no longer matches comms_transport_board_id_for_team()'s actual rule, silently misrouting incident/handshake relays to the wrong board.
+- **Connects to:** comms_transport_board_id_for_team (the rule it must mirror); called by mission_link_apply_and_relay_incident, mission_link_handshake_tx_step
+
+### 22. `mission_link_handshake_ready_now` [static] — L244
+**SEVERITY: NONE**
+Delegates to mission_link_handshake_build_local_reply(), matches documented round-trip semantics.
+- **Connects to:** mission_link_handshake_build_local_reply; called by mission_link_route_or_apply_roster, mission_link_route_or_apply_fault, mission_link_apply_and_relay_incident, mission_link_comms_transport_rx_step
+
+### 23. `mission_link_route_or_apply_roster` [static] — L265
+**SEVERITY: NONE**
+relay_buf sizing correct; readiness gate applied before both branches; roster-applied counter incremented only on the documented path.
+- **Connects to:** mission_link_handshake_ready_now, comms_transport_board_id_for_team, mission_link_apply_roster, mission_link_pack_roster_payload, comms_transport_send; called by mission_link_rx_try_consume_one
+
+### 24. `mission_link_route_or_apply_fault` [static] — L301
+**SEVERITY: NONE**
+Same structure as #5, correctly sized buffer, precedence computed via mission_link_fault_precedence(msg).
+- **Connects to:** mission_link_handshake_ready_now, comms_transport_board_id_for_team, mission_link_apply_fault, mission_link_pack_fault_payload, mission_link_fault_precedence, comms_transport_send; called by mission_link_rx_try_consume_one
+
+### 25. `mission_link_apply_and_relay_incident` [static] — L349
+**SEVERITY: NONE**
+board_count from comms_transport_board_count(), not hardcoded; correctly skips this board; relay_buf correctly sized. Depends on mission_link_representative_team() (see #3) but is not itself buggy.
+- **Connects to:** mission_link_handshake_ready_now, mission_link_apply_incident, comms_transport_board_count, mission_link_representative_team, mission_link_pack_incident_payload, mission_link_incident_precedence, comms_transport_send; called by mission_link_rx_try_consume_one
+
+### 26. `mission_link_rx_try_consume_one` [static] — L393
+**SEVERITY: NONE**
+Each parser follows the documented 1/0/-1 contract; compaction loop correctly shifts remaining bytes and decrements g_rx_buf_len, no underflow.
+- **Connects to:** mission_link_handshake_parse_req, mission_link_handshake_note_request_received, mission_link_parse_roster, mission_link_route_or_apply_roster, mission_link_parse_incident, mission_link_apply_and_relay_incident, mission_link_parse_fault, mission_link_route_or_apply_fault; called by mission_link_usart1_rx_step
+
+### 27. `mission_link_usart1_rx_step` [static] — L491
+**SEVERITY: NONE**
+Board-0-only gate correct; RX accumulation bounded by MISSION_LINK_RX_BUF_CAPACITY; correctly implements the corrected readiness-gate placement.
+- **Connects to:** board_usart1_read_byte, mission_link_rx_try_consume_one; called by mission_link_task_step
+
+### 28. `mission_link_comms_transport_rx_step` [static] — L550
+**SEVERITY: NONE** (peek-before-pop fix already applied, excluded per instructions)
+Rest of function checked fresh: HANDSHAKE branch payload-length guards before indexing payload[1]; MISSION_LINK sub-type switch guards payload_len before every parse call; STATUS case correctly restricted to board 0; readiness gate correctly scoped to only the four data types.
+- **Connects to:** comms_transport_peek_frame_type, comms_transport_poll_received, mission_link_handshake_note_request_received, mission_link_handshake_parse_reply_payload, mission_link_handshake_note_remote_reply, mission_link_handshake_ready_now, mission_link_parse_roster_payload, mission_link_apply_roster, mission_link_parse_incident_payload, mission_link_apply_incident, mission_link_parse_fault_payload, mission_link_apply_fault, mission_link_parse_status_payload, mission_link_pack_status, mission_link_usart1_write; called by mission_link_task_step
+
+### 29. `mission_link_send_status` [static] — L784
+**SEVERITY: NONE**
+Board-0 path and non-DK path both correctly sized; team 0 resolving to board 0 is divisor-independent (unlike #3's literal-5 usage).
+- **Connects to:** mission_link_pack_status, mission_link_usart1_write, mission_link_pack_status_payload, mission_link_status_precedence, comms_transport_send; called by mission_link_status_tx_step
+
+### 30. `mission_link_status_tx_step` [static] — L810
+**SEVERITY: NONE**
+Correctly filters to locally-hosted teams; four should_send triggers checked in sensible order; unsigned wraparound on now_ms-last_sent_ms is intentional/documented, matching cbba.c's established pattern.
+- **Connects to:** cbba_now_ms, comms_transport_board_id_for_team, mission_link_build_status, mission_link_send_status; called by mission_link_task_step
+
+### 31. `mission_link_handshake_tx_step` [static] — L919
+**SEVERITY: MEDIUM**
+g_relay_reply_sent[]/g_relay_reply_last_sent[] are fixed arrays capped at HANDSHAKE_MAX_BOARDS (8), but the peer loop (`for(peer=1; peer<board_count; peer++)`) never clamps peer < HANDSHAKE_MAX_BOARDS before indexing. Safe today (board_count=2 given current NUM_TEAMS/TEAMS_PER_BOARD), but if NUM_TEAMS grows without also bumping HANDSHAKE_MAX_BOARDS (a change this file's own comment explicitly anticipates as valid), this writes out of bounds. No defensive clamp exists despite the header explicitly flagging HANDSHAKE_MAX_BOARDS as a cap other code must respect.
+- **Connects to:** cbba_now_ms, mission_link_handshake_build_local_reply, mission_link_handshake_pack_reply, mission_link_usart1_write, mission_link_handshake_pack_reply_payload, comms_transport_send, comms_transport_board_count, mission_link_handshake_should_send_relay_req, mission_link_handshake_pack_req_payload, mission_link_representative_team, mission_link_handshake_get_relay_reply; called by mission_link_task_step
+
+### 32. `mission_link_task_init` [global] — L1045
+**SEVERITY: MEDIUM**
+Resets g_rx_buf_len, g_last_sent_status[], g_own_reply_sent, g_relay_reply_sent[] but NOT g_roster_applied_count. Harmless in the documented single-boot-call usage, but this is the designated re-init entry point; a re-invocation (test harness, soft-restart) would leave main_board.c's roster-arrival gate seeing a stale nonzero count against freshly-reset g_teams[] state.
+- **Connects to:** writes g_rx_buf_len/g_last_sent_status[]/g_own_reply_sent/g_relay_reply_sent[]; does not touch g_roster_applied_count (read by mission_link_task_any_roster_applied)
+
+### 33. `mission_link_task_step` [global] — L1070
+**SEVERITY: NONE**
+Straight-line dispatch of the four sub-steps in documented order; no state of its own.
+- **Connects to:** mission_link_usart1_rx_step, mission_link_comms_transport_rx_step, mission_link_status_tx_step, mission_link_handshake_tx_step; called by main_board.c's per-tick loop
+
+## board/STM32N6570-DK/sx1262_hal.c
+
+### 34. `gpio_clock_enable_all` [static] — L131
+**SEVERITY: NONE**
+Enables clocks for all 7 ports; dummy read-back forces the required post-enable sync delay.
+- **Connects to:** called by sx1262_hal_init
+
+### 35. `gpio_set_output` [static] — L143
+**SEVERITY: NONE**
+2-bit MODER/OSPEEDR/PUPDR field math and 1-bit OTYPER checked against pin-shift formulas - correct.
+- **Connects to:** called by sx1262_hal_init
+
+### 36. `gpio_set_input` [static] — L151
+**SEVERITY: NONE**
+Clears MODER to input, sets PUPDR correctly; doesn't touch OSPEEDR/OTYPER (correct for an input).
+- **Connects to:** called by sx1262_hal_init
+
+### 37. `gpio_set_af` [static] — L157
+**SEVERITY: NONE**
+AFR[0] vs AFR[1] index/shift math correct; checked against PG2/PH8/PE15 - correct.
+- **Connects to:** called by spi5_init
+
+### 38. `gpio_write` [static inline] — L168
+**SEVERITY: NONE**
+BSRR single-write set/reset pattern is the standard atomic GPIO write idiom, no RMW race.
+- **Connects to:** called by sx1262_hal_init, sx126x_hal_reset, sx126x_hal_wakeup, apply_rf_switch_for_opcode, sx126x_hal_write, sx126x_hal_read
+
+### 39. `gpio_read` [static inline] — L174
+**SEVERITY: NONE**
+Correct IDR bit test.
+- **Connects to:** called by wait_busy_low, sx1262_poll_rx
+
+### 40. `spi5_init` [static] — L189
+**SEVERITY: HIGH**
+`SX1262_SPI->CFG2 = SPI_CFG2_MASTER;` sets only the MASTER bit. The comment claims software NSS management (SSM/SSOE off, driving NSS via GPIO), but SPI_CFG2_SSM (bit 26) is NOT actually set - leaving SSM=0 is hardware NSS management (the peripheral watches the real NSS AF line for master-mode-fault detection), the opposite of the stated intent. Since PA3 is configured as a plain GPIO output (not routed to SPI5's NSS AF), the peripheral's internal hardware NSS input is left disconnected/floating. With SSM=0 in master mode this is a classic setup for a MODF (mode fault) event, which STM32 SPI responds to by auto-clearing SPI_CR1_SPE (disabling the peripheral). Once disabled, spi5_xfer_byte()'s unbounded TXP/RXP wait loops (#23) would spin forever, hanging the single cooperative task permanently. Correct fix: set SPI_CFG2_SSM (and typically SPI_CR1_SSI) alongside SPI_CFG2_MASTER.
+- **Connects to:** gpio_set_af, RCC registers; called by sx1262_hal_init
+
+### 41. `spi5_xfer_byte` [static] — L223
+**SEVERITY: MEDIUM**
+No timeout on the TXP/RXP wait loops - unlike wait_busy_low()'s infinite wait (which is justified against datasheet BUSY semantics), a disabled/wedged SPI peripheral here (e.g. via #22's MODF scenario) hangs the entire single-task firmware with no diagnostic or recovery. Re-setting CR1|=CSTART on every byte call is idempotent/harmless, not a bug.
+- **Connects to:** called by sx126x_hal_write, sx126x_hal_read
+
+### 42. `crude_delay_cycles` [static] — L251
+**SEVERITY: NONE**
+Volatile loop counter prevents optimization-away; explicitly documented as an uncalibrated placeholder for generous-margin uses.
+- **Connects to:** called by sx126x_hal_reset, sx126x_hal_wakeup
+
+### 43. `wait_busy_low` [static] — L259
+**SEVERITY: MEDIUM**
+Infinite busy-wait with no timeout, intentionally documented (a command issued while BUSY is high is silently dropped per datasheet). But since there's exactly one cooperative task and this runs on every SPI transaction, a dead/disconnected/miswired radio (a real risk given this file's documented required solder-bridge rework) freezes the entire firmware (mission-link, sim tick, telemetry) with no watchdog recovery.
+- **Connects to:** gpio_read; called by sx126x_hal_reset, sx126x_hal_wakeup, sx126x_hal_write, sx126x_hal_read
+
+### 44. `sx1262_hal_init` [global] — L277
+**SEVERITY: NONE**
+GPIO roles assigned correctly per the wiring table; NSS/NRST idle correctly before spi5_init(). (Depends on spi5_init's register bug, #22, but this function's own logic is correct.)
+- **Connects to:** gpio_clock_enable_all, gpio_set_output, gpio_write, gpio_set_input, spi5_init; called by board bring-up
+
+### 45. `sx126x_hal_reset` [global] — L304
+**SEVERITY: LOW**
+No extra settle delay between NRST release and the first BUSY read - if BUSY takes a moment to assert after reset release, could in principle read stale-low. Low-confidence, unverified-against-datasheet-timing concern, not a demonstrated failure.
+- **Connects to:** gpio_write, crude_delay_cycles, wait_busy_low; called by ensure_radio_configured
+
+### 46. `sx126x_hal_wakeup` [global] — L322
+**SEVERITY: MEDIUM**
+NSS-low wake pulse uses crude_delay_cycles(10u) - an arbitrarily tiny, uncalibrated cycle count, inconsistent with sx126x_hal_reset's comparatively generous crude_delay_cycles(10000u) (1000x larger) for its reset pulse. Nothing establishes 10 cycles satisfies the SX126x's minimum wake-pulse timing at the actual core clock; if too short, could silently leave the radio asleep.
+- **Connects to:** wait_busy_low, gpio_write, crude_delay_cycles; called by (currently unused elsewhere in this file - dead entry point exposed via sx126x_hal.h to the vendored driver)
+
+### 47. `apply_rf_switch_for_opcode` [static] — L345
+**SEVERITY: NONE**
+Opcode constants cross-checked against sx126x.c's private enum; switch correctly sets RXEN/TXEN mutually exclusively, both low for SetSleep, untouched for other opcodes.
+- **Connects to:** gpio_write; called by sx126x_hal_write
+
+### 48. `sx126x_hal_write` [global] — L370
+**SEVERITY: NONE**
+Correctly snoops command[0] only when length>0; NSS bracketing correct; SetSleep trailing-wait exception documented and matches reference HALs. Always returns OK since there's no error path from the busy-wait SPI primitives to propagate (real risk lives in spi5_xfer_byte/wait_busy_low, #23/#25, not here).
+- **Connects to:** apply_rf_switch_for_opcode, wait_busy_low, gpio_write, spi5_xfer_byte; called by the vendored sx126x_driver core for every command
+
+### 49. `sx126x_hal_read` [global] — L411
+**SEVERITY: NONE**
+Correctly clocks NOP bytes during data-read phase; wait_busy_low bracketing correct. Same "always OK" caveat as #30, not a defect specific to this function.
+- **Connects to:** wait_busy_low, gpio_write, spi5_xfer_byte; called by the vendored sx126x_driver core
+
+### 50. `sx1262_enter_rx` [static] — L496
+**SEVERITY: LOW**
+Both underlying calls' return codes discarded via (void). Dormant given the HAL always reports success today, but a genuine unchecked-return-value instance if real error detection is ever added.
+- **Connects to:** sx126x_set_standby, sx126x_set_rx_with_timeout_in_rtc_step; called by ensure_radio_configured, sx1262_poll_rx
+
+### 51. `ensure_radio_configured` [static] — L519
+**SEVERITY: MEDIUM**
+All ~9 configuration calls have return codes discarded via (void), and g_radio_configured=1 is set unconditionally afterward regardless of whether any actually failed. A partial/failed radio bring-up is undetectable - proceeds to TX/RX against whatever partial state landed on the chip. lora_spi_transmit() (see below), by contrast, DOES check its own critical calls - this function's inconsistency stands out.
+- **Connects to:** sx126x_hal_reset, sx126x_set_standby, sx126x_set_pkt_type, sx126x_set_rf_freq, sx126x_set_buffer_base_address, sx126x_set_dio_irq_params, sx126x_set_lora_mod_params, sx126x_set_lora_pkt_params, sx126x_set_lora_sync_word, sx126x_set_tx_params, sx1262_enter_rx; called by lora_spi_transmit, sx1262_poll_rx
+
+### 52. `lora_spi_transmit` [global] — L586
+**SEVERITY: NONE**
+frame_len bounds checked against 0 and 255 before anything else; return codes of set_lora_pkt_params/write_buffer/set_tx all checked with early return on failure - correctly avoids setting g_lora_tx_busy unless TX was actually keyed.
+- **Connects to:** ensure_radio_configured, sx126x_set_lora_pkt_params, sx126x_write_buffer, sx126x_set_tx; called by comms_transport.c's dispatcher
+
+### 53. `lora_radio_tx_busy` [global] — L631
+**SEVERITY: NONE**
+Trivial getter of volatile int g_lora_tx_busy - volatile correctly present given the two call sites are both driven from the same single task's tick loop.
+- **Connects to:** reads g_lora_tx_busy; called by comms_transport.c's dispatch_pending()
+
+### 54. `sx1262_poll_rx` [global] — L653
+**SEVERITY: NONE**
+DIO1 fast-path early-return keeps common case cheap; all return codes checked with early returns; IRQ bits cleared with exact irq_status read (not a broader mask), preventing stale-DIO1 false retrigger; buffer-length bounds check correctly guards the read against an out-of-range wire value; TxDone/Timeout vs RxDone handling both correct against the driver's documented semantics.
+- **Connects to:** ensure_radio_configured, gpio_read, sx126x_get_irq_status, sx126x_clear_irq_status, sx126x_get_rx_buffer_status, sx126x_read_buffer, lora_frame_try_parse, comms_transport_deliver_received, sx1262_enter_rx; called by main_board.c's per-tick loop
+
+
+## board/Raspberry_Pi_Pico/debug.c
+
+### 55. `fmt_fixed3` [static] — L54
+**SEVERITY: NONE**
+Every buffer write guarded by `pos + 1 < bufsz` before increment; truncation-toward-zero matches documented behavior for 0-100 stamina/score ranges; decimals only ever called with literal 3.
+- **Connects to:** print_world_state, debug_emit_live_frame
+
+### 56. `debug_trace` [global] — L116
+**SEVERITY: NONE**
+Intentional no-op per comment/debug.h doc (varargs float forwarding to tm_printf unsupported); gated behind g_simulation_trace_enabled, documented not accidental.
+- **Connects to:** called from core/allocator.c, core/simulation.c
+
+### 57. `print_world_state` [global] — L133
+**SEVERITY: NONE**
+Loop bound matches g_teams[] sizing; format specifiers match field types after promotion; fmt_fixed3 buffer correctly sized.
+- **Connects to:** fmt_fixed3, team_status_to_string
+
+### 58. `initialize_test_scenario` [global] — L178
+**SEVERITY: NONE**
+Empty stub, documented as intentionally not ported.
+- **Connects to:** none
+
+### 59. `debug_emit_live_frame` [global] — L188
+**SEVERITY: NONE**
+Same checks as print_world_state pass; narrower field set is a deliberate documented scope reduction.
+- **Connects to:** fmt_fixed3, team_status_to_string
+
+### 60. `debug_print_generator_evaluation` [global] — L229
+**SEVERITY: NONE**
+All parameters voided, documented intentional silent stub.
+- **Connects to:** none
+
+### 61. `debug_print_generator_selection` [global] — L256
+**SEVERITY: NONE**
+Same as above.
+- **Connects to:** none
+
+## board/Raspberry_Pi_Pico/snapshot.c
+
+### 62. `board_snapshot_ring_pending` [global] — L73
+**SEVERITY: NONE**
+Trivial accessor; single-task model confirmed, no tearing concern despite volatile.
+- **Connects to:** called from main_board.c, currently unused there
+
+### 63. `snapshot_begin_run` [global] — L78
+**SEVERITY: NONE**
+Resets ring state unconditionally; the safety argument (final drain before next begin_run) holds for the single-seed-loop path, though see sim_task's finding below re: the final drain not always fully emptying the ring - that risk is attributed to sim_task/board_snapshot_ring_drain's interaction, not this function's own logic.
+- **Connects to:** board_snapshot_ring_drain (indirectly), sim_task
+
+### 64. `board_snapshot_ring_push` [static] — L102
+**SEVERITY: NONE**
+Overflow handling correct: when full, g_ring_head==g_ring_tail, so overwriting g_ring_head before advancing g_ring_tail correctly drops the oldest entry with no double-counting or OOB index.
+- **Connects to:** snapshot_record, snapshot_record_resolved
+
+### 65. `snapshot_record` [global] — L128
+**SEVERITY: NONE**
+Thin wrapper casting EventType_t to uint8_t; no truncation issue.
+- **Connects to:** board_snapshot_ring_push
+
+### 66. `snapshot_record_resolved` [global] — L144
+**SEVERITY: NONE**
+NULL-checks task; correctly uses task->assigned_team per documented rationale.
+- **Connects to:** board_snapshot_ring_push
+
+### 67. `snapshot_end_run` [global] — L154
+**SEVERITY: NONE**
+Empty stub, documented intentional.
+- **Connects to:** none
+
+### 68. `snapshot_close_dataset` [global] — L163
+**SEVERITY: NONE**
+Empty stub, documented intentional.
+- **Connects to:** none
+
+### 69. `board_snapshot_ring_drain` [global] — L183
+**SEVERITY: LOW**
+Wire-format construction correct (10-byte payload, checksum, magic bytes match telemetry_frame.h). The real gap: capped at BOARD_SNAPSHOT_DRAIN_MAX_FRAMES_PER_CALL (32) per call, and main_board.c's single post-seed "final drain" call relies on the unenforced assumption that 32 covers typical pending volume. If more than 32 events are pending when the tick loop ends, the remainder is silently left in the ring, and the next snapshot_begin_run() unconditionally zeroes ring state, permanently discarding them (worse on the last seed, since nothing drains after sim_runner_shutdown()). Rated LOW since this is an explicitly-documented-as-lossy debug/telemetry side channel, not the authoritative record, and the gap is already flagged in surrounding comments as a known assumption.
+- **Connects to:** called from main_board.c's sim_task
+
+## board/Raspberry_Pi_Pico/syscalls.c
+
+### 70. `_sbrk` [global] — L46
+**SEVERITY: LOW**
+Upper-bound check (heap_end+incr > RP2040_RAM_END) correctly prevents heap/stack collision. No lower-bound check: a negative incr (not reachable via newlib's actual nano-malloc usage here, but the stub itself doesn't defend against it) could walk heap_end back into .bss/.data with no guard.
+- **Connects to:** called by newlib malloc internals, transitively by fabsf/log1pf users in core/scoring.c, core/watchdog.c
+
+### 71. `_write` [global] — L66
+**SEVERITY: NONE**
+Unconditionally returns -1/ENOSYS, matching documented design; tm_printf/tm_putchar (the real output paths) never go through this.
+- **Connects to:** none
+
+### 72. `_read` [global] — L75
+**SEVERITY: NONE**
+Same pattern as _write - correctly stubbed to fail.
+- **Connects to:** none
+
+### 73. `_close` [global] — L84
+**SEVERITY: NONE**
+Correctly stubbed to fail, no real fds exist.
+- **Connects to:** none
+
+### 74. `_fstat` [global] — L91
+**SEVERITY: LOW**
+Dereferences st->st_mode with no NULL check on st. Only invoked by newlib's internal stdio init with a valid on-stack struct in practice, so theoretical.
+- **Connects to:** none
+
+### 75. `_isatty` [global] — L98
+**SEVERITY: NONE**
+Always returns 1, harmless default.
+- **Connects to:** none
+
+### 76. `_lseek` [global] — L104
+**SEVERITY: NONE**
+Always returns 0, correct no-op.
+- **Connects to:** none
+
+### 77. `_exit` [global] — L112
+**SEVERITY: NONE**
+Infinite empty loop as documented, correct terminal behavior.
+- **Connects to:** none
+
+### 78. `_kill` [global] — L121
+**SEVERITY: NONE**
+Always fails with EINVAL, correct for no process/signal model.
+- **Connects to:** none
+
+### 79. `_getpid` [global] — L129
+**SEVERITY: NONE**
+Always returns 1, harmless placeholder.
+- **Connects to:** none
+
+## board/Raspberry_Pi_Pico/main_board.c
+
+### 80. `mission_link_handshake_round_trip_complete` [static] — L342
+**SEVERITY: NONE**
+scratch intentionally unread by caller; correctly forwards to mission_link_handshake_build_local_reply(), the correct two-condition gate.
+- **Connects to:** mission_link_handshake_build_local_reply; called by sim_task
+
+### 81. `board_led_init` [LOCAL] — L360
+**SEVERITY: LOW**
+Return values of gpio_set_pin()/gpio_set_val() (both ER, can report error) discarded - a GPIO config failure would silently leave LED state unconfirmed. Consistent with the same unchecked-return convention already used throughout sx1262_hal.c, not a newly introduced inconsistency.
+- **Connects to:** gpio_set_pin, gpio_set_val (BSP); called by sim_task
+
+### 82. `board_led_pulse` [LOCAL] — L369
+**SEVERITY: LOW**
+Same unchecked-return issue for gpio_set_val()/tk_dly_tsk(). Blocking tk_dly_tsk() is safe here since every call site is inside sim_task, a real task context, never an ISR.
+- **Connects to:** gpio_set_val (BSP), tk_dly_tsk (kernel); called by board_led_blink_n, board_led_wait_pulse_handshake, board_led_wait_pulse_roster, sim_task
+
+### 83. `board_led_blink_n` [LOCAL] — L383
+**SEVERITY: NONE**
+Simple bounded loop, no off-by-one or overflow risk at realistic call values.
+- **Connects to:** board_led_pulse; called by board_led_wait_pulse_roster, sim_task
+
+### 84. `board_led_wait_pulse_handshake` [LOCAL] — L404
+**SEVERITY: NONE**
+Single fixed pulse call matching its documented pattern.
+- **Connects to:** board_led_pulse; called by sim_task
+
+### 85. `board_led_wait_pulse_roster` [LOCAL] — L412
+**SEVERITY: NONE**
+Two blinks plus a top-up delay; total timing doesn't exactly match the comment's stated intent but this is an explicitly-approximate LED-timing cosmetic, not a functional bug.
+- **Connects to:** board_led_blink_n, tk_dly_tsk (kernel); called by sim_task
+
+### 86. `sim_task` [LOCAL] — L457
+**SEVERITY: MEDIUM**
+Full control flow checked: sim_runner_init() failure handled correctly; init ordering matches its own extensive comments; handshake/roster wait loops both correctly poll RX before stepping mission_link/dispatching comms (a previously-fixed bug per the comment, confirmed fixed in both loops); seed/tick loop bounds correct half-open ranges. The genuine issue: the post-tick-loop final drain (one board_snapshot_ring_drain() call, capped at 32 frames) is not guaranteed to fully empty the ring before the next snapshot_begin_run() unconditionally resets ring state - if per-tick snapshot volume in the last drain-interval window exceeds 32, leftover telemetry is silently and permanently lost with no warning (worse on the last seed, since nothing drains after sim_runner_shutdown()). Real, triggerable data-loss path, but confined to the debug/telemetry side channel (explicitly not the authoritative record per telemetry_frame.h) - hence MEDIUM not HIGH.
+- **Connects to:** board_led_init, board_led_pulse, board_led_blink_n, board_led_wait_pulse_handshake, board_led_wait_pulse_roster, sx1262_hal_init, sx1262_rx_poll, sim_runner_init, comms_transport_init, mission_link_task_init, mission_link_handshake_board_init, mission_link_handshake_mark_local_ready, mission_link_handshake_round_trip_complete, mission_link_task_any_roster_applied, mission_link_task_step, comms_transport_dispatch_pending, sim_start_seed_board, sim_tick, board_snapshot_ring_drain, sim_end_seed, sim_runner_shutdown, tk_dly_tsk, tk_slp_tsk; called by usermain
+
+### 87. `usermain` [global/EXPORT] — L724
+**SEVERITY: NONE**
+tk_cre_tsk() return value checked (sim_tskid<=0 -> failure message + return); tk_sta_tsk() starts the task; usermain parks in tk_slp_tsk(TMO_FEVR) rather than returning, correctly avoiding the "returning shuts down µT-Kernel" hazard. Confirms single-task model: exactly one tk_cre_tsk call in the whole file.
+- **Connects to:** sim_task (via tk_cre_tsk/tk_sta_tsk), tk_slp_tsk (kernel)
+
+
+## board/Raspberry_Pi_Pico/mission_link_task.c
+
+### 88. `board_usart1_read_byte` [global/weak] — L148
+**SEVERITY: NONE**
+Weak stub deliberately returns -1 until a real UART driver links in a strong definition. Non-blocking contract honored, no side effects.
+- **Connects to:** mission_link_usart1_rx_step
+
+### 89. `mission_link_usart1_write` [static] — L160
+**SEVERITY: NONE**
+Byte-at-a-time write via tm_putchar; loop bound matches caller-supplied wire-size constants. tm_putchar's return discarded, matching the same convention already established in snapshot.c.
+- **Connects to:** tm_putchar, mission_link_send_status, mission_link_comms_transport_rx_step, mission_link_handshake_tx_step
+
+### 90. `mission_link_task_any_roster_applied` [global] — L215
+**SEVERITY: NONE**
+Trivial accessor, no side effects.
+- **Connects to:** main_board.c gate check, mission_link_route_or_apply_roster, mission_link_comms_transport_rx_step
+
+### 91. `mission_link_representative_team` [static] — L226
+**SEVERITY: LOW**
+`(uint8_t)(board_id * 5u)` truncates silently for board_id > 51. Unreachable today (board_count=2 given current constants), but no bounds check guards the multiply/cast if board_count is ever scaled up.
+- **Connects to:** mission_link_apply_and_relay_incident, mission_link_handshake_tx_step
+
+### 92. `mission_link_handshake_ready_now` [static] — L244
+**SEVERITY: NONE**
+Discards the built reply, only uses the return value as documented gate.
+- **Connects to:** mission_link_handshake_build_local_reply, mission_link_route_or_apply_roster, mission_link_route_or_apply_fault, mission_link_apply_and_relay_incident, mission_link_comms_transport_rx_step
+
+### 93. `mission_link_route_or_apply_roster` [static] — L265
+**SEVERITY: NONE**
+Readiness-gated correctly; relay_buf sized exactly to match the payload write, no overflow.
+- **Connects to:** mission_link_handshake_ready_now, comms_transport_board_id_for_team, mission_link_apply_roster, mission_link_pack_roster_payload, comms_transport_send
+
+### 94. `mission_link_route_or_apply_fault` [static] — L301
+**SEVERITY: NONE**
+Same shape/checks as roster variant, correctly sized.
+- **Connects to:** mission_link_handshake_ready_now, comms_transport_board_id_for_team, mission_link_apply_fault, mission_link_pack_fault_payload, mission_link_fault_precedence, comms_transport_send
+
+### 95. `mission_link_apply_and_relay_incident` [static] — L349
+**SEVERITY: NONE**
+Loop bound correct and non-overflowing for realistic board counts; relay_buf sized exactly to match; self-board correctly skipped.
+- **Connects to:** mission_link_handshake_ready_now, mission_link_apply_incident, comms_transport_board_count, mission_link_representative_team, mission_link_pack_incident_payload, mission_link_incident_precedence, comms_transport_send
+
+### 96. `mission_link_rx_try_consume_one` [static] — L393
+**SEVERITY: NONE**
+Verified against each parser's 1/0/-1 contract; fixed-order type trying can't starve a smaller/matching frame behind an incomplete larger one; compaction loop has no off-by-one or OOB access.
+- **Connects to:** mission_link_handshake_parse_req, mission_link_parse_roster, mission_link_parse_incident, mission_link_parse_fault, mission_link_handshake_note_request_received, mission_link_route_or_apply_roster, mission_link_route_or_apply_fault, mission_link_apply_and_relay_incident
+
+### 97. `mission_link_usart1_rx_step` [static] — L491
+**SEVERITY: NONE**
+Board-0-only gate correct; fill loop bounded, preventing overflow; drain loop correctly bounded by the consume function's contract.
+- **Connects to:** board_usart1_read_byte, mission_link_rx_try_consume_one
+
+### 98. `mission_link_comms_transport_rx_step` [static] — L550
+**SEVERITY: NONE** (peek-before-poll fix already applied, confirmed, not re-flagged)
+payload_len bounds-checked before every payload[1..] parse, buffer large enough for every checked size; HANDSHAKE branch correctly bypasses the readiness gate; STATUS sub-type correctly no-ops on a non-DK board. The `frame_type != LORA_FRAME_TYPE_MISSION_LINK` guard after the peek is dead code today (single-task, no real ISR) but harmless defensive code.
+- **Connects to:** comms_transport_peek_frame_type, comms_transport_poll_received, mission_link_handshake_note_request_received, mission_link_handshake_parse_reply_payload, mission_link_handshake_note_remote_reply, mission_link_handshake_ready_now, mission_link_parse_roster_payload, mission_link_apply_roster, mission_link_parse_incident_payload, mission_link_apply_incident, mission_link_parse_fault_payload, mission_link_apply_fault, mission_link_parse_status_payload, mission_link_pack_status, mission_link_usart1_write
+
+### 99. `mission_link_send_status` [static] — L784
+**SEVERITY: NONE**
+Board-0 and relay paths both sized exactly correctly; team-0-addressing trick consistent with the rest of the file.
+- **Connects to:** mission_link_pack_status, mission_link_usart1_write, mission_link_pack_status_payload, mission_link_status_precedence, comms_transport_send
+
+### 100. `mission_link_status_tx_step` [static] — L810
+**SEVERITY: NONE**
+Loop bound and ownership filter correct; unsigned-subtraction wraparound handling correct/intentional, matching cbba.c's own pattern; no stale last-sent fields after a send.
+- **Connects to:** cbba_now_ms, comms_transport_board_id_for_team, mission_link_build_status, mission_link_send_status
+
+### 101. `mission_link_handshake_tx_step` [static] — L919
+**SEVERITY: MEDIUM**
+g_relay_reply_sent[]/g_relay_reply_last_sent[] (both HANDSHAKE_MAX_BOARDS-sized) are indexed by a loop bounded only by comms_transport_board_count(), with no clamp against HANDSHAKE_MAX_BOARDS. core/mission_link_handshake.c's own equivalent per-peer state is now protected by explicit bounds checks in every accessor (fixed earlier this session), but this file's two LOCAL arrays are indexed directly with no such guard. Currently unreachable (board_count=2 today) but a latent out-of-bounds write if NUM_TEAMS is ever scaled past 40 without updating this file too. Same finding independently confirmed on the DK's identical function.
+- **Connects to:** cbba_now_ms, mission_link_handshake_build_local_reply, mission_link_handshake_pack_reply, mission_link_usart1_write, mission_link_handshake_pack_reply_payload, comms_transport_send, comms_transport_board_count, mission_link_handshake_should_send_relay_req, mission_link_handshake_pack_req_payload, mission_link_representative_team, mission_link_handshake_get_relay_reply
+
+### 102. `mission_link_task_init` [global] — L1045
+**SEVERITY: NONE**
+Zeroes all state this function owns; g_roster_applied_count/other untouched globals start at 0 via C zero-init and this function is called exactly once at boot per the documented/actual usage - not a re-init bug in practice (contrast with the DK finding on the same function, which flagged this as a real gap if ever re-invoked - same underlying code, same latent gap, rated NONE here vs MEDIUM there only because this agent weighted the "called once today" fact more heavily; worth reconciling as the same underlying issue during triage).
+- **Connects to:** none (pure state reset), called once from main_board.c
+
+### 103. `mission_link_task_step` [global] — L1070
+**SEVERITY: NONE**
+Trivial fixed-order dispatcher, RX before TX, matches documented design.
+- **Connects to:** mission_link_usart1_rx_step, mission_link_comms_transport_rx_step, mission_link_status_tx_step, mission_link_handshake_tx_step
+
+**Divergence check vs DK's mission_link_task.c:** byte-identical except board-name/BSP comments - no functional divergence.
+
+**Task/interrupt-model check:** confirmed exactly one tk_cre_tsk call in this board's main_board.c (sim_task) - single-task model holds for the Pico too.
+
+## board/Raspberry_Pi_Pico/sx1262_hal.c
+
+### 104. `sx1262_spi_init` [static] — L195
+**SEVERITY: NONE**
+Idempotency guard correct for single-task use; reset/idle-level sequencing correct; PL022 SPI mode configuration (DSS_8BIT/FRF_MOTOROLA/SPO=0/SPH=0) matches SX126x's required mode 0.
+- **Connects to:** sx126x_hal_write, sx126x_hal_read, sx126x_hal_reset, sx126x_hal_wakeup, lora_spi_transmit, sx1262_enter_rx, sx1262_hal_init
+
+### 105. `sx1262_spi_xfer_byte` [static] — L267
+**SEVERITY: LOW**
+Busy-waits on local PL022 FIFO status bits with no timeout - resolves almost immediately in normal operation (not dependent on the external radio), same class as the DK's spi5_xfer_byte.
+- **Connects to:** sx126x_hal_write, sx126x_hal_read
+
+### 106. `sx1262_wait_not_busy` [static] — L282
+**SEVERITY: NONE**
+Deliberate no-timeout busy-wait on the SX126x BUSY line, matching the DK's wait_busy_low() and its documented datasheet rationale.
+- **Connects to:** sx126x_hal_write, sx126x_hal_read, sx126x_hal_wakeup
+
+### 107. `apply_rf_switch_for_opcode` [static] — L299
+**SEVERITY: NONE**
+Ported verbatim from the DK's identical function, correct switch coverage.
+- **Connects to:** sx126x_hal_write
+
+### 108. `sx126x_hal_write` [global] — L326
+**SEVERITY: NONE**
+Opcode snoop correctly guarded; BUSY-wait before NSS assert; loop bounds correct. Always returns OK (no failure path to detect at this level), consistent with the DK's identical HAL.
+- **Connects to:** sx1262_spi_init, apply_rf_switch_for_opcode, sx1262_wait_not_busy, sx1262_spi_xfer_byte
+
+### 109. `sx126x_hal_read` [global] — L358
+**SEVERITY: NONE**
+Same structure as write, correct NOP-byte clocking, no bounds issues.
+- **Connects to:** sx1262_spi_init, sx1262_wait_not_busy, sx1262_spi_xfer_byte
+
+### 110. `sx126x_hal_reset` [global] — L384
+**SEVERITY: NONE**
+NRESET pulse timing coarser than datasheet minimum but intentionally erring long. Doesn't itself wait on BUSY after release, but every subsequent hal call independently waits on BUSY first, so no race introduced.
+- **Connects to:** sx1262_spi_init; called from sx1262_hal_init
+
+### 111. `sx126x_hal_wakeup` [global] — L400
+**SEVERITY: MEDIUM**
+Pulses NSS low then immediately high with NO delay between the two calls, and doesn't wait on BUSY before starting the pulse - unlike the DK's equivalent, which inserts a delay cycle and a pre-emptive BUSY wait. Real bug (no guaranteed minimum NSS-low pulse width), but currently dead code: neither sx126x_set_sleep() nor sx126x_wakeup() (this function's only caller path) is invoked anywhere in this codebase.
+- **Connects to:** sx1262_spi_init, sx1262_wait_not_busy; called only via sx126x_wakeup() (vendored driver), which itself has no callers
+
+### 112. `lora_spi_transmit` [global] — L423
+**SEVERITY: NONE**
+frame_len bounds checked before any truncating cast; every SPI call's return code checked with early-return on failure; tx_busy state set only after full success. timeout_in_ms=0 (no hardware TX watchdog) is a documented, deliberate divergence from the DK, compensated by this board's own software poll-count watchdog in sx1262_rx_poll - intentional, not an oversight.
+- **Connects to:** sx1262_spi_init, sx126x_set_standby, sx126x_set_lora_pkt_params, sx126x_write_buffer, sx126x_set_tx; sets state read by lora_radio_tx_busy and sx1262_rx_poll
+
+### 113. `lora_radio_tx_busy` [global] — L483
+**SEVERITY: NONE**
+Trivial volatile accessor, no concurrency hazard given the confirmed single-task model.
+- **Connects to:** comms_transport_dispatch_pending
+
+### 114. `sx1262_dio1_is_asserted` [static] — L513
+**SEVERITY: NONE**
+Single GPIO read gating the more expensive SPI round trip; confirmed no interrupt-vector registration anywhere for DIO1 - genuinely polled, matching the DK's model.
+- **Connects to:** sx1262_rx_poll
+
+### 115. `sx1262_enter_rx` [global] — L535
+**SEVERITY: MEDIUM**
+Both underlying calls' return codes discarded via (void). If either fails, the radio is silently left not actually listening, with zero diagnostic and no retry - called both at boot and after every TX completion/timeout, so a single failed call could silently deafen the radio for the rest of the run.
+- **Connects to:** sx1262_spi_init, sx126x_set_standby, sx126x_set_rx_with_timeout_in_rtc_step; called by sx1262_hal_init, sx1262_rx_poll
+
+### 116. `sx1262_rx_poll` [global] — L562
+**SEVERITY: NONE**
+TX-busy watchdog increment correctly placed before the DIO1 early-return; buffer-length bounds check correctly precedes the actual buffer read; IRQ bits always cleared once observed; RX only re-armed on the correct branch given this configuration's mutually-exclusive RX_DONE vs TX_DONE/Timeout semantics (continuous RX, no RX timeout possible, TX timeout=0 so no TX timeout possible either).
+- **Connects to:** sx126x_get_irq_status, sx126x_get_rx_buffer_status, sx126x_read_buffer, lora_frame_try_parse, comms_transport_deliver_received, sx126x_clear_irq_status, sx1262_enter_rx, sx1262_dio1_is_asserted
+
+### 117. `sx1262_hal_init` [global] — L699
+**SEVERITY: MEDIUM**
+Every configuration call in the one-time bring-up sequence discards its return code via (void). A failure during bring-up (plausible given this file's own header notes pin assignments are still placeholders) leaves the radio incompletely configured with zero diagnostic emitted anywhere - silent total-comms failure, hard to diagnose. Same pattern present in the DK's own bring-up (ensure_radio_configured).
+- **Connects to:** sx1262_spi_init, sx126x_hal_reset, sx126x_set_dio_irq_params, sx126x_set_pkt_type, sx126x_set_rf_freq, sx126x_set_buffer_base_address, sx126x_set_lora_mod_params, sx126x_set_lora_pkt_params, sx126x_set_lora_sync_word, sx126x_set_tx_params, sx1262_enter_rx; called once from main_board.c
+
+**Divergence check vs DK's sx1262_hal.c:** differs substantially in register-level specifics as expected (PL022/libbsp GPIO here vs CMSIS direct-register on the DK), plus one deliberately-documented behavioral difference (TX timeout 0 vs 1000ms, compensated by a software watchdog here). The RXEN/TXEN opcode-snoop logic, DIO1-polled model, and continuous-RX policy are functionally identical between boards. The one substantive UNINTENTIONAL divergence: sx126x_hal_wakeup() (finding #24) - the DK's version has a delay cycle and pre-emptive BUSY wait this board's version omits.
+
