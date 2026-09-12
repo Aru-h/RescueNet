@@ -1322,9 +1322,24 @@ void complete_incident_stage(IncidentState_t *incident) //incident
             break;
 
         case(SPEC_SUPPORT):
-            if(incident->incident_type == INCIDENT_EQUIPMENT_CACHE && incident->spawned_by != NO_ASSIGNMENT &&incident->spawned_by < NUM_TEAMS)
+            if(incident->incident_type == INCIDENT_EQUIPMENT_CACHE)
             {
-                g_teams[incident->spawned_by].equipment_level = EQ_MAX_LEVEL;
+                /* Bug fix: this used to only call complete_task() inside
+                   the spawned_by-validation branch, so an invalid
+                   spawned_by (not reachable via the current sole creator
+                   create_equipment_cache_incident(), which always sets
+                   it to a real team_id, but not asserted anywhere) would
+                   leave the task permanently stuck INC_IN_PROGRESS with
+                   its team stuck ON_SCENE forever - update_incident_work()
+                   re-invokes this every tick once work_remaining hits 0,
+                   so it would silently re-enter this no-op branch
+                   indefinitely. Always complete the task; only the
+                   equipment-refill credit is conditional on spawned_by
+                   actually being valid. */
+                if(incident->spawned_by != NO_ASSIGNMENT && incident->spawned_by < NUM_TEAMS)
+                {
+                    g_teams[incident->spawned_by].equipment_level = EQ_MAX_LEVEL;
+                }
                 complete_task(TASK_POOL_SYSTEM, incident);
             }
             break;
@@ -2193,6 +2208,8 @@ void escalate_starved_incidents(uint32_t current_tick)
     }
 }
 
+unsigned long g_diag_hazard_event_dropped_pool_full = 0;
+
 void generate_incidents_if_needed(void)
 {
     IncidentType_t hazard_type;
@@ -2200,7 +2217,18 @@ void generate_incidents_if_needed(void)
     int16_t hazard_y;
 
     while(environment_pop_pending_hazard_event(&hazard_type, &hazard_x, &hazard_y))
-        generate_incident_at(hazard_type, hazard_x, hazard_y);
+    {
+        /* Bug fix: generate_incident_at()'s return value used to be
+           discarded. It returns 0 when the incident pool is full
+           (find_free_incident_slot() found nothing) - since the hazard
+           event has already been popped from the pending queue at that
+           point (not requeued), a real fire/gas/collapse event could
+           vanish with no incident ever created and no diagnostic trail.
+           Counting it doesn't recover the lost event (there's nowhere
+           to put it back), but at least makes the loss visible. */
+        if(!generate_incident_at(hazard_type, hazard_x, hazard_y))
+            g_diag_hazard_event_dropped_pool_full++;
+    }
 
     if(g_current_tick < g_next_incident_evaluation_tick)
         return;

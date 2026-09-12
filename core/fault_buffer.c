@@ -317,7 +317,15 @@ void fault_buffer_record_local_vote(
     for(uint8_t fault_class = 0u; fault_class < NUM_OPERATIONAL_FAULT_CLASSES; fault_class++)
     {
         if((class_mask & (1u << fault_class)) != 0u)
+        {
             g_vote_weight[target_team_id][fault_class] += weight;
+            /* Bug fix: this sibling of fault_buffer_record_remote_vote()
+               was missing the same cap - "Cap at NUM_TEAMS so a replayed
+               or duplicate frame can't inflate weight beyond what the
+               real voter count allows" applies here too. */
+            if(g_vote_weight[target_team_id][fault_class] > (float)NUM_TEAMS)
+                g_vote_weight[target_team_id][fault_class] = (float)NUM_TEAMS;
+        }
     }
 }
 

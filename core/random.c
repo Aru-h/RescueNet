@@ -73,6 +73,14 @@ uint32_t random_range(uint32_t min,uint32_t max)
         max=min;
         min=temp;
     }
+    /* Bug fix: max-min+1 wraps to 0 in uint32_t arithmetic when the
+       requested range spans the full uint32_t width (min=0, max=
+       UINT32_MAX), causing a modulo-by-zero. No current caller passes
+       that full a range, but nothing guarded against it either - this
+       is the one case where the whole random_u32() draw IS the answer,
+       no modulo needed. */
+    if(max - min == UINT32_MAX)
+        return random_u32();
     return min + (random_u32()%(max-min+1));
 }
 
@@ -84,6 +92,9 @@ uint32_t random_range_stream(RandomStream_t stream, uint32_t min, uint32_t max)
         max=min;
         min=temp;
     }
+    /* Same fix as random_range() above. */
+    if(max - min == UINT32_MAX)
+        return random_u32_stream(stream);
     return min + random_u32_stream(stream)%(max-min+1);
 }
 
