@@ -244,6 +244,23 @@ void fault_buffer_record_remote_vote(
     if(target_team_id >= NUM_TEAMS)
         return;
 
+    /* weight/class_mask come straight off the wire (FaultVotePayload_t,
+       deserialized in fault_comms_ingest_remote_frames()) with no upstream
+       validation - a corrupt or misbehaving sender could put a negative
+       or NaN weight on the wire. Clamp before it touches either the
+       history slot below or the g_vote_weight accumulator further down:
+       `!(weight >= 0.0f)` catches negative values AND NaN in one check
+       (any comparison against NaN is false, so a plain `weight < 0.0f`
+       guard would let NaN through unclamped, and once NaN enters a `+=`
+       accumulation it poisons that team/class's tally permanently - see
+       fault_buffer_fuse()'s quorum math, which reads g_vote_weight
+       downstream). Upper bound matches the cap already applied to the
+       accumulator below. */
+    if(!(weight >= 0.0f))
+        weight = 0.0f;
+    else if(weight > (float)NUM_TEAMS)
+        weight = (float)NUM_TEAMS;
+
     history = &g_remote_vote_history[target_team_id];
     slot = &history->entries[history->head];
 
