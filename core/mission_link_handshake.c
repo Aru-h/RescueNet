@@ -428,8 +428,25 @@ static void mission_link_handshake_seed_timeout_clock_if_needed(uint32_t now)
     }
 }
 
+/* Bug fix: every g_relay_*[peer_board_id]-indexing function below except
+ * mission_link_handshake_note_remote_reply() (whose board_id comes off
+ * the wire, so it already had to check) trusted peer_board_id to be
+ * < HANDSHAKE_MAX_BOARDS with no guard of its own - a caller iterating
+ * past that cap (e.g. NUM_TEAMS/COMMS_TRANSPORT_TEAMS_PER_BOARD drifting
+ * past HANDSHAKE_MAX_BOARDS without updating that macro too, exactly the
+ * scenario this file's own header comment already warns about) would be
+ * an out-of-bounds read or write into these static arrays - real memory
+ * corruption on an MMU-less target, not just a wrong answer. All five
+ * now bounds-check up front, matching mission_link_handshake_note_
+ * remote_reply()'s existing pattern, each returning the same safe
+ * default it would return for "no relay activity yet for this peer". */
 static void mission_link_handshake_note_relay_req_sent(uint8_t peer_board_id, uint32_t now)
 {
+    if (peer_board_id >= HANDSHAKE_MAX_BOARDS)
+    {
+        return;
+    }
+
     g_relay_req_sent_once[peer_board_id] = 1u;
     g_relay_req_last_sent_valid[peer_board_id] = 1u;
     g_relay_req_last_sent_tick[peer_board_id] = now;
@@ -438,6 +455,11 @@ static void mission_link_handshake_note_relay_req_sent(uint8_t peer_board_id, ui
 int mission_link_handshake_should_send_relay_req(uint8_t peer_board_id, uint32_t now)
 {
     int due;
+
+    if (peer_board_id >= HANDSHAKE_MAX_BOARDS)
+    {
+        return 0;
+    }
 
     mission_link_handshake_seed_timeout_clock_if_needed(now);
 
@@ -478,6 +500,11 @@ int mission_link_handshake_should_send_relay_req(uint8_t peer_board_id, uint32_t
 
 int mission_link_handshake_relay_timed_out(uint8_t peer_board_id, uint32_t now)
 {
+    if (peer_board_id >= HANDSHAKE_MAX_BOARDS)
+    {
+        return 0;
+    }
+
     if (g_relay_timed_out[peer_board_id])
     {
         return 1;
@@ -517,6 +544,11 @@ void mission_link_handshake_note_remote_reply(const MissionLinkHandshakeReply_t 
 int mission_link_handshake_get_relay_reply(uint8_t peer_board_id, uint32_t now,
                                             MissionLinkHandshakeReply_t *out)
 {
+    if (peer_board_id >= HANDSHAKE_MAX_BOARDS)
+    {
+        return 0;
+    }
+
     if (g_relay_reply_seen[peer_board_id])
     {
         *out = g_relay_reply[peer_board_id];
@@ -545,5 +577,10 @@ int mission_link_handshake_relay_reply_seen(uint8_t peer_board_id)
        out() or touch g_board_init_tick/cbba_now_ms() in any way - see
        this function's own doc in the header for exactly why that
        matters. A plain array read, nothing else. */
+    if (peer_board_id >= HANDSHAKE_MAX_BOARDS)
+    {
+        return 0;
+    }
+
     return (int)g_relay_reply_seen[peer_board_id];
 }

@@ -31,6 +31,15 @@ static uint32_t g_tx_counter = 0u;
 static uint32_t g_rx_last_counter[LORA_CRYPTO_MAX_SENDERS];
 static uint8_t g_rx_seen[LORA_CRYPTO_MAX_SENDERS];
 
+/* Non-atomic read-then-increment on g_tx_counter, no lock. Safe today for
+ * the same reason documented in comms_transport_inbox_push()'s
+ * concurrency-invariant comment: both board targets create exactly one
+ * simulation task, and every caller of this function (lora_frame_pack(),
+ * via comms_transport_send()/comms_transport_dispatch_pending()) runs
+ * from that same single task - never from an ISR, never from a second
+ * concurrent task. A repeated (key, nonce) pair from a torn read-modify-
+ * write here would be a catastrophic AEAD break, so re-verify this
+ * invariant before ever calling this from a second task or an ISR. */
 uint32_t lora_crypto_next_tx_counter(void)
 {
     uint32_t value = g_tx_counter;

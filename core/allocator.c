@@ -106,6 +106,23 @@ void allocate_all_incidents(void)
         team->incident_queue_size = 0;
         team->incident_queue_index = 0;
 
+        /* Bug fix: this used to hardcode index 0 and `break` after the
+           first matching task, so a team's incident_queue_* arrays
+           (sized CBBA_MAX_BUNDLE_SIZE) never held more than one entry
+           even when the team's own CBBA path carried multiple incident
+           tasks it won this round - the extra capacity sat unused, and
+           dispatch_next_queued_incident()/reopen_future_queued_
+           incidents() (both already built to walk a multi-entry queue)
+           never had more than one entry to walk. Now queues every
+           qualifying task in path order: the first becomes the team's
+           actual current assignment (via assign_incident(), which also
+           sets status/EN_ROUTE), and every task after that is marked
+           INC_ASSIGNED/assigned_team here directly - deliberately NOT
+           via assign_incident() again, which would wrongly re-point
+           the team's current assigned_task_pool/slot at each later
+           task in turn instead of leaving it on the first one. */
+        uint8_t already_assigned = 0;
+
         for(uint8_t j = 0; j < agent->path_size; j++)
         {
             TaskRef_t task = agent->path[j];
@@ -126,13 +143,26 @@ void allocate_all_incidents(void)
             {
                 continue;
             }
-            team->incident_queue_slot[0] =task.slot;
-            team->incident_queue_id[0] =incident->incident_id;
-            team->incident_queue_size = 1;
-            team->incident_queue_index = 0;
-            assign_incident(team_id,task.slot);
 
-            break;
+            if(team->incident_queue_size >= CBBA_MAX_BUNDLE_SIZE)
+                break; /* queue arrays are full - any further tasks this
+                          team won this round are left INC_OPEN for a
+                          future round to re-bid/re-queue */
+
+            team->incident_queue_slot[team->incident_queue_size] = task.slot;
+            team->incident_queue_id[team->incident_queue_size] = incident->incident_id;
+            team->incident_queue_size++;
+
+            if(!already_assigned)
+            {
+                assign_incident(team_id, task.slot);
+                already_assigned = 1;
+            }
+            else
+            {
+                incident->status = INC_ASSIGNED;
+                incident->assigned_team = team_id;
+            }
         }
     }
 
