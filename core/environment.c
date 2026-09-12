@@ -584,6 +584,16 @@ static void stage_generate_terrain(void)
 
 static void assign_anchor(uint8_t type, int16_t x, int16_t y)
 {
+    /* stage_generate_districts() below currently hardcodes exactly
+       NUM_DISTRICT_TYPES calls to this function, which is the only
+       reason g_districts[NUM_DISTRICT_TYPES] never overflows here - if
+       that assumption ever breaks (a new district type added without
+       updating the call site to match), this guard drops the extra
+       anchor silently instead of corrupting whatever static memory
+       follows g_districts, and this comment is the trail back to why. */
+    if(g_environment_summary.district_total >= NUM_DISTRICT_TYPES)
+        return;
+
     DistrictRecord_t *district = &g_districts[g_environment_summary.district_total];
     district->district_id = g_environment_summary.district_total;
     district->type = type;
