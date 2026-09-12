@@ -561,9 +561,33 @@ static void cbba_apply_override_pin(uint8_t team_id)
     task.pool = TASK_POOL_INCIDENT;
     task.slot = pinned_slot;
 
-        /* Guard against path overflow — use path_size, not bundle_size,
-       since it's the path array being written into */
-    if(agent->path_size >= CBBA_MAX_BUNDLE_SIZE || cbba_bundle_contains(team_id, task))
+    /* Bug fix: this used to guard both writes below (bundle[bundle_size]
+     * AND the path[] shift-insert) with a single check on path_size,
+     * relying on an implicit, undocumented invariant - bundle_size <=
+     * path_size - to make checking path_size alone also safe for the
+     * bundle[] write. That invariant does hold today, but only because
+     * nothing currently inserts a TASK_POOL_SYSTEM entry into
+     * agent->path[]: system tasks are assigned straight to
+     * team->assigned_task_pool/slot (core/allocator.c's allocate_all_
+     * incidents()), entirely bypassing bundle[]/path[], even though
+     * cbba_release_lost_tasks() (below) already has code anticipating a
+     * future where path[] holds system-pool entries bundle[] never
+     * does ("System tasks are never in the bundle - always keep
+     * them") - currently dead code, since nothing produces that case
+     * yet. Guard each counter against its own array's capacity
+     * independently instead, so this stops depending on that invariant
+     * at all - whoever eventually wires system tasks into path[] won't
+     * silently reopen an overflow here. (cbba_build_bundle()'s own
+     * bundle[]/path[] writes are each already independently guarded
+     * this way; only this function shared one guard across both.) Note
+     * this doesn't change the separate, already-known "orphaned pin"
+     * functional issue where a task can be credited as won in bundle[]
+     * without ever landing in path[] - that's a different fix (needs a
+     * decision on what should happen when path fills up, not just a
+     * bounds check) and is intentionally left alone here. */
+    if(agent->bundle_size >= CBBA_COMMITMENT_LIMIT ||
+       agent->path_size >= CBBA_MAX_BUNDLE_SIZE ||
+       cbba_bundle_contains(team_id, task))
         return;
 
     agent->bundle[agent->bundle_size] = task;
