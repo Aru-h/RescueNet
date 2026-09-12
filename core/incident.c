@@ -1387,6 +1387,77 @@ uint8_t find_nearest_safe_zone(const TeamState_t *team) //incident
 }
 
 
+/* Deterministic last resort for initialize_evacuation_gateways()'s random-
+ * retry loop below: scans the whole perimeter in a fixed order for the
+ * first cell not already claimed by an earlier gateway (index < i) or a
+ * safe zone, and is therefore guaranteed to succeed as long as any free
+ * perimeter cell exists at all - with NUM_EVACUATION_GATEWAYS (3) and
+ * MAX_SAFE_ZONES (4) claiming at most 7 cells out of ~2*(GRID_WIDTH+
+ * GRID_HEIGHT)-4 (~140) perimeter cells, that's always true in practice.
+ * Water is deliberately NOT excluded here (unlike the random draw above) -
+ * this only runs after the random draw has already failed
+ * EVACUATION_GATEWAY_MAX_RANDOM_ATTEMPTS times, so a water-heavy world is
+ * exactly the case where insisting on dry land could exhaust the scan too;
+ * any dry, unclaimed cell is still preferred first (the loop checks all
+ * dry cells before considering water ones), same failure-mode-avoidance
+ * spirit as environment.c's stage_generate_infrastructure() no longer
+ * requiring has_road() on its own gateway candidates. */
+static uint8_t find_free_perimeter_cell(int gateway_index, int16_t *out_x, int16_t *out_y)
+{
+    for(int pass = 0; pass < 2; pass++)
+    {
+        uint8_t require_dry = (pass == 0);
+
+        for(int x = 0; x < GRID_WIDTH; x++)
+        {
+            for(int y = 0; y < GRID_HEIGHT; y++)
+            {
+                if(x != 0 && y != 0 && x != GRID_WIDTH - 1 && y != GRID_HEIGHT - 1)
+                    continue;
+
+                if(require_dry && !environment_cell_is_navigable(x, y))
+                    continue;
+
+                uint8_t claimed = 0;
+
+                for(int j = 0; j < gateway_index; j++)
+                {
+                    if(g_evacuation_gateways[j].loc_x == x && g_evacuation_gateways[j].loc_y == y)
+                    {
+                        claimed = 1;
+                        break;
+                    }
+                }
+
+                if(!claimed)
+                {
+                    for(int j = 0; j < g_num_safe_zones; j++)
+                    {
+                        if(g_safezones[j].loc_x == x && g_safezones[j].loc_y == y)
+                        {
+                            claimed = 1;
+                            break;
+                        }
+                    }
+                }
+
+                if(!claimed)
+                {
+                    *out_x = (int16_t)x;
+                    *out_y = (int16_t)y;
+                    return 1;
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
+#define EVACUATION_GATEWAY_MAX_RANDOM_ATTEMPTS 100
+
+unsigned long g_diag_evacuation_gateway_fallback_scan_count = 0;
+
 void initialize_evacuation_gateways(uint32_t seed) //incident
 {
     random_seed_stream(STREAM_EVACUATION_GATEWAYS, derive_seed(seed, STREAM_EVACUATION_GATEWAYS));
@@ -1395,9 +1466,37 @@ void initialize_evacuation_gateways(uint32_t seed) //incident
     {
         int valid_position = 0;
         int deterministic_site_rejected = 0;
+        int random_attempts = 0;
 
         while(!valid_position)
         {
+            /* Bug fix: this retry loop used to have no iteration cap - a
+             * pathological run of colliding random draws (vanishingly
+             * unlikely given how few cells are ever claimed relative to
+             * the perimeter's size, but not impossible) would spin
+             * forever with no external watchdog to catch it on this
+             * single-task board model (see AUDIT.md item #21). After a
+             * bounded number of random attempts, fall back to a
+             * deterministic scan that is guaranteed to terminate. */
+            if(random_attempts >= EVACUATION_GATEWAY_MAX_RANDOM_ATTEMPTS)
+            {
+                if(find_free_perimeter_cell(i, &g_evacuation_gateways[i].loc_x,
+                                             &g_evacuation_gateways[i].loc_y))
+                {
+                    g_diag_evacuation_gateway_fallback_scan_count++;
+                    break;
+                }
+
+                /* Should be unreachable (see find_free_perimeter_cell()'s
+                   own doc), but if every perimeter cell is somehow
+                   claimed, stop retrying rather than loop forever - accept
+                   whatever position was last drawn and let the duplicate-
+                   detection above generate_safe_zones() already accepts
+                   the same tradeoff for the analogous MAX_ATTEMPTS
+                   fallback there. */
+                break;
+            }
+
             int16_t gateway_x = 0;
             int16_t gateway_y = 0;
 
@@ -1409,6 +1508,7 @@ void initialize_evacuation_gateways(uint32_t seed) //incident
             }
             else
             {
+                random_attempts++;
                 int edge = random_range_stream(STREAM_EVACUATION_GATEWAYS,0, 3);
 
                 switch(edge)
