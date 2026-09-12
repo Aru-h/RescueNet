@@ -570,6 +570,7 @@ NONE — `in_bounds` guard returns `UINT16_MAX` sentinel before dereferencing `g
 **SEVERITY: MEDIUM**
 The backtrace loop `while(!(cx==start.x && cy==start.y))` has no iteration cap and no cycle-detection while walking `nodes[cx][cy].parent_x/y`; this is safe today because parent pointers only ever form a tree rooted at `start` given the forward search's invariants, but the lack of a defensive bound in a function walking data-derived parent pointers is a latent risk if that invariant is ever broken by a future edit (e.g. a bug in the forward search that lets a node be revisited/re-parented). Also O(N³) worst-case full-grid rescans per step — a performance concern, not a memory-safety one. No actual out-of-bounds access found; every index used is bounds-checked via `in_bounds` except `start`/`end`, which are always caller-supplied in-range coordinates.
 - **Connects to:** `connection_cost`, `paint_road_width`, `next_road_id`, `abs_i`, `in_bounds`; called by `stage_generate_roads`, `carve_repair_to_nearest_road`.
+   **RESOLVED** — commit `5a6538a`. Bounded the backtrace loop at `GRID_WIDTH*GRID_HEIGHT` steps.
 
 ### 109. `stage_generate_roads` static — L983
 **SEVERITY: NONE**
@@ -621,6 +622,7 @@ Per the function's own trailing comment, empirically ~47/50 seeds leave `g_gatew
 **SEVERITY: MEDIUM**
 Declares `GridPoint_t queue[GRID_WIDTH * GRID_HEIGHT]` (~5.2 KB) as a **stack** local, unlike sibling arrays (`g_carve_nodes`/`g_carve_visited`) that were explicitly promoted to BSS elsewhere in this file specifically to eliminate a large stack frame (per that code's own comment). This function is called repeatedly from `stage_generate_infrastructure`, `stage_validate_and_build_navigation`, and `environment_validate_hazard_reachability`; a ~5 KB single-call stack frame on an embedded target with limited task stack budgets risks overflow if the calling task's stack wasn't sized with this frame in mind — the same class of bug already fixed once for `carve_path_between`. No out-of-bounds indexing found otherwise.
 - **Connects to:** `has_road`, `in_bounds`; called by `stage_generate_infrastructure`, `stage_validate_and_build_navigation`, `environment_validate_hazard_reachability`.
+   **RESOLVED** — commit `5a6538a`. BFS queue promoted from stack to file-scope static (`g_road_reachable_queue`), same treatment as `g_carve_nodes`/`g_carve_visited` in this file.
 
 ### 119. `lot_reachable` static — L1564
 **SEVERITY: NONE**
@@ -704,6 +706,7 @@ NONE — same guard pattern.
 **SEVERITY: MEDIUM**
 Performs a non-atomic, unprotected read-modify-write on the shared globals `g_environment_summary.blocked_road_count`/`navigable_cell_count` (increment/decrement based on comparing old vs. new cell state), plus a plain (non-`volatile`) write into the shared `g_environment` grid. Neither `g_environment` nor `g_environment_summary` is `volatile`, and there is no lock/critical-section guard anywhere in this function. If this public entry point is ever invoked from both task and ISR/fault-injection-callback context (plausible for a "set operational state" API reacting to async fault events), a race on the read-then-increment/decrement can desynchronize the counters from actual grid state.
 - **Connects to:** `in_bounds`; called from mission/incident/fault-injection code outside this file.
+   **RESOLVED (re-scoped, not a live race)** — commit `5a6538a`. Confirmed every caller runs from the single simulation task; documented the invariant.
 
 ### 135. `environment_register_safe_zone` global — L2053
 **SEVERITY: NONE**
@@ -885,6 +888,7 @@ Same correctness pattern as function 6. No current callers found.
 **SEVERITY: MEDIUM**
 Unlike its remote counterpart, this function applies **no cap at all** (upper or lower) to `g_vote_weight[target_team_id][fault_class] += weight` — the header-documented invariant ("Cap at NUM_TEAMS so a replayed or duplicate frame can't inflate weight beyond what the real voter count allows") is silently absent from this sibling entry point. Latent under the current single call site (once per target per round); any future caller (or a bug invoking this more than once per round for the same target) inflates a team's vote weight past what `fault_buffer_fuse()`'s quorum math assumes, with no defense.
 - **Connects to:** board_mark_heard; called by fault_comms_cast_vote
+   **RESOLVED** — commit `5a6538a`. Added the same upper-bound cap its sibling `fault_buffer_record_remote_vote()` already has.
 
 ### 170. `fault_buffer_round_reset` [global] — L307
 **SEVERITY: NONE**
@@ -1202,6 +1206,7 @@ Pool-validated, NULL-checked. `TASK_POOL_SYSTEM` branch correctly clears the slo
 **SEVERITY: MEDIUM**
 In the `SPEC_SUPPORT` case, if `incident->incident_type == INCIDENT_EQUIPMENT_CACHE` but `spawned_by` is `NO_ASSIGNMENT` or `>= NUM_TEAMS`, the function does nothing at all: no `complete_task()`, no status change. Since `update_incident_work()` re-invokes this every tick once `work_remaining` hits 0, this would create a task permanently stuck `INC_IN_PROGRESS` with its team stuck `ON_SCENE` forever. Not reachable via the current sole creator `create_equipment_cache_incident()` (always sets `spawned_by = team->team_id`), but there is no fallback path to recover state if that invariant is ever violated.
 - **Connects to:** random_range_stream, snapshot_record, release_main_task_team, complete_task, find_best_gateway, find_nearest_safe_zone, cbba_sync_mission_execution_twin.
+   **RESOLVED** — commit `5a6538a`. The task is now always completed; only the equipment-refill credit is conditional on `spawned_by` being valid.
 
 ### 230. `incident_needs_support` [global] — L1337
 **SEVERITY: NONE**
@@ -1310,6 +1315,7 @@ Bails cleanly if `environment_find_incident_site()` fails.
 **SEVERITY: MEDIUM**
 Dead code with a documented, dangerous latent effect: internally correct, but not currently invoked from the live tick loop, and its precondition (`last_swept_tick` refreshed by a real sweep-cycle-completion writer) is not yet met anywhere. Per the function's own header comment, wiring this in today would push every open, discovered incident to permanent `PRIORITY_CRITICAL` within `ZONE_TRUST_DECAY_CAP_TICKS` of simulation start. No runtime impact today since nothing calls it.
 - **Connects to:** zone_id_for_location, search_zone_trust; not currently called by anything live.
+   **FLAGGED, not fixed — deliberately.** This is genuinely dead code (never called from the live tick loop) whose only "fix" would be wiring it in, which requires deciding how `last_swept_tick` gets refreshed by a real sweep-cycle-completion writer - a feature decision, not a bug fix, and out of scope for this pass. Left as documented dead code.
 
 ### 251. `escalate_starved_incidents` [global] — L2067
 **SEVERITY: NONE**
@@ -1320,6 +1326,7 @@ Dead code with a documented, dangerous latent effect: internally correct, but no
 **SEVERITY: MEDIUM**
 `while(environment_pop_pending_hazard_event(...)) generate_incident_at(...)` discards `generate_incident_at()`'s return value. If the incident pool is full, the popped hazard event is silently dropped forever — already consumed from the pending queue, not requeued or logged — so a real hazard (fire/gas/collapse) can vanish with no incident ever created and no diagnostic trail.
 - **Connects to:** environment_pop_pending_hazard_event, generate_incident_at, build_generation_context, calculate_generation_load, calculate_generation_probability, select_weighted_incident_type, generate_incident, schedule_next_generation_evaluation.
+   **RESOLVED** — commit `5a6538a`. Added `g_diag_hazard_event_dropped_pool_full` diagnostic counter; the event itself can't be recovered once popped, but the loss is now visible.
 
 ### 253. `clear_stale_equipment_cache_requests` [static] — L2130
 **SEVERITY: NONE**
@@ -1880,11 +1887,13 @@ Only writes when cache active; narrows ints but values are already grid-bounded 
 **SEVERITY: MEDIUM**
 `equipment_flags` is cast to `(void)` and never used — confirmed `environment_cell_is_navigable`/`environment_cell_travel_cost` have no equipment-awareness at all. The entire "with_equipment" pathfinding variant is a no-op with respect to equipment: any hazmat/vehicle-capable routing distinction the API implies never takes effect, and no caller currently even passes a non-zero `equipment_flags`.
 - **Connects to:** path_in_bounds, environment_cell_is_navigable, environment_cell_travel_cost, find_next_path_step_with_equipment
+   **FLAGGED, not fixed — deliberately, same reasoning as its sibling `can_traverse_cell` below.** "Fixing" this means designing real equipment-aware terrain semantics (what equipment should unlock what terrain) from scratch - a feature decision with no existing design to implement, not a mechanical bug fix. Left as a documented gap.
 
 ### 359. `can_traverse_cell` [static] — L126
 **SEVERITY: MEDIUM**
 Same issue as `get_movement_cost`: `equipment_flags` ignored, so destination traversability never varies by equipment.
 - **Connects to:** path_in_bounds, environment_cell_is_navigable, find_next_path_step_with_equipment
+   **FLAGGED, not fixed — deliberately.** Same reasoning as `get_movement_cost` above: this is a missing feature (equipment-aware traversal), not a bug with an obvious fix. Left as a documented gap.
 
 ### 360. `get_heuristic` [static] — L136
 **SEVERITY: NONE**
@@ -2019,11 +2028,13 @@ Bounds-checks `stream`, falls back to the global stream if out of range, and laz
 **SEVERITY: MEDIUM**
 Normalizes `min>max` by swapping, then returns `min + (random_u32() % (max-min+1))`. If `max-min == UINT32_MAX` (e.g. `min=0, max=UINT32_MAX`), `max-min+1` wraps to `0` in `uint32_t` arithmetic, causing a modulo-by-zero (undefined behavior / typically a hardware fault or crash on both Cortex-M targets and the x86-64 laptop build). No current caller passes a full `[0, UINT32_MAX]` range, but nothing guards against it — a live landmine in a general-purpose utility.
 - **Connects to:** random_u32; called from core/allocator.c, core/safezone.c, core/team.c, core/incident.c, core/environment.c, core/cbba.c
+   **RESOLVED** — commit `5a6538a`. Added the full-range special case (returns `random_u32()` directly, no modulo).
 
 ### 386. `random_range_stream` [global] — L79
 **SEVERITY: MEDIUM**
 Same modulo-by-zero landmine as `random_range` when `max-min == UINT32_MAX`.
 - **Connects to:** random_u32_stream; called from core/fault_injector.c and other stream-based callers
+   **RESOLVED** — commit `5a6538a`. Same fix as `random_range()` above.
 
 ### 387. `derive_seed` [global] — L90
 **SEVERITY: NONE**
@@ -2226,6 +2237,7 @@ Returns a copy of `g_recovery_metrics` by value.
 **SEVERITY: MEDIUM**
 The `MAX_ATTEMPTS` hard-exit fallback path commits `g_safezones[i]` at whatever `(x,y)` was last computed without re-running the duplicate-location check the normal path performs. Once `attempts >= 40` and the candidate cell is non-navigable, `x`/`y` are forced to `(0,0)`; if this happens for more than one zone index on a degenerate map, multiple safe zones can be registered at the identical `(0,0)` location with no de-duplication, unlike every other placement path in this function which checks against existing zone locations. A genuinely degenerate-map-only edge case (tracked partially via a diagnostic counter), but the duplicate-check gap itself is real and untracked.
 - **Connects to:** random_seed_stream, random_range_stream, derive_seed, environment_find_safe_zone_site, environment_cell_is_navigable, environment_register_safe_zone
+   **RESOLVED** — commit `5a6538a`. Added `find_free_navigable_cell()`, a deterministic whole-grid scan for an unclaimed cell, same shape as `initialize_evacuation_gateways()`'s earlier fix.
 
 ## core/scoring.c
 
