@@ -44,3 +44,15 @@ Different audience from the CSV section above: this is for anyone reading `core/
 10. **`propagate_fire`** (core/environment.c) — its `building_id < MAX_ENV_BUILDINGS` guard is redundant (IDs are always in range by construction) but genuinely safe, not buggy.
 11. **`lora_crypto_accept_counter`** (core/lora_crypto.c) — the actual floor-regression bug here was fixed via `AUDIT.md` top-10 item #10 (commit `7e733ab`); the residual "non-atomic, no real ISR context" note is the same class of finding as item #4 (documented future-risk, no live ISR anywhere in this codebase today).
 12. **`sim_tick`** (core/sim_runner.c) — tick-counter wraparound requires ~4.29 billion ticks and self-heals within one tick regardless (`simulation_step()` re-syncs it).
+
+---
+
+# Known Limitations — `board/` (accepted findings from the AUDIT.md board audit pass)
+
+Same audience as the `core/` section above: accepted findings from the board/-specific audit (`board/STM32N6570-DK/*.c`, `board/Raspberry_Pi_Pico/*.c`). Each is either an explicitly intentional stub, cosmetic-only, or a low-confidence/unverified concern with no demonstrated failure — not bugs to fix.
+
+1. **`debug_trace`** (both boards' `dk_debug.c`/`debug.c`) — intentional no-op; documented as a stub with no on-device sink, not a bug.
+2. **`sx126x_hal_reset`** (board/STM32N6570-DK/sx1262_hal.c) — no extra settle delay between NRST release and the first BUSY read. Low-confidence, unverified-against-datasheet-timing concern; no demonstrated failure.
+3. **`board_led_init`** (board/Raspberry_Pi_Pico/main_board.c) — `gpio_set_pin()`/`gpio_set_val()` return values discarded. Cosmetic LED status indicator; consistent with this codebase's established unchecked-BSP-return convention elsewhere.
+4. **`board_led_pulse`** (board/Raspberry_Pi_Pico/main_board.c) — same reasoning as `board_led_init` above.
+5. **`fmt_fixed3`** (both boards' `dk_debug.c`/`debug.c`) — residual `tmp[12]`/`int32_t scaled` truncation risk for a value/decimals combination outside the stamina/CBBA-score range this function is actually called with today. Not reachable given current callers; same class as several already-accepted `core/` LOW items above.
