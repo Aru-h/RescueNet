@@ -53,6 +53,15 @@ enum {
  * is single-threaded and non-reentrant, so a file-scope static is safe. */
 static PathNode_t g_carve_nodes[GRID_WIDTH][GRID_HEIGHT];
 static uint8_t    g_carve_visited[GRID_WIDTH][GRID_HEIGHT];
+
+/* Same promotion as g_carve_nodes/g_carve_visited above, for the same
+ * reason: road_reachable_map()'s BFS queue was a ~5.2 KB stack-local
+ * array, called repeatedly from stage_generate_infrastructure(),
+ * stage_validate_and_build_navigation(), and environment_validate_
+ * hazard_reachability() - all single-threaded, non-reentrant callers
+ * (confirmed: exactly one simulation task exists on either board
+ * target), so a file-scope static is safe here too. */
+static GridPoint_t g_road_reachable_queue[GRID_WIDTH * GRID_HEIGHT];
 EnvironmentCell_t g_environment[GRID_WIDTH][GRID_HEIGHT];
 EnvironmentBuilding_t g_environment_buildings[MAX_ENV_BUILDINGS];
 EnvironmentSummary_t g_environment_summary;
@@ -986,7 +995,16 @@ static uint8_t carve_path_between(GridPoint_t start, GridPoint_t end, uint8_t ro
 
     int cx = end.x;
     int cy = end.y;
-    while(!(cx == start.x && cy == start.y))
+    /* Bug fix: no iteration cap. Safe today only because parent pointers
+       are only ever set by the forward search above, which always forms
+       a tree rooted at `start` - so this can't currently cycle - but
+       that's an invariant of the forward search, not something this
+       backtrace verifies for itself. GRID_WIDTH*GRID_HEIGHT is the most
+       cells a path could possibly visit, so bounding the loop at that
+       many steps costs nothing in the working case and turns a future
+       forward-search bug that lets a node get re-parented into a
+       diagnostic instead of a hang. */
+    for(int steps = 0; steps < GRID_WIDTH * GRID_HEIGHT && !(cx == start.x && cy == start.y); steps++)
     {
         int px = nodes[cx][cy].parent_x;
         int py = nodes[cx][cy].parent_y;
@@ -1490,7 +1508,7 @@ static void stage_generate_infrastructure(void)
 
 static uint8_t road_reachable_map(uint8_t reachable[GRID_WIDTH][GRID_HEIGHT])
 {
-    GridPoint_t queue[GRID_WIDTH * GRID_HEIGHT];
+    GridPoint_t *const queue = g_road_reachable_queue;
     int head = 0;
     int tail = 0;
     uint8_t found_start = 0;
@@ -2060,6 +2078,13 @@ uint8_t environment_cell_base_safety(int x, int y)
     return g_environment[x][y].base_safety;
 }
 
+/* Non-atomic read-modify-write on g_environment_summary's counters, no
+ * lock. Confirmed safe today, not just assumed: every caller
+ * (core/fault_injector.c's inject_environment_fault()/recover_
+ * environment_fault()) runs from fault_injector_step(), called from
+ * sim_tick() in the same single simulation task both board targets
+ * create - never an ISR, never a second task. Revisit if this is ever
+ * called from a real async fault-injection callback instead. */
 void environment_set_cell_operational_state(int x, int y, uint8_t travel_cost, uint8_t navigable, uint8_t road_blocked)
 {
     if(!in_bounds(x, y))
