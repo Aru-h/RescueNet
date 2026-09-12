@@ -435,12 +435,21 @@ LOCAL void sim_task(INT stacd, void *exinf)
         /* Final drain: flush whatever the last partial interval left
          * pending so a run's last few events aren't stuck in the
          * ring until the next seed's ticks happen to drain them (or
-         * lost if this was the last seed). One call is enough as
-         * long as BOARD_SNAPSHOT_DRAIN_MAX_FRAMES_PER_CALL >=
-         * BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL's worth of typical
-         * per-tick snapshot_record() volume; if that assumption ever
-         * stops holding, this would need a loop instead of one call. */
-        (void)board_snapshot_ring_drain();
+         * lost if this was the last seed).
+         * Bug fix: this used to be a single call, only correct as
+         * long as BOARD_SNAPSHOT_DRAIN_MAX_FRAMES_PER_CALL (32) covers
+         * whatever accumulated since the last periodic drain - the
+         * comment itself flagged this as an assumption, not a
+         * guarantee. If exceeded, snapshot_begin_run()'s unconditional
+         * ring reset at the start of the next seed would have silently
+         * and permanently discarded the remainder (worse on the very
+         * last seed, since nothing drains after sim_runner_shutdown()
+         * at all). Loop until the ring is actually empty instead of
+         * assuming one call is enough - board_snapshot_ring_drain()
+         * returns 0 once there's nothing left to drain. */
+        while(board_snapshot_ring_drain() > 0u)
+        {
+        }
 
         sim_end_seed();
         tm_printf((UB*)"tron: seed %lu done\n", (unsigned long)seed);
@@ -469,7 +478,18 @@ EXPORT INT usermain(void)
         return 1;
     }
 
-    tk_sta_tsk(sim_tskid, 0);
+    /* Bug fix: this return value used to be discarded, unlike
+       tk_cre_tsk()'s just above. Since this starts the only task in
+       the whole system, a failed tk_sta_tsk() with no check would have
+       left the board silently parked forever at tk_slp_tsk() below,
+       indistinguishable from a normally-running-but-quiet system - no
+       diagnostic, no simulation activity, ever. */
+    ER sta_ercd = tk_sta_tsk(sim_tskid, 0);
+    if(sta_ercd < E_OK)
+    {
+        tm_putstring((UB*)"tron: tk_sta_tsk FAILED\n");
+        return 1;
+    }
 
     /* usermain's own task stays parked forever; sim_task does the
      * actual work. Per BSP2 manual: if usermain returns, µT-Kernel
