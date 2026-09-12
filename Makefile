@@ -123,7 +123,7 @@ ifneq ($(wildcard $(BSP_DIR)/include),)
   # implementing sx126x_hal_write/_read/_reset/_wakeup) now fold into
   # the real per-board build, so check-board-link genuinely link-checks
   # the HAL instead of leaving those four symbols undefined.
-  BOARD_SOURCES = $(CORE_SOURCES) $(BOARD_DIR)/debug.c $(BOARD_DIR)/snapshot.c $(BOARD_DIR)/main_board.c $(BOARD_DIR)/mission_link_task.c $(SX126X_DIR)/sx126x.c $(BOARD_DIR)/sx1262_hal.c
+  BOARD_SOURCES = $(CORE_SOURCES) $(BOARD_DIR)/dk_debug.c $(BOARD_DIR)/snapshot.c $(BOARD_DIR)/main_board.c $(BOARD_DIR)/mission_link_task.c $(SX126X_DIR)/sx126x.c $(BOARD_DIR)/sx1262_hal.c
   BSP_MODE = real BSP2 headers ($(BSP_DIR))
 else
   ARM_CFLAGS = $(ARM_CFLAGS_BASE)
