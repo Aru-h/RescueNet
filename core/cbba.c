@@ -1005,16 +1005,47 @@ void cbba_broadcast_local_teams(void)
    if nothing has arrived yet: a real board still has to move its
    teams every tick whether or not the other board replied in time,
    so this finalizes with whatever's been ingested so far rather than
-   blocking indefinitely. */
+   blocking indefinitely.
+
+   Bug fix (AUDIT.md item #3): this used to busy-wait the FULL
+   CBBA_ROUND_TIMEOUT_MS every single call regardless of whether every
+   expected reply had already arrived, because cbba_run() (and
+   therefore this function) runs every tick via allocate_all_
+   incidents() - not just when something is actually outstanding. On
+   the single-task board model (see comms_transport_inbox_push()'s
+   concurrency-invariant comment) that meant every tick could burn up
+   to 530ms of pure CPU spin ahead of simulation_step() and this
+   board's own RX/TX/heartbeat servicing right after. cbba_broadcast_
+   local_teams() sends one CBBAMessage_t per LOCALLY-hosted team to
+   every OTHER board - so the number of distinct replies THIS board
+   should expect this round is exactly the number of non-local teams,
+   not comms_transport_board_count()-1 (that would be the wrong unit:
+   a board can host several teams, each broadcasting separately, and
+   board_count() also reflects configured boards, not which ones are
+   actually live). Tallying ingested messages against that expected
+   total and exiting as soon as it's met preserves the timeout as a
+   fallback for a board that never replies (the tally simply never
+   reaches its target that round, same behavior as before this fix)
+   while eliminating the wait entirely on every round where all boards
+   already responded. */
 /* Not static - see cbba_team_is_local()'s comment above for why. */
 void cbba_ingest_remote_mesh_replies(void)
 {
     uint32_t round_start = cbba_now_ms();
+    uint8_t expected_replies = 0;
+    uint8_t ingested_replies = 0;
 #ifdef CBBA_DEBUG_TIMING
     bool reply_ingested_this_round = false;
 #endif
 
-    while((cbba_now_ms() - round_start) < CBBA_ROUND_TIMEOUT_MS)
+    for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+    {
+        if(!cbba_team_is_local(team_id))
+            expected_replies++;
+    }
+
+    while(ingested_replies < expected_replies &&
+          (cbba_now_ms() - round_start) < CBBA_ROUND_TIMEOUT_MS)
     {
         uint8_t sender_team_id;
         uint8_t frame_type;
@@ -1059,6 +1090,7 @@ void cbba_ingest_remote_mesh_replies(void)
             separate board isn't on the wire at the comms_transport
             layer today, only inside CBBAMessage_t itself */
 
+        ingested_replies++;
 #ifdef CBBA_DEBUG_TIMING
         reply_ingested_this_round = true;
 #endif
