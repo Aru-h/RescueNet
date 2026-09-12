@@ -158,6 +158,12 @@ int comms_transport_deliver_received(uint8_t frame_type, const uint8_t *payload,
    targets - nothing else needs editing to add or remove a board. */
 uint8_t comms_transport_board_count(void);
 
+/* Inverse of comms_transport_board_id_for_team(): one team_id (the
+   lowest) that resolves back to the given board, per that function's
+   own divisor - see comms_transport.c's doc on why this is a function,
+   not a header macro. */
+uint8_t comms_transport_representative_team_for_board(uint8_t board_id);
+
 /* Routes to receiver_team_id. If comms_transport_board_id_for_team(receiver_team_id)
    equals g_comms_transport_this_board_id, delivers via an in-process
    queue - packed and pushed immediately, synchronously, same as
