@@ -53,6 +53,7 @@ static void clear_fault_summary(TeamFaultState_t *fault_state, OperationalFaultC
     fault_state->original_navigable[fault_class] = 0;
     fault_state->pending_repair[fault_class] = 0;
     fault_state->repair_confirm_tick[fault_class] = 0;
+    fault_state->target_incident_id[fault_class] = 0;
     /* This was the actual bug: active_mask only ever got bits SET (at
      * each inject_*_fault() call site), never cleared here on recovery.
      * Every other per-class field above correctly resets, but the

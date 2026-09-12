@@ -544,7 +544,7 @@ static RecoveryReason_t recovery_reason_for_action(
         if(signal->action < action)
             continue;
 
-        if(signal->confidence >= best_confidence)
+        if(signal->confidence > best_confidence)
         {
             best_confidence = signal->confidence;
             reason = signal->reason;
@@ -557,7 +557,7 @@ static RecoveryReason_t recovery_reason_for_action(
         {
             const RecoverySignal_t *signal = &signals[i];
 
-            if(signal->confidence >= best_confidence)
+            if(signal->confidence > best_confidence)
             {
                 best_confidence = signal->confidence;
                 reason = signal->reason;

@@ -302,7 +302,12 @@ const IncidentArchetype_t g_incident_archetypes[NUM_INCIDENT_TYPES] =
 
 static void apply_incident_archetype(IncidentState_t *incident, IncidentType_t type)
 {
-    const IncidentArchetype_t *archetype = &g_incident_archetypes[type];
+    const IncidentArchetype_t *archetype;
+
+    if((uint32_t)type >= NUM_INCIDENT_TYPES)
+        return;
+
+    archetype = &g_incident_archetypes[type];
 
     incident->incident_type = type;
     incident->priority = archetype->priority;
@@ -451,7 +456,7 @@ void search_generate_sweep_tasks(uint32_t current_tick)
  * not zero effectiveness. */
 static uint8_t sweep_radius_for_team(const TeamState_t *team)
 {
-    IncidentState_t probe;
+    IncidentState_t probe = {0};
     probe.req_capability = SPEC_SEARCH;
 
     float capability = capability_score(team, &probe);
@@ -1362,7 +1367,7 @@ static int team_needs_safe_zone(const TeamState_t *team) //incident
     {
         return 1;
     }
-    else if(team->equipment_level<=30)
+    else if(team->equipment_level<=TEAM_NEEDS_SAFE_ZONE_EQUIPMENT_THRESHOLD)
     {
         return 1;
     }
@@ -1692,19 +1697,19 @@ static void build_generation_context(GenerationContext_t *ctx)
         {
             case STATUS_AVAILABLE:
                 ctx->available_teams++;
-                if(team->specialization < NUM_TEAMS)
+                if(team->specialization < NUM_TEAM_SPECIALIZATIONS)
                     ctx->available_by_spec[team->specialization]++;
                 break;
 
             case STATUS_EN_ROUTE:
                 ctx->en_route_teams++;
-                if(team->specialization < NUM_TEAMS)
+                if(team->specialization < NUM_TEAM_SPECIALIZATIONS)
                     ctx->active_by_spec[team->specialization]++;
                 break;
 
             case STATUS_ON_SCENE:
                 ctx->on_scene_teams++;
-                if(team->specialization < NUM_TEAMS)
+                if(team->specialization < NUM_TEAM_SPECIALIZATIONS)
                     ctx->active_by_spec[team->specialization]++;
                 break;
 

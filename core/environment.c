@@ -1631,11 +1631,23 @@ static void ensure_hospital_redundancy(void)
 
         int x = building->loc_x;
         int y = building->loc_y;
+        /* Bug fix: access_count used to be hardcoded to 2 here
+           regardless of whether either paint_road_cell() call below
+           actually ran - a hospital near the grid's far edge (both
+           guards false) got credited with redundant access it never
+           received, silently misleading any consumer that trusts
+           access_count >= 2 to mean "reachable via 2 independent
+           routes." Only count the roads actually painted. */
         if(x + 1 < GRID_WIDTH - 1)
+        {
             paint_road_cell(x + 1, y, ROAD_COLLECTOR, next_road_id(), 0);
+            building->access_count++;
+        }
         if(y + 1 < GRID_HEIGHT - 1)
+        {
             paint_road_cell(x, y + 1, ROAD_COLLECTOR, next_road_id(), 0);
-        building->access_count = 2;
+            building->access_count++;
+        }
     }
 }
 

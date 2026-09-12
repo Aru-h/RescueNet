@@ -438,6 +438,10 @@ float distance_score(
 
 float capability_score(const TeamState_t *team, const IncidentState_t *incident)
 {
+    if((uint32_t)team->specialization >= NUM_TEAM_SPECIALIZATIONS ||
+       (uint32_t)incident->req_capability >= NUM_TEAM_SPECIALIZATIONS)
+        return 0.0f;
+
     return CAPABILITY_MATRIX[team->specialization][incident->req_capability];
 }
 
@@ -694,6 +698,17 @@ float calculate_marginal_bundle_bid(
             agent->path_size);
 
     if(current_utility < 0.0f)
+        return -1.0f;
+
+    /* trial_path[] below is sized CBBA_MAX_BUNDLE_SIZE and gets filled
+       with up to agent->path_size + 1 entries (inserting candidate
+       among the existing path) - safe only if path_size hasn't already
+       reached capacity. The only current call site (cbba_build_bundle(),
+       inside a loop bounded by CBBA_COMMITMENT_LIMIT == CBBA_MAX_
+       BUNDLE_SIZE) never passes path_size == CBBA_MAX_BUNDLE_SIZE
+       today, but this function shouldn't rely on that going unverified
+       here too. */
+    if(agent->path_size >= CBBA_MAX_BUNDLE_SIZE)
         return -1.0f;
 
     float best_marginal_bid = -1.0f;
