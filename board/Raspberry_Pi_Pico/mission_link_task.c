@@ -549,15 +549,52 @@ static void mission_link_usart1_rx_step(void)
 
 static void mission_link_comms_transport_rx_step(void)
 {
-    uint8_t sender_team_id;
-    uint8_t frame_type;
-    uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
-    uint8_t payload_len;
-
-    while (comms_transport_poll_received(&sender_team_id, &frame_type,
-                                          payload, &payload_len))
+    for (;;)
     {
+        uint8_t sender_team_id;
+        uint8_t frame_type;
+        uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
+        uint8_t payload_len;
         uint8_t sub_type;
+        uint8_t peeked_type;
+
+        /* Bug fix: this used to be `while (comms_transport_poll_received(
+         * ...))`, an unconditional, destructive poll on the shared per-
+         * board inbox (core/comms_transport.h) with the frame_type check
+         * only running AFTER the pop below. That silently consumed (and
+         * then dropped, via `continue`) any LORA_FRAME_TYPE_CBBA/
+         * FAULT_BROADCAST/FAULT_VOTE frame that happened to be queued
+         * when this ran, before core/cbba.c's cbba_ingest_remote_mesh_
+         * replies() or core/fault_comms.c's fault_comms_ingest_remote_
+         * frames() - both driven from sim_tick() earlier in this same
+         * board's per-tick loop, see main_board.c - ever got a chance to
+         * see it on a later tick. Peek first instead, same pattern those
+         * two functions already use: only poll (destructively) once the
+         * peeked type is confirmed to be one this task actually owns,
+         * otherwise leave it in the inbox for the next consumer. */
+        if (!comms_transport_peek_frame_type(&peeked_type))
+        {
+            break; /* inbox empty */
+        }
+
+        if (peeked_type != LORA_FRAME_TYPE_HANDSHAKE &&
+            peeked_type != LORA_FRAME_TYPE_MISSION_LINK)
+        {
+            /* Not ours - leave it for cbba's or fault_comms's own
+               receivers. */
+            break;
+        }
+
+        if (!comms_transport_poll_received(&sender_team_id, &frame_type,
+                                            payload, &payload_len))
+        {
+            break; /* inbox empty - shouldn't happen right after a
+                       successful peek in this single-task, no-real-ISR
+                       build (see comms_transport_inbox_push()'s own
+                       concurrency-invariant comment in core/comms_
+                       transport.c), but stay defensive rather than
+                       assume it can't. */
+        }
 
         (void)sender_team_id;
 
@@ -617,11 +654,13 @@ static void mission_link_comms_transport_rx_step(void)
 
         if (frame_type != LORA_FRAME_TYPE_MISSION_LINK)
         {
-            /* Not ours (LORA_FRAME_TYPE_CBBA) - CBBA's own receive
-               loop is responsible for those; this task only drains
-               entries it actually recognizes, never the whole inbox
-               indiscriminately, since comms_transport_poll_received()
-               is a shared per-board inbox (core/comms_transport.h). */
+            /* Should be unreachable now that the peek above already
+               filters to HANDSHAKE/MISSION_LINK only (peek and poll
+               read the same head-of-queue entry with nothing else able
+               to preempt in between - see comms_transport_inbox_push()'s
+               concurrency-invariant comment). Kept as defense-in-depth
+               rather than trusted blindly, since frame_type came off a
+               separate call than peeked_type did. */
             continue;
         }
 
