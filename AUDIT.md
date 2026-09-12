@@ -189,6 +189,7 @@ The overflow guard `if(agent->path_size >= CBBA_MAX_BUNDLE_SIZE || cbba_bundle_c
 **SEVERITY: LOW**
 The `agent->path[j]` shift-and-insert is separately guarded by `path_size < CBBA_MAX_BUNDLE_SIZE`, so the path array itself is safe; however `agent->bundle_size` and `agent->winner[best_task.slot]`/`winning_bid[]` are updated unconditionally regardless of whether the path guard actually succeeded, so `bundle_size` can advance past what `path_size` reflects — the same divergence scenario noted in `cbba_apply_override_pin`, a latent state-consistency issue between `bundle` and `path` (not itself a memory-safety bug here since `bundle[]` is separately bounded).
 - **Connects to:** cbba_apply_override_pin, cbba_bundle_contains, team_can_accept_incident, team_has_minimum_equipment, calculate_marginal_bundle_bid, candidate_claim_is_better, cbba_sync_team_execution_twin; called by cbba_run
+   **ACCEPTED, moved to `KNOWN_LIMITATIONS.md`** — same underlying issue as top-10 item #9's deliberately-unfixed "orphaned pin" behavior; tracked there.
 
 ### 36. `cbba_release_lost_tasks` static — L658
 **SEVERITY: NONE**
@@ -246,6 +247,7 @@ NONE — orchestration; round count is a fixed bounded loop; correctly brackets 
 **SEVERITY: LOW**
 Computes `(x << n) | (x >> (32 - n))`; if ever called with `n == 0`, shifting by 32 is undefined behavior in C. Not currently triggerable (every call site uses fixed literals 16, 12, 8, 7), but the helper itself has no guard — a latent landmine for any future caller/refactor passing a variable rotation of 0 or ≥32.
 - **Connects to:** chacha20_quarter_round
+   **ACCEPTED, moved to `KNOWN_LIMITATIONS.md`** — theoretical UB, unreachable given fixed-literal call sites.
 
 ### 47. `chacha20_quarter_round` static — L20
 **SEVERITY: NONE**
@@ -376,6 +378,7 @@ NONE — same pattern as `clamp_u8`, casts `min`/`max` to `int` for comparison b
 **SEVERITY: LOW**
 `value < 0 ? -value : value` on `INT_MIN` is undefined behavior (overflow), but every caller passes small grid-coordinate differences (max ~72), so this is unreachable in practice.
 - **Connects to:** called by `stage_generate_terrain`, `find_best_land_cell`, `ensure_unique_anchor`, `connection_cost`, `carve_path_between`, `carve_repair_to_nearest_road`, `earthquake_damage_at`.
+   **ACCEPTED, moved to `KNOWN_LIMITATIONS.md`** — theoretical UB, unreachable given small grid-coordinate deltas.
 
 ### 72. `deterministic_hash` static — L118
 **SEVERITY: NONE**
@@ -471,6 +474,7 @@ NONE — same pattern.
 **SEVERITY: LOW**
 NONE for the function itself, but note it is computed into `DistrictRecord_t.critical_infrastructure_density` in `assign_anchor` and that field is never read anywhere else in the file — dead data, not a correctness bug.
 - **Connects to:** `assign_anchor`.
+   **ACCEPTED, moved to `KNOWN_LIMITATIONS.md`** — dead data, not a correctness bug.
 
 ### 91. `road_travel_cost` static — L372
 **SEVERITY: NONE**
@@ -496,6 +500,7 @@ NONE — fixed-size loop over `MAX_ENV_PENDING_HAZARDS`, zero-initializes each s
 **SEVERITY: LOW**
 Silent data loss: if all `MAX_ENV_PENDING_HAZARDS` (16) slots are occupied, the function returns 0 and the caller (e.g. `propagate_fire`) simply does not increment its count — the hazard state on the building/cell is still updated, but the consumer-facing pending-event queue silently drops the notification with no logging/assert. This is a legitimate design tradeoff (bounded queue) but worth flagging as silent loss under hazard storms.
 - **Connects to:** called by `propagate_fire`, `escalate_gas_leaks`, `apply_aftershocks`; consumed by `environment_pop_pending_hazard_event`.
+   **ACCEPTED, moved to `KNOWN_LIMITATIONS.md`** — explicit, acknowledged bounded-queue tradeoff.
 
 ### 96. `reset_generation_state` static — L431
 **SEVERITY: NONE**
@@ -551,6 +556,7 @@ NONE — `paint_road_cell` internally bounds-checks each `(px,py)`, so out-of-ra
 **SEVERITY: LOW**
 `static uint16_t road_id` pre-incremented on every call with no wraparound guard; at 65535 calls it would wrap and collide with earlier-issued IDs. Current world-generation issues at most a few hundred IDs per run, so unreachable today, but there is no overflow guard.
 - **Connects to:** called by `stage_generate_roads`, `carve_path_between`, `ensure_hospital_redundancy`, `carve_repair_to_nearest_road`.
+   **ACCEPTED, moved to `KNOWN_LIMITATIONS.md`** — wraparound unreachable at current road-ID volumes.
 
 ### 107. `connection_cost` static — L864
 **SEVERITY: NONE**
@@ -621,11 +627,13 @@ NONE — `in_bounds` checked before indexing `reachable[nx][ny]`.
 **SEVERITY: LOW**
 If no road cell exists anywhere on the grid, `best` stays equal to `start` and `carve_path_between(start,start,...)` produces a degenerate single-cell "path" that silently "succeeds" rather than signaling that no reachable road network was found to connect to. Essentially unreachable given `stage_generate_roads` always carves the arterial chain first, but there is no defensive distinction between "found and repaired" and "nothing to connect to."
 - **Connects to:** `has_road`, `abs_i`, `carve_path_between`; called by `stage_generate_infrastructure`, `stage_validate_and_build_navigation`, `environment_validate_hazard_reachability`.
+   **ACCEPTED, moved to `KNOWN_LIMITATIONS.md`** — degenerate case prevented by `stage_generate_roads()`'s own ordering.
 
 ### 121. `ensure_hospital_redundancy` static — L1614
 **SEVERITY: LOW**
 `building->access_count = 2;` is set unconditionally at the end regardless of whether the `+x`/`+y` guarded `paint_road_cell` calls actually executed (both are skipped if the hospital sits near the grid's far edge) — a silent-success bug where the metadata claims redundant access the building does not actually have, which could mislead any consumer trusting `access_count >= 2` to mean "reachable via 2 independent routes."
 - **Connects to:** `paint_road_cell`, `next_road_id`; called by `stage_validate_and_build_navigation`.
+   **RESOLVED** — commit `ddb46cf` (batch). `access_count` now reflects roads actually painted instead of a hardcoded `2`.
 
 ### 122. `stage_validate_and_build_navigation` static — L1634
 **SEVERITY: NONE**
@@ -646,6 +654,7 @@ NONE — arithmetic done in `int` before final `clamp_u8`, so no unsigned wrapar
 **SEVERITY: LOW**
 Reconstructs the footprint window from `loc_x`/`loc_y`/`footprint_width`/`footprint_height` rather than reusing the original placement rectangle; mitigated by a `building_id` mismatch check per cell (mismatches are skipped, not flagged), but this coupling is fragile against future changes to how `loc_x`/footprint are computed in `place_building_rect`.
 - **Connects to:** `earthquake_damage_at`, `clamp_u8`, `in_bounds`; called by `environment_apply_earthquake`.
+   **ACCEPTED, moved to `KNOWN_LIMITATIONS.md`** — fragile but currently mitigated by an existing mismatch check.
 
 ### 126. `apply_road_damage` static — L1844
 **SEVERITY: NONE**
@@ -726,6 +735,7 @@ NONE — NULL-checked before dereference; default case returns 0.
 **SEVERITY: LOW**
 No NULL check of its own (unlike sibling `building_can_spawn_incident`), but both call sites only invoke this after `building_can_spawn_incident` has already returned true (which itself NULL-checks first), so `building` is guaranteed non-NULL today; would be unsafe if reused elsewhere without that precondition.
 - **Connects to:** called by `select_damaged_building_source`, `select_damaged_building_source_in_zone`.
+   **ACCEPTED, moved to `KNOWN_LIMITATIONS.md`** — both call sites already guarantee non-NULL.
 
 ### 142. `cell_incident_score` static — L2212
 **SEVERITY: NONE**
@@ -771,6 +781,7 @@ NONE — `in_bounds` checked first; `building_id == ENV_NO_BUILDING || building_
 **SEVERITY: LOW**
 The `if(target->building_id < MAX_ENV_BUILDINGS)` guard before `ignite[target->building_id] = 1` is redundant-but-safe (IDs are always `< building_count <= MAX_ENV_BUILDINGS` by construction), so no actual OOB write — defensive rather than buggy. Two-pass ignite-then-apply correctly limits fire to one hop per tick.
 - **Connects to:** `building_at`, `deterministic_percent_roll`, `queue_hazard_event`; called by `environment_update_hazard_propagation`.
+   **ACCEPTED, moved to `KNOWN_LIMITATIONS.md`** — guard is redundant but genuinely safe.
 
 ### 151. `escalate_gas_leaks` static — L2506
 **SEVERITY: NONE**
@@ -955,6 +966,7 @@ Promotes a configured `0` severity to `1` so no fault class can have a zero-effe
 **SEVERITY: LOW**
 Resets every per-class field the comment claims to reset except `fault_state->target_incident_id[fault_class]`, which is left stale after a mission-fault clears. Currently harmless because `inject_mission_fault` unconditionally overwrites that field before it's ever read again, and no other file reads it — but an incomplete "reset point" relative to the function's own stated contract, and a latent trap for a future consumer.
 - **Connects to:** called by recover_environment_fault, recover_mission_fault, recover_fault
+   **RESOLVED** — commit `ddb46cf` (batch). `target_incident_id[fault_class]` now reset.
 
 ### 186. `mark_last_fault` [static] — L73
 **SEVERITY: NONE**
@@ -1037,6 +1049,7 @@ The two-stage repair state machine is internally consistent: environment-class b
 **SEVERITY: LOW**
 With `FAULT_MODEL_LOADED==0` (current build state), `evidence` is never dereferenced, so a NULL `evidence` pointer from either call site is currently harmless. No NULL-check on `evidence` though — once real inference code lands in the `#if FAULT_MODEL_LOADED` branch (which the header says is coming), a NULL/short evidence buffer would be dereferenced with no defense.
 - **Connects to:** called by fault_comms_cast_vote, recovery_manager.c's evaluate_fault_predictor
+   **RESOLVED** — commit `ddb46cf` (batch). Added a NULL check on `evidence`.
 
 ## core/grid.c
 
@@ -1067,6 +1080,7 @@ Plain post-increment of `g_incident_counter` (uint32_t). No callers from ISR con
 **SEVERITY: LOW**
 No bounds check on `type` before indexing `g_incident_archetypes[type]` (sized `NUM_INCIDENT_TYPES`). Every current call site passes an in-range value, so no live OOB read today, but no defensive guard for a future unvalidated caller.
 - **Connects to:** called by search_generate_sweep_tasks, create_equipment_cache_incident, create_evacuee_offboard_incident, populate_generated_incident_model.
+   **RESOLVED** — commit `ddb46cf` (batch). Added a `type < NUM_INCIDENT_TYPES` bounds check.
 
 ### 207. `search_generate_sweep_tasks` [global] — L337
 **SEVERITY: NONE**
@@ -1077,6 +1091,7 @@ In-flight bitmask (`districts_with_task_in_flight`, uint16_t) against `NUM_SEARC
 **SEVERITY: LOW**
 Local `IncidentState_t probe` is stack-allocated and only `probe.req_capability` is initialized before being passed by pointer to `capability_score()`. Currently safe only because `capability_score()` reads exactly `req_capability` and nothing else — if extended to read another field, this becomes an uninitialized-stack-memory read feeding a live radius calculation.
 - **Connects to:** capability_score (scoring.c); called by search_sweep_step.
+   **RESOLVED** — commit `ddb46cf` (batch). `probe` is now fully zero-initialized.
 
 ### 209. `search_sweep_step` [global] — L483
 **SEVERITY: NONE**
@@ -1197,6 +1212,7 @@ Switch covers all `FitnessTier_t` values with a sane default.
 **SEVERITY: LOW**
 Correct logic, but `30` (equipment threshold) is a bare magic number rather than a named constant — a maintainability gap, not a functional bug.
 - **Connects to:** get_min_stamina; called by release_team.
+   **RESOLVED** — commit `ddb46cf` (batch). `30` named as `TEAM_NEEDS_SAFE_ZONE_EQUIPMENT_THRESHOLD` (mission_state.h).
 
 ### 233. `find_nearest_safe_zone` [global] — L1372
 **SEVERITY: NONE**
@@ -1252,6 +1268,7 @@ Every `IncidentType_t` reachable through `generate_incident()`'s weighted profil
 **SEVERITY: LOW**
 Bounds checks use `team->specialization < NUM_TEAMS` (10) instead of the more precise `NUM_TEAM_SPECIALIZATIONS` (5) before indexing `available_by_spec[]`/etc. Not an OOB write since those arrays are sized `[NUM_TEAMS]`, only an overly permissive guard. Also iterates the full grid every generation tick — a performance note, not a correctness bug.
 - **Connects to:** g_teams, g_incidents, g_system_tasks, g_grid; called by generate_incidents_if_needed.
+   **RESOLVED** — commit `ddb46cf` (batch). All three bounds checks now compare against `NUM_TEAM_SPECIALIZATIONS`, not `NUM_TEAMS`.
 
 ### 244. `calculate_generation_load` [static] — L1764
 **SEVERITY: NONE**
@@ -1345,6 +1362,7 @@ In the declared-unreachable-but-handled 32-bit-wrap branch, the function returns
 **SEVERITY: LOW**
 Unconditionally overwrites `g_rx_last_counter[sender_board_id]` with `counter` whenever `sender_board_id < LORA_CRYPTO_MAX_SENDERS`, with no check that `counter > g_rx_last_counter[sender_board_id]` — relies entirely on the caller only invoking this after a successful verify with a counter from `lora_crypto_reconstruct_counter()`. This is what actually commits the floor regression from finding #4. Also non-`volatile`, non-atomic shared state; same ISR/task caveat as #1.
 - **Connects to:** lora_frame_try_parse, lora_crypto_reconstruct_counter
+   **ACCEPTED, moved to `KNOWN_LIMITATIONS.md`** — the actual bug already fixed via top-10 item #10 (commit `7e733ab`); residual note is the same class as item #4.
 
 ## core/lora_frame.c
 
@@ -2095,6 +2113,7 @@ Direct-match confidence takes priority over discounted higher-action fallback su
 **SEVERITY: LOW**
 Both scan loops initialize `best_confidence` to `0.0f` and compare with `>=`, so any signal whose confidence *equals* the running best overwrites `reason` — in effect returns the *last* qualifying signal in evaluator-registration order rather than a genuinely highest-confidence one on ties. Only affects which `RecoveryReason_t` is reported for diagnostics/logging, not which `RecoveryAction_t` is dispatched.
 - **Connects to:** recovery_build_status
+   **RESOLVED** — commit `ddb46cf` (batch). Tie-break changed from `>=` to `>` in both scan loops.
 
 ### 407. `recovery_downgrade_to_achievable_action` [static] — L570
 **SEVERITY: NONE**
@@ -2275,6 +2294,7 @@ Thin wrapper.
 **SEVERITY: LOW**
 `CAPABILITY_MATRIX[specialization][req_capability]` indexes with no bounds check on either dimension. Every current producer keeps both fields in `[0,4]`, so not observed to misbehave today, but any future corrupted/uninitialized `TeamState_t`/`IncidentState_t` would read out of the 5x5 array with no guard.
 - **Connects to:** calculate_score, incident_utility_score, candidate_claim_is_better, team.c's generate_teams
+   **RESOLVED** — commit `ddb46cf` (batch). Both `CAPABILITY_MATRIX` indices now bounds-checked, defaulting to `0.0f`.
 
 ### 442. `priority_score` [global] — L486
 **SEVERITY: NONE**
@@ -2305,6 +2325,7 @@ Same shape as calculate_score minus the travel term (by design).
 **SEVERITY: LOW**
 `trial_path[CBBA_MAX_BUNDLE_SIZE]` (size 3) is filled by a loop writing up to `agent->path_size + 1` entries with no internal check that `path_size < CBBA_MAX_BUNDLE_SIZE`; it implicitly trusts the caller. The sole call site (`cbba_build_bundle`, inside a loop bounded by `CBBA_COMMITMENT_LIMIT == CBBA_MAX_BUNDLE_SIZE == 3`) only ever calls this with `path_size <= 2`, so no overflow today, but the guarantee lives entirely in the caller, not this function — a latent stack-buffer-overflow risk if a future caller reuses it without preserving that invariant.
 - **Connects to:** calculate_route_utility, cbba_build_bundle
+   **RESOLVED** — commit `ddb46cf` (batch). Added an internal `path_size < CBBA_MAX_BUNDLE_SIZE` guard.
 
 ### 448. `stamina_score` [global] — L776
 **SEVERITY: NONE**
@@ -2384,6 +2405,7 @@ Deliberately omits `generate_world()` per its documented board-only contract; ot
 **SEVERITY: LOW**
 `g_sim_step_tick = g_current_tick + 1u` wraps to 0 if `g_current_tick == UINT32_MAX`, momentarily desynchronizing event-logging tick numbers (self-heals within one tick since `simulation_step()` re-syncs it). Requires ~4.29 billion ticks — theoretical, not practically reachable.
 - **Connects to:** fault_injector_step, allocate_all_incidents, simulation_step
+   **ACCEPTED, moved to `KNOWN_LIMITATIONS.md`** — wraparound requires ~4.29 billion ticks and self-heals within one tick.
 
 ### 463. `sim_end_seed` [global] — L71
 **SEVERITY: NONE**
@@ -2423,6 +2445,7 @@ Simple bounded loop over NUM_TEAMS matching array size.
 **SEVERITY: LOW**
 The `fitness_tier` switch has no `default:` case. Since `specialization` is always `i % 5` here, every value 0-4 is covered and this cannot misbehave today, but if `TeamSpecialization_t` is ever extended without updating this switch, `fitness_tier` would be left at whatever memset set it to with no explicit fallback — unlike the equipment switch immediately above it, which does have a default.
 - **Connects to:** random_seed_stream, derive_seed, random_range_stream, generate_world
+   **RESOLVED** — commit `ddb46cf` (batch). Added a `default:` case to the `fitness_tier` switch, matching `fitness_speed_multiplier()`'s convention.
 
 ### 470. `change_stamina` [static] — L127
 **SEVERITY: NONE**
