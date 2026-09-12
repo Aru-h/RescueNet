@@ -227,9 +227,10 @@ NONE — `num_boards` ceiling-division matches `comms_transport_board_id_for_tea
 - **Connects to:** cbba_team_is_local, cbba_broadcast, comms_transport_send
 
 ### 43. `cbba_ingest_remote_mesh_replies` global — L986
-**SEVERITY: LOW**
+**SEVERITY: LOW → re-rated during triage, see below**
 The `while((cbba_now_ms() - round_start) < CBBA_ROUND_TIMEOUT_MS)` loop busy-polls with no yield/sleep between iterations when the inbox is empty; on real hardware with a genuine wall-clock `cbba_now_ms()` override this becomes a tight CPU-spinning busy-wait for up to 530ms every tick, expensive on an embedded target expected to also service other tasks. Not a correctness bug (behavior is as documented) but a real efficiency/scheduling concern.
 - **Connects to:** cbba_now_ms, comms_transport_peek_frame_type, comms_transport_poll_received, cbba_team_is_local, cbba_receive_and_update; called by cbba_run
+   **Re-assessed, then RESOLVED — commit `4f081e9`.** During the LOW-severity triage pass this was pulled out of LOW: confirmed `cbba_run()` (and this function) runs **every tick**, unconditionally, via `allocate_all_incidents()` — not only when a reply is actually outstanding — and the loop had no early exit on success, so it burned up to the full 530ms every single tick regardless. `BOARD_TICK_DELAY_MS=0` (no pacing) means there was nothing to absorb that cost. Fixed by tallying ingested CBBA messages against the number of non-local teams (traced `cbba_broadcast_local_teams()`'s exact message shape first — one message per locally-hosted team, not one per board) and exiting early once that count is met; the 530ms timeout remains the correct fallback for a board that doesn't respond in full. Verified no regression via `--sweep-priority1`.
 
 ### 44. `cbba_consensus` global — L1073
 **SEVERITY: NONE**
@@ -1336,6 +1337,7 @@ Same validation shape as #50, intentionally doesn't preserve a "current" entry s
 **SEVERITY: LOW**
 Early-returns if `heading_to_rest`. If `task` resolves non-NULL but the team is neither `task->assigned_team` nor `task->support_team` (an invariant violation not asserted anywhere), the function silently skips both branches, leaving the task's bookkeeping untouched while still clearing the team's pool/slot and sending it to rest — no diagnostic, no defensive cleanup. Also, `task->unreachable_streak` is only read here, never incremented in this function — its increment must live entirely elsewhere, unverified.
 - **Connects to:** begin_return_to_safe_zone, release_queued_incidents, team_set_available; reads g_incidents/g_system_tasks via team's assigned pool/slot.
+   **RESOLVED (partially by finding it was already correct) — commit `9efa538`.** The `unreachable_streak` claim traced clean: it's genuinely incremented elsewhere (`core/simulation.c:320-321`'s `move_team()`, on a failed path attempt) and reset correctly on arrival/slot-clear — non-issue, no fix needed. The ownership-mismatch claim: traced every writer of `->assigned_team` in the codebase and confirmed the mismatch isn't reachable through any currently-known-correct assignment path (`assign_incident()` always sets a task's `assigned_team` and the owning team's `assigned_task_pool/slot` together, in one call) — it's a defensive check against a hypothetical bug elsewhere, the same class of stale-slot-reuse hazard `recover_mission_fault()` already guards against via `incident_id` matching. Implemented the diagnostic-counter fix (confirmed over the heavier `incident_id`-cross-check alternative, which would need a new `TeamState_t` field) — runtime behavior unchanged, the "shouldn't happen" branch is now visible if ever hit.
 
 
 ## core/lora_crypto.c
