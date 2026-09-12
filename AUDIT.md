@@ -228,7 +228,7 @@ NONE — `num_boards` ceiling-division matches `comms_transport_board_id_for_tea
 - **Connects to:** cbba_team_is_local, cbba_broadcast, comms_transport_send
 
 ### 43. `cbba_ingest_remote_mesh_replies` global — L986
-**SEVERITY: LOW → re-rated during triage, see below**
+**SEVERITY: LOW → RESOLVED (re-assessed as a real efficiency bug during triage, see below)**
 The `while((cbba_now_ms() - round_start) < CBBA_ROUND_TIMEOUT_MS)` loop busy-polls with no yield/sleep between iterations when the inbox is empty; on real hardware with a genuine wall-clock `cbba_now_ms()` override this becomes a tight CPU-spinning busy-wait for up to 530ms every tick, expensive on an embedded target expected to also service other tasks. Not a correctness bug (behavior is as documented) but a real efficiency/scheduling concern.
 - **Connects to:** cbba_now_ms, comms_transport_peek_frame_type, comms_transport_poll_received, cbba_team_is_local, cbba_receive_and_update; called by cbba_run
    **Re-assessed, then RESOLVED — commit `4f081e9`.** During the LOW-severity triage pass this was pulled out of LOW: confirmed `cbba_run()` (and this function) runs **every tick**, unconditionally, via `allocate_all_incidents()` — not only when a reply is actually outstanding — and the loop had no early exit on success, so it burned up to the full 530ms every single tick regardless. `BOARD_TICK_DELAY_MS=0` (no pacing) means there was nothing to absorb that cost. Fixed by tallying ingested CBBA messages against the number of non-local teams (traced `cbba_broadcast_local_teams()`'s exact message shape first — one message per locally-hosted team, not one per board) and exiting early once that count is met; the 530ms timeout remains the correct fallback for a board that doesn't respond in full. Verified no regression via `--sweep-priority1`.
@@ -2751,10 +2751,12 @@ Files audited, in order:
 |---|---|
 | CRITICAL | 0 |
 | HIGH | 1 |
-| MEDIUM | 15 |
+| MEDIUM | 16 |
 | LOW | 11 |
-| NONE | 90 |
+| NONE | 89 |
 | **Total functions audited** | **117** |
+
+(MEDIUM/NONE updated during a later verification pass: item #87 `usermain`'s Pico entry was originally misrated NONE, missing the same unchecked-`tk_sta_tsk` gap the DK's twin function had — see that entry.)
 
 ## Prioritized list (fix first, pending your triage)
 
@@ -3255,8 +3257,9 @@ Full control flow checked: sim_runner_init() failure handled correctly; init ord
    **RESOLVED** — commit `34241eb` (the telemetry-ring-loss half of this finding; fixed directly in this function's final drain).
 
 ### 87. `usermain` [global/EXPORT] — L724
-**SEVERITY: NONE**
-tk_cre_tsk() return value checked (sim_tskid<=0 -> failure message + return); tk_sta_tsk() starts the task; usermain parks in tk_slp_tsk(TMO_FEVR) rather than returning, correctly avoiding the "returning shuts down µT-Kernel" hazard. Confirms single-task model: exactly one tk_cre_tsk call in the whole file.
+**SEVERITY: MEDIUM (corrected from NONE — verification-pass finding)**
+**Original entry was wrong.** It read: "tk_cre_tsk() return value checked... tk_sta_tsk() starts the task... Confirms single-task model" — treating the unchecked `tk_sta_tsk()` call as unremarkable. It isn't: this is the exact same gap the DK's Top-10 board finding #6 flagged and fixed via commit `cbcb0e2` on the DK side. Top-10 item #6 explicitly said "it's unclear... whether the Pico's `tk_sta_tsk` call has the same gap or not; worth a quick specific check before fixing" — that check never happened, so this entry stood uncorrected with a NONE rating that contradicted the open question raised elsewhere in the same document. tk_cre_tsk() return value was checked correctly; tk_sta_tsk()'s was not — since this starts the only task in the whole single-task system, a failure here would have left the board silently parked forever at tk_slp_tsk() with no diagnostic, indistinguishable from a normally-running-but-quiet system.
+   **RESOLVED** — added the identical `sta_ercd < E_OK` check and `"tron: tk_sta_tsk FAILED\n"` diagnostic the DK already has (same pattern as commit `cbcb0e2`, applied to `board/Raspberry_Pi_Pico/main_board.c`). Verified clean via `make check-pico-compile`.
 - **Connects to:** sim_task (via tk_cre_tsk/tk_sta_tsk), tk_slp_tsk (kernel)
 
 
@@ -3336,7 +3339,8 @@ g_relay_reply_sent[]/g_relay_reply_last_sent[] (both HANDSHAKE_MAX_BOARDS-sized)
 
 ### 102. `mission_link_task_init` [global] — L1045
 **SEVERITY: NONE**
-Zeroes all state this function owns; g_roster_applied_count/other untouched globals start at 0 via C zero-init and this function is called exactly once at boot per the documented/actual usage - not a re-init bug in practice (contrast with the DK finding on the same function, which flagged this as a real gap if ever re-invoked - same underlying code, same latent gap, rated NONE here vs MEDIUM there only because this agent weighted the "called once today" fact more heavily; worth reconciling as the same underlying issue during triage).
+Zeroes all state this function owns; g_roster_applied_count/other untouched globals start at 0 via C zero-init and this function is called exactly once at boot per the documented/actual usage - not a re-init bug in practice (same underlying code as the DK's entry on this function).
+- **RECONCILED to NONE** (matches the DK's own entry, which was re-rated from MEDIUM to NONE during triage): verified against this file's own handoff notes and both boards' `main_board.c` that `mission_link_task_init()` is documented and actually called exactly once, before the seed loop starts, on both boards — never re-invoked. The original MEDIUM rating's premise ("any caller that re-invokes it later") isn't supported by the actual call pattern on either board. This entry's NONE rating was correct from the start; no fix needed.
 - **Connects to:** none (pure state reset), called once from main_board.c
 
 ### 103. `mission_link_task_step` [global] — L1070
