@@ -78,6 +78,22 @@ static float recovery_positive(float value)
     return value > 0.0f ? value : 0.0f;
 }
 
+/* active_mask below is shifted into the top 12 bits (52-63) of this
+ * packed uint64_t signature - only NUM_OPERATIONAL_FAULT_CLASSES (5)
+ * bits of it are ever actually set today, so 12 bits of headroom is
+ * generous, but every bit above bit 63 (i.e. every active_mask bit at
+ * position >= 12) silently falls off the top and stops contributing to
+ * the signature at all. This assert turns "silently stops detecting a
+ * change" into a build break the moment fault classes grow enough to
+ * matter, rather than a bug someone has to rediscover by hand - fixing
+ * the packing itself would mean re-deriving disjoint bit ranges for
+ * every field above, not a one-line change. */
+_Static_assert(NUM_OPERATIONAL_FAULT_CLASSES <= 12,
+    "recovery_team_signature()'s active_mask field only has 12 bits of "
+    "room (bits 52-63) - widen this packing before adding more fault "
+    "classes, or recovery_dispatch()'s change-detection will silently "
+    "stop noticing changes confined to the truncated high bits");
+
 static uint64_t recovery_team_signature(const TeamState_t *team)
 {
     uint64_t signature = 0;

@@ -641,6 +641,8 @@ static GridPoint_t find_best_land_cell(int min_x, int max_x, int min_y, int max_
     return best;
 }
 
+unsigned long g_diag_duplicate_anchor_fallback = 0;
+
 static GridPoint_t ensure_unique_anchor(GridPoint_t candidate, const GridPoint_t *anchors, uint16_t count)
 {
     for(int radius = 0; radius < GRID_WIDTH + GRID_HEIGHT; radius++)
@@ -670,6 +672,16 @@ static GridPoint_t ensure_unique_anchor(GridPoint_t candidate, const GridPoint_t
         }
     }
 
+    /* Bug fix: no probe within radius [0, GRID_WIDTH+GRID_HEIGHT) was ever
+       unique - silently returning the original candidate unmodified used
+       to permit a duplicate/overlapping anchor with no signal at all.
+       Diagnostic-only fix (matching the same posture as this file's other
+       g_diag_* counters for rare/degenerate world-gen outcomes): still
+       returns the original candidate (there is no better fallback to
+       offer - every reachable cell was already tried), but now a
+       degenerate world is at least visible via this counter instead of
+       silently producing overlapping districts. */
+    g_diag_duplicate_anchor_fallback++;
     return candidate;
 }
 
@@ -2625,6 +2637,14 @@ static void apply_aftershocks(uint32_t tick)
         {
             g_environment_summary.aftershock_collapse_count++;
 
+            /* Cross-module increment on search_zones.c-owned state, with
+               no lock - confirmed safe today, not just assumed: both
+               board targets create exactly one simulation task
+               (tk_cre_tsk() in main_board.c) and nothing else ever
+               touches g_search_zones concurrently - the same single-
+               task model documented in comms_transport_inbox_push()'s
+               concurrency-invariant comment. Revisit if a second task
+               is ever added that also touches search-zone state. */
             if(building->district_id < NUM_SEARCH_ZONES)
                 g_search_zones[building->district_id].aftershock_hits_since_swept++;
         }
