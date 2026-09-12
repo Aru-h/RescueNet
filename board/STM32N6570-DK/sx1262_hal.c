@@ -240,20 +240,73 @@ static void spi5_init(void)
     SX1262_SPI->CR1 = SPI_CR1_SSI | SPI_CR1_SPE; /* enable, NSS forced high internally */
 }
 
-static uint8_t spi5_xfer_byte(uint8_t out)
+/*
+ * Iteration-count bounds (not wall-clock: no calibrated timer exists at
+ * this call depth, and this file's own SystemCoreClock/APB2 frequency
+ * is explicitly unresolved - see spi5_init()'s CFG1 comment above,
+ * "exact APB2 clock depends on the DK's final clock tree, not yet
+ * finalized"). Sized against the actual physical worst case rather
+ * than picked blind: cross-checked the SPI5 config actually chosen
+ * above (CFG1's deliberately most-conservative /256 prescaler) and the
+ * SX126x datasheet's own documented Tswmode (~3.5ms max BUSY-high
+ * duration for a mode-switching command - matches this file's existing
+ * "~3ms post-reset BUSY stretch" figure used by crude_delay_cycles()
+ * above) against the Cortex-M55's rated maximum core clock for this
+ * part (800MHz, STM32N657 datasheet) as the fastest plausible clock
+ * this bound has to survive without a false timeout:
+ *   - SPI5_XFER_TIMEOUT_ITERS: one byte at /256 off an (unrealistically
+ *     generous) 800MHz APB2 takes ~2.6us; even at a handful of cycles
+ *     per spin iteration this bound clears that with >100x margin.
+ *   - WAIT_BUSY_LOW_TIMEOUT_ITERS: covering the ~3.5ms Tswmode figure
+ *     at the same 800MHz ceiling needs on the order of a few hundred
+ *     thousand spin iterations; this bound clears that with similar
+ *     margin. Deliberately far larger than SPI5_XFER_TIMEOUT_ITERS -
+ *     BUSY can legitimately stay high for a whole command's internal
+ *     processing, not just one byte's shift time.
+ * Both are generous-but-bounded on the same "crude, uncalibrated,
+ * revisit once a real timer exists" basis this file already documents
+ * for crude_delay_cycles() - not a precise real-time deadline, just a
+ * ceiling a genuinely wedged/disconnected SPI bus or radio can't hide
+ * behind forever.
+ */
+#define SPI5_XFER_TIMEOUT_ITERS      100000u
+#define WAIT_BUSY_LOW_TIMEOUT_ITERS  2000000u
+
+/* Returns 0 and writes the received byte to *in on success; returns 1
+   (leaving *in untouched) if either flag never asserts within
+   SPI5_XFER_TIMEOUT_ITERS spins - see that macro's own doc above for
+   how this bound was sized. Callers (sx126x_hal_write/read below) are
+   responsible for leaving the bus in a consistent state (deasserting
+   NSS) on a timeout, same as they already do on the success path -
+   this leaf function only ever reports failure, never guesses at
+   recovery. */
+static int spi5_xfer_byte(uint8_t out, uint8_t *in)
 {
+    uint32_t timeout;
+
     /* Kick a single-byte transfer. */
     SX1262_SPI->CR1 |= SPI_CR1_CSTART;
 
+    timeout = SPI5_XFER_TIMEOUT_ITERS;
     while (!(SX1262_SPI->SR & SPI_SR_TXP))
     {
+        if (--timeout == 0u)
+        {
+            return 1;
+        }
     }
     *(volatile uint8_t *)&SX1262_SPI->TXDR = out;
 
+    timeout = SPI5_XFER_TIMEOUT_ITERS;
     while (!(SX1262_SPI->SR & SPI_SR_RXP))
     {
+        if (--timeout == 0u)
+        {
+            return 1;
+        }
     }
-    return *(volatile uint8_t *)&SX1262_SPI->RXDR;
+    *in = *(volatile uint8_t *)&SX1262_SPI->RXDR;
+    return 0;
 }
 
 /*
@@ -276,15 +329,33 @@ static void crude_delay_cycles(uint32_t n)
     }
 }
 
-static void wait_busy_low(void)
+/* Bug fix: this used to spin forever with no timeout at all - "no
+   timeout on purpose" per the removed comment, reasoning that per the
+   datasheet a command issued while BUSY is high is silently dropped,
+   so only looping until BUSY actually clears could honor that. That
+   reasoning still holds for what happens on SUCCESS - this function
+   still never lets a caller proceed while BUSY reads high - but it
+   doesn't justify spinning forever: a dead/disconnected/miswired radio
+   (a real risk this file's own wiring notes call out, given the
+   required solder-bridge rework) left BUSY permanently high with no
+   way to ever recover, freezing the entire single-task firmware
+   (mission-link, sim tick, telemetry) with no diagnostic. Bounded to
+   WAIT_BUSY_LOW_TIMEOUT_ITERS instead (see that macro's own doc above
+   spi5_xfer_byte() for how it was sized against the datasheet's actual
+   Tswmode figure, not picked blind) - returns 1 on timeout, still
+   without ever telling a caller BUSY was low when it wasn't. */
+static int wait_busy_low(void)
 {
-    /* No timeout here on purpose: per the datasheet, a command issued
-       while BUSY is high is silently dropped - looping until BUSY
-       actually clears is the only way to honor that, not a timeout
-       that might let a caller proceed into a dropped command. */
+    uint32_t timeout = WAIT_BUSY_LOW_TIMEOUT_ITERS;
+
     while (gpio_read(SX1262_BUSY_PORT, SX1262_BUSY_PIN) != 0)
     {
+        if (--timeout == 0u)
+        {
+            return 1;
+        }
     }
+    return 0;
 }
 
 /*
@@ -334,7 +405,10 @@ sx126x_hal_status_t sx126x_hal_reset(const void *context)
        per-transaction check, done here explicitly rather than relying
        on the next hal_write's own wait_busy_low() to happen to cover
        it. */
-    wait_busy_low();
+    if (wait_busy_low() != 0)
+    {
+        return SX126X_HAL_STATUS_ERROR;
+    }
 
     return SX126X_HAL_STATUS_OK;
 }
@@ -357,11 +431,17 @@ sx126x_hal_status_t sx126x_hal_wakeup(const void *context)
        actually generous. Currently dead code (nothing in this
        codebase calls sx126x_wakeup()/sx126x_set_sleep()), but wrong
        regardless of whether it's exercised today. */
-    wait_busy_low();
+    if (wait_busy_low() != 0)
+    {
+        return SX126X_HAL_STATUS_ERROR;
+    }
     gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 0);
     crude_delay_cycles(10000u);
     gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 1);
-    wait_busy_low();
+    if (wait_busy_low() != 0)
+    {
+        return SX126X_HAL_STATUS_ERROR;
+    }
 
     return SX126X_HAL_STATUS_OK;
 }
@@ -398,6 +478,18 @@ static void apply_rf_switch_for_opcode(uint8_t opcode)
     }
 }
 
+/* Bug fix: every spi5_xfer_byte()/wait_busy_low() return code below
+ * used to be discarded - a SPI or BUSY timeout mid-command would have
+ * silently sent a truncated/garbled command (or none at all) and still
+ * reported success up through the vendored sx126x driver, which casts
+ * this function's return straight through as its own status (see
+ * sx126x.c's sx126x_set_*() wrappers). Now checked: a timeout leaves
+ * NSS deasserted (same cleanup the success path already does - not a
+ * peripheral reset, just finishing the GPIO sequence this function
+ * already owns) and returns SX126X_HAL_STATUS_ERROR, which the return-
+ * code checks already added elsewhere this session (ensure_radio_
+ * configured(), sx1262_enter_rx(), lora_spi_transmit()) now correctly
+ * propagate and act on instead of silently ignoring. */
 sx126x_hal_status_t sx126x_hal_write(const void *context, const uint8_t *command,
                                       const uint16_t command_length, const uint8_t *data,
                                       const uint16_t data_length)
@@ -411,17 +503,30 @@ sx126x_hal_status_t sx126x_hal_write(const void *context, const uint8_t *command
         apply_rf_switch_for_opcode(command[0]);
     }
 
-    wait_busy_low();
+    if (wait_busy_low() != 0)
+    {
+        return SX126X_HAL_STATUS_ERROR;
+    }
 
     gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 0);
 
     for (i = 0u; i < command_length; i++)
     {
-        (void)spi5_xfer_byte(command[i]);
+        uint8_t discard;
+        if (spi5_xfer_byte(command[i], &discard) != 0)
+        {
+            gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 1);
+            return SX126X_HAL_STATUS_ERROR;
+        }
     }
     for (i = 0u; i < data_length; i++)
     {
-        (void)spi5_xfer_byte(data[i]);
+        uint8_t discard;
+        if (spi5_xfer_byte(data[i], &discard) != 0)
+        {
+            gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 1);
+            return SX126X_HAL_STATUS_ERROR;
+        }
     }
 
     gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 1);
@@ -433,12 +538,22 @@ sx126x_hal_status_t sx126x_hal_write(const void *context, const uint8_t *command
        opcode. */
     if (!(command_length > 0u && command[0] == SX1262_OPCODE_SET_SLEEP))
     {
-        wait_busy_low();
+        if (wait_busy_low() != 0)
+        {
+            return SX126X_HAL_STATUS_ERROR;
+        }
     }
 
     return SX126X_HAL_STATUS_OK;
 }
 
+/* Bug fix: same class of fix as sx126x_hal_write() above - every
+ * spi5_xfer_byte()/wait_busy_low() return code below used to be
+ * discarded, so a SPI or BUSY timeout mid-read would have silently
+ * handed back partial/garbage data (data[] left partly written from a
+ * previous call) while still reporting success. Now checked, with the
+ * same "deassert NSS, then report SX126X_HAL_STATUS_ERROR" cleanup on
+ * a timeout. */
 sx126x_hal_status_t sx126x_hal_read(const void *context, const uint8_t *command,
                                      const uint16_t command_length, uint8_t *data,
                                      const uint16_t data_length)
@@ -447,22 +562,37 @@ sx126x_hal_status_t sx126x_hal_read(const void *context, const uint8_t *command,
 
     (void)context;
 
-    wait_busy_low();
+    if (wait_busy_low() != 0)
+    {
+        return SX126X_HAL_STATUS_ERROR;
+    }
 
     gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 0);
 
     for (i = 0u; i < command_length; i++)
     {
-        (void)spi5_xfer_byte(command[i]);
+        uint8_t discard;
+        if (spi5_xfer_byte(command[i], &discard) != 0)
+        {
+            gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 1);
+            return SX126X_HAL_STATUS_ERROR;
+        }
     }
     for (i = 0u; i < data_length; i++)
     {
-        data[i] = spi5_xfer_byte(SX126X_NOP);
+        if (spi5_xfer_byte(SX126X_NOP, &data[i]) != 0)
+        {
+            gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 1);
+            return SX126X_HAL_STATUS_ERROR;
+        }
     }
 
     gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 1);
 
-    wait_busy_low();
+    if (wait_busy_low() != 0)
+    {
+        return SX126X_HAL_STATUS_ERROR;
+    }
 
     return SX126X_HAL_STATUS_OK;
 }

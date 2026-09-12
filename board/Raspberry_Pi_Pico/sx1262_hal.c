@@ -267,32 +267,106 @@ static void sx1262_spi_init(void)
     g_sx1262_spi_ready = true;
 }
 
+/*
+ * Iteration-count bounds (not wall-clock: this BSP exposes no usec-
+ * granularity timer here - see this file's header note - and clk_peri's
+ * actual running frequency is explicitly unmeasured, per
+ * sx1262_spi_init()'s own SX1262_SPI_CPSR comment: "this BSP doesn't
+ * expose clk_peri's actual running frequency anywhere checked, so an
+ * exact bit rate can't be computed from this codebase alone"). Sized
+ * the same way as board/STM32N6570-DK/sx1262_hal.c's identical bounds
+ * (see that file's own derivation comment) - against the actual
+ * physical worst case, not picked blind: this file's own SX1262_SPI_CPSR
+ * (62) / SX1262_SPI_SCR (0) config against the RP2040 datasheet's rated
+ * clk_peri ceiling (125MHz) as the fastest plausible clock this bound
+ * has to survive without a false timeout, and the SX126x datasheet's
+ * own Tswmode (~3.5ms max BUSY-high duration for a mode-switching
+ * command) for the BUSY bound:
+ *   - SX1262_SPI_XFER_TIMEOUT_ITERS: one byte at CPSR=62 off a 125MHz
+ *     clk_peri ceiling takes ~4us; even at a handful of cycles per spin
+ *     iteration this bound clears that with well over 100x margin.
+ *   - SX1262_WAIT_NOT_BUSY_TIMEOUT_ITERS: covering the ~3.5ms Tswmode
+ *     figure at that same 125MHz ceiling needs on the order of tens of
+ *     thousands of spin iterations even accounting for this BSP's
+ *     libbsp gpio_get_val() wrapper call overhead (more expensive per
+ *     iteration than a raw register read); this bound clears that with
+ *     generous margin. Deliberately far larger than the SPI transfer
+ *     bound - BUSY can legitimately stay high for a whole command's
+ *     internal processing, not just one byte's shift time.
+ * Both are generous-but-bounded, same "crude, uncalibrated, revisit
+ * once real hardware timing is measured" basis this file already uses
+ * elsewhere (e.g. SX1262_TX_BUSY_POLL_LIMIT above) - not a precise
+ * real-time deadline, just a ceiling a genuinely wedged/disconnected
+ * SPI bus or radio can't hide behind forever.
+ */
+#define SX1262_SPI_XFER_TIMEOUT_ITERS      100000u
+#define SX1262_WAIT_NOT_BUSY_TIMEOUT_ITERS 2000000u
+
 /* Blocking single-byte full-duplex transfer. PL022 FIFOs are 8 deep,
  * but this HAL only needs correctness here, not throughput - one
  * byte at a time keeps this file simple and matches how the four
  * sx126x_hal_*() functions below are called (small command/status
- * bursts, not bulk streaming). */
-static uint8_t sx1262_spi_xfer_byte(uint8_t out)
+ * bursts, not bulk streaming).
+ *
+ * Bug fix: this used to spin on both FIFO flags with no timeout at
+ * all. Returns 0 and writes the received byte to *in on success;
+ * returns 1 (leaving *in untouched) if either flag never asserts
+ * within SX1262_SPI_XFER_TIMEOUT_ITERS spins - see that macro's own
+ * doc above for how this bound was sized. Callers (sx126x_hal_write/
+ * read below) are responsible for leaving the bus in a consistent
+ * state (deasserting NSS) on a timeout, same as they already do on the
+ * success path - this leaf function only ever reports failure, never
+ * guesses at recovery. */
+static int sx1262_spi_xfer_byte(uint8_t out, uint8_t *in)
 {
+    uint32_t timeout;
+
+    timeout = SX1262_SPI_XFER_TIMEOUT_ITERS;
     while ((in_w(SSPSR(SX1262_SPI_BASE)) & SSPSR_TNF) == 0)
     {
         /* wait for room in the TX FIFO */
+        if (--timeout == 0u)
+        {
+            return 1;
+        }
     }
     out_w(SSPDR(SX1262_SPI_BASE), out);
 
+    timeout = SX1262_SPI_XFER_TIMEOUT_ITERS;
     while ((in_w(SSPSR(SX1262_SPI_BASE)) & SSPSR_RNE) == 0)
     {
         /* wait for the matching RX byte */
+        if (--timeout == 0u)
+        {
+            return 1;
+        }
     }
-    return (uint8_t)in_w(SSPDR(SX1262_SPI_BASE));
+    *in = (uint8_t)in_w(SSPDR(SX1262_SPI_BASE));
+    return 0;
 }
 
-static void sx1262_wait_not_busy(void)
+/* Bug fix: this used to spin forever with no timeout at all, same
+ * issue as board/STM32N6570-DK/sx1262_hal.c's identical wait_busy_low()
+ * (see that file's own doc on why an unbounded wait here is wrong, not
+ * just this file's - a dead/disconnected/miswired radio, a real risk
+ * given this file's own "pin assignment still placeholder, no real
+ * radio validated yet" caveats, would otherwise freeze this board's
+ * entire single-task firmware forever with no diagnostic). Bounded to
+ * SX1262_WAIT_NOT_BUSY_TIMEOUT_ITERS instead - returns 1 on timeout,
+ * still without ever telling a caller BUSY was low when it wasn't. */
+static int sx1262_wait_not_busy(void)
 {
+    uint32_t timeout = SX1262_WAIT_NOT_BUSY_TIMEOUT_ITERS;
+
     while (gpio_get_val(SX1262_PIN_BUSY) != 0)
     {
         /* spin - radio deasserts BUSY once ready for the next command */
+        if (--timeout == 0u)
+        {
+            return 1;
+        }
     }
+    return 0;
 }
 
 /* RXEN/TXEN switching: this module's RF switch is driven directly by
@@ -331,11 +405,25 @@ static void apply_rf_switch_for_opcode(uint8_t opcode)
  * this board has exactly one SX1262, so there is nothing per-instance
  * to look up. */
 
+/* Bug fix: every sx1262_spi_xfer_byte()/sx1262_wait_not_busy() return
+ * code below used to be discarded - a SPI or BUSY timeout mid-command
+ * would have silently sent a truncated/garbled command and still
+ * reported success up through the vendored sx126x driver, which casts
+ * this function's return straight through as its own status (see
+ * sx126x.c's sx126x_set_*() wrappers). Now checked: a timeout leaves
+ * NSS deasserted (same cleanup the success path already does - not a
+ * peripheral reset, just finishing the GPIO sequence this function
+ * already owns) and returns SX126X_HAL_STATUS_ERROR, which the return-
+ * code checks already added elsewhere this session (sx1262_hal_init(),
+ * sx1262_enter_rx(), lora_spi_transmit()) now correctly propagate and
+ * act on instead of silently ignoring. Same fix as the DK's identical
+ * functions. */
 sx126x_hal_status_t sx126x_hal_write(const void* context, const uint8_t* command,
                                       const uint16_t command_length,
                                       const uint8_t* data, const uint16_t data_length)
 {
     uint16_t i;
+    uint8_t discard;
 
     (void)context;
     sx1262_spi_init();
@@ -345,17 +433,28 @@ sx126x_hal_status_t sx126x_hal_write(const void* context, const uint8_t* command
         apply_rf_switch_for_opcode(command[0]);
     }
 
-    sx1262_wait_not_busy();
+    if (sx1262_wait_not_busy() != 0)
+    {
+        return SX126X_HAL_STATUS_ERROR;
+    }
 
     gpio_set_val(SX1262_PIN_NSS, 0);
 
     for (i = 0u; i < command_length; i++)
     {
-        (void)sx1262_spi_xfer_byte(command[i]);
+        if (sx1262_spi_xfer_byte(command[i], &discard) != 0)
+        {
+            gpio_set_val(SX1262_PIN_NSS, 1);
+            return SX126X_HAL_STATUS_ERROR;
+        }
     }
     for (i = 0u; i < data_length; i++)
     {
-        (void)sx1262_spi_xfer_byte(data[i]);
+        if (sx1262_spi_xfer_byte(data[i], &discard) != 0)
+        {
+            gpio_set_val(SX1262_PIN_NSS, 1);
+            return SX126X_HAL_STATUS_ERROR;
+        }
     }
 
     gpio_set_val(SX1262_PIN_NSS, 1);
@@ -363,25 +462,42 @@ sx126x_hal_status_t sx126x_hal_write(const void* context, const uint8_t* command
     return SX126X_HAL_STATUS_OK;
 }
 
+/* Bug fix: same class of fix as sx126x_hal_write() above - every
+ * return code below used to be discarded, so a SPI or BUSY timeout
+ * mid-read would have silently handed back partial/garbage data while
+ * still reporting success. Now checked, with the same "deassert NSS,
+ * then report SX126X_HAL_STATUS_ERROR" cleanup on a timeout. */
 sx126x_hal_status_t sx126x_hal_read(const void* context, const uint8_t* command,
                                      const uint16_t command_length,
                                      uint8_t* data, const uint16_t data_length)
 {
     uint16_t i;
+    uint8_t discard;
 
     (void)context;
     sx1262_spi_init();
-    sx1262_wait_not_busy();
+    if (sx1262_wait_not_busy() != 0)
+    {
+        return SX126X_HAL_STATUS_ERROR;
+    }
 
     gpio_set_val(SX1262_PIN_NSS, 0);
 
     for (i = 0u; i < command_length; i++)
     {
-        (void)sx1262_spi_xfer_byte(command[i]);
+        if (sx1262_spi_xfer_byte(command[i], &discard) != 0)
+        {
+            gpio_set_val(SX1262_PIN_NSS, 1);
+            return SX126X_HAL_STATUS_ERROR;
+        }
     }
     for (i = 0u; i < data_length; i++)
     {
-        data[i] = sx1262_spi_xfer_byte(SX126X_NOP);
+        if (sx1262_spi_xfer_byte(SX126X_NOP, &data[i]) != 0)
+        {
+            gpio_set_val(SX1262_PIN_NSS, 1);
+            return SX126X_HAL_STATUS_ERROR;
+        }
     }
 
     gpio_set_val(SX1262_PIN_NSS, 1);
@@ -427,12 +543,18 @@ sx126x_hal_status_t sx126x_hal_wakeup(const void* context)
        too. Currently dead code (nothing in this codebase calls
        sx126x_wakeup()/sx126x_set_sleep()), but wrong regardless of
        whether it's exercised today. */
-    sx1262_wait_not_busy();
+    if (sx1262_wait_not_busy() != 0)
+    {
+        return SX126X_HAL_STATUS_ERROR;
+    }
     gpio_set_val(SX1262_PIN_NSS, 0);
     tk_dly_tsk(1);
     gpio_set_val(SX1262_PIN_NSS, 1);
 
-    sx1262_wait_not_busy();
+    if (sx1262_wait_not_busy() != 0)
+    {
+        return SX126X_HAL_STATUS_ERROR;
+    }
 
     return SX126X_HAL_STATUS_OK;
 }
