@@ -100,6 +100,8 @@
                                        see "Channel 0: handshake" section
                                        near the bottom of this file. */
 #include "mission_state.h"
+#include "recovery_manager.h" /* RECOVERY_ACTION_ABORT_MISSION gate in
+                                  mission_link_status_tx_step() below */
 #include "comms_transport.h"
 #include "lora_frame.h"
 #include "cbba.h"            /* cbba_now_ms() - reused as this link's
@@ -831,6 +833,24 @@ static void mission_link_status_tx_step(void)
                report on it (and no up-to-date g_teams[] entry for it
                either, beyond whatever a fault/roster relay happened
                to populate). */
+            continue;
+        }
+
+        if (recovery_manager_get_recommendation(team_id) == RECOVERY_ACTION_ABORT_MISSION)
+        {
+            /* An aborted team has nothing new worth reporting - it's
+               already been pulled off whatever it was doing
+               (recovery_dispatch(), core/recovery_manager.c) - and
+               skipping it here saves the same class of wasted
+               bandwidth/compute this file's fault-broadcast sibling
+               (core/fault_comms.c) already skips for the identical
+               reason. Does not clear g_last_sent_status[team_id] -
+               if the team is later reset off ABORT_MISSION, the next
+               status build naturally differs from that stale anchor
+               (status/equipment_level/work_rate all reflect the
+               team's real post-reset state) and the existing should_
+               send triggers below fire normally on their own; nothing
+               here needs to force that. */
             continue;
         }
 
