@@ -52,7 +52,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity check-fault-comms-receive check-fault-comms-broadcast-pacing check-fault-comms-abort-gate check-recovery-predictor-stress check-realloc-gate check-environment-e2e-stress check-consensus-weighting
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity check-fault-comms-receive check-fault-comms-broadcast-pacing check-fault-comms-abort-gate check-recovery-predictor-stress check-realloc-gate check-environment-e2e-stress check-consensus-weighting check-mission-link-status-gate
 
 all: $(TARGET) $(LABELER)
 
@@ -249,7 +249,7 @@ clean:
 	rm -rf $(BOARD_OBJ_DIR) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
 	rm -f $(TWO_BOARD_HARNESS_BIN) $(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN) \
 		$(FAULT_COMMS_RECEIVE_SELFTEST_BIN) $(FAULT_COMMS_BROADCAST_PACING_TEST_BIN) \
-		$(FAULT_COMMS_ABORT_GATE_TEST_BIN) $(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) $(CONSENSUS_WEIGHTING_SELFTEST_BIN)
+		$(FAULT_COMMS_ABORT_GATE_TEST_BIN) $(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) $(CONSENSUS_WEIGHTING_SELFTEST_BIN) $(MISSION_LINK_STATUS_GATE_TEST_BIN)
 
 # --- Pico compile check --------------------------------------------------
 # Mirrors check-board-compile/-link above, same class of check now that
@@ -604,6 +604,32 @@ check-fault-comms-abort-gate:
 		$(FAULT_COMMS_ABORT_GATE_TEST_CORE_SOURCES) \
 		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
 	@./$(FAULT_COMMS_ABORT_GATE_TEST_BIN)
+
+# --- mission_link.c status-reporting ABORT_MISSION gate selftest -----------
+# Confirms board/STM32N6570-DK/mission_link_task.c's mission_link_
+# status_tx_step() new RECOVERY_ACTION_ABORT_MISSION gate with REAL
+# frame sequencing: links the actual mission_link_task.c, calls its
+# real public mission_link_task_step(), and decodes the real wire
+# bytes it writes (captured via this test's own tm_putchar() stub,
+# laptop/tools/mission_link_gate_test_stubs/) with the real core/
+# mission_link.c mission_link_parse_status() codec - see laptop/tools/
+# mission_link_status_gate_test.c's own header doc. Excludes core/
+# fault_predictor.c and core/watchdog.c from CORE_SOURCES for the same
+# reason check-fault-comms-abort-gate does (this test provides its own
+# strong overrides to drive a real ABORT_MISSION recommendation).
+MISSION_LINK_STATUS_GATE_TEST_BIN = build/mission_link_status_gate_test
+
+check-mission-link-status-gate:
+	@mkdir -p build
+	@echo "  CC      $(TOOLS_DIR)/mission_link_status_gate_test.c"
+	@$(CC) $(CFLAGS) -I$(TOOLS_DIR)/mission_link_gate_test_stubs \
+		-I$(CORE_DIR) -I$(BOARD_DIR) -I$(LAPTOP_DIR) \
+		-o $(MISSION_LINK_STATUS_GATE_TEST_BIN) \
+		$(TOOLS_DIR)/mission_link_status_gate_test.c \
+		$(BOARD_DIR)/mission_link_task.c \
+		$(FAULT_COMMS_ABORT_GATE_TEST_CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@./$(MISSION_LINK_STATUS_GATE_TEST_BIN)
 
 # --- recovery_manager.c fault-predictor path stress test --------------------
 # Drives the REAL core/recovery_manager.c decision/tiering/hysteresis
