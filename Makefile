@@ -52,7 +52,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity check-fault-comms-receive
 
 all: $(TARGET) $(LABELER)
 
@@ -513,4 +513,24 @@ check-evidence-vector-parity:
 		$(TOOLS_DIR)/evidence_vector_parity_selftest.c \
 		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
 	@./$(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN)
+
+# --- fault_comms.c receive-path selftest ------------------------------------
+# Drives core/fault_comms.c's fault_comms_ingest_remote_frames() with
+# synthetic FaultVotePayload_t frames pushed through the real core/
+# comms_transport.c inbox (comms_transport_deliver_received()), then
+# inspects the real core/fault_buffer.c state it produced - see laptop/
+# tools/fault_comms_receive_selftest.c's own header doc for why this
+# needs the whole core/ directory linked (same reason check-evidence-
+# vector-parity does) and for the explicit note that core/consensus_
+# weighting.c is NOT wired into this call path today.
+FAULT_COMMS_RECEIVE_SELFTEST_BIN = build/fault_comms_receive_selftest
+
+check-fault-comms-receive:
+	@mkdir -p build
+	@echo "  CC      $(TOOLS_DIR)/fault_comms_receive_selftest.c"
+	@$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) \
+		-o $(FAULT_COMMS_RECEIVE_SELFTEST_BIN) \
+		$(TOOLS_DIR)/fault_comms_receive_selftest.c \
+		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@./$(FAULT_COMMS_RECEIVE_SELFTEST_BIN)
 

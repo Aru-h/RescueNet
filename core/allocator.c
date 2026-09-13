@@ -229,8 +229,22 @@ bool team_can_accept_incident(const TeamState_t *team, const IncidentState_t *in
          * reason the recovery manager would immediately abort a fresh
          * assignment (e.g. an active severe communication fault) - so
          * check its current recommendation directly rather than
-         * duplicating each evaluator's own threshold logic here. */
-        if(recovery_manager_get_recommendation(team->team_id) == RECOVERY_ACTION_ABORT_MISSION)
+         * duplicating each evaluator's own threshold logic here.
+         *
+         * REQUEST_TASK_REALLOCATION added alongside ABORT_MISSION for the
+         * same reason: recovery_dispatch() (core/recovery_manager.c)
+         * handles that action by calling allocate_all_incidents()
+         * immediately, which can free this exact team from its current
+         * task within the same tick - the instant that happens, team-
+         * >status reads STATUS_AVAILABLE and this branch runs again for
+         * it, in the same allocate_all_incidents() pass, for a candidate
+         * NEW incident unrelated to whatever it was just reallocated away
+         * from. Without this check, a team recovery_manager.c is actively
+         * reallocating away from its current task could be handed a
+         * completely different new assignment in that same tick, before
+         * its own reallocation has even had a chance to resolve. */
+        if(recovery_manager_get_recommendation(team->team_id) == RECOVERY_ACTION_ABORT_MISSION ||
+           recovery_manager_get_recommendation(team->team_id) == RECOVERY_ACTION_REQUEST_TASK_REALLOCATION)
             return false;
 
         return team->stamina >= get_soft_stamina_floor(team) &&
