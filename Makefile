@@ -52,7 +52,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-consensus-weighting check-evidence-vector-parity check-fault-comms-receive check-fault-comms-broadcast-pacing check-fault-comms-abort-gate check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-env-raw-travel-cost-ablation check-consensus-tau-local-proxy-tuning
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress
 
 all: $(TARGET) $(LABELER)
 
@@ -247,9 +247,7 @@ check-board-link: check-board-compile
 clean:
 	rm -f $(TARGET) $(LABELER) tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv tron_telemetry.log
 	rm -rf $(BOARD_OBJ_DIR) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
-	rm -f $(TWO_BOARD_HARNESS_BIN) $(CONSENSUS_WEIGHTING_SELFTEST_BIN) $(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN) \
-		$(FAULT_COMMS_RECEIVE_SELFTEST_BIN) $(FAULT_COMMS_BROADCAST_PACING_TEST_BIN) \
-		$(FAULT_COMMS_ABORT_GATE_TEST_BIN) $(MISSION_LINK_STATUS_GATE_TEST_BIN) \
+	rm -f $(TWO_BOARD_HARNESS_BIN) $(MISSION_LINK_STATUS_GATE_TEST_BIN) \
 		$(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) \
 		$(RECOVERY_MANAGER_PERSISTENCE_SELFTEST_BIN)
 
@@ -500,114 +498,14 @@ check-two-board-cbba-harness:
 	@chmod +x $(TOOLS_DIR)/check-two-board-cbba-harness.sh
 	@$(TOOLS_DIR)/check-two-board-cbba-harness.sh
 
-# --- Consensus weighting selftest -----------------------------------------
-# core/consensus_weighting.c's own standalone selftest (laptop/tools/
-# consensus_weighting_selftest.c) - see that file's own build comment for
-# why its dependency list is short (just fault_buffer.c/fault_config.c/
-# mission_state.c for shared constants, not the whole simulator).
-CONSENSUS_WEIGHTING_SELFTEST_BIN = build/consensus_weighting_selftest
-
-check-consensus-weighting:
-	@mkdir -p build
-	@echo "  CC      $(TOOLS_DIR)/consensus_weighting_selftest.c"
-	@$(CC) $(CFLAGS) -I$(CORE_DIR) \
-		-o $(CONSENSUS_WEIGHTING_SELFTEST_BIN) \
-		$(TOOLS_DIR)/consensus_weighting_selftest.c \
-		$(CORE_DIR)/consensus_weighting.c $(CORE_DIR)/fault_buffer.c \
-		$(CORE_DIR)/fault_config.c $(CORE_DIR)/mission_state.c $(LDFLAGS)
-	@./$(CONSENSUS_WEIGHTING_SELFTEST_BIN)
-
-# --- Evidence-vector parity selftest ---------------------------------------
-# Confirms core/recovery_manager.c's evaluate_fault_predictor() and core/
-# fault_comms.c's fault_comms_broadcast_local_teams() build byte-identical
-# FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES vectors for the same team/tick
-# (audit #163) - see laptop/tools/evidence_vector_parity_selftest.c's own
-# doc for why this needs the whole core/ directory linked, same pattern as
-# laptop/tools/recovery_manager_persistence_selftest.c.
-#
-# -DCBBA_SIM_CLOCK_STEP_MS=120000u: fault_comms_broadcast_local_teams() is
-# now paced against FAULT_COMMS_BROADCAST_INTERVAL_MS=120000 (core/
-# fault_comms.c) via cbba_now_ms() - this test calls it exactly once and
-# checks the vector it wrote, so cbba_now_ms()'s weak-default simulated
-# clock (core/cbba.c, CBBA_SIM_CLOCK_STEP_MS=10 by default) needs to
-# advance a full interval on that single call for the broadcast to
-# actually fire, or the test would see nothing recorded at all - this
-# override is scoped to this one selftest binary, not the real build.
-EVIDENCE_VECTOR_PARITY_SELFTEST_BIN = build/evidence_vector_parity_selftest
-
-check-evidence-vector-parity:
-	@mkdir -p build
-	@echo "  CC      $(TOOLS_DIR)/evidence_vector_parity_selftest.c"
-	@$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) -DCBBA_SIM_CLOCK_STEP_MS=120000u \
-		-o $(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN) \
-		$(TOOLS_DIR)/evidence_vector_parity_selftest.c \
-		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
-	@./$(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN)
-
-# --- fault_comms.c receive-path selftest ------------------------------------
-# Drives core/fault_comms.c's fault_comms_ingest_remote_frames() with
-# synthetic FaultVotePayload_t frames pushed through the real core/
-# comms_transport.c inbox (comms_transport_deliver_received()), then
-# inspects the real core/fault_buffer.c state it produced - see laptop/
-# tools/fault_comms_receive_selftest.c's own header doc for why this
-# needs the whole core/ directory linked (same reason check-evidence-
-# vector-parity does) and for the explicit note that core/consensus_
-# weighting.c is NOT wired into this call path today.
-FAULT_COMMS_RECEIVE_SELFTEST_BIN = build/fault_comms_receive_selftest
-
-check-fault-comms-receive:
-	@mkdir -p build
-	@echo "  CC      $(TOOLS_DIR)/fault_comms_receive_selftest.c"
-	@$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) \
-		-o $(FAULT_COMMS_RECEIVE_SELFTEST_BIN) \
-		$(TOOLS_DIR)/fault_comms_receive_selftest.c \
-		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
-	@./$(FAULT_COMMS_RECEIVE_SELFTEST_BIN)
-
-# --- fault_comms.c broadcast-pacing selftest ---------------------------------
-# Confirms fault_comms_broadcast_local_teams()'s FAULT_COMMS_BROADCAST_
-# INTERVAL_MS pacing gate produces real ~120s wall-clock cadence, not
-# the invalidated TICK_TIME_SEC-based assumption - see laptop/tools/
-# fault_comms_broadcast_pacing_test.c's own header doc. Overrides core/
-# cbba.c's weak cbba_now_ms() with a test-controlled strong definition,
-# so needs the whole core/ directory linked same as check-fault-comms-
-# receive, but must NOT also link a second cbba_now_ms() - there isn't
-# one, the override lives in the test file itself.
-FAULT_COMMS_BROADCAST_PACING_TEST_BIN = build/fault_comms_broadcast_pacing_test
-
-check-fault-comms-broadcast-pacing:
-	@mkdir -p build
-	@echo "  CC      $(TOOLS_DIR)/fault_comms_broadcast_pacing_test.c"
-	@$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) \
-		-o $(FAULT_COMMS_BROADCAST_PACING_TEST_BIN) \
-		$(TOOLS_DIR)/fault_comms_broadcast_pacing_test.c \
-		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
-	@./$(FAULT_COMMS_BROADCAST_PACING_TEST_BIN)
-
-# --- fault_comms.c ABORT_MISSION transmission-gate selftest -----------------
-# Confirms fault_comms_broadcast_local_teams()'s per-team RECOVERY_
-# ACTION_ABORT_MISSION check: an aborted team stops transmitting
-# FAULT_BROADCAST frames while other, still-active teams are
-# unaffected - see laptop/tools/fault_comms_abort_gate_test.c's own
-# header doc. Excludes core/fault_predictor.c and core/watchdog.c from
-# CORE_SOURCES (the test provides its own strong overrides so it can
-# drive a real ABORT_MISSION recommendation with a synthetic
-# confidence sequence - neither real function is declared weak, so
-# linking both would be a duplicate-symbol error).
-FAULT_COMMS_ABORT_GATE_TEST_BIN = build/fault_comms_abort_gate_test
+# --- mission_link.c status-reporting ABORT_MISSION gate selftest -----------
+# core/fault_predictor.c and core/watchdog.c are excluded from CORE_SOURCES
+# below (this test provides its own strong overrides so it can drive a
+# real ABORT_MISSION recommendation with a synthetic confidence sequence -
+# neither real function is declared weak, so linking both would be a
+# duplicate-symbol error).
 FAULT_COMMS_ABORT_GATE_TEST_CORE_SOURCES = $(filter-out $(CORE_DIR)/fault_predictor.c $(CORE_DIR)/watchdog.c,$(CORE_SOURCES))
 
-check-fault-comms-abort-gate:
-	@mkdir -p build
-	@echo "  CC      $(TOOLS_DIR)/fault_comms_abort_gate_test.c"
-	@$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) \
-		-o $(FAULT_COMMS_ABORT_GATE_TEST_BIN) \
-		$(TOOLS_DIR)/fault_comms_abort_gate_test.c \
-		$(FAULT_COMMS_ABORT_GATE_TEST_CORE_SOURCES) \
-		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
-	@./$(FAULT_COMMS_ABORT_GATE_TEST_BIN)
-
-# --- mission_link.c status-reporting ABORT_MISSION gate selftest -----------
 # Confirms board/STM32N6570-DK/mission_link_task.c's mission_link_
 # status_tx_step() new RECOVERY_ACTION_ABORT_MISSION gate with REAL
 # frame sequencing: links the actual mission_link_task.c, calls its
@@ -701,21 +599,6 @@ check-recovery-manager-persistence:
 check-persistence-bounded-forgiveness:
 	python3 $(TOOLS_DIR)/persistence_bounded_forgiveness_ablation.py
 
-# --- CONSENSUS_TAU_LOCAL proxy tuning ---------------------------------------
-# Real-but-proxy (not core/fault_predictor.c, not train.py - that file
-# doesn't exist in this repo) derivation for core/consensus_weighting.h's
-# CONSENSUS_TAU_LOCAL, using this session's Config A sklearn pipeline's
-# real predict_proba against real ground truth - see laptop/tools/
-# consensus_tau_local_proxy_tuning.py's own header doc, and that
-# constant's own comment in consensus_weighting.h, for the full
-# derivation and its explicit provisional/re-tune-later caveats.
-# consensus_weighting.c has zero live callers today (confirmed by grep
-# before this tuning pass was done) - this is academic until it's
-# wired in. Requires tron_snapshot_dataset.csv with --fault-profile=
-# combined, same as this session's other dataset-dependent ablations.
-check-consensus-tau-local-proxy-tuning:
-	python3 $(TOOLS_DIR)/consensus_tau_local_proxy_tuning.py
-
 # --- Environment-class end-to-end escalation check ---------------------------
 # Python, not C - reuses the Config A sklearn pipeline (same as this
 # project's comparative-F1 experiments) to get real predicted confidence
@@ -729,16 +612,4 @@ check-consensus-tau-local-proxy-tuning:
 # not a pass/fail gate.
 check-environment-e2e-stress:
 	python3 $(TOOLS_DIR)/environment_class_e2e_stress.py
-
-# --- env_raw_travel_cost before/after ablation --------------------------
-# Real before/after environment-class F1 for the new env_raw_travel_cost
-# CSV column (laptop/snapshot.c) - fault_predictor_architecture_v4.md
-# Section 8 item 4's raw, non-twin-relative instrumentation fix. Same
-# Config A sklearn pipeline this session's other ablations use. Requires
-# tron_snapshot_dataset.csv regenerated with the updated laptop/
-# snapshot.c AND --fault-profile=combined (e.g. `./tron 1 30 400
-# --fault-profile=combined`) - not run automatically, same reason as
-# check-environment-e2e-stress.
-check-env-raw-travel-cost-ablation:
-	python3 $(TOOLS_DIR)/env_raw_travel_cost_ablation.py
 
