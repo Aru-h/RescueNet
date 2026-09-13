@@ -52,7 +52,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity check-fault-comms-receive check-fault-comms-broadcast-pacing check-fault-comms-abort-gate check-recovery-predictor-stress check-realloc-gate check-environment-e2e-stress
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity check-fault-comms-receive check-fault-comms-broadcast-pacing check-fault-comms-abort-gate check-recovery-predictor-stress check-realloc-gate check-environment-e2e-stress check-consensus-weighting
 
 all: $(TARGET) $(LABELER)
 
@@ -249,7 +249,7 @@ clean:
 	rm -rf $(BOARD_OBJ_DIR) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
 	rm -f $(TWO_BOARD_HARNESS_BIN) $(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN) \
 		$(FAULT_COMMS_RECEIVE_SELFTEST_BIN) $(FAULT_COMMS_BROADCAST_PACING_TEST_BIN) \
-		$(FAULT_COMMS_ABORT_GATE_TEST_BIN) $(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN)
+		$(FAULT_COMMS_ABORT_GATE_TEST_BIN) $(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) $(CONSENSUS_WEIGHTING_SELFTEST_BIN)
 
 # --- Pico compile check --------------------------------------------------
 # Mirrors check-board-compile/-link above, same class of check now that
@@ -497,6 +497,23 @@ check-two-board-harness:
 check-two-board-cbba-harness:
 	@chmod +x $(TOOLS_DIR)/check-two-board-cbba-harness.sh
 	@$(TOOLS_DIR)/check-two-board-cbba-harness.sh
+
+# --- Consensus weighting selftest -----------------------------------------
+# core/consensus_weighting.c's own standalone selftest (laptop/tools/
+# consensus_weighting_selftest.c) - see that file's own build comment for
+# why its dependency list is short (just fault_buffer.c/fault_config.c/
+# mission_state.c for shared constants, not the whole simulator).
+CONSENSUS_WEIGHTING_SELFTEST_BIN = build/consensus_weighting_selftest
+
+check-consensus-weighting:
+	@mkdir -p build
+	@echo "  CC      $(TOOLS_DIR)/consensus_weighting_selftest.c"
+	@$(CC) $(CFLAGS) -I$(CORE_DIR) \
+		-o $(CONSENSUS_WEIGHTING_SELFTEST_BIN) \
+		$(TOOLS_DIR)/consensus_weighting_selftest.c \
+		$(CORE_DIR)/consensus_weighting.c $(CORE_DIR)/fault_buffer.c \
+		$(CORE_DIR)/fault_config.c $(CORE_DIR)/mission_state.c $(LDFLAGS)
+	@./$(CONSENSUS_WEIGHTING_SELFTEST_BIN)
 
 # --- Evidence-vector parity selftest ---------------------------------------
 # Confirms core/recovery_manager.c's evaluate_fault_predictor() and core/

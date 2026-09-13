@@ -112,7 +112,19 @@ _Static_assert(FAULT_BUFFER_TEAMS_PER_BOARD < FAULT_BUFFER_FULL_STRENGTH_QUORUM,
    local-evidence-buffer refresh cycles (FAULT_BUFFER_LOCAL_DEPTH_TICKS)
    worth of silence - a provisional heuristic, not a derived value,
    pending real deployment data on how long a board can legitimately go
-   quiet. */
+   quiet.
+
+   UPDATE: a real wall-clock cadence now exists to derive against -
+   FAULT_COMMS_BROADCAST_INTERVAL_MS=120000 (core/fault_comms.c) - but
+   "trade one wrong unit for another" above is exactly why plugging a
+   tick-converted number in here would still be wrong: there remains no
+   valid tick<->ms conversion on real hardware. Deriving a real value
+   requires converting board_mark_heard()/fault_buffer_board_liveness_
+   confidence() to operate on cbba_now_ms() real milliseconds directly
+   (see core/fault_buffer.c's FAULT_BUFFER_LIVENESS_GRACE_TICKS comment
+   and core/consensus_weighting.h's CONSENSUS_LIVENESS_CONFIDENCE_
+   THRESHOLD comment for the full scope of that follow-up) - not
+   attempted here. */
 #define FAULT_BUFFER_LIVENESS_WINDOW_TICKS (2u * FAULT_BUFFER_LOCAL_DEPTH_TICKS)
 
 /* Below this many live voters, fusion is skipped entirely for the
