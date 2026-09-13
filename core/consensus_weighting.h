@@ -232,15 +232,38 @@ typedef struct
    wherever it's used. */
 extern const float CONSENSUS_TAU_SINGLE_BOARD;
 
-/* UNTUNED PLACEHOLDER - not a derived/validated value. Set to 0.5f as a
-   round-number stand-in only; there is no numeric derivation for it
-   anywhere in this project (fault_predictor_architecture_v4.md Section 3
-   explicitly states the tiered-trust confidence thresholds' "principle
-   locked, numbers not set"). Do not read this value as validated just
-   because it's committed - treat retuning it as an open TODO, and note
-   that if/when it IS retuned, consensus_weighting_design.md's
-   quantization hysteresis-margin note applies to whatever new value is
-   chosen (see that doc for why 0.5f specifically has been safe so far).
+/* PROXY-DERIVED PROVISIONAL VALUE - NOT from a real trained model, and
+   NOT validated the way FAULT_PERSISTENCE_FLOOR/_TRIP_TICKS were
+   (against real simulator ground truth via a real-but-not-production
+   classifier is as close as this gets, since core/fault_predictor.c's
+   real weights don't exist yet - FAULT_MODEL_LOADED is 0 - and
+   train.py doesn't exist in this repo at all).
+   Confirmed before doing this tuning pass: consensus_weighting.c has
+   ZERO live callers anywhere in core/, board/, or laptop/ outside its
+   own file and its own selftest (repo-wide grep) - this module is not
+   wired into anything, so this value is academic until it is, and
+   MUST be re-tuned once core/fault_predictor.c has real trained
+   weights - do not treat this as settled just because it moved off
+   the original round-number placeholder.
+   Derivation (laptop/tools/consensus_tau_local_proxy_tuning.py, make
+   check-consensus-tau-local-proxy-tuning): with x==1 (exactly one
+   board voting), Brooks-Iyengar's max-overlap y has nothing to overlap
+   against, so it reduces to that single vote's own confidence value -
+   this is therefore an ordinary single-classifier confidence-threshold
+   tuning problem, not a fusion one. Reused this session's Config A
+   sklearn pipeline (HistGradientBoostingClassifier, genuinely trained,
+   genuinely real predict_proba - a proxy stand-in, not core/fault_
+   predictor.c) to get real held-out predicted confidence for all 5
+   fault classes pooled together (CONSENSUS_TAU_LOCAL is one constant
+   applied identically regardless of class), then swept candidate
+   thresholds against real ground truth: F1 is maximized at tau=0.75
+   (precision 0.832, recall 0.814, F1 0.823) vs. the previous 0.5f
+   round-number placeholder (precision 0.695, recall 0.899, F1 0.784) -
+   a real, measured improvement on this proxy, not just a guess, but
+   still explicitly provisional per the caveats above.
+   consensus_weighting_design.md's quantization hysteresis-margin note
+   (why 0.5f specifically was safe) applies to this new value too -
+   re-check it if this gets re-tuned again.
    Finite local-tier confidence floor - same role as recovery_manager.c's
    existing "AI alone" confidence floor (ARCHITECTURE.md Section 3/8:
    "Exact tiered-trust confidence thresholds... numbers not set"; kept
@@ -250,7 +273,7 @@ extern const float CONSENSUS_TAU_SINGLE_BOARD;
    even CONSENSUS_TIER_LOCAL; no value of y can promote an x==1 verdict
    past CONSENSUS_TIER_LOCAL - only x>=2 does that (see consensus_gate_
    tier()). */
-#define CONSENSUS_TAU_LOCAL 0.5f
+#define CONSENSUS_TAU_LOCAL 0.75f
 
 /* UNTUNED PLACEHOLDER - not a derived/validated value, same status as
    CONSENSUS_TAU_LOCAL above, but for a DIFFERENT reason - this one

@@ -52,7 +52,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity check-fault-comms-receive check-fault-comms-broadcast-pacing check-fault-comms-abort-gate check-recovery-predictor-stress check-realloc-gate check-environment-e2e-stress check-consensus-weighting check-mission-link-status-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-env-raw-travel-cost-ablation
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-consensus-weighting check-evidence-vector-parity check-fault-comms-receive check-fault-comms-broadcast-pacing check-fault-comms-abort-gate check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-env-raw-travel-cost-ablation check-consensus-tau-local-proxy-tuning
 
 all: $(TARGET) $(LABELER)
 
@@ -247,9 +247,11 @@ check-board-link: check-board-compile
 clean:
 	rm -f $(TARGET) $(LABELER) tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv tron_telemetry.log
 	rm -rf $(BOARD_OBJ_DIR) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
-	rm -f $(TWO_BOARD_HARNESS_BIN) $(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN) \
+	rm -f $(TWO_BOARD_HARNESS_BIN) $(CONSENSUS_WEIGHTING_SELFTEST_BIN) $(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN) \
 		$(FAULT_COMMS_RECEIVE_SELFTEST_BIN) $(FAULT_COMMS_BROADCAST_PACING_TEST_BIN) \
-		$(FAULT_COMMS_ABORT_GATE_TEST_BIN) $(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) $(CONSENSUS_WEIGHTING_SELFTEST_BIN) $(MISSION_LINK_STATUS_GATE_TEST_BIN) $(RECOVERY_MANAGER_PERSISTENCE_SELFTEST_BIN)
+		$(FAULT_COMMS_ABORT_GATE_TEST_BIN) $(MISSION_LINK_STATUS_GATE_TEST_BIN) \
+		$(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) \
+		$(RECOVERY_MANAGER_PERSISTENCE_SELFTEST_BIN)
 
 # --- Pico compile check --------------------------------------------------
 # Mirrors check-board-compile/-link above, same class of check now that
@@ -698,6 +700,21 @@ check-recovery-manager-persistence:
 # regen, analysis script not a pass/fail gate).
 check-persistence-bounded-forgiveness:
 	python3 $(TOOLS_DIR)/persistence_bounded_forgiveness_ablation.py
+
+# --- CONSENSUS_TAU_LOCAL proxy tuning ---------------------------------------
+# Real-but-proxy (not core/fault_predictor.c, not train.py - that file
+# doesn't exist in this repo) derivation for core/consensus_weighting.h's
+# CONSENSUS_TAU_LOCAL, using this session's Config A sklearn pipeline's
+# real predict_proba against real ground truth - see laptop/tools/
+# consensus_tau_local_proxy_tuning.py's own header doc, and that
+# constant's own comment in consensus_weighting.h, for the full
+# derivation and its explicit provisional/re-tune-later caveats.
+# consensus_weighting.c has zero live callers today (confirmed by grep
+# before this tuning pass was done) - this is academic until it's
+# wired in. Requires tron_snapshot_dataset.csv with --fault-profile=
+# combined, same as this session's other dataset-dependent ablations.
+check-consensus-tau-local-proxy-tuning:
+	python3 $(TOOLS_DIR)/consensus_tau_local_proxy_tuning.py
 
 # --- Environment-class end-to-end escalation check ---------------------------
 # Python, not C - reuses the Config A sklearn pipeline (same as this
