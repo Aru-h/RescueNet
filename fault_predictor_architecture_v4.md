@@ -150,6 +150,73 @@ that actually tolerates a whole-board failure, or (b) a bandwidth budget confirm
 feature-vector broadcast is actually feasible at the real tick rate. Not doing this first isn't
 skipping it — it's making sure it isn't built on math or bandwidth assumptions that don't hold.
 
+**Concern 2, partial answer — `fault_comms_broadcast_local_teams()`'s real airtime cost and a
+proposed pacing fix, READY TO APPLY ONCE THE TWO-BOARD HARNESS WIRES THIS FUNCTION INTO A REAL
+CALL SITE (it currently has zero callers anywhere in `core/`, `board/`, or `laptop/` — confirmed
+by repo-wide grep, also noted in `ARCHITECTURE.md`/`AUDIT.md` — so there is nothing to pace yet
+and this is deliberately not being added to `core/fault_comms.c` as a standing TODO in code with
+no caller to exercise it):**
+
+- `FaultBroadcastPayload_t` is 48 bytes (confirmed via `sizeof`, not estimated) → wire frame =
+  3 (`LORA_FRAME_HEADER_SIZE`) + 48 + 19 (AEAD trailer: tag+counter-frag+checksum) = **70 bytes**.
+- Applying the same Semtech AN1200.13 time-on-air formula `core/comms_transport.c` already uses
+  and locks for its own 166-byte/266.496ms worked example (SF7/BW125/CR4:5/8-symbol
+  preamble/explicit header/CRC on — reproduced exactly, not re-derived differently) to this
+  70-byte frame gives **128.256ms per frame**.
+- On real hardware (`NUM_TEAMS=10`, `FAULT_BUFFER_TEAMS_PER_BOARD=5` → 2 boards), one call to
+  `fault_comms_broadcast_local_teams()` sends one `FAULT_BROADCAST` frame per locally-hosted
+  team to the one other board — **5 frames per call**, independent of model state (this
+  function never emits `FAULT_VOTE` frames itself; those only originate from the separate
+  ingest-side `fault_comms_cast_vote()` path). Total TX-locked time per call: **5 × 128.256ms ≈
+  641.28ms**.
+- **Failure mode this prevents, not hypothetical:** `comms_transport_send()`'s cross-board path
+  doesn't block on the radio — it enqueues into one of four fixed-capacity precedence queues
+  (`core/comms_transport.c`; `FAULT_BROADCAST` uses `COMMS_PRECEDENCE_PRIORITY`, capacity 12
+  slots). An unpaced caller on a flat-out main loop (`BOARD_TICK_DELAY_MS=0` by default, both
+  boards) would overflow that 12-slot queue within 2-3 ticks and start silently dropping frames
+  (`comms_transport_send()` returns non-zero on a full queue; every current call site already
+  discards that return value with `(void)`) — a data-loss bug, not a graceful degradation, and
+  one that would also starve CBBA/mission-link traffic sharing the same `PRIORITY`/`FLASH` TX
+  queues and the same physical radio.
+- **Proposed fix — self-paced interval against a real wall-clock primitive, mirroring the
+  existing `mission_link_status_tx_step()`/`MISSION_LINK_HEARTBEAT_INTERVAL_MS` pattern
+  (`core/mission_link.c`, `core/cbba.c`'s `cbba_now_ms()`), not a blocking `tk_dly_tsk()` (which
+  would stall CBBA/mission-link on the same loop):**
+
+  ```c
+  #ifndef FAULT_COMMS_BROADCAST_INTERVAL_MS
+  #define FAULT_COMMS_BROADCAST_INTERVAL_MS 120000u /* 2 min - see duty-cycle derivation, this doc */
+  #endif
+
+  void fault_comms_broadcast_local_teams(void)
+  {
+      static uint32_t s_last_broadcast_ms = 0u;
+      uint32_t now_ms = cbba_now_ms();
+
+      if (now_ms - s_last_broadcast_ms < FAULT_COMMS_BROADCAST_INTERVAL_MS)
+          return;
+      s_last_broadcast_ms = now_ms;
+      /* ... existing body, unchanged ... */
+  }
+  ```
+
+  Callable every tick, unconditionally — it self-throttles, same as the heartbeat pattern it
+  mirrors, so nothing about the call site needs to coordinate timing.
+- **Duty-cycle recomputation, against real wall-clock timing, not `TICK_TIME_SEC`** (the prior
+  0.37% figure was computed against the simulated-time constant and was invalidated for exactly
+  that reason — duty cycle depends on wall-clock call frequency, which `TICK_TIME_SEC` does not
+  represent on hardware since `BOARD_TICK_DELAY_MS=0` means tick rate has no fixed real-time
+  period):
+  - Minimum interval for a ≤1% ceiling: 641.28ms / 0.01 = **64.13s**.
+  - Proposed 120s interval: **641.28ms / 120,000ms ≈ 0.53%** — under 1% with margin for clock
+    drift, and leaving headroom since CBBA/mission-link traffic shares the same radio's overall
+    duty budget (not accounted for in this 0.53% figure, which covers only this function's own
+    `FAULT_BROADCAST` traffic — flagged, not solved, here).
+  - `FAULT_COMMS_BROADCAST_INTERVAL_MS=120000` is a proposed, untuned starting point (same
+    "provisional, not derived from a regulatory filing" status as this project's other
+    duty-cycle-adjacent placeholders) pending confirmation of what "1%" actually means under
+    this band's real WPC IN865 de-licensing terms — not yet a settled decision.
+
 ---
 
 ## 5. On-device buffer — two shapes, not one
@@ -228,7 +295,10 @@ confirmed correctly wired, verified by inspecting a real generated file. This is
 
 1. **Cross-board consensus** (Section 4) — real, unresolved engineering concerns (correlated
    board-failure math, bandwidth, board-liveness conflation), not a "do we need it" question.
-   Not dropped — sequenced after the base model.
+   Not dropped — sequenced after the base model. Concern 2 (bandwidth) now has a real airtime
+   figure and a proposed pacing fix (`FAULT_COMMS_BROADCAST_INTERVAL_MS`, ~0.53% duty cycle at a
+   120s interval) documented in Section 4 — ready to apply once `fault_comms_broadcast_local_
+   teams()` actually has a caller, not applied yet since it doesn't.
 2. **Exact tiered-trust confidence thresholds** (Section 3) — principle locked, numbers not
    set. Same open status CONCORD's doc had it in; still unresolved.
 3. **6-8 tick evidence window** — measured against a real onset-to-detection lag distribution
