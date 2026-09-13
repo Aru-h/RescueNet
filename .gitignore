@@ -45,6 +45,17 @@ Thumbs.db
 *.swp
 *~
 .vscode/
+__pycache__/
+*.pyc
+*.dSYM/
+
+# Eclipse CDT / STM32CubeIDE machine-generated project metadata (not the
+# same as tron_board/.osx.project, which is tracked deliberately)
+.project
+.cproject
+
+# Local dashboard tool run-history state - not source
+.dashboard_history.json
 
 # Vendored T-License 2.2 BSPs — fetch separately per board vendor/README.md,
 # do not commit (not a redistribution-friendly license to bundle verbatim)

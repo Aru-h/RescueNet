@@ -112,19 +112,7 @@ _Static_assert(FAULT_BUFFER_TEAMS_PER_BOARD < FAULT_BUFFER_FULL_STRENGTH_QUORUM,
    local-evidence-buffer refresh cycles (FAULT_BUFFER_LOCAL_DEPTH_TICKS)
    worth of silence - a provisional heuristic, not a derived value,
    pending real deployment data on how long a board can legitimately go
-   quiet.
-
-   UPDATE: a real wall-clock cadence now exists to derive against -
-   FAULT_COMMS_BROADCAST_INTERVAL_MS=120000 (core/fault_comms.c) - but
-   "trade one wrong unit for another" above is exactly why plugging a
-   tick-converted number in here would still be wrong: there remains no
-   valid tick<->ms conversion on real hardware. Deriving a real value
-   requires converting board_mark_heard()/fault_buffer_board_liveness_
-   confidence() to operate on cbba_now_ms() real milliseconds directly
-   (see core/fault_buffer.c's FAULT_BUFFER_LIVENESS_GRACE_TICKS comment
-   and core/consensus_weighting.h's CONSENSUS_LIVENESS_CONFIDENCE_
-   THRESHOLD comment for the full scope of that follow-up) - not
-   attempted here. */
+   quiet. */
 #define FAULT_BUFFER_LIVENESS_WINDOW_TICKS (2u * FAULT_BUFFER_LOCAL_DEPTH_TICKS)
 
 /* Below this many live voters, fusion is skipped entirely for the
@@ -260,27 +248,6 @@ void fault_buffer_round_reset(void);
 /* Current running vote weight for one (target team, class) pair
    within the current round. */
 float fault_buffer_get_vote_weight(uint8_t target_team_id, OperationalFaultClass_t fault_class);
-
-/*
- * Graded (0.0-1.0) liveness confidence for board_id at tick `now`, built
- * on the same last-heard timestamp board_is_live() (private to fault_
- * buffer.c) already tracks internally - not a second/duplicate liveness
- * mechanism. This is the primitive consensus_weighting.c's caller uses
- * to decide whether a board's vote is even eligible for submission this
- * round (see consensus_weighting.h's "Liveness vs disagreement" section
- * for the full rule and consensus_gate_submit_vote_if_live()).
- *
- * Deadline-based simplified approximation of the general phi-accrual
- * failure-detector pattern (Hayashibara et al., SRDS 2004) - appropriate
- * for this fixed-tick RTOS rather than the full statistical version; see
- * this function's own definition in fault_buffer.c for the exact ramp
- * and the FLP-impossibility caveat (perfectly distinguishing "crashed"
- * from "merely slow" is provably impossible in an asynchronous system -
- * this is a bounded-risk approximation, not a certainty).
- *
- * Returns 0.0f for an out-of-range board_id or a board never heard from.
- */
-float fault_buffer_board_liveness_confidence(uint8_t board_id, uint32_t now);
 
 /*
  * Brooks-Iyengar fusion, run independently per class, against a

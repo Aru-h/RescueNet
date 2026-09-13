@@ -24,8 +24,14 @@
  *                                 in sx1262_hal_wait_irq() below)
  *   RESET     12        PB3       plain GPIO output, active-low NRST
  *   BUSY      14        PC7       plain GPIO input
- *   RXEN      17        PD13      plain GPIO output, active-high
- *   TXEN      18        PF1       plain GPIO output, active-high
+ *   RXEN      D4        PH5       plain GPIO output, active-high
+ *                                 (Arduino header pin, not STMod+/CN4 -
+ *                                 free GPIO not used by any other on-
+ *                                 board peripheral)
+ *   TXEN      D7        PD6       plain GPIO output, active-high
+ *                                 (Arduino header pin, not STMod+/CN4 -
+ *                                 free GPIO not used by any other on-
+ *                                 board peripheral)
  *   VCC       -         -         3.3V from the Arduino connector's CN8
  *                                 pin 4 (+3V3) - CN4 only brings out 5V
  *   GND       5 or 16   -         -
@@ -107,11 +113,11 @@
 #define SX1262_RESET_PORT           GPIOB
 #define SX1262_RESET_PIN            3u    /* PB3 */
 
-#define SX1262_RXEN_PORT            GPIOD
-#define SX1262_RXEN_PIN             13u   /* PD13 */
+#define SX1262_RXEN_PORT            GPIOH
+#define SX1262_RXEN_PIN             5u    /* PH5 - Arduino header D4 */
 
-#define SX1262_TXEN_PORT            GPIOF
-#define SX1262_TXEN_PIN             1u    /* PF1 */
+#define SX1262_TXEN_PORT            GPIOD
+#define SX1262_TXEN_PIN             6u    /* PD6 - Arduino header D7 */
 
 /* Opcodes this file needs to snoop for RXEN/TXEN switching (see
  * sx126x_hal_write() below). Not exported by sx126x_hal.h - the HAL
@@ -130,11 +136,11 @@
 
 static void gpio_clock_enable_all(void)
 {
-    /* GPIOA, B, C, D, E, F, G - every port this HAL touches. */
+    /* GPIOA, B, C, D, E, F, G, H - every port this HAL touches. */
     RCC->AHB4ENR |= (RCC_AHB4ENR_GPIOAEN | RCC_AHB4ENR_GPIOBEN |
                       RCC_AHB4ENR_GPIOCEN | RCC_AHB4ENR_GPIODEN |
                       RCC_AHB4ENR_GPIOEEN | RCC_AHB4ENR_GPIOFEN |
-                      RCC_AHB4ENR_GPIOGEN);
+                      RCC_AHB4ENR_GPIOGEN | RCC_AHB4ENR_GPIOHEN);
     /* RCC needs a couple of cycles before the newly-clocked
        peripherals' registers are safely accessible. */
     (void)RCC->AHB4ENR;

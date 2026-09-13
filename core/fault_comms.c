@@ -3,7 +3,6 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "cbba.h"
 #include "comms_precedence.h"
 #include "comms_transport.h"
 #include "fault_buffer.h"
@@ -11,7 +10,6 @@
 #include "fault_predictor.h"
 #include "lora_frame.h"
 #include "mission_state.h"
-#include "recovery_manager.h"
 #include "watchdog.h"
 
 /* Not declared in cbba.h - see cbba_team_is_local()'s own comment in
@@ -19,25 +17,6 @@
    is forward-declared at each call site instead of given a header of
    its own. Same convention laptop/snapshot.c already follows. */
 extern bool cbba_team_is_local(uint8_t team_id);
-
-/* Real-airtime duty-cycle pacing for fault_comms_broadcast_local_teams()
-   - see fault_predictor_architecture_v4.md Section 4's "Concern 2,
-   partial answer" for the full derivation: 5 FAULT_BROADCAST frames per
-   call on real 2-board/10-team hardware, 128.256ms airtime each (Semtech
-   AN1200.13 ToA formula, same one core/comms_transport.c already locks
-   for its own 166-byte worked example) = 641.28ms TX-locked time per
-   call. At this 120s interval: 641.28ms / 120,000ms ~= 0.53% duty cycle
-   - under the proposed 1% ceiling with margin, though "1%" itself is not
-   yet a settled regulatory decision (same doc section). Self-paced
-   against cbba_now_ms() (real-HAL-backed on hardware, weak-default
-   simulated otherwise - core/cbba.c), mirroring core/mission_link.c's
-   mission_link_status_tx_step()/MISSION_LINK_HEARTBEAT_INTERVAL_MS
-   pattern - deliberately NOT tk_dly_tsk() (which would block CBBA/
-   mission-link on the same loop). Callable every tick unconditionally;
-   it self-throttles and does nothing until the interval elapses. */
-#ifndef FAULT_COMMS_BROADCAST_INTERVAL_MS
-#define FAULT_COMMS_BROADCAST_INTERVAL_MS 120000u
-#endif
 
 /* Provisional - see fault_predictor.c's own FAULT_MODEL_LOADED comment.
    While the model is inert this never fires (all scores are 0.0), so no
@@ -247,30 +226,12 @@ static void fault_comms_cast_vote(uint8_t target_team_id,
    see comms_transport.h). */
 void fault_comms_broadcast_local_teams(void)
 {
-    static uint32_t s_last_broadcast_ms = 0u;
-    uint32_t now_ms = cbba_now_ms();
-
-    if(now_ms - s_last_broadcast_ms < FAULT_COMMS_BROADCAST_INTERVAL_MS)
-        return;
-    s_last_broadcast_ms = now_ms;
-
     for(uint8_t team_id = 0u; team_id < NUM_TEAMS; team_id++)
     {
         FaultBroadcastPayload_t payload;
         uint8_t confirmed_mobility_impairment = 0u;
 
         if(!cbba_team_is_local(team_id))
-            continue;
-
-        /* An aborted team has nothing left to broadcast an opinion
-           about - abandon_task_for_recovery() (recovery_dispatch(),
-           core/recovery_manager.c) has already pulled it off whatever
-           it was doing, so there's no fresh mission-relevant evidence
-           to send, and no reason to keep spending airtime/radio time
-           on a team the recovery manager has already given up on this
-           round. Checked per-team, not once for the whole call, since
-           ABORT_MISSION is a per-team recommendation. */
-        if(recovery_manager_get_recommendation(team_id) == RECOVERY_ACTION_ABORT_MISSION)
             continue;
 
         /* Item 2: this is the one place that already loops "for
