@@ -75,6 +75,24 @@ typedef struct
 uint8_t recovery_manager_persistence_streak_step(uint8_t streak, float confidence);
 
 /*
+ * EXPERIMENTAL, NOT the production mechanism - see this function's own
+ * doc in recovery_manager.c for the full measured verdict (laptop/
+ * tools/persistence_bounded_forgiveness_ablation.py). Tolerates exactly
+ * one isolated below-floor tick without resetting, hard-resets on two
+ * consecutive misses. Closes the specific dip-every-Nth-tick exploit it
+ * was aimed at, but is NOT a net improvement over recovery_manager_
+ * persistence_streak_step() on real simulator data (worse false-accept
+ * than the false-reject it buys) - kept here as tested, documented, and
+ * deliberately not adopted, not silently discarded.
+ *
+ * *was_last_miss is extra caller-owned state this variant needs beyond
+ * the plain streak (true if the immediately preceding tick was itself
+ * a miss) - persist it across calls the same way streak itself is.
+ */
+uint8_t recovery_manager_persistence_streak_step_bounded_forgiveness(
+    uint8_t streak, float confidence, uint8_t *was_last_miss);
+
+/*
  * Builds the FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES-wide evidence vector
  * evaluate_fault_predictor() feeds to fault_predictor_run() for team_id:
  * watchdog_get_evidence_vector()'s 7 accumulated_evidence[] channels,
