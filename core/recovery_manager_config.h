@@ -170,13 +170,16 @@
  * fallback because the better idea didn't work out."
  *
  * FAULT_PERSISTENCE_FLOOR = 0.20, NOT WATCHDOG_ANOMALY_THRESHOLD (0.10,
- * core/watchdog.c) and NOT the 0.35 in evidence_channels.py's
- * ANOMALY_THRESHOLD (that 0.35 is STALE - core/watchdog.c's own comment
- * confirms 0.35 was WATCHDOG_ANOMALY_THRESHOLD's value before an empirical
- * retune to 0.10 this pass; evidence_channels.py was never updated to
- * match and needs a separate fix). 0.20 instead reuses core/watchdog.c's
- * real, current per-channel evidence_flags_from_values() threshold,
- * applied here to the combined confidence score - a deliberate choice,
+ * core/watchdog.c) and NOT evidence_channels.py's ANOMALY_THRESHOLD
+ * (also 0.10, matching WATCHDOG_ANOMALY_THRESHOLD - re-confirmed by
+ * re-running validate_against_watchdog() against a freshly generated
+ * dataset: 99.97% overall anomaly_detected agreement, vs. 88.13% if
+ * ANOMALY_THRESHOLD were reverted to 0.35, the stale value an earlier
+ * draft of this comment described; that draft is what's now stale, not
+ * the constant - evidence_channels.py itself already matches). 0.20
+ * instead reuses core/watchdog.c's real, current per-channel
+ * evidence_flags_from_values() threshold, applied here to the combined
+ * confidence score - a deliberate choice,
  * not a copy of either watchdog threshold, and deliberately NOT
  * FAULT_EVIDENCE_ONSET_LAG_TICKS=20 either (that constant answers a
  * different question - ticks to first detection, not sustained-ticks

@@ -52,7 +52,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity check-fault-comms-receive
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity check-fault-comms-receive check-fault-comms-broadcast-pacing check-fault-comms-abort-gate check-recovery-predictor-stress check-realloc-gate check-environment-e2e-stress
 
 all: $(TARGET) $(LABELER)
 
@@ -247,7 +247,9 @@ check-board-link: check-board-compile
 clean:
 	rm -f $(TARGET) $(LABELER) tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv tron_telemetry.log
 	rm -rf $(BOARD_OBJ_DIR) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
-	rm -f $(TWO_BOARD_HARNESS_BIN) $(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN)
+	rm -f $(TWO_BOARD_HARNESS_BIN) $(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN) \
+		$(FAULT_COMMS_RECEIVE_SELFTEST_BIN) $(FAULT_COMMS_BROADCAST_PACING_TEST_BIN) \
+		$(FAULT_COMMS_ABORT_GATE_TEST_BIN) $(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN)
 
 # --- Pico compile check --------------------------------------------------
 # Mirrors check-board-compile/-link above, same class of check now that
@@ -503,12 +505,21 @@ check-two-board-cbba-harness:
 # (audit #163) - see laptop/tools/evidence_vector_parity_selftest.c's own
 # doc for why this needs the whole core/ directory linked, same pattern as
 # laptop/tools/recovery_manager_persistence_selftest.c.
+#
+# -DCBBA_SIM_CLOCK_STEP_MS=120000u: fault_comms_broadcast_local_teams() is
+# now paced against FAULT_COMMS_BROADCAST_INTERVAL_MS=120000 (core/
+# fault_comms.c) via cbba_now_ms() - this test calls it exactly once and
+# checks the vector it wrote, so cbba_now_ms()'s weak-default simulated
+# clock (core/cbba.c, CBBA_SIM_CLOCK_STEP_MS=10 by default) needs to
+# advance a full interval on that single call for the broadcast to
+# actually fire, or the test would see nothing recorded at all - this
+# override is scoped to this one selftest binary, not the real build.
 EVIDENCE_VECTOR_PARITY_SELFTEST_BIN = build/evidence_vector_parity_selftest
 
 check-evidence-vector-parity:
 	@mkdir -p build
 	@echo "  CC      $(TOOLS_DIR)/evidence_vector_parity_selftest.c"
-	@$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) \
+	@$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) -DCBBA_SIM_CLOCK_STEP_MS=120000u \
 		-o $(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN) \
 		$(TOOLS_DIR)/evidence_vector_parity_selftest.c \
 		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
@@ -533,4 +544,98 @@ check-fault-comms-receive:
 		$(TOOLS_DIR)/fault_comms_receive_selftest.c \
 		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
 	@./$(FAULT_COMMS_RECEIVE_SELFTEST_BIN)
+
+# --- fault_comms.c broadcast-pacing selftest ---------------------------------
+# Confirms fault_comms_broadcast_local_teams()'s FAULT_COMMS_BROADCAST_
+# INTERVAL_MS pacing gate produces real ~120s wall-clock cadence, not
+# the invalidated TICK_TIME_SEC-based assumption - see laptop/tools/
+# fault_comms_broadcast_pacing_test.c's own header doc. Overrides core/
+# cbba.c's weak cbba_now_ms() with a test-controlled strong definition,
+# so needs the whole core/ directory linked same as check-fault-comms-
+# receive, but must NOT also link a second cbba_now_ms() - there isn't
+# one, the override lives in the test file itself.
+FAULT_COMMS_BROADCAST_PACING_TEST_BIN = build/fault_comms_broadcast_pacing_test
+
+check-fault-comms-broadcast-pacing:
+	@mkdir -p build
+	@echo "  CC      $(TOOLS_DIR)/fault_comms_broadcast_pacing_test.c"
+	@$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) \
+		-o $(FAULT_COMMS_BROADCAST_PACING_TEST_BIN) \
+		$(TOOLS_DIR)/fault_comms_broadcast_pacing_test.c \
+		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@./$(FAULT_COMMS_BROADCAST_PACING_TEST_BIN)
+
+# --- fault_comms.c ABORT_MISSION transmission-gate selftest -----------------
+# Confirms fault_comms_broadcast_local_teams()'s per-team RECOVERY_
+# ACTION_ABORT_MISSION check: an aborted team stops transmitting
+# FAULT_BROADCAST frames while other, still-active teams are
+# unaffected - see laptop/tools/fault_comms_abort_gate_test.c's own
+# header doc. Excludes core/fault_predictor.c and core/watchdog.c from
+# CORE_SOURCES (the test provides its own strong overrides so it can
+# drive a real ABORT_MISSION recommendation with a synthetic
+# confidence sequence - neither real function is declared weak, so
+# linking both would be a duplicate-symbol error).
+FAULT_COMMS_ABORT_GATE_TEST_BIN = build/fault_comms_abort_gate_test
+FAULT_COMMS_ABORT_GATE_TEST_CORE_SOURCES = $(filter-out $(CORE_DIR)/fault_predictor.c $(CORE_DIR)/watchdog.c,$(CORE_SOURCES))
+
+check-fault-comms-abort-gate:
+	@mkdir -p build
+	@echo "  CC      $(TOOLS_DIR)/fault_comms_abort_gate_test.c"
+	@$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) \
+		-o $(FAULT_COMMS_ABORT_GATE_TEST_BIN) \
+		$(TOOLS_DIR)/fault_comms_abort_gate_test.c \
+		$(FAULT_COMMS_ABORT_GATE_TEST_CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@./$(FAULT_COMMS_ABORT_GATE_TEST_BIN)
+
+# --- recovery_manager.c fault-predictor path stress test --------------------
+# Drives the REAL core/recovery_manager.c decision/tiering/hysteresis
+# logic with synthetic model-confidence sequences (laptop/tools/recovery_
+# predictor_stress_test_stubs.c replaces watchdog.c/fault_predictor.c) -
+# confirms persistence-alone escalation, the dip-every-7th-tick
+# persistence-streak exploit, and watchdog/model threshold-desync
+# behavior, none of which need real trained weights.
+RECOVERY_PREDICTOR_STRESS_TEST_BIN = build/recovery_predictor_stress_test
+
+check-recovery-predictor-stress:
+	@mkdir -p build
+	@echo "  CC      $(TOOLS_DIR)/recovery_predictor_stress_test.c"
+	@$(CC) $(CFLAGS) -I$(CORE_DIR) \
+		-o $(RECOVERY_PREDICTOR_STRESS_TEST_BIN) \
+		$(TOOLS_DIR)/recovery_predictor_stress_test.c \
+		$(TOOLS_DIR)/recovery_predictor_stress_test_stubs.c \
+		$(CORE_DIR)/recovery_manager.c $(CORE_DIR)/mission_state.c $(LDFLAGS)
+	@./$(RECOVERY_PREDICTOR_STRESS_TEST_BIN)
+
+# --- allocator.c REQUEST_TASK_REALLOCATION gate selftest ---------------------
+# Confirms core/allocator.c's team_can_accept_incident() fix: a team
+# recovery_manager.c has flagged REQUEST_TASK_REALLOCATION cannot be
+# handed an unrelated new assignment (system task) in the same tick,
+# even if it becomes STATUS_AVAILABLE - see laptop/tools/realloc_gate_
+# test.c's own header doc, including its before/after regression control.
+REALLOC_GATE_TEST_BIN = build/realloc_gate_test
+
+check-realloc-gate:
+	@mkdir -p build
+	@echo "  CC      $(TOOLS_DIR)/realloc_gate_test.c"
+	@$(CC) $(CFLAGS) -I$(CORE_DIR) \
+		-o $(REALLOC_GATE_TEST_BIN) \
+		$(TOOLS_DIR)/realloc_gate_test.c \
+		$(TOOLS_DIR)/realloc_gate_test_stubs.c \
+		$(CORE_DIR)/allocator.c $(CORE_DIR)/recovery_manager.c $(CORE_DIR)/mission_state.c $(LDFLAGS)
+	@./$(REALLOC_GATE_TEST_BIN)
+
+# --- Environment-class end-to-end escalation check ---------------------------
+# Python, not C - reuses the Config A sklearn pipeline (same as this
+# project's comparative-F1 experiments) to get real predicted confidence
+# for real held-out environment-fault onset episodes, then runs each
+# through a faithful port of recovery_manager.c's persistence/hysteresis
+# state machine - laptop/tools/environment_class_e2e_stress.py's own
+# header doc has the full method. Requires tron_snapshot_dataset.csv to
+# exist with --fault-profile=combined fault injection (e.g. `./tron 1 30
+# 400 --fault-profile=combined`) - not run automatically by this target
+# since regenerating the dataset is slow and this is an analysis script,
+# not a pass/fail gate.
+check-environment-e2e-stress:
+	python3 $(TOOLS_DIR)/environment_class_e2e_stress.py
 

@@ -151,11 +151,15 @@ feature-vector broadcast is actually feasible at the real tick rate. Not doing t
 skipping it — it's making sure it isn't built on math or bandwidth assumptions that don't hold.
 
 **Concern 2, partial answer — `fault_comms_broadcast_local_teams()`'s real airtime cost and a
-proposed pacing fix, READY TO APPLY ONCE THE TWO-BOARD HARNESS WIRES THIS FUNCTION INTO A REAL
-CALL SITE (it currently has zero callers anywhere in `core/`, `board/`, or `laptop/` — confirmed
-by repo-wide grep, also noted in `ARCHITECTURE.md`/`AUDIT.md` — so there is nothing to pace yet
-and this is deliberately not being added to `core/fault_comms.c` as a standing TODO in code with
-no caller to exercise it):**
+pacing fix, APPLIED. `FAULT_COMMS_BROADCAST_INTERVAL_MS=120000` is now live in
+`core/fault_comms.c` (self-paced against `cbba_now_ms()`, exactly as designed below), verified
+by `laptop/tools/fault_comms_broadcast_pacing_test.c`/`make check-fault-comms-broadcast-pacing`:
+6000 simulated flat-out per-tick calls over 600s produced exactly 4 real broadcasts, spaced
+exactly 120000ms apart — confirming real wall-clock cadence, not the invalidated
+`TICK_TIME_SEC`-based assumption. The function itself still has zero callers anywhere in
+`core/`, `board/`, or `laptop/` (confirmed by repo-wide grep, also noted in `ARCHITECTURE.md`/
+`AUDIT.md`) — the pacing gate is tested in isolation via a controlled `cbba_now_ms()`, same as
+every other zero-caller function in this codebase already gets unit-tested directly:**
 
 - `FaultBroadcastPayload_t` is 48 bytes (confirmed via `sizeof`, not estimated) → wire frame =
   3 (`LORA_FRAME_HEADER_SIZE`) + 48 + 19 (AEAD trailer: tag+counter-frag+checksum) = **70 bytes**.
@@ -296,9 +300,10 @@ confirmed correctly wired, verified by inspecting a real generated file. This is
 1. **Cross-board consensus** (Section 4) — real, unresolved engineering concerns (correlated
    board-failure math, bandwidth, board-liveness conflation), not a "do we need it" question.
    Not dropped — sequenced after the base model. Concern 2 (bandwidth) now has a real airtime
-   figure and a proposed pacing fix (`FAULT_COMMS_BROADCAST_INTERVAL_MS`, ~0.53% duty cycle at a
-   120s interval) documented in Section 4 — ready to apply once `fault_comms_broadcast_local_
-   teams()` actually has a caller, not applied yet since it doesn't.
+   figure and a pacing fix (`FAULT_COMMS_BROADCAST_INTERVAL_MS`, ~0.53% duty cycle at a 120s
+   interval), documented and APPLIED in Section 4 — `fault_comms_broadcast_local_teams()`
+   itself still has no caller, but the pacing gate is verified in isolation (`make check-
+   fault-comms-broadcast-pacing`).
 2. **Exact tiered-trust confidence thresholds** (Section 3) — principle locked, numbers not
    set. Same open status CONCORD's doc had it in; still unresolved.
 3. **6-8 tick evidence window** — measured against a real onset-to-detection lag distribution
@@ -459,6 +464,41 @@ confirmed correctly wired, verified by inspecting a real generated file. This is
    consistent with this simulator's current tuning, not as validated against reality. Re-measure
    once real training-run data or hardware-timed traces are available, before leaning on these
    specific numbers for anything safety-critical.
+
+### Future scope: multi-watcher fusion (post-submission)
+
+**Status: not started, evidence-backed direction only, deferred past this
+deadline.**
+
+Comparative experiment (this session, scratchpad-only, not committed —
+multi_watcher_experiment.py) tested whether cross-team inference could replace
+each team's own single-team classifier ("Config A": own ~70-feature raw+evidence
+vector) with a multi-watcher approach ("Config B": aggregated mean/max/std of
+other teams' 11-feature broadcast summaries, N=9 watchers per tick).
+
+Result: Config A won every fault class outright, not close on 4/5 (mobility,
+communication, resource, mission). Config B is NOT a viable replacement anywhere.
+
+However, per-row analysis found Config B genuinely catches real cases Config A's
+own-team model misses entirely, concentrated on environment (+11.9% B-only
+catches) and mission (+7.2%) — the two classes Config A is already weakest on.
+This is real complementary signal, not noise, consistent with this doc's own
+framing of cross-board input as a hedge against one team's model being wrong,
+not a standalone detector.
+
+**Recommended future direction, if pursued:**
+- NOT a replacement model — a fusion layer on top of Config A's own verdict,
+  weighted toward A, nudged by aggregated cross-team evidence specifically for
+  environment/mission classes.
+- Must use realistic broadcast pacing (the designed ~120s interval / 0.53% duty
+  cycle from Section 8's bandwidth analysis), NOT the experiment's idealized
+  every-tick full-roster assumption — re-run the comparative methodology under
+  real pacing constraints before trusting any result.
+- Should route through the already-built, already-unwired transport path
+  (fault_comms.c receive side, consensus_weighting.c's interval-based gate)
+  rather than a new mechanism.
+- Explicitly out of scope for the current deadline — Config A alone is the
+  confirmed, sufficient architecture for submission.
 
 ---
 
