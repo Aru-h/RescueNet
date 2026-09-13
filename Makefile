@@ -52,7 +52,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity check-fault-comms-receive check-fault-comms-broadcast-pacing check-fault-comms-abort-gate check-recovery-predictor-stress check-realloc-gate check-environment-e2e-stress check-consensus-weighting check-mission-link-status-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity check-fault-comms-receive check-fault-comms-broadcast-pacing check-fault-comms-abort-gate check-recovery-predictor-stress check-realloc-gate check-environment-e2e-stress check-consensus-weighting check-mission-link-status-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-env-raw-travel-cost-ablation
 
 all: $(TARGET) $(LABELER)
 
@@ -712,4 +712,16 @@ check-persistence-bounded-forgiveness:
 # not a pass/fail gate.
 check-environment-e2e-stress:
 	python3 $(TOOLS_DIR)/environment_class_e2e_stress.py
+
+# --- env_raw_travel_cost before/after ablation --------------------------
+# Real before/after environment-class F1 for the new env_raw_travel_cost
+# CSV column (laptop/snapshot.c) - fault_predictor_architecture_v4.md
+# Section 8 item 4's raw, non-twin-relative instrumentation fix. Same
+# Config A sklearn pipeline this session's other ablations use. Requires
+# tron_snapshot_dataset.csv regenerated with the updated laptop/
+# snapshot.c AND --fault-profile=combined (e.g. `./tron 1 30 400
+# --fault-profile=combined`) - not run automatically, same reason as
+# check-environment-e2e-stress.
+check-env-raw-travel-cost-ablation:
+	python3 $(TOOLS_DIR)/env_raw_travel_cost_ablation.py
 
