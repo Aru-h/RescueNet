@@ -95,19 +95,123 @@ static void board_mark_heard(uint8_t board_id, uint32_t tick)
         g_board_last_heard_tick[board_id] = tick;
 }
 
-static uint8_t board_is_live(uint8_t board_id, uint32_t now)
-{
-    uint32_t last_heard = g_board_last_heard_tick[board_id];
-    uint32_t age;
+/* UNTUNED PLACEHOLDER - not a derived/validated split, same status as
+   consensus_weighting.h's CONSENSUS_TAU_LOCAL/CONSENSUS_LIVENESS_
+   CONFIDENCE_THRESHOLD, but see that header's CONSENSUS_LIVENESS_
+   CONFIDENCE_THRESHOLD comment for why THIS family of constants is
+   untuned for a different reason than CONSENSUS_TAU_LOCAL: it is NOT
+   blocked on a trained model, it is blocked on this whole liveness
+   mechanism being tick-denominated (this constant, FAULT_BUFFER_
+   LIVENESS_WINDOW_TICKS below, board_mark_heard()'s stored values,
+   and every fault_comms.c call site all operate in ticks), and ticks
+   have no fixed real-time rate on hardware (BOARD_TICK_DELAY_MS=0) -
+   so there is no valid way to derive "how many ticks correspond to
+   missing N real broadcasts" now that FAULT_COMMS_BROADCAST_INTERVAL_
+   MS=120000 (core/fault_comms.c) gives a real cadence to derive
+   against. Doing this properly means converting board_mark_heard()/
+   fault_buffer_board_liveness_confidence() to real milliseconds via
+   cbba_now_ms() first (touching every fault_comms.c call site and
+   laptop/tools/consensus_weighting_selftest.c's existing tick-based
+   test cases) - a scoped, multi-file follow-up, not a same-day fix,
+   and deliberately not attempted here.
+   The /2u (grace = exactly half the liveness window) is not derived
+   from any heartbeat-timing analysis, jitter measurement, or false-
+   positive/false-negative study - it is a round-number stand-in for
+   "some grace before suspicion starts climbing" (see fault_buffer_
+   board_liveness_confidence()'s own doc for the deadline-based/phi-
+   accrual-style reasoning the ramp SHAPE follows; that citation
+   justifies the shape of the curve, not this specific split point on
+   it, and not its tick-vs-ms unit either). Kept as its own named
+   constant rather than an inline magic /2u so it's one grep away when
+   it does get tuned - treat retuning it as an open TODO, not as
+   validated because it's committed. FAULT_BUFFER_LIVENESS_WINDOW_TICKS
+   itself (fault_buffer.h) derives from FAULT_BUFFER_LOCAL_DEPTH_TICKS,
+   which that header's own comment already flags as "provisional". */
+#define FAULT_BUFFER_LIVENESS_GRACE_TICKS (FAULT_BUFFER_LIVENESS_WINDOW_TICKS / 2u)
 
+/*
+ * Graded (not boolean) liveness confidence for board_id, in [0.0, 1.0],
+ * built directly on g_board_last_heard_tick/FAULT_BUFFER_LIVENESS_WINDOW_
+ * TICKS - the same underlying last-heard timestamp board_is_live() below
+ * already uses, not a second/duplicate liveness mechanism. Public (unlike
+ * board_is_live()) because consensus_weighting.c's caller needs a graded
+ * signal to gate vote submission on, not just a yes/no.
+ *
+ * Model: a simplified, deadline-based approximation of the general phi-
+ * accrual failure detector pattern (Hayashibara et al., "The phi Accrual
+ * Failure Detector", SRDS 2004) - phi-accrual computes suspicion from the
+ * observed distribution of inter-arrival times; this fixed-tick RTOS
+ * doesn't need that machinery, because under nominal operation inter-
+ * arrival time IS the fixed tick period (BOARD_TICK_DELAY_MS), so a
+ * fixed deadline curve captures the same "confidence falls as time-since-
+ * last-heard grows" shape without tracking a distribution:
+ *
+ *   age <= GRACE_TICKS              -> confidence = 1.0 (full trust)
+ *   GRACE_TICKS < age <= WINDOW     -> confidence ramps linearly to just
+ *                                       above 0 (still "live" by the
+ *                                       boolean board_is_live() below,
+ *                                       which only requires confidence > 0)
+ *   age > WINDOW, or never heard    -> confidence = 0.0 (not live)
+ *
+ * IMPORTANT CAVEAT - stated here, not just implied: perfectly
+ * distinguishing "this board crashed" from "this board is merely slow"
+ * is provably impossible in an asynchronous system (Fischer, Lynch &
+ * Paterson, "Impossibility of Distributed Consensus with One Faulty
+ * Process", 1985 - the FLP impossibility result). This function is a
+ * BOUNDED-RISK APPROXIMATION, not a certainty: a board silent for
+ * slightly longer than its window is treated as unreachable even though
+ * it could in principle still be alive and about to resume, and a board
+ * that has just barely stayed within its window is treated as trustworthy
+ * even though it could be about to go dark. The risk this approximation
+ * accepts is bounded by FAULT_BUFFER_LIVENESS_WINDOW_TICKS/GRACE_TICKS's
+ * width, not eliminated - choosing those constants is choosing how much
+ * of that unavoidable risk to accept, not whether to accept any.
+ */
+float fault_buffer_board_liveness_confidence(uint8_t board_id, uint32_t now)
+{
+    uint32_t last_heard;
+    uint32_t age;
+    uint32_t ramp_span;
+
+    if(board_id >= FAULT_BUFFER_NUM_BOARDS)
+        return 0.0f;
+
+    last_heard = g_board_last_heard_tick[board_id];
     if(last_heard == FAULT_BUFFER_BOARD_NEVER_HEARD)
-        return 0u;
+        return 0.0f;
 
     /* now should never be behind last_heard, but don't underflow if a
        caller ever passes a stale "now" - treat that as maximally live. */
     age = (now >= last_heard) ? (now - last_heard) : 0u;
 
-    return (age <= FAULT_BUFFER_LIVENESS_WINDOW_TICKS) ? 1u : 0u;
+    if(age <= FAULT_BUFFER_LIVENESS_GRACE_TICKS)
+        return 1.0f;
+
+    if(age > FAULT_BUFFER_LIVENESS_WINDOW_TICKS)
+        return 0.0f;
+
+    /* Linear ramp from just-under-1.0 down to just-above-0.0 across
+       (GRACE_TICKS, WINDOW_TICKS]. Denominator is span+1, not span, so
+       age == WINDOW_TICKS lands strictly above 0 - this is what keeps
+       board_is_live()'s "age <= WINDOW_TICKS" boolean below exactly
+       equivalent to "confidence > 0.0f", rather than the two definitions
+       silently disagreeing at their shared boundary tick. */
+    ramp_span = FAULT_BUFFER_LIVENESS_WINDOW_TICKS - FAULT_BUFFER_LIVENESS_GRACE_TICKS;
+    return 1.0f - (float)(age - FAULT_BUFFER_LIVENESS_GRACE_TICKS) / (float)(ramp_span + 1u);
+}
+
+/* Boolean liveness, as used by fault_buffer_fuse()'s N_live/quorum math -
+   a coarser question ("does this board count toward Byzantine quorum at
+   all this round?") than the graded confidence above, and kept boolean
+   deliberately: N_live needs a hard yes/no to sum into an integer team
+   count, not a confidence-weighted fraction. Defined as confidence > 0.0f
+   so there is exactly one underlying liveness computation in this file,
+   not two that could drift apart - see fault_buffer_board_liveness_
+   confidence()'s own doc for why this equivalence holds exactly at their
+   shared boundary tick (age == FAULT_BUFFER_LIVENESS_WINDOW_TICKS). */
+static uint8_t board_is_live(uint8_t board_id, uint32_t now)
+{
+    return (fault_buffer_board_liveness_confidence(board_id, now) > 0.0f) ? 1u : 0u;
 }
 
 /* Teams hosted on board_id - g_teams_per_board for every board except
