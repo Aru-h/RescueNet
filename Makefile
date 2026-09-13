@@ -52,7 +52,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity check-fault-comms-receive check-fault-comms-broadcast-pacing check-fault-comms-abort-gate check-recovery-predictor-stress check-realloc-gate check-environment-e2e-stress check-consensus-weighting check-mission-link-status-gate
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-evidence-vector-parity check-fault-comms-receive check-fault-comms-broadcast-pacing check-fault-comms-abort-gate check-recovery-predictor-stress check-realloc-gate check-environment-e2e-stress check-consensus-weighting check-mission-link-status-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness
 
 all: $(TARGET) $(LABELER)
 
@@ -249,7 +249,7 @@ clean:
 	rm -rf $(BOARD_OBJ_DIR) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
 	rm -f $(TWO_BOARD_HARNESS_BIN) $(EVIDENCE_VECTOR_PARITY_SELFTEST_BIN) \
 		$(FAULT_COMMS_RECEIVE_SELFTEST_BIN) $(FAULT_COMMS_BROADCAST_PACING_TEST_BIN) \
-		$(FAULT_COMMS_ABORT_GATE_TEST_BIN) $(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) $(CONSENSUS_WEIGHTING_SELFTEST_BIN) $(MISSION_LINK_STATUS_GATE_TEST_BIN)
+		$(FAULT_COMMS_ABORT_GATE_TEST_BIN) $(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) $(CONSENSUS_WEIGHTING_SELFTEST_BIN) $(MISSION_LINK_STATUS_GATE_TEST_BIN) $(RECOVERY_MANAGER_PERSISTENCE_SELFTEST_BIN)
 
 # --- Pico compile check --------------------------------------------------
 # Mirrors check-board-compile/-link above, same class of check now that
@@ -667,6 +667,37 @@ check-realloc-gate:
 		$(TOOLS_DIR)/realloc_gate_test_stubs.c \
 		$(CORE_DIR)/allocator.c $(CORE_DIR)/recovery_manager.c $(CORE_DIR)/mission_state.c $(LDFLAGS)
 	@./$(REALLOC_GATE_TEST_BIN)
+
+# --- recovery_manager.c persistence-streak selftest -------------------------
+# core/recovery_manager.c's recovery_manager_persistence_streak_step()
+# (hard-consecutive-tick mechanism) AND its EXPERIMENTAL, not-adopted
+# bounded-forgiveness sibling - see laptop/tools/recovery_manager_
+# persistence_selftest.c's own header doc. Pre-existing file that had
+# no Makefile target at all until now - a real, unrelated gap, filled
+# here rather than left as a second loose end alongside item 8's work.
+RECOVERY_MANAGER_PERSISTENCE_SELFTEST_BIN = build/recovery_manager_persistence_selftest
+
+check-recovery-manager-persistence:
+	@mkdir -p build
+	@echo "  CC      $(TOOLS_DIR)/recovery_manager_persistence_selftest.c"
+	@$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) \
+		-o $(RECOVERY_MANAGER_PERSISTENCE_SELFTEST_BIN) \
+		$(TOOLS_DIR)/recovery_manager_persistence_selftest.c \
+		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@./$(RECOVERY_MANAGER_PERSISTENCE_SELFTEST_BIN)
+
+# --- Persistence bounded-forgiveness ablation --------------------------------
+# Python, not C - real false-reject/false-accept validation of the
+# bounded-forgiveness variant against the SAME methodology that tuned
+# FAULT_PERSISTENCE_TRIP_TICKS=8 (simulator ground truth + evidence_
+# channels.py, no trained model) - see laptop/tools/persistence_
+# bounded_forgiveness_ablation.py's own header doc for the measured
+# verdict. Requires tron_snapshot_dataset.csv with --fault-profile=
+# combined fault injection, same as check-environment-e2e-stress - not
+# run automatically by this target for the same reason (slow dataset
+# regen, analysis script not a pass/fail gate).
+check-persistence-bounded-forgiveness:
+	python3 $(TOOLS_DIR)/persistence_bounded_forgiveness_ablation.py
 
 # --- Environment-class end-to-end escalation check ---------------------------
 # Python, not C - reuses the Config A sklearn pipeline (same as this

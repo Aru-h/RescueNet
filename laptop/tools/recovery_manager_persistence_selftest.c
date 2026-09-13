@@ -193,6 +193,81 @@ static void test_saturates_without_overflow(void)
     CHECK(streak == 255u);
 }
 
+/* ---------------------------------------------------------------
+ * 6. Bounded-forgiveness variant (recovery_manager_persistence_streak_
+ *    step_bounded_forgiveness() - EXPERIMENTAL, NOT the production
+ *    mechanism, see that function's own doc for the full measured
+ *    verdict against real simulator data, laptop/tools/persistence_
+ *    bounded_forgiveness_ablation.py). Confirms the two behaviors that
+ *    define it, on concrete sequences:
+ *      (a) it closes the dip-every-Nth-tick pattern the hard-reset
+ *          mechanism (tests 1-5 above) is vulnerable to;
+ *      (b) it still hard-resets on two CONSECUTIVE misses, so it is
+ *          not an unlimited-forgiveness mechanism either.
+ * --------------------------------------------------------------- */
+static uint8_t run_sequence_bounded_forgiveness(const float *confidences, int n)
+{
+    uint8_t streak = 0u;
+    uint8_t was_last_miss = 0u;
+    for (int i = 0; i < n; i++)
+        streak = recovery_manager_persistence_streak_step_bounded_forgiveness(
+            streak, confidences[i], &was_last_miss);
+    return streak;
+}
+
+static void test_bounded_forgiveness_closes_dip_every_nth_tick(void)
+{
+    /* Same dip-every-7th-tick pattern confirmed exploitable against the
+       hard-reset mechanism earlier this session (recovery_predictor_
+       stress_test.c's scenario 2: max streak reached there was capped
+       well below FAULT_PERSISTENCE_TRIP_TICKS, forever). The bounded-
+       forgiveness variant must NOT be defeated by it - one isolated
+       miss every 7 ticks is never two consecutive misses. */
+    float seq[80];
+    for (int i = 0; i < 80; i++)
+        seq[i] = ((i + 1) % 7 == 0) ? 0.0f : 0.85f;
+
+    uint8_t streak = 0u;
+    uint8_t was_last_miss = 0u;
+    uint8_t max_streak = 0u;
+    int trip_tick = -1;
+    for (int i = 0; i < 80; i++)
+    {
+        streak = recovery_manager_persistence_streak_step_bounded_forgiveness(
+            streak, seq[i], &was_last_miss);
+        if (streak > max_streak)
+            max_streak = streak;
+        if (trip_tick < 0 && streak >= FAULT_PERSISTENCE_TRIP_TICKS)
+            trip_tick = i + 1;
+    }
+
+    CHECK(trip_tick > 0); /* DOES trip, unlike the hard-reset mechanism on this exact input */
+    CHECK(max_streak >= FAULT_PERSISTENCE_TRIP_TICKS);
+    CHECK(run_sequence_bounded_forgiveness(seq, 80) > 0u);
+}
+
+static void test_bounded_forgiveness_still_resets_on_two_consecutive_misses(void)
+{
+    float seq[12] = {0.85f, 0.85f, 0.85f, 0.85f, 0.85f, 0.0f, 0.0f, /* two misses in a row */
+                      0.85f, 0.85f, 0.85f, 0.85f, 0.85f};
+
+    uint8_t streak = 0u;
+    uint8_t was_last_miss = 0u;
+    for (int i = 0; i < 7; i++) /* through the two consecutive misses */
+        streak = recovery_manager_persistence_streak_step_bounded_forgiveness(
+            streak, seq[i], &was_last_miss);
+
+    CHECK(streak == 0u); /* fully reset - two consecutive misses are NOT forgiven */
+
+    /* One isolated miss (not two in a row) must NOT reset. */
+    uint8_t s2 = 3u;
+    uint8_t wlm2 = 0u;
+    s2 = recovery_manager_persistence_streak_step_bounded_forgiveness(s2, 0.0f, &wlm2);
+    CHECK(s2 == 3u); /* unchanged, not reset */
+    s2 = recovery_manager_persistence_streak_step_bounded_forgiveness(s2, 0.85f, &wlm2);
+    CHECK(s2 == 4u); /* resumes climbing normally right after the forgiven miss */
+}
+
 int main(void)
 {
     test_sustained_high_trips();
@@ -200,6 +275,8 @@ int main(void)
     test_noisy_trending_high_does_not_trip();
     test_floor_boundary_and_reset_at_the_edge();
     test_saturates_without_overflow();
+    test_bounded_forgiveness_closes_dip_every_nth_tick();
+    test_bounded_forgiveness_still_resets_on_two_consecutive_misses();
 
     if (g_failures == 0)
     {

@@ -1175,6 +1175,84 @@ uint8_t recovery_manager_persistence_streak_step(uint8_t streak, float confidenc
     return streak;
 }
 
+/*
+ * EXPERIMENTAL - MEASURED AND NOT ADOPTED. NOT called from predictor_
+ * persistence_streak_update()/evaluate_fault_predictor() below; this
+ * function exists purely so the variant it implements is real, tested
+ * code rather than a claim, exposed the same way recovery_manager_
+ * persistence_streak_step() above is exposed for its own selftest.
+ *
+ * Bounded-forgiveness variant: tolerates exactly ONE isolated below-
+ * floor tick without resetting the streak, but still hard-resets on
+ * two CONSECUTIVE misses - explicitly narrower than the proportional
+ * up/down decay counter recovery_manager_config.h:154-170 already
+ * documents as designed, measured, and REJECTED (that variant forgave
+ * every bad tick a little, in proportion, which let it forgive bursty
+ * noise just as generously as a real fault's brief dip - the exact
+ * failure mode this narrower variant was designed to avoid by only
+ * ever forgiving a single isolated miss, never a run of them).
+ *
+ * *was_last_miss is the caller-owned extra bit of state this variant
+ * needs beyond the plain streak counter (recovery_manager_persistence_
+ * streak_step() above needs none) - true if the immediately preceding
+ * tick was itself a miss. Caller must persist it across calls the same
+ * way the streak itself is persisted; there is no packed single-uint8_t
+ * form of this state, deliberately, so this stays as easy to reason
+ * about and unit-test as the sibling function above.
+ *
+ * MEASURED RESULT (laptop/tools/persistence_bounded_forgiveness_
+ * ablation.py, make check-persistence-bounded-forgiveness - real
+ * simulator data, evidence_channels.py's recomputed_anomaly_confidence
+ * against real fault_active_* ground truth, same methodology
+ * FAULT_PERSISTENCE_TRIP_TICKS=8 was itself tuned against, not a
+ * trained model):
+ *
+ *   - DOES fully close the specific dip-every-7th-tick adversarial
+ *     pattern found and confirmed exploitable against the hard-reset
+ *     mechanism this session (that pattern never lets the hard-reset
+ *     streak exceed 6; this variant reaches H=8 by tick 9 against the
+ *     identical input, every time).
+ *   - Does NOT meaningfully improve the general false-reject/false-
+ *     accept tradeoff on real simulator data at H=8: false-reject
+ *     46.7% vs. the shipped mechanism's 48.0% (a 1.3-point
+ *     improvement) but false-accept 10.8% vs. 7.5% (a 3.3-point
+ *     regression) - a worse trade than the improvement it buys, by
+ *     the exact same standard (matched-false-reject false-accept
+ *     comparison) recovery_manager_config.h already used to reject
+ *     the up/down variant. Smaller-magnitude version of the same
+ *     problem: bounding the forgiveness to one isolated tick instead
+ *     of unlimited proportional decay reduces how much noise gets
+ *     forgiven, but does not eliminate it - real noise under FAULT_
+ *     PROFILE_COMBINED's concurrent-fault-class background churn
+ *     still produces enough isolated single-tick blips for this to
+ *     cost more false-accept than it saves false-reject.
+ *
+ * Conclusion: closes the one specific exploit it was aimed at, but is
+ * NOT a net improvement on this dataset - left here as tested,
+ * documented, and explicitly not shipped, rather than silently
+ * discarded (same disposition as the up/down variant gets in recovery_
+ * manager_config.h) or adopted anyway despite the numbers.
+ */
+uint8_t recovery_manager_persistence_streak_step_bounded_forgiveness(
+    uint8_t streak, float confidence, uint8_t *was_last_miss)
+{
+    if(confidence >= FAULT_PERSISTENCE_FLOOR)
+    {
+        if(streak < UINT8_MAX)
+            streak++;
+        *was_last_miss = 0u;
+    }
+    else
+    {
+        if(*was_last_miss)
+            streak = 0u; /* second consecutive miss - hard reset */
+        /* else: first isolated miss - forgiven, streak unchanged */
+        *was_last_miss = 1u;
+    }
+
+    return streak;
+}
+
 static uint8_t predictor_persistence_streak_update(uint8_t team_id, float confidence)
 {
     RecoveryManagerTeamState_t *state = &g_recovery_state[team_id];
