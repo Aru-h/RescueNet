@@ -1073,6 +1073,13 @@ function drawFrame(frame, skipInspector) {
 function renderInspector() {
   const el = document.getElementById("mapInspector");
 
+  // An override result or in-progress status outranks the preview card:
+  // map redraws while waiting for the board's ack must not replace it.
+  if (overrideStatus) {
+    drawOverrideStatus(el);
+    return;
+  }
+
   if (pendingOverride) {
     const p = pendingOverride;
     const specName = SPEC_NAMES[p.teamIndex % SPEC_NAMES.length] || "team";
@@ -1150,6 +1157,7 @@ function handleMapClick(evt) {
 
 let dragState = null; 
 let pendingOverride = null; 
+let overrideStatus = null; // {title, detail, withOk} while an override status card is showing
 
 function mapCanvasCoords(evt) {
   const rect = mapCanvas.getBoundingClientRect();
@@ -1233,6 +1241,65 @@ function drawDragOverlay() {
   }
 }
 
+// Final and in-progress states reported by /api/board/override/status
+// (laptop/tools/telemetry_bridge.py OverrideTracker).
+const OVERRIDE_STATE_TEXT = {
+  sent: ["Waiting for the board…", "Sent to board 0 - waiting for it to acknowledge."],
+  relayed: ["Relayed…", "Board 0 forwarded it over LoRa - waiting for the team's board to confirm."],
+  applied: ["✓ Override Applied", "The team's board applied it. It takes effect on that board's next allocation pass."],
+  rejected_not_ready: ["⚠ Override Rejected", "A board hadn't finished its handshake yet, so nothing was changed. Try again once the board is ready."],
+  rejected_bad_team: ["⚠ Override Rejected", "The board doesn't recognize that team id, so nothing was changed."],
+  relay_failed: ["⚠ Override Not Delivered", "Board 0's radio queue was full, so the override never left it. Try again."],
+  unconfirmed: ["⚠ Override Unconfirmed", "No confirmation came back in time. It may or may not have been applied - the relay or its acknowledgement was probably lost on the radio."],
+};
+const OVERRIDE_FINAL_STATES = new Set(["applied", "rejected_not_ready", "rejected_bad_team", "relay_failed", "unconfirmed"]);
+
+function drawOverrideStatus(el) {
+  const { title, detail, withOk } = overrideStatus;
+  el.innerHTML = `
+    <div class="override-card">
+      <div class="override-title">${title}</div>
+      <div style="font-size:12.5px;">${detail}</div>
+      ${withOk ? `<div class="override-actions" style="margin-top:10px;">
+        <button id="overrideAckBtn" class="override-btn cancel">OK</button>
+      </div>` : ""}
+    </div>`;
+  if (withOk) {
+    document.getElementById("overrideAckBtn").addEventListener("click", () => {
+      overrideStatus = null;
+      pendingOverride = null;
+      selectedMarker = null;
+      renderInspector();
+    });
+  }
+}
+
+function showOverrideResult(title, detail, withOk) {
+  overrideStatus = { title, detail, withOk };
+  drawOverrideStatus(document.getElementById("mapInspector"));
+}
+
+function pollOverrideAck(teamId, incidentId) {
+  fetch(`/api/board/override/status?team_id=${teamId}`)
+    .then((resp) => resp.json())
+    .then((body) => {
+      const entry = body && body.override;
+      if (!entry || entry.incident_id !== incidentId) {
+        showOverrideResult("⚠ Override Status Unknown", (body && body.message) || "This override is no longer being tracked (a newer one for the same team replaced it).", true);
+        return;
+      }
+      const [title, text] = OVERRIDE_STATE_TEXT[entry.state] || ["Override status", entry.state];
+      const detail = `Team ${teamId} → Incident ${incidentId}: ${text}`;
+      if (OVERRIDE_FINAL_STATES.has(entry.state)) {
+        showOverrideResult(title, detail, true);
+      } else {
+        showOverrideResult(title, detail, false);
+        setTimeout(() => pollOverrideAck(teamId, incidentId), 500);
+      }
+    })
+    .catch((err) => showOverrideResult("⚠ Override Status Unknown", `Request error: ${err}`, true));
+}
+
 function confirmPendingOverride() {
   const el = document.getElementById("mapInspector");
   const p = pendingOverride;
@@ -1260,24 +1327,13 @@ function confirmPendingOverride() {
   })
     .then((resp) => resp.json().then((body) => ({ ok: resp.ok, body })))
     .then(({ ok, body }) => {
-      const title = ok ? "✓ Override Sent" : "⚠ Override Failed";
-      const detail = ok
-        ? `Team ${teamId} → Incident ${incidentId} sent to the board. It'll show up in ` +
-          `<code>g_incidents[].assigned_team</code> on the next tick once the board applies it.`
-        : (body && body.message) || "Unknown error";
-      el.innerHTML = `
-        <div class="override-card">
-          <div class="override-title">${title}</div>
-          <div style="font-size:12.5px;">${detail}</div>
-          <div class="override-actions" style="margin-top:10px;">
-            <button id="overrideAckBtn" class="override-btn cancel">OK</button>
-          </div>
-        </div>`;
-      document.getElementById("overrideAckBtn").addEventListener("click", () => {
-        pendingOverride = null;
-        selectedMarker = null;
-        renderInspector();
-      });
+      if (!ok) {
+        showOverrideResult("⚠ Override Failed", (body && body.message) || "Unknown error", true);
+        return;
+      }
+      // The POST only means the bytes left the laptop - wait for the
+      // board's acknowledgement (core/mission_link_override.h section 3).
+      pollOverrideAck(teamId, incidentId);
     })
     .catch((err) => {
       el.innerHTML = `
