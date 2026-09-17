@@ -205,7 +205,7 @@ int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
                           uint8_t frame_type, CommsPrecedence_t precedence,
                           const uint8_t *payload, uint8_t payload_len);
 
-/* Non-preemptive strict-priority TX dispatcher - the piece that
+/* Non-preemptive priority TX dispatcher - the piece that
    actually moves a cross-board send from "enqueued" to "on air".
    Meant to be called once per tick, from main_board.c's own tick
    loop, alongside the existing RX-poll call (sx1262_rx_poll()/
@@ -219,7 +219,9 @@ int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
    standalone before that HAL work exists), does nothing this tick.
    Otherwise, scans the 4 TX queues from COMMS_PRECEDENCE_FLASH down
    to COMMS_PRECEDENCE_ROUTINE, takes the oldest entry from the first
-   non-empty one, packs it (lora_frame_pack() - TX counter advances
+   non-empty one (except that ROUTINE gets a turn after a few PRIORITY
+   dispatches in a row while it waits, so CBBA load can't starve it -
+   see comms_transport_tx_dequeue_highest()), packs it (lora_frame_pack() - TX counter advances
    here, not at enqueue time), and hands it to lora_spi_transmit().
    At most one frame is dispatched per call - real LoRa airtime for
    even a small frame spans many ticks at this project's tick rate, so
@@ -262,5 +264,32 @@ uint32_t comms_transport_channel_busy_until_tick(void);
  * returns 0 if the inbox is empty.  Does NOT remove the frame.
  * Use this to check ownership before calling comms_transport_poll_received(). */
 int comms_transport_peek_frame_type(uint8_t *out_frame_type);
+
+/* Bit for frame_type in the type masks below (LORA_FRAME_TYPE_* < 32). */
+#define COMMS_FRAME_TYPE_BIT(frame_type) ((uint32_t)1u << (frame_type))
+
+/* Like comms_transport_poll_received(), but takes the OLDEST frame whose
+   type is in type_mask from anywhere in the inbox, leaving every other
+   frame in place and in order. Returns 1 if one was found, 0 otherwise.
+
+   Exists because every receiver used to peek the head and stop at the
+   first frame type it didn't own ("leave it for the next consumer"). That
+   only works while every consumer runs every tick: in both boards' boot
+   wait loops only mission_link_task_step() runs, so one CBBA frame from a
+   peer that is already mid-mission sat at the head forever and the
+   handshake Req / roster behind it were never read - boot hung. Measured
+   in a two-process harness: board 1 never applied its roster once board 0
+   was sending CBBA. */
+int comms_transport_poll_received_types(uint32_t type_mask,
+                                         uint8_t *out_sender_team_id,
+                                         uint8_t *out_frame_type,
+                                         uint8_t *out_payload,
+                                         uint8_t *out_payload_len);
+
+/* Drops every inbox frame whose type is NOT in keep_type_mask; returns how
+   many were dropped. For the boot wait loops: before the simulation
+   starts nothing reads CBBA/fault traffic, and left alone it fills the
+   16-slot inbox so the frames boot is waiting for get refused. */
+uint32_t comms_transport_discard_received_except(uint32_t keep_type_mask);
 
 #endif /* COMMS_TRANSPORT_H */

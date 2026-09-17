@@ -184,3 +184,78 @@ int mission_link_override_route_or_apply(const MissionLinkOverride_t *msg)
                                  payload,
                                  (uint8_t)MISSION_LINK_OVERRIDE_PAYLOAD_SIZE);
 }
+
+/* ---------------------------------------------------------------
+ * Acknowledgement codec - see mission_link_override.h section 3.
+ * ---------------------------------------------------------------
+ */
+
+void mission_link_override_pack_ack_payload(const MissionLinkOverrideAck_t *ack,
+                                             uint8_t *out_payload)
+{
+    const uint8_t *src = (const uint8_t *)ack;
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_OVERRIDE_ACK_PAYLOAD_SIZE; i++)
+    {
+        out_payload[i] = src[i];
+    }
+}
+
+void mission_link_override_parse_ack_payload(const uint8_t *payload,
+                                              MissionLinkOverrideAck_t *out)
+{
+    uint8_t *dst = (uint8_t *)out;
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_OVERRIDE_ACK_PAYLOAD_SIZE; i++)
+    {
+        dst[i] = payload[i];
+    }
+}
+
+uint32_t mission_link_override_pack_ack(const MissionLinkOverrideAck_t *ack,
+                                         uint8_t *out_buf)
+{
+    uint8_t *payload_start = &out_buf[2];
+
+    out_buf[0] = MISSION_LINK_OVERRIDE_ACK_MAGIC0;
+    out_buf[1] = MISSION_LINK_OVERRIDE_ACK_MAGIC1;
+
+    mission_link_override_pack_ack_payload(ack, payload_start);
+
+    out_buf[2u + MISSION_LINK_OVERRIDE_ACK_PAYLOAD_SIZE] =
+        override_checksum(payload_start, MISSION_LINK_OVERRIDE_ACK_PAYLOAD_SIZE);
+
+    return MISSION_LINK_OVERRIDE_ACK_WIRE_SIZE;
+}
+
+int mission_link_override_parse_ack(const uint8_t *buf, uint32_t buf_len,
+                                     MissionLinkOverrideAck_t *out)
+{
+    if (buf_len < 2u)
+    {
+        return 0;
+    }
+
+    if (buf[0] != MISSION_LINK_OVERRIDE_ACK_MAGIC0 ||
+        buf[1] != MISSION_LINK_OVERRIDE_ACK_MAGIC1)
+    {
+        return -1;
+    }
+
+    if (buf_len < MISSION_LINK_OVERRIDE_ACK_WIRE_SIZE)
+    {
+        return 0;
+    }
+
+    if (buf[2u + MISSION_LINK_OVERRIDE_ACK_PAYLOAD_SIZE] !=
+        override_checksum(&buf[2], MISSION_LINK_OVERRIDE_ACK_PAYLOAD_SIZE))
+    {
+        return -1;
+    }
+
+    mission_link_override_parse_ack_payload(&buf[2], out);
+
+    return 1;
+}

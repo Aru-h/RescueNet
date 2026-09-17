@@ -70,10 +70,11 @@
  * Build:
  *   gcc -std=gnu11 -Wall -Wextra -Icore -Ilaptop \
  *       -Icore/vendor/sx126x_driver/src \
- *       -o sx1262_rx_selftest laptop/tools/sx1262_rx_selftest.c \
+ *       -o sx1262_rx_selftest laptop/tools/sx1262_rx_selftest_dk.c \
  *       core/aead_chacha20poly1305.c core/allocator.c core/cbba.c \
  *       core/chacha20.c core/comms_transport.c core/environment.c \
- *       core/fault_config.c core/fault_injector.c core/grid.c \
+ *       core/fault_buffer.c core/fault_comms.c core/fault_config.c \
+ *       core/fault_injector.c core/fault_predictor.c core/grid.c \
  *       core/incident.c core/lora_crypto.c core/lora_frame.c \
  *       core/mission_execution_twin.c core/mission_link.c \
  *       core/mission_link_handshake.c core/mission_link_override.c \

@@ -505,6 +505,20 @@ void board_incident_cache_remove(uint32_t incident_id)
  * ---------------------------------------------------------------
  */
 
+/* Counts whole-message rejects below. Both reject paths are silent by
+   design (no logging in portable core/), which leaves a board that gates
+   its boot on mission_link_task_any_roster_applied() unable to tell "a
+   roster was rejected" apart from "no roster ever arrived" - the two look
+   identical from outside, and both boards' roster-wait loops block forever
+   on either. This counter is what lets platform code surface that
+   difference; nothing in core/ acts on it. */
+static uint32_t g_roster_reject_count;
+
+uint32_t mission_link_roster_reject_count(void)
+{
+    return g_roster_reject_count;
+}
+
 void mission_link_apply_roster(const MissionLinkRoster_t *msg)
 {
     TeamState_t *team;
@@ -514,6 +528,7 @@ void mission_link_apply_roster(const MissionLinkRoster_t *msg)
         /* Out-of-range team_id: nothing on this board to bootstrap.
            Defensive only - mission generation on the laptop side
            guarantees valid team_id values in practice. */
+        g_roster_reject_count++;
         return;
     }
 
@@ -531,6 +546,7 @@ void mission_link_apply_roster(const MissionLinkRoster_t *msg)
            any future bug upstream) would silently become an out-of-
            bounds array index the first time this team tries to path
            anywhere. */
+        g_roster_reject_count++;
         return;
     }
 

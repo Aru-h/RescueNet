@@ -75,7 +75,21 @@
  *    HARNESS_MAX_ITERATIONS raised to 30000 (a real passing run lands
  *    around iteration 10000-11000, confirmed empirically, not
  *    guessed).
- * All four were found by actually running this harness repeatedly and
+ * 5. (4)'s fix was the same mistake as (2), one level up: any
+ *    ITERATION cap is a real-time guess between two unsynchronized
+ *    processes. Board 1's loop is a non-blocking spin, so 30000
+ *    iterations was only ~0.1s of wall time; passing runs landed
+ *    anywhere from ~1800 to ~17600, and whenever board 0 was
+ *    descheduled long enough, board 1 burned its whole budget with
+ *    nothing wrong on the wire - failed 1/25 in a plain loop, 2/800
+ *    under parallel load, and 100% with an injected 300ms board-0
+ *    stall. Instrumented failures showed zero rejects, resyncs, or
+ *    delivery failures: board 0 had injected the roster (iteration
+ *    11 and 34) after board 1 had already given up. Fix: both loops
+ *    are bounded by HARNESS_WALL_CLOCK_BUDGET_MS instead, and board 0
+ *    stops as soon as board 1 closes its end of the socket (so a
+ *    passing run still takes a fraction of a second, not the budget).
+ * All five were found by actually running this harness repeatedly and
  * tracing real output, not by reasoning about the code in the
  * abstract - each fix was verified with 30-80 consecutive passing
  * runs before being called done, not one passing run.
@@ -177,9 +191,11 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <sys/select.h>
+#include <poll.h>
 #include <errno.h>
 #include <signal.h>
 #include <fcntl.h>
+#include <time.h>
 
 #include "mission_state.h"
 #include "comms_transport.h"
@@ -187,6 +203,7 @@
 #include "mission_link.h"
 #include "mission_link_codec.h"
 #include "mission_link_handshake.h"
+#include "mission_link_override.h"
 
 extern void mission_link_task_init(void);
 extern void mission_link_task_step(void);
@@ -207,6 +224,48 @@ extern void comms_transport_dispatch_pending(void);
    this file's top comment on "why two processes"). */
 static int g_harness_socket_fd = -1;
 
+/* Set by harness_rx_pump() when read() reports EOF: the peer process
+   has closed its end (board 1 does so by exiting once it has a
+   verdict). Board 0 uses it to stop pumping - see run_board0(). */
+static int g_harness_peer_closed;
+
+/* Writes one whole frame, waiting up to a second for socket space instead
+   of dropping it. The socket is non-blocking for reads; a plain write()
+   failed with EAGAIN for most of board 1's frames whenever board 0 fell
+   behind under CPU load, so this harness's "radio" lost the very frames
+   being checked. The timeout keeps two processes that both stop reading
+   from deadlocking. A partial write is finished rather than abandoned,
+   since half a frame would desync the byte stream. */
+static int harness_socket_write_frame(int fd, const uint8_t *bytes, uint32_t len)
+{
+    uint32_t done = 0u;
+
+    while (done < len)
+    {
+        ssize_t n = write(fd, bytes + done, len - done);
+
+        if (n > 0)
+        {
+            done += (uint32_t)n;
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        {
+            struct pollfd pfd;
+
+            pfd.fd = fd;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            if (poll(&pfd, 1, 1000) > 0)
+            {
+                continue;
+            }
+        }
+        return -1;
+    }
+    return 0;
+}
+
 /* ---- lora_spi_transmit() override: writes onto this process's own
    socket fd, standing in for the SX1262 radio. Strong definition
    here supersedes comms_transport.c's own weak default (same
@@ -216,12 +275,7 @@ static int g_harness_socket_fd = -1;
    eventually will). ---- */
 int lora_spi_transmit(const uint8_t *frame_bytes, uint32_t frame_len)
 {
-    ssize_t written = write(g_harness_socket_fd, frame_bytes, frame_len);
-    if (written < 0 || (uint32_t)written != frame_len)
-    {
-        return -1;
-    }
-    return 0;
+    return harness_socket_write_frame(g_harness_socket_fd, frame_bytes, frame_len);
 }
 
 /* ---- board_usart1_read_byte() override: board 0 (parent) only -
@@ -243,7 +297,73 @@ static uint32_t g_harness_req_len;
 static uint8_t g_harness_roster_bytes[MISSION_LINK_ROSTER_WIRE_SIZE];
 static uint32_t g_harness_roster_len;
 
-static uint8_t g_harness_injected_bytes[MISSION_LINK_HANDSHAKE_REQ_WIRE_SIZE + MISSION_LINK_ROSTER_WIRE_SIZE];
+/* Two dashboard overrides injected right after the roster: one for a
+   team board 1 hosts (must be relayed as LORA_FRAME_TYPE_OVERRIDE and
+   applied there), one for a team board 0 hosts (must be applied locally
+   and never relayed). Before these were wired, board 0's USART1 parser
+   had no override case at all - the dashboard's override button did
+   nothing on hardware. */
+#define HARNESS_OVERRIDE_REMOTE_TEAM     6u
+#define HARNESS_OVERRIDE_REMOTE_INCIDENT 4242u
+#define HARNESS_OVERRIDE_LOCAL_TEAM      2u
+#define HARNESS_OVERRIDE_LOCAL_INCIDENT  4343u
+/* Sent ahead of the laptop's Req, so board 0 isn't ready yet: must be
+   answered NOT_READY and not applied. */
+#define HARNESS_OVERRIDE_EARLY_TEAM      3u
+#define HARNESS_OVERRIDE_EARLY_INCIDENT  99u
+static uint8_t g_harness_override_bytes[2u * MISSION_LINK_OVERRIDE_WIRE_SIZE];
+static uint32_t g_harness_override_len;
+
+static uint8_t g_harness_injected_bytes[MISSION_LINK_HANDSHAKE_REQ_WIRE_SIZE + MISSION_LINK_ROSTER_WIRE_SIZE +
+                                        3u * MISSION_LINK_OVERRIDE_WIRE_SIZE];
+
+/* Override acks board 0 wrote to USART1, picked out of its output through
+   the stub tm_putchar()'s hook with a sliding window. Only acks are kept:
+   board 0 also forwards board 1's frequent status heartbeats to USART1,
+   which filled a whole-output capture buffer before the last ack arrived
+   (found under CPU load). Board 1 has no USART1 writes. */
+#define HARNESS_MAX_ACKS 32u
+static MissionLinkOverrideAck_t g_harness_acks[HARNESS_MAX_ACKS];
+static uint32_t g_harness_ack_count;
+static uint8_t g_harness_usart1_window[MISSION_LINK_OVERRIDE_ACK_WIRE_SIZE];
+static uint32_t g_harness_usart1_window_len;
+
+void harness_usart1_tx_byte(int c)
+{
+    MissionLinkOverrideAck_t ack;
+
+    if (g_harness_usart1_window_len == sizeof(g_harness_usart1_window))
+    {
+        memmove(g_harness_usart1_window, g_harness_usart1_window + 1,
+                sizeof(g_harness_usart1_window) - 1u);
+        g_harness_usart1_window_len--;
+    }
+    g_harness_usart1_window[g_harness_usart1_window_len++] = (uint8_t)c;
+
+    if (g_harness_usart1_window_len == sizeof(g_harness_usart1_window) &&
+        mission_link_override_parse_ack(g_harness_usart1_window, g_harness_usart1_window_len,
+                                        &ack) == 1 &&
+        g_harness_ack_count < HARNESS_MAX_ACKS)
+    {
+        g_harness_acks[g_harness_ack_count++] = ack;
+    }
+}
+
+/* 1 if board 0 wrote an ack with exactly these fields to USART1. */
+static int harness_usart1_has_ack(uint8_t team_id, uint32_t incident_id, uint8_t result)
+{
+    uint32_t i;
+
+    for (i = 0u; i < g_harness_ack_count; i++)
+    {
+        if (g_harness_acks[i].team_id == team_id && g_harness_acks[i].incident_id == incident_id &&
+            g_harness_acks[i].result == result)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
 static uint32_t g_harness_injected_len;
 static uint32_t g_harness_injected_pos;
 
@@ -283,9 +403,13 @@ static void harness_rx_pump(void)
             buf[buf_len++] = chunk[i];
         }
     }
+    else if (n == 0)
+    {
+        g_harness_peer_closed = 1;
+    }
     /* n == 0 (peer closed) or n < 0 (EAGAIN/EWOULDBLOCK, nothing
        available right now) - both are "nothing new this pump", not
-       an error worth reporting; the caller's own iteration cap is
+       an error worth reporting; the caller's own wall-clock budget is
        what bounds how long this harness waits overall. */
 
     for (;;)
@@ -357,25 +481,27 @@ static void make_socket_nonblocking(int fd)
     }
 }
 
-#define HARNESS_MAX_ITERATIONS 30000 /* generous, not tight - the two
-                                         forked processes' loops have
-                                         no lockstep relationship (see
-                                         this file's own top comment),
-                                         and readiness alone can take
-                                         over 1000 iterations to
-                                         observe in practice (found by
-                                         tracing a real run) before
-                                         there's any roster relay/
-                                         receive/apply left to do at
-                                         all - a tight cap leaves too
-                                         little margin for that to
-                                         finish before either process's
-                                         own loop ends. */
+/* Wall-clock, not an iteration count - see this file's own top comment
+   (debugging history 2, 4 and 5) for why no iteration cap is a real
+   bound between two unsynchronized processes. Generous on purpose: a
+   passing run finishes in well under a second, so this only decides
+   how long a genuine failure takes to report. */
+#define HARNESS_WALL_CLOCK_BUDGET_MS 20000u
+
+static uint32_t harness_elapsed_ms(const struct timespec *start)
+{
+    struct timespec now;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint32_t)((now.tv_sec - start->tv_sec) * 1000 +
+                      (now.tv_nsec - start->tv_nsec) / 1000000);
+}
 
 /* ---- Board 1 (child): receiver + the actual pass/fail check ---- */
 static int run_board1(void)
 {
     int i;
+    struct timespec start;
     const uint8_t expect_team_id = 5u;
 
     g_comms_transport_this_board_id = 1u;
@@ -384,29 +510,57 @@ static int run_board1(void)
     mission_link_handshake_board_init(1u);
     mission_link_handshake_mark_local_ready();
 
-    for (i = 0; i < HARNESS_MAX_ITERATIONS; i++)
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (i = 0; harness_elapsed_ms(&start) < HARNESS_WALL_CLOCK_BUDGET_MS; i++)
     {
         harness_rx_pump();
         mission_link_task_step();
         comms_transport_dispatch_pending();
 
-        if (g_teams[expect_team_id].team_id == expect_team_id &&
-            g_teams[expect_team_id].loc_x == 1234 &&
-            g_teams[expect_team_id].loc_y == -500 &&
-            g_teams[expect_team_id].stamina > 79.4f && g_teams[expect_team_id].stamina < 80.6f)
+        if (g_cbba_agent_state[HARNESS_OVERRIDE_LOCAL_TEAM].override_active)
         {
-            fprintf(stderr, "[board1] PASS: g_teams[%u] roster applied correctly after "
-                             "a real cross-process handshake + LoRa relay + apply "
-                             "(iteration %d)\n", expect_team_id, i);
+            fprintf(stderr, "[board1] FAIL: board 0's local-team override was applied "
+                             "on board 1 (team %u)\n", HARNESS_OVERRIDE_LOCAL_TEAM);
+            return 1;
+        }
+
+        if (g_teams[expect_team_id].team_id == expect_team_id &&
+            g_teams[expect_team_id].loc_x == 29 &&
+            g_teams[expect_team_id].loc_y == 17 &&
+            g_teams[expect_team_id].stamina > 79.4f && g_teams[expect_team_id].stamina < 80.6f &&
+            g_cbba_agent_state[HARNESS_OVERRIDE_REMOTE_TEAM].override_active &&
+            g_cbba_agent_state[HARNESS_OVERRIDE_REMOTE_TEAM].override_incident_id ==
+                HARNESS_OVERRIDE_REMOTE_INCIDENT)
+        {
+            fprintf(stderr, "[board1] PASS: g_teams[%u] roster and team %u override applied "
+                             "correctly after a real cross-process handshake + LoRa relay + "
+                             "apply (iteration %d)\n",
+                    expect_team_id, HARNESS_OVERRIDE_REMOTE_TEAM, i);
+            /* Keep dispatching briefly so the override's APPLIED ack
+               actually goes out to board 0 before this process exits. */
+            {
+                struct timespec linger;
+                clock_gettime(CLOCK_MONOTONIC, &linger);
+                while (harness_elapsed_ms(&linger) < 300u)
+                {
+                    harness_rx_pump();
+                    mission_link_task_step();
+                    comms_transport_dispatch_pending();
+                }
+            }
             return 0;
         }
     }
 
-    fprintf(stderr, "[board1] FAIL: g_teams[%u] never reflected the expected roster "
-                     "within %d iterations (loc_x=%d loc_y=%d stamina=%f team_id=%u)\n",
-            expect_team_id, HARNESS_MAX_ITERATIONS,
+    fprintf(stderr, "[board1] FAIL: expected roster/override never landed within %u ms / "
+                     "%d iterations (g_teams[%u]: loc_x=%d loc_y=%d stamina=%f team_id=%u; "
+                     "team %u override_active=%u incident_id=%u)\n",
+            HARNESS_WALL_CLOCK_BUDGET_MS, i, expect_team_id,
             g_teams[expect_team_id].loc_x, g_teams[expect_team_id].loc_y,
-            (double)g_teams[expect_team_id].stamina, g_teams[expect_team_id].team_id);
+            (double)g_teams[expect_team_id].stamina, g_teams[expect_team_id].team_id,
+            HARNESS_OVERRIDE_REMOTE_TEAM,
+            (unsigned)g_cbba_agent_state[HARNESS_OVERRIDE_REMOTE_TEAM].override_active,
+            (unsigned)g_cbba_agent_state[HARNESS_OVERRIDE_REMOTE_TEAM].override_incident_id);
     return 1;
 }
 
@@ -414,6 +568,7 @@ static int run_board1(void)
 static int run_board0(void)
 {
     int i;
+    struct timespec start;
     int roster_injected = 0;
     MissionLinkRoster_t roster;
 
@@ -427,8 +582,15 @@ static int run_board0(void)
     roster.specialization = 0u;
     roster.equipment_flags = 0u;
     roster.fitness_tier = 0u;
-    roster.loc_x = 1234;
-    roster.loc_y = -500;
+    /* Must stay within GRID_WIDTH/GRID_HEIGHT: mission_link_apply_roster()
+       rejects an out-of-range location outright (whole-message reject, no
+       diagnostic), so out-of-grid sentinels here silently never apply and
+       this harness fails with g_teams[5] left all-zero. Distinctive
+       in-bounds values serve the same purpose - g_teams[] is zero-filled
+       in this harness, so any nonzero value still proves the data came
+       over the wire. */
+    roster.loc_x = 29;
+    roster.loc_y = 17;
     roster.stamina = 80u;
 
     {
@@ -439,6 +601,20 @@ static int run_board0(void)
 
         g_harness_req_len = mission_link_handshake_pack_req(&laptop_req, g_harness_req_bytes);
         g_harness_roster_len = mission_link_pack_roster(&roster, g_harness_roster_bytes);
+    }
+
+    {
+        MissionLinkOverride_t remote_override;
+        MissionLinkOverride_t local_override;
+
+        remote_override.team_id = HARNESS_OVERRIDE_REMOTE_TEAM;
+        remote_override.incident_id = HARNESS_OVERRIDE_REMOTE_INCIDENT;
+        local_override.team_id = HARNESS_OVERRIDE_LOCAL_TEAM;
+        local_override.incident_id = HARNESS_OVERRIDE_LOCAL_INCIDENT;
+
+        g_harness_override_len = mission_link_override_pack(&remote_override, g_harness_override_bytes);
+        g_harness_override_len += mission_link_override_pack(&local_override,
+                                                             g_harness_override_bytes + g_harness_override_len);
     }
 
     /* Req is available from iteration 0 - as if the laptop reached DK
@@ -457,14 +633,25 @@ static int run_board0(void)
        HandshakeCoordinator.all_ready would actually be gated on (see
        laptop/tools/telemetry_bridge.py), not a guess at how long that
        might take. */
-    for (i = 0; i < HARNESS_MAX_ITERATIONS; i++)
+    /* Runs until board 1 closes its socket (it has a verdict - nothing
+       left for board 0 to relay) or the same wall-clock budget board 1
+       uses runs out, whichever comes first. */
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (i = 0; !g_harness_peer_closed &&
+                harness_elapsed_ms(&start) < HARNESS_WALL_CLOCK_BUDGET_MS; i++)
     {
         harness_rx_pump();
 
         if (i == 0)
         {
-            memcpy(g_harness_injected_bytes, g_harness_req_bytes, g_harness_req_len);
-            g_harness_injected_len = g_harness_req_len;
+            MissionLinkOverride_t early;
+
+            early.team_id = HARNESS_OVERRIDE_EARLY_TEAM;
+            early.incident_id = HARNESS_OVERRIDE_EARLY_INCIDENT;
+            g_harness_injected_len = mission_link_override_pack(&early, g_harness_injected_bytes);
+            memcpy(g_harness_injected_bytes + g_harness_injected_len, g_harness_req_bytes,
+                   g_harness_req_len);
+            g_harness_injected_len += g_harness_req_len;
         }
         else if (!roster_injected)
         {
@@ -486,6 +673,9 @@ static int run_board0(void)
                 memcpy(g_harness_injected_bytes + g_harness_injected_len,
                        g_harness_roster_bytes, g_harness_roster_len);
                 g_harness_injected_len += g_harness_roster_len;
+                memcpy(g_harness_injected_bytes + g_harness_injected_len,
+                       g_harness_override_bytes, g_harness_override_len);
+                g_harness_injected_len += g_harness_override_len;
                 roster_injected = 1;
             }
         }
@@ -494,11 +684,58 @@ static int run_board0(void)
         comms_transport_dispatch_pending();
     }
 
-    /* Board 0 has no local assertion of its own to make - its whole
-       job in this scenario is "receive from USART1, relay over LoRa"
-       - the real check lives on board 1, where the data actually has
-       to land. Board 0 always exits 0; run_board1()'s exit code is
-       what the parent actually waits on. */
+    /* The roster and remote override are checked on board 1, where they
+       have to land. Board 0's own check is the override pair: the team it
+       hosts must be applied here, and the team board 1 hosts must only
+       have been relayed, never applied locally. */
+    if (!g_cbba_agent_state[HARNESS_OVERRIDE_LOCAL_TEAM].override_active ||
+        g_cbba_agent_state[HARNESS_OVERRIDE_LOCAL_TEAM].override_incident_id !=
+            HARNESS_OVERRIDE_LOCAL_INCIDENT ||
+        g_cbba_agent_state[HARNESS_OVERRIDE_REMOTE_TEAM].override_active)
+    {
+        fprintf(stderr, "[board0] FAIL: override routing wrong (team %u active=%u incident=%u, "
+                         "want 1/%u; team %u active=%u, want 0)\n",
+                HARNESS_OVERRIDE_LOCAL_TEAM,
+                (unsigned)g_cbba_agent_state[HARNESS_OVERRIDE_LOCAL_TEAM].override_active,
+                (unsigned)g_cbba_agent_state[HARNESS_OVERRIDE_LOCAL_TEAM].override_incident_id,
+                HARNESS_OVERRIDE_LOCAL_INCIDENT, HARNESS_OVERRIDE_REMOTE_TEAM,
+                (unsigned)g_cbba_agent_state[HARNESS_OVERRIDE_REMOTE_TEAM].override_active);
+        return 1;
+    }
+
+    if (g_cbba_agent_state[HARNESS_OVERRIDE_EARLY_TEAM].override_active)
+    {
+        fprintf(stderr, "[board0] FAIL: override sent before the handshake was applied\n");
+        return 1;
+    }
+
+    /* The laptop must hear back about every override: NOT_READY for the
+       early one, APPLIED for the local one, and RELAYED then (forwarded
+       from board 1) APPLIED for the remote one. */
+    {
+        int early_nr = harness_usart1_has_ack(HARNESS_OVERRIDE_EARLY_TEAM, HARNESS_OVERRIDE_EARLY_INCIDENT,
+                                              MISSION_LINK_OVERRIDE_ACK_NOT_READY);
+        int local_ok = harness_usart1_has_ack(HARNESS_OVERRIDE_LOCAL_TEAM, HARNESS_OVERRIDE_LOCAL_INCIDENT,
+                                              MISSION_LINK_OVERRIDE_ACK_APPLIED);
+        int remote_relayed = harness_usart1_has_ack(HARNESS_OVERRIDE_REMOTE_TEAM,
+                                                    HARNESS_OVERRIDE_REMOTE_INCIDENT,
+                                                    MISSION_LINK_OVERRIDE_ACK_RELAYED);
+        int remote_ok = harness_usart1_has_ack(HARNESS_OVERRIDE_REMOTE_TEAM,
+                                               HARNESS_OVERRIDE_REMOTE_INCIDENT,
+                                               MISSION_LINK_OVERRIDE_ACK_APPLIED);
+
+        if (!early_nr || !local_ok || !remote_relayed || !remote_ok)
+        {
+            fprintf(stderr, "[board0] FAIL: override acks on USART1 (early NOT_READY=%d, local "
+                             "APPLIED=%d, remote RELAYED=%d, remote APPLIED=%d)\n",
+                    early_nr, local_ok, remote_relayed, remote_ok);
+            return 1;
+        }
+    }
+
+    fprintf(stderr, "[board0] PASS: team %u override applied locally, team %u only relayed, "
+                     "all acks reached USART1\n",
+            HARNESS_OVERRIDE_LOCAL_TEAM, HARNESS_OVERRIDE_REMOTE_TEAM);
     return 0;
 }
 
@@ -566,7 +803,7 @@ int main(void)
     }
 
     fprintf(stderr, "[harness] ALL CHECKS PASSED: real handshake + real LoRa-relayed "
-                     "roster delivery, across two separate OS processes connected by "
+                     "roster and override delivery, across two separate OS processes connected by "
                      "a real socket, using unmodified production mission-link code.\n");
     return 0;
 }

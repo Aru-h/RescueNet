@@ -66,20 +66,27 @@
  *                                       shape but didn't work through
  *                                       the multi-sender-under-one-
  *                                       key implication.
- *   byte 3..N-1       ciphertext       payload_len bytes, ChaCha20
+ *   byte 3..6         sender_epoch     sender's per-boot session epoch
+ *                                       (LE, AAD) - see core/lora_
+ *                                       crypto.h's top comment. Part of
+ *                                       the nonce, and how a receiver
+ *                                       tells a rebooted sender's new
+ *                                       session from its old one.
+ *   byte 7..N-1       ciphertext       payload_len bytes, ChaCha20
  *                                       keystream XOR plaintext (N =
- *                                       3 + payload_len)
+ *                                       7 + payload_len)
  *   byte N..N+15      poly1305_tag     16-byte RFC 8439 Poly1305 tag
- *                                       over AAD (bytes 0..2) +
+ *                                       over AAD (bytes 0..6) +
  *                                       ciphertext
- *   byte N+16..N+17   counter_frag     low 16 bits of the 32-bit
- *                                       per-sender counter used to
- *                                       build the AEAD nonce (LE) -
- *                                       receiver reconstructs the
- *                                       full value, see
- *                                       core/lora_crypto.h's
- *                                       lora_crypto_reconstruct_counter()
- *   byte N+18         checksum         additive sum mod 256 over the
+ *   byte N+16..N+19   counter          the full 32-bit per-sender
+ *                                       counter used to build the AEAD
+ *                                       nonce (LE). Was a 16-bit
+ *                                       fragment the receiver had to
+ *                                       reconstruct - see core/lora_
+ *                                       crypto.h lora_crypto_counter_
+ *                                       is_replay() for why that
+ *                                       stopped being safe.
+ *   byte N+20         checksum         additive sum mod 256 over the
  *                                       ciphertext bytes only (NOT
  *                                       the tag/counter_frag) - a
  *                                       cheap pre-filter to reject
@@ -110,6 +117,12 @@
 
 #define LORA_FRAME_TYPE_CBBA          0u
 #define LORA_FRAME_TYPE_MISSION_LINK  1u
+#define LORA_FRAME_TYPE_SESSION       6u /* core/lora_crypto.h's session
+                                             control (HELLO/CHALLENGE/
+                                             RESPONSE) - handled inside
+                                             lora_frame_try_parse()/core/
+                                             comms_transport.c, never
+                                             delivered to the inbox. */
 #define LORA_FRAME_TYPE_HANDSHAKE     2u /* core/mission_link_handshake.h's
                                              DK<->board-1 liveness handshake.
                                              Canonical home for this value
@@ -149,6 +162,42 @@
                                              tally (fault_buffer_record_
                                              remote_vote()) on the
                                              receiving side. */
+#define LORA_FRAME_TYPE_OVERRIDE        5u /* core/mission_link_override.c:
+                                             DK->hosting board relay of a
+                                             laptop override (5-byte
+                                             MissionLinkOverride_t). Was
+                                             3 in mission_link_override.h,
+                                             colliding with FAULT_
+                                             BROADCAST. Applied by the
+                                             hosting board's
+                                             mission_link_task.c. */
+#define LORA_FRAME_TYPE_OVERRIDE_ACK    7u /* hosting board -> board 0:
+                                             6-byte MissionLinkOverrideAck_t
+                                             (core/mission_link_override.h
+                                             section 3), forwarded to the
+                                             laptop over USART1. */
+
+/* Every LORA_FRAME_TYPE_* above must be distinct and < 32 (comms_
+   transport.h's COMMS_FRAME_TYPE_BIT() mask). Two equal values would
+   OR to fewer bits than they sum to, so a duplicate fails here. */
+#define LORA_FRAME_TYPE_BIT_(t) ((uint32_t)1u << (t))
+_Static_assert((LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_CBBA) |
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_MISSION_LINK) |
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_HANDSHAKE) |
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_FAULT_BROADCAST) |
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_FAULT_VOTE) |
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_OVERRIDE) |
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_OVERRIDE_ACK) |
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_SESSION)) ==
+               (LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_CBBA) +
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_MISSION_LINK) +
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_HANDSHAKE) +
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_FAULT_BROADCAST) +
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_FAULT_VOTE) +
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_OVERRIDE) +
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_OVERRIDE_ACK) +
+                LORA_FRAME_TYPE_BIT_(LORA_FRAME_TYPE_SESSION)),
+               "LORA_FRAME_TYPE_* values must be distinct");
 
 /*
  * CBBAMessage_t (core/cbba.c, private to that file) is the largest
@@ -180,29 +229,31 @@
 _Static_assert(LORA_FRAME_MAX_PAYLOAD <= AEAD_CHACHA20POLY1305_MAX_DATA_BYTES,
                "LORA_FRAME_MAX_PAYLOAD must not exceed what core/aead_chacha20poly1305.h was sized for");
 
-/* frame_type + payload_len + sender_board_id - see this header's
-   "Encryption" section above for why sender_board_id had to join the
-   two original fields. */
-#define LORA_FRAME_HEADER_SIZE ((uint32_t)3u)
+/* frame_type + payload_len + sender_board_id + sender_epoch(4) - see
+   this header's "Encryption" section above for why sender_board_id and
+   then sender_epoch had to join the two original fields. */
+#define LORA_FRAME_HEADER_SIZE ((uint32_t)7u)
 
 /* poly1305_tag + counter_frag + checksum - see this header's
    "Encryption" section above for each field's size/purpose. */
 #define LORA_FRAME_TAG_SIZE          16u
-#define LORA_FRAME_COUNTER_FRAG_SIZE 2u
+#define LORA_FRAME_COUNTER_FRAG_SIZE 4u /* full counter - name kept */
 #define LORA_FRAME_CHECKSUM_SIZE     1u
 #define LORA_FRAME_TRAILER_SIZE \
     ((uint32_t)(LORA_FRAME_TAG_SIZE + LORA_FRAME_COUNTER_FRAG_SIZE + LORA_FRAME_CHECKSUM_SIZE))
 
 /* Smallest possible on-air frame: header + trailer, zero payload
    bytes. Unlike the pre-encryption envelope, this is NOT small
-   (22 bytes, not 3) - AEAD overhead (tag + counter_frag + checksum)
+   (28 bytes, not 7) - AEAD overhead (tag + counter_frag + checksum)
    is paid even on an empty payload, since the tag authenticates the
    AAD header fields regardless of payload size. */
 #define LORA_FRAME_MIN_WIRE_SIZE (LORA_FRAME_HEADER_SIZE + LORA_FRAME_TRAILER_SIZE)
 
 /* Largest possible on-air frame: header + a full LORA_FRAME_MAX_PAYLOAD
    payload (as ciphertext, same length as plaintext - ChaCha20 is a
-   stream cipher) + trailer. 3 + 144 + 19 = 166 bytes - see this
+   stream cipher) + trailer. 7 + 144 + 21 = 172 bytes (was 166 before
+   the 4-byte sender_epoch joined the header and the counter went from
+   16 to 32 bits on the wire) - see this
    header's "Encryption" section above on why this is 166, not the
    LoRa-encryption reference doc's original 165-byte sketch (the
    +1 is the sender_board_id field that sketch didn't account for).
@@ -263,12 +314,11 @@ uint32_t lora_frame_pack(uint8_t frame_type, uint8_t sender_board_id,
 /*
  * Parses one frame out of buf (buf_len bytes available): checks the
  * cheap checksum pre-filter, then AEAD-decrypts+verifies (see this
- * header's "Encryption" section above), reconstructing the sender's
- * full counter from the wire fragment via
- * core/lora_crypto.h's lora_crypto_reconstruct_counter() and, on a
- * successful verify, committing it via lora_crypto_accept_counter()
- * (which is also this function's replay-rejection mechanism - see
- * that function's own doc).
+ * header's "Encryption" section above), rejecting a counter at or below
+ * the sender's replay floor (core/lora_crypto.h lora_crypto_counter_is_
+ * replay()) and, on a successful verify, committing it via
+ * lora_crypto_accept_counter() - or, for a sender's new session, holding
+ * the frame until that session is confirmed (see lora_crypto.h).
  *
  * Returns:
  *    1  a complete, checksum-valid, AEAD-verified frame was found.
@@ -301,5 +351,34 @@ uint32_t lora_frame_pack(uint8_t frame_type, uint8_t sender_board_id,
 int lora_frame_try_parse(const uint8_t *buf, uint32_t buf_len,
                           uint8_t *out_type, uint8_t *out_sender_board_id,
                           uint8_t *out_payload, uint8_t *out_payload_len);
+
+/* Monotonic count of frames lora_frame_try_parse() rejected because the
+   AEAD tag did not verify (checksum and length rejects are NOT counted).
+   That branch is silent by design. (It used to also swallow every frame
+   from a peer that rebooted while this board stayed up - see core/
+   lora_crypto.h's top comment for that lockout and its fix.) A rising
+   count means something is sending frames this board cannot verify:
+   RF corruption that slips past the 8-bit checksum, a sender
+   using a different key, and a stream parser retrying misaligned bytes
+   (laptop/tools/two_board_harness.c) all land in the same branch.
+   Nothing in core/ acts on it; board code reports it. */
+uint32_t lora_frame_auth_fail_count(void);
+
+/* Monotonic count of frames lora_frame_try_parse() accepted (returned 1).
+   Lets a board stuck waiting tell "the radio hears authenticated peer
+   traffic" apart from "nothing has arrived at all". */
+uint32_t lora_frame_accept_count(void);
+
+/* Monotonic count of AEAD-VALID frames lora_frame_try_parse() held back
+   (returned -1) because they came from a sender's not-yet-confirmed new
+   session - see core/lora_crypto.h. Nonzero briefly after a peer reboots
+   (until its challenge RESPONSE arrives); a count that keeps climbing
+   means the challenge exchange is not completing. */
+uint32_t lora_frame_session_hold_count(void);
+
+/* Monotonic count of frames lora_frame_try_parse() rejected because their
+   counter was at or below the sender's replay floor for its confirmed
+   session (a duplicate or a replay). Not counted as an auth failure. */
+uint32_t lora_frame_replay_count(void);
 
 #endif /* LORA_FRAME_H */

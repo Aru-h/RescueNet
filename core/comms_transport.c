@@ -1,3 +1,5 @@
+#include <stddef.h>
+
 #include "comms_transport.h"
 #include "mission_state.h" /* g_current_tick */
 
@@ -251,9 +253,10 @@ static int comms_transport_inbox_push(uint8_t sender_team_id,
  * headroom, not a tight fit. ROUTINE (heartbeat/roster) arrives at a
  * much lower rate than CBBA bidding. Same tail-drop-when-full policy
  * the original single g_inbox already used, just applied per tier
- * now instead of to one shared buffer - see this project's design
- * notes on why strict-priority + tail-drop is the standard pairing
- * here, not something invented for this file.
+ * now instead of to one shared buffer. Two refinements, both found
+ * under sustained CBBA load: CBBA frames coalesce per sending team
+ * (see comms_transport_tx_enqueue()), and ROUTINE can't be starved by
+ * PRIORITY indefinitely (see comms_transport_tx_dequeue_highest()).
  */
 
 #ifndef COMMS_TRANSPORT_TX_QUEUE_CAPACITY_FLASH
@@ -273,8 +276,17 @@ typedef struct
 {
     uint8_t frame_type;
     uint8_t payload_len;
+    uint8_t sender_team_id; /* local only - the CBBA coalescing key, see
+                               comms_transport_tx_enqueue() */
     uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
 } CommsTxEntry_t;
+
+/* ROUTINE may be passed over for PRIORITY this many dispatches in a row
+   while it has something waiting; the next dispatch then serves ROUTINE.
+   See comms_transport_tx_dequeue_highest(). */
+#ifndef COMMS_TRANSPORT_ROUTINE_STARVATION_LIMIT
+#define COMMS_TRANSPORT_ROUTINE_STARVATION_LIMIT 4u
+#endif
 
 typedef struct
 {
@@ -294,6 +306,27 @@ static CommsTxEntry_t g_tx_routine_slots[COMMS_TRANSPORT_TX_QUEUE_CAPACITY_ROUTI
    ROUTINE..FLASH in that numeric order (see comms_precedence.h). */
 static CommsTxQueue_t g_tx_queues[COMMS_PRECEDENCE_COUNT];
 
+/* 1 if the previous dispatch sent a session control frame - see
+   comms_transport_dispatch_pending(). */
+static uint8_t g_last_dispatch_was_session;
+
+/* Consecutive dispatches that served PRIORITY while ROUTINE was waiting. */
+static uint32_t g_routine_passed_over;
+
+static int comms_transport_tx_any_queued(void)
+{
+    uint32_t p;
+
+    for (p = 0u; p < (uint32_t)COMMS_PRECEDENCE_COUNT; p++)
+    {
+        if (g_tx_queues[p].count > 0u)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void comms_transport_tx_queues_init(void)
 {
     g_tx_queues[COMMS_PRECEDENCE_ROUTINE].slots    = g_tx_routine_slots;
@@ -311,24 +344,58 @@ static void comms_transport_tx_queues_init(void)
         g_tx_queues[p].tail = 0u;
         g_tx_queues[p].count = 0u;
     }
+    g_routine_passed_over = 0u;
 }
 
 static int comms_transport_tx_enqueue(CommsPrecedence_t precedence,
+                                       uint8_t sender_team_id,
                                        uint8_t frame_type,
                                        const uint8_t *payload,
                                        uint8_t payload_len)
 {
     CommsTxQueue_t *q = &g_tx_queues[(uint32_t)precedence];
-    CommsTxEntry_t *slot;
+    CommsTxEntry_t *slot = NULL;
     uint8_t i;
 
-    if (q->count == q->capacity)
+    /* A CBBA frame is a team's whole current belief, so a newer one from
+       the same team supersedes one still waiting here: overwrite it in
+       place (keeping its position) instead of queueing both. Without
+       this, cbba_broadcast_local_teams() queues one frame per local team
+       every tick against one dispatch per tick, which kept this tier
+       permanently full - tail-dropping incident/fault relays sent later
+       in the same tick - with most of what did go out already stale.
+       The radio broadcasts, so one transmission reaches every board
+       regardless of which receiver_team_id each copy was sent to. */
+    if (frame_type == (uint8_t)LORA_FRAME_TYPE_CBBA)
     {
-        return -1; /* tail-drop: that tier's queue is full */
+        uint32_t n;
+
+        for (n = 0u; n < q->count; n++)
+        {
+            CommsTxEntry_t *queued = &q->slots[(q->tail + n) % q->capacity];
+
+            if (queued->frame_type == frame_type && queued->sender_team_id == sender_team_id)
+            {
+                slot = queued;
+                break;
+            }
+        }
     }
 
-    slot = &q->slots[q->head];
+    if (slot == NULL)
+    {
+        if (q->count == q->capacity)
+        {
+            return -1; /* tail-drop: that tier's queue is full */
+        }
+
+        slot = &q->slots[q->head];
+        q->head = (q->head + 1u) % q->capacity;
+        q->count++;
+    }
+
     slot->frame_type = frame_type;
+    slot->sender_team_id = sender_team_id;
     slot->payload_len = payload_len;
 
     for (i = 0u; i < payload_len; i++)
@@ -336,33 +403,57 @@ static int comms_transport_tx_enqueue(CommsPrecedence_t precedence,
         slot->payload[i] = payload[i];
     }
 
-    q->head = (q->head + 1u) % q->capacity;
-    q->count++;
-
     return 0;
 }
 
-/* Returns 1 and fills *out_entry if the highest-precedence non-empty
-   queue had something to pop, 0 if every queue is empty. Strict
-   priority: always checks FLASH first, then IMMEDIATE, PRIORITY,
-   ROUTINE - see comms_transport_dispatch_pending()'s own doc
-   (comms_transport.h) for why this is non-preemptive head-of-line
-   scheduling, not round-robin. */
+static void comms_transport_tx_pop(CommsTxQueue_t *q, CommsTxEntry_t *out_entry)
+{
+    *out_entry = q->slots[q->tail];
+    q->tail = (q->tail + 1u) % q->capacity;
+    q->count--;
+}
+
+/* Returns 1 and fills *out_entry if any queue had something to pop, 0 if
+   every queue is empty. Priority order - FLASH, IMMEDIATE, PRIORITY,
+   ROUTINE - with one exception: ROUTINE is not starved by PRIORITY
+   forever. CBBA bidding alone queues PRIORITY traffic faster than one
+   dispatch per tick drains it, so under strict priority a roster relay
+   or status heartbeat queued while a simulation runs never went out
+   (found by the two-board reboot harness: a rebooted board's roster
+   never arrived). After COMMS_TRANSPORT_ROUTINE_STARVATION_LIMIT
+   PRIORITY dispatches in a row with ROUTINE waiting, ROUTINE gets one.
+   FLASH and IMMEDIATE are never delayed by this. */
 static int comms_transport_tx_dequeue_highest(CommsTxEntry_t *out_entry)
 {
+    CommsTxQueue_t *routine = &g_tx_queues[(uint32_t)COMMS_PRECEDENCE_ROUTINE];
     int p;
 
     for (p = (int)COMMS_PRECEDENCE_FLASH; p >= (int)COMMS_PRECEDENCE_ROUTINE; p--)
     {
         CommsTxQueue_t *q = &g_tx_queues[(uint32_t)p];
 
-        if (q->count > 0u)
+        if (q->count == 0u)
         {
-            *out_entry = q->slots[q->tail];
-            q->tail = (q->tail + 1u) % q->capacity;
-            q->count--;
-            return 1;
+            continue;
         }
+
+        if (p == (int)COMMS_PRECEDENCE_PRIORITY && routine->count > 0u)
+        {
+            if (g_routine_passed_over >= COMMS_TRANSPORT_ROUTINE_STARVATION_LIMIT)
+            {
+                g_routine_passed_over = 0u;
+                comms_transport_tx_pop(routine, out_entry);
+                return 1;
+            }
+            g_routine_passed_over++;
+        }
+        else if (p == (int)COMMS_PRECEDENCE_ROUTINE)
+        {
+            g_routine_passed_over = 0u;
+        }
+
+        comms_transport_tx_pop(q, out_entry);
+        return 1;
     }
 
     return 0;
@@ -381,6 +472,12 @@ void comms_transport_init(void)
     g_inbox_count = 0u;
 
     comms_transport_tx_queues_init();
+    g_last_dispatch_was_session = 0u;
+
+    /* Session control frames (core/lora_crypto.h) addressed to another
+       board are ignored - needs this board's own id, which the caller
+       set just before calling this. */
+    lora_crypto_set_local_board_id(g_comms_transport_this_board_id);
 
     /* Channel starts idle as of right now, not "busy until 0" -
        matters if comms_transport_init() is ever called mid-run
@@ -530,10 +627,10 @@ int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
        (comms_transport.h) for why packing (and the crypto counter
        advance it does) is deliberately deferred to that point instead
        of happening here. sender_team_id has no wire representation
-       (see this header's own "Open question" note) and isn't needed
-       to pack or dispatch a cross-board frame, so it's intentionally
-       not part of the queued entry. */
-    return comms_transport_tx_enqueue(precedence, frame_type, payload, payload_len);
+       (see this header's own "Open question" note); the queued entry
+       keeps it only as the key for coalescing CBBA frames. */
+    return comms_transport_tx_enqueue(precedence, sender_team_id, frame_type,
+                                      payload, payload_len);
 }
 
 void comms_transport_dispatch_pending(void)
@@ -551,6 +648,37 @@ void comms_transport_dispatch_pending(void)
            radio actually frees up. */
         return;
     }
+
+    /* Session control (core/lora_crypto.h: reboot recovery HELLO/
+       CHALLENGE/RESPONSE) goes ahead of every precedence tier - until
+       it completes, a peer that rebooted has everything else it sends
+       held. But never twice in a row while data is waiting: answering a
+       CHALLENGE is triggered by received frames, so without this an
+       attacker replaying one recorded CHALLENGE per dispatch starved all
+       data TX (found by review: 200 dispatches, 200 session frames, 0 of
+       4 queued data frames sent). Alternating keeps at least every other
+       dispatch for data and still completes a recovery exchange within a
+       couple of dispatches. */
+    if (!(g_last_dispatch_was_session && comms_transport_tx_any_queued()))
+    {
+        uint8_t session_payload[LORA_CRYPTO_SESSION_PAYLOAD_SIZE];
+        uint8_t session_len;
+
+        if (lora_crypto_take_session_tx(session_payload, &session_len))
+        {
+            wire_len = lora_frame_pack(LORA_FRAME_TYPE_SESSION, g_comms_transport_this_board_id,
+                                        session_payload, session_len, wire_buf);
+            if (wire_len != 0u)
+            {
+                comms_transport_advance_channel_busy(wire_len);
+                (void)lora_spi_transmit(wire_buf, wire_len);
+            }
+            g_last_dispatch_was_session = 1u;
+            return;
+        }
+    }
+
+    g_last_dispatch_was_session = 0u;
 
     if (!comms_transport_tx_dequeue_highest(&entry))
     {
@@ -618,6 +746,83 @@ int comms_transport_poll_received(uint8_t *out_sender_team_id,
     return 1;
 }
 
+/* Same single-task-only concurrency rule as comms_transport_poll_received()
+ * above - see comms_transport_inbox_push()'s comment. */
+int comms_transport_poll_received_types(uint32_t type_mask,
+                                         uint8_t *out_sender_team_id,
+                                         uint8_t *out_frame_type,
+                                         uint8_t *out_payload,
+                                         uint8_t *out_payload_len)
+{
+    uint32_t k;
+
+    for (k = 0u; k < g_inbox_count; k++)
+    {
+        uint32_t idx = (g_inbox_tail + k) % COMMS_TRANSPORT_INBOX_CAPACITY;
+        CommsInboxEntry_t *slot = &g_inbox[idx];
+        uint32_t j;
+        uint8_t i;
+
+        if (slot->frame_type >= 32u ||
+            (type_mask & COMMS_FRAME_TYPE_BIT(slot->frame_type)) == 0u)
+        {
+            continue;
+        }
+
+        *out_sender_team_id = slot->sender_team_id;
+        *out_frame_type = slot->frame_type;
+        *out_payload_len = slot->payload_len;
+        for (i = 0u; i < slot->payload_len; i++)
+        {
+            out_payload[i] = slot->payload[i];
+        }
+
+        /* Close the gap: shift every later entry back one slot, so
+           the remaining frames keep their arrival order. */
+        for (j = k + 1u; j < g_inbox_count; j++)
+        {
+            g_inbox[(g_inbox_tail + j - 1u) % COMMS_TRANSPORT_INBOX_CAPACITY] =
+                g_inbox[(g_inbox_tail + j) % COMMS_TRANSPORT_INBOX_CAPACITY];
+        }
+        g_inbox_head = (g_inbox_head + COMMS_TRANSPORT_INBOX_CAPACITY - 1u) %
+                       COMMS_TRANSPORT_INBOX_CAPACITY;
+        g_inbox_count--;
+
+        return 1;
+    }
+
+    return 0;
+}
+
+uint32_t comms_transport_discard_received_except(uint32_t keep_type_mask)
+{
+    uint32_t k;
+    uint32_t kept = 0u;
+    uint32_t dropped;
+
+    for (k = 0u; k < g_inbox_count; k++)
+    {
+        const CommsInboxEntry_t *slot =
+            &g_inbox[(g_inbox_tail + k) % COMMS_TRANSPORT_INBOX_CAPACITY];
+
+        if (slot->frame_type < 32u &&
+            (keep_type_mask & COMMS_FRAME_TYPE_BIT(slot->frame_type)) != 0u)
+        {
+            if (kept != k)
+            {
+                g_inbox[(g_inbox_tail + kept) % COMMS_TRANSPORT_INBOX_CAPACITY] = *slot;
+            }
+            kept++;
+        }
+    }
+
+    dropped = g_inbox_count - kept;
+    g_inbox_count = kept;
+    g_inbox_head = (g_inbox_tail + kept) % COMMS_TRANSPORT_INBOX_CAPACITY;
+
+    return dropped;
+}
+
 /* Shares g_inbox_head/tail/count with comms_transport_inbox_push() - see
  * that function's concurrency-invariant comment above. Not yet safe to
  * call from a real ISR context caller pushing concurrently. */
@@ -643,6 +848,14 @@ int comms_transport_deliver_received(uint8_t frame_type, const uint8_t *payload,
     if(payload_len > LORA_FRAME_MAX_PAYLOAD)
     {
         return -1;
+    }
+    if(frame_type == LORA_FRAME_TYPE_SESSION)
+    {
+        /* Already fully handled inside lora_frame_try_parse() (core/
+           lora_crypto.h "Session control"). Must never reach the inbox:
+           mission_link_task.c's RX loop stops at the first frame type it
+           doesn't own, so a queued control frame would block it. */
+        return 0;
     }
     return comms_transport_inbox_push(COMMS_TRANSPORT_UNKNOWN_SENDER, frame_type,
                                        payload, payload_len);

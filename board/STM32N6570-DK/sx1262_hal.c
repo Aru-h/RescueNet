@@ -783,6 +783,34 @@ static int ensure_radio_configured(void)
     return 0;
 }
 
+/* Reads a 32-bit true random value from the SX1262's own RNG (RSSI noise
+   sampling, core/vendor/sx126x_driver's sx126x_get_random_numbers()),
+   for main_board.c's per-boot LoRa session epoch (core/lora_crypto.h
+   lora_crypto_set_tx_epoch()). That driver call leaves the radio in
+   standby, so RX is re-armed before returning. Returns 0 on success,
+   1 on any radio failure (*out untouched on failure). */
+int sx1262_hal_get_random_u32(uint32_t *out)
+{
+    uint32_t value;
+
+    if (ensure_radio_configured() != 0)
+    {
+        return 1;
+    }
+    if (sx126x_get_random_numbers(NULL, &value, 1u) != SX126X_STATUS_OK)
+    {
+        g_radio_configured = 0; /* radio state unknown - redo bring-up next use */
+        return 1;
+    }
+    if (sx1262_enter_rx() != 0)
+    {
+        g_radio_configured = 0;
+        return 1;
+    }
+    *out = value;
+    return 0;
+}
+
 int lora_spi_transmit(const uint8_t *frame_bytes, uint32_t frame_len)
 {
     sx126x_pkt_params_lora_t pkt_params;

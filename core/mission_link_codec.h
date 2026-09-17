@@ -157,6 +157,13 @@ void mission_link_parse_status_payload(const uint8_t *payload,
    indexing g_teams[] out of bounds. */
 void mission_link_apply_roster(const MissionLinkRoster_t *msg);
 
+/* Monotonic count of rosters mission_link_apply_roster() rejected whole
+   (bad team_id, or a location outside the grid). Both rejects are silent,
+   so a board gating boot on a roster arriving cannot otherwise distinguish
+   "rejected" from "never sent" - see each board's own main_board.c
+   roster-wait loop, which uses this to report the difference. */
+uint32_t mission_link_roster_reject_count(void);
+
 /* Ongoing: updates the board's local partial view of this incident
    (creating a new local slot on first sight - matched by incident_id,
    not by array position, since this board's slot layout has no

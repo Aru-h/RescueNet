@@ -25,7 +25,7 @@
  * Build:
  *   gcc -std=gnu11 -Wall -Wextra -Wpedantic -Icore -Ilaptop \
  *       -o mission_link_selftest laptop/tools/mission_link_selftest.c \
- *       core/*.c laptop/snapshot.c
+ *       core/[a-z]*.c laptop/snapshot.c
  * Run:
  *   ./mission_link_selftest
  *
@@ -36,7 +36,7 @@
  * mission_link.c's object file references resolved regardless of
  * which functions in it actually get called at runtime.
  *
- * This now links the FULL core/*.c set, not just mission_link.c +
+ * This now links the FULL core/ .c set, not just mission_link.c +
  * mission_state.c: mission_link_build_status() started calling
  * core/incident.c's team_effective_work_rate() to fill
  * MissionLinkStatus_t's schema-v2 work_rate anchor field (see
@@ -52,7 +52,7 @@
  * pattern (CORE_SOURCES + a platform's snapshot.c) rather than
  * hand-maintaining a second, narrower file list. laptop/
  * snapshot.c specifically (not debug.c) for the same reason as
- * before: core/*.c's snapshot_record()/snapshot_record_resolved()/
+ * before: core/'s .c files' snapshot_record()/snapshot_record_resolved()/
  * snapshot_begin_run()/etc. calls need *some* definition to link
  * against, and debug_trace() is stubbed below instead of pulled in
  * from laptop/debug.c to avoid the conflicting-definition

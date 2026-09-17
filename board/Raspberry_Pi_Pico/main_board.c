@@ -54,6 +54,8 @@
 
 #include "sim_runner.h"
 #include "fault_config.h"
+#include "mission_link_codec.h" /* mission_link_roster_reject_count() -
+                                    roster-wait loop's reject diagnostic */
 #include "comms_transport.h" /* g_comms_transport_this_board_id,
                                  comms_transport_init() - see
                                  THIS_BOARD_ID below */
@@ -351,6 +353,168 @@ static int mission_link_handshake_round_trip_complete(void)
     return mission_link_handshake_build_local_reply(&scratch) != 0;
 }
 
+#include "lora_frame.h" /* lora_frame_auth_fail_count(),
+                           lora_frame_accept_count() */
+
+/*
+ * Link diagnostics. A board rebooting while its peer stays up used to
+ * wedge boot silently in two ways (both reproduced at runtime): the
+ * peer's replay floor locked out the rebooted board's restarted frame
+ * counter, and board 0 never re-sent a rebooted peer its handshake Req.
+ * Both are fixed now - per-boot LoRa session epochs with a challenge
+ * (core/lora_crypto.h) and board 0 re-opening a rebooted peer's
+ * handshake leg (mission_link_task.c) - and these lines show that
+ * recovery happening, or show where it stalls if it doesn't. Most of
+ * it is visible on the board that STAYED UP, which is why this is also
+ * called from the tick loop, not only from the boot wait loops.
+ *
+ * Each line prints once per change, since the wait loops spin
+ * unthrottled. Report only - nothing here aborts a wait, retries, or
+ * relaxes replay rejection.
+ */
+extern uint32_t mission_link_task_peer_reboot_count(void);
+extern int sx1262_hal_get_random_u32(uint32_t *out);
+
+static uint32_t g_reported_auth_fails;
+static uint32_t g_reported_session_holds;
+static uint32_t g_reported_peer_reboots;
+static uint8_t g_reported_first_frame;
+static uint8_t g_reported_peer_timed_out[HANDSHAKE_MAX_BOARDS];
+
+static void board_report_link_diagnostics(void)
+{
+    uint32_t auth_fails = lora_frame_auth_fail_count();
+
+    if(auth_fails != g_reported_auth_fails)
+    {
+        tm_printf((UB*)"tron: LoRa AUTH FAIL (%lu so far) - frames arriving but failing authentication (RF corruption, a peer built with a different key, or a replay)\n",
+                  (unsigned long)auth_fails);
+        g_reported_auth_fails = auth_fails;
+    }
+
+    {
+        uint32_t holds = lora_frame_session_hold_count();
+
+        if(holds != g_reported_session_holds)
+        {
+            tm_printf((UB*)"tron: LoRa session HOLD (%lu so far) - a peer started a new session (reboot?); its frames wait until it answers this board's challenge\n",
+                      (unsigned long)holds);
+            g_reported_session_holds = holds;
+        }
+    }
+
+    {
+        uint32_t reboots = mission_link_task_peer_reboot_count();
+
+        if(reboots != g_reported_peer_reboots)
+        {
+            tm_printf((UB*)"tron: peer reboot detected (%lu so far) - re-running that board's handshake\n",
+                      (unsigned long)reboots);
+            g_reported_peer_reboots = reboots;
+        }
+    }
+
+    if(!g_reported_first_frame && lora_frame_accept_count() > 0u)
+    {
+        tm_putstring((UB*)"tron: LoRa link alive - first authenticated frame received\n");
+        g_reported_first_frame = 1u;
+    }
+
+    if(g_comms_transport_this_board_id == 0u)
+    {
+        uint8_t board_count = comms_transport_board_count();
+        uint8_t peer;
+
+        if(board_count > HANDSHAKE_MAX_BOARDS)
+        {
+            board_count = HANDSHAKE_MAX_BOARDS;
+        }
+
+        for(peer = 1u; peer < board_count; peer++)
+        {
+            if(!g_reported_peer_timed_out[peer] &&
+               !mission_link_handshake_relay_reply_seen(peer) &&
+               mission_link_handshake_relay_timed_out_seen(peer))
+            {
+                tm_printf((UB*)"tron: peer board %lu never answered the handshake (timed out) - the laptop will not send mission data until it does; check that board is powered, flashed with this build, and on the same radio params\n",
+                          (unsigned long)peer);
+                g_reported_peer_timed_out[peer] = 1u;
+            }
+        }
+    }
+}
+
+/*
+ * Boot wait loops only: nothing reads CBBA or fault traffic until the
+ * simulation starts, so a peer that is already mid-mission would fill the
+ * 16-slot inbox with it and the Req/roster these loops are waiting for
+ * would be refused on arrival. Those frames describe rounds this board is
+ * not part of yet, so dropping them loses nothing. Override frames and
+ * their acks are kept: mission_link_task_step() answers an override that
+ * arrives before this board is ready with a NOT_READY ack, and board 0
+ * forwards acks to the laptop, so the operator isn't left guessing.
+ */
+static void board_boot_wait_discard_stale_frames(void)
+{
+    (void)comms_transport_discard_received_except(
+        COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_HANDSHAKE) |
+        COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_MISSION_LINK) |
+        COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_OVERRIDE) |
+        COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_OVERRIDE_ACK));
+}
+
+/*
+ * Per-boot LoRa session epoch (core/lora_crypto.h lora_crypto_set_tx_
+ * epoch()): MUST differ from every previous boot's, or a reboot brings
+ * back AEAD nonce reuse and the peer-side lockout. Primary source is the
+ * SX1262's own RNG. Every draw is mixed with µT-Kernel operating time as
+ * well, and a failure or a zero result is reported loudly - operating
+ * time alone at this point of boot is close to constant across reboots,
+ * so a board that prints the warning below should not be trusted to
+ * recover from a reboot until its radio RNG works.
+ */
+static void board_seed_lora_session_epoch(void)
+{
+    uint32_t epoch = 0u;
+    uint32_t extra = 0u;
+    SYSTIM otm;
+    int rng_ok = 0;
+    UINT attempt;
+
+    /* Retried: a single SPI glitch at bring-up shouldn't cost reboot
+       safety. The RNG and the LoRa link are the same chip on the same
+       bus, so if every attempt fails the radio can't carry traffic
+       either - the weak fallback below only matters for a radio that
+       comes good later, and the warning says so. */
+    for(attempt = 0u; attempt < 5u && !rng_ok; attempt++)
+    {
+        rng_ok = (sx1262_hal_get_random_u32(&epoch) == 0) &&
+                 (sx1262_hal_get_random_u32(&extra) == 0);
+        if(!rng_ok)
+        {
+            tk_dly_tsk(20u);
+        }
+    }
+
+    if(tk_get_otm(&otm) == E_OK)
+    {
+        extra ^= otm.lo;
+    }
+    epoch ^= (extra << 13) | (extra >> 19);
+
+    if(!rng_ok || epoch == 0u)
+    {
+        tm_putstring((UB*)"tron: WARNING - SX1262 RNG unavailable; LoRa session epoch is weak, reboot recovery may fail\n");
+        if(epoch == 0u)
+        {
+            epoch = 0x5EED0001u ^ (uint32_t)THIS_BOARD_ID;
+        }
+    }
+
+    lora_crypto_set_tx_epoch(epoch);
+    tm_printf((UB*)"tron: LoRa session epoch %08lx\n", (unsigned long)epoch);
+}
+
 /*
  * Onboard LED heartbeat helpers - see BOARD_LED_PIN's own doc above
  * for why this exists. gpio_set_pin()/gpio_set_val() are the exact
@@ -417,6 +581,36 @@ LOCAL void board_led_wait_pulse_roster(void)
                            repeat at roughly the same overall rate -
                            only the blink shape differs, not the
                            cadence. */
+}
+
+/* Roster-REJECTED pattern: FOUR quick blinks. Distinct from the plain
+   roster wait's two, because the two states need very different
+   responses and look identical without this: two blinks means nothing
+   has arrived (peer not flashed yet, radio params mismatched), four
+   means roster frames ARE arriving and being thrown away by
+   mission_link_apply_roster()'s validation, so the wire is fine and the
+   DATA is wrong. Without the split, a malformed roster field looks
+   exactly like a dead link forever - and this board has no UART adapter
+   or SWD debugger attached in the bring-up case this LED exists for
+   (see BOARD_LED_PIN's own doc), so the LED is the only channel that
+   difference can arrive on. */
+LOCAL void board_led_wait_pulse_roster_rejected(void)
+{
+    board_led_blink_n(4u, 80u, 120u);
+    tk_dly_tsk(120u);
+}
+
+/* Auth-FAILED pattern: THREE quick blinks, used by both wait loops once
+   lora_frame_auth_fail_count() is nonzero. Means LoRa frames ARE
+   arriving but failing authentication - e.g. a peer that rebooted while
+   this board stayed up, locked out by this board's replay floor (see
+   board_report_link_diagnostics()) - as opposed to one blink / two
+   blinks (nothing usable arrived) or four (roster authenticated but
+   invalid). */
+LOCAL void board_led_wait_pulse_auth_failed(void)
+{
+    board_led_blink_n(3u, 80u, 120u);
+    tk_dly_tsk(200u);
 }
 
 LOCAL void sim_task(INT stacd, void *exinf);
@@ -508,6 +702,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
      */
     g_comms_transport_this_board_id = THIS_BOARD_ID;
     comms_transport_init();
+    board_seed_lora_session_epoch();
 
     /* Once, before the seed loop - see mission_link_task.c's own
        handoff note 1. Must follow whatever sets
@@ -589,10 +784,19 @@ LOCAL void sim_task(INT stacd, void *exinf)
         sx1262_rx_poll();
         mission_link_task_step();
         comms_transport_dispatch_pending();
+        board_report_link_diagnostics();
+        board_boot_wait_discard_stale_frames();
 
         if((wait_pulse_counter % BOARD_LED_WAIT_PULSE_TICK_INTERVAL) == 0u)
         {
-            board_led_wait_pulse_handshake();
+            if(lora_frame_auth_fail_count() > 0u)
+            {
+                board_led_wait_pulse_auth_failed();
+            }
+            else
+            {
+                board_led_wait_pulse_handshake();
+            }
         }
         wait_pulse_counter++;
     }
@@ -620,16 +824,46 @@ LOCAL void sim_task(INT stacd, void *exinf)
                                         the handshake wait loop's own
                                         copy of this variable above for
                                         why it exists. */
+    uint32_t reported_rejects = 0u; /* last reject count already printed,
+                                        so a steady stream of rejects
+                                        doesn't reprint on every pulse. */
 
     while (mission_link_task_any_roster_applied() == 0u)
     {
+        uint32_t rejects;
+
         sx1262_rx_poll();
         mission_link_task_step();
         comms_transport_dispatch_pending();
+        board_report_link_diagnostics();
+        board_boot_wait_discard_stale_frames();
+
+        rejects = mission_link_roster_reject_count();
 
         if((wait_pulse_counter % BOARD_LED_WAIT_PULSE_TICK_INTERVAL) == 0u)
         {
-            board_led_wait_pulse_roster();
+            if(rejects > 0u)
+            {
+                /* Deliberately keeps waiting rather than aborting: one
+                   corrupted frame shouldn't end the mission, and a later
+                   good roster still resolves this loop normally. The
+                   point is only to stop the failure being invisible. */
+                if(rejects != reported_rejects)
+                {
+                    tm_printf((UB*)"tron: roster REJECTED (%lu so far) - arriving but failing validation\n",
+                              (unsigned long)rejects);
+                    reported_rejects = rejects;
+                }
+                board_led_wait_pulse_roster_rejected();
+            }
+            else if(lora_frame_auth_fail_count() > 0u)
+            {
+                board_led_wait_pulse_auth_failed();
+            }
+            else
+            {
+                board_led_wait_pulse_roster();
+            }
         }
         wait_pulse_counter++;
     }
@@ -679,6 +913,9 @@ LOCAL void sim_task(INT stacd, void *exinf)
             if((tick % BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL) == 0u)
             {
                 (void)board_snapshot_ring_drain();
+                /* Throttled to the drain interval: during a post-reboot
+                   lockout the auth-fail count can climb every tick. */
+                board_report_link_diagnostics();
             }
 
             /* Heartbeat stage 3/3: one short pulse every

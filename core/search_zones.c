@@ -38,7 +38,7 @@ typedef struct { int16_t x, y; } SearchZonePoint_t;
  * routes over any navigable cell, road or not, so a road-only reachability
  * check systematically mismatches what a search team can actually reach -
  * this is why the frontier-picker fix was deferred until a navigable-cell
- * version existed (see TRON_FIX_PLAN.md). Rebuilt fresh on every call:
+ * version existed (see commit 94347d3). Rebuilt fresh on every call:
  * search_zone_pick_frontier_cell() and search_zone_coverage_percent() are
  * together called well under 2 times per tick across every team combined
  * (measured directly), so a fresh full-grid BFS per call is cheap, not a
