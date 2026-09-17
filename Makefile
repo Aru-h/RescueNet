@@ -1,4 +1,17 @@
 CC ?= gcc
+# Python for the laptop/tools scripts. Uses the project's .venv when it
+# exists (python3.11+ -m venv .venv && .venv/bin/pip install -r
+# requirements.txt), else python3. The analysis gates need numpy, pandas and
+# scikit-learn on a Python whose scipy imports. Override with PYTHON=...
+# Absolute and quoted because some recipes cd into laptop/tools first and
+# the repo path may contain spaces.
+ifeq ($(origin PYTHON),undefined)
+  ifneq ($(wildcard .venv/bin/python),)
+    PYTHON = "$(CURDIR)/.venv/bin/python"
+  else
+    PYTHON = python3
+  endif
+endif
 CFLAGS ?= -std=gnu11 -Wall -Wextra -Wpedantic
 # Laptop/desktop build simulates every team in one process - override
 # the board-split divisor so all NUM_TEAMS resolve to board 0 and
@@ -52,7 +65,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-two-board-reboot-harness check-bridge-selftests
 
 all: $(TARGET) $(LABELER)
 
@@ -250,6 +263,7 @@ clean:
 	rm -f $(TWO_BOARD_HARNESS_BIN) $(MISSION_LINK_STATUS_GATE_TEST_BIN) \
 		$(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) \
 		$(RECOVERY_MANAGER_PERSISTENCE_SELFTEST_BIN)
+	rm -rf $(SELFTEST_BIN_DIR)
 
 # --- Pico compile check --------------------------------------------------
 # Mirrors check-board-compile/-link above, same class of check now that
@@ -378,7 +392,9 @@ check-pico-bsp:
 	fi
 	@mkdir -p $(PICO_BSP_OBJ_DIR)
 	@echo "  ARM-CC  $(PICO_BSP_DIR)/app_program/app_main.c"
-	@$(PICO_ARM_CC) -std=gnu11 -Wall -Wextra -mcpu=cortex-m0plus -mthumb \
+	@# -Wno-unused-parameter: the vendored sample task_1(INT stacd, void *exinf)
+	@# ignores both µT-Kernel task arguments; vendored code is not edited here.
+	@$(PICO_ARM_CC) -std=gnu11 -Wall -Wextra -Wno-unused-parameter -mcpu=cortex-m0plus -mthumb \
 		-ffreestanding -fno-builtin -D_PICO_RP2040_ \
 		-I$(PICO_BSP_DIR)/config -I$(PICO_BSP_DIR)/include -I$(PICO_BSP_DIR)/kernel/knlinc \
 		-c $(PICO_BSP_DIR)/app_program/app_main.c -o $(PICO_BSP_OBJ_DIR)/app_main.o
@@ -478,7 +494,7 @@ check-two-board-harness:
 		$(BOARD_DIR)/mission_link_task.c $(LAPTOP_DIR)/debug.c \
 		$(LAPTOP_DIR)/snapshot.c $(CORE_SOURCES) -lm
 	@./$(TWO_BOARD_HARNESS_BIN)
-	@echo "check-two-board-harness: real two-process handshake + LoRa-relayed roster delivery passed"
+	@echo "check-two-board-harness: real two-process handshake + LoRa-relayed roster and override delivery passed"
 
 # --- Two-board CBBA consensus harness check --------------------------------
 # CBBA-side counterpart to check-two-board-harness above: builds and runs
@@ -597,7 +613,7 @@ check-recovery-manager-persistence:
 # run automatically by this target for the same reason (slow dataset
 # regen, analysis script not a pass/fail gate).
 check-persistence-bounded-forgiveness:
-	python3 $(TOOLS_DIR)/persistence_bounded_forgiveness_ablation.py
+	$(PYTHON) $(TOOLS_DIR)/persistence_bounded_forgiveness_ablation.py
 
 # --- Environment-class end-to-end escalation check ---------------------------
 # Python, not C - reuses the Config A sklearn pipeline (same as this
@@ -611,5 +627,141 @@ check-persistence-bounded-forgiveness:
 # since regenerating the dataset is slow and this is an analysis script,
 # not a pass/fail gate.
 check-environment-e2e-stress:
-	python3 $(TOOLS_DIR)/environment_class_e2e_stress.py
+	$(PYTHON) $(TOOLS_DIR)/environment_class_e2e_stress.py
+
+# --- Standalone laptop/tools selftests ---------------------------------------
+# These seven selftests existed with no Makefile target at all, so nothing
+# ever ran them (each file's own "Build:" comment was the only way in, and
+# three of those comments had drifted out of linking as core/ grew). Each
+# returns nonzero on any failed check, so these are real pass/fail gates.
+#
+# SELFTEST_CFLAGS deliberately does NOT use $(CFLAGS): that adds
+# -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS (every team on board 0),
+# and cbba_board_selftest.c's board-locality check depends on the real
+# default 5-teams-per-board split. Wide selftests link $(CORE_SOURCES)
+# rather than a hand-kept file list, so a new core/ file can't break them
+# the way it broke those Build: comments.
+#
+# Binaries run from $(SELFTEST_BIN_DIR), not the repo root:
+# override_selftest writes tron_snapshot_dataset.csv into its working
+# directory, and would otherwise overwrite the real dataset.
+SELFTEST_CFLAGS = -std=gnu11 -Wall -Wextra -Wpedantic -I$(CORE_DIR) -I$(LAPTOP_DIR)
+SELFTEST_BIN_DIR = build/selftests
+LORA_CRYPTO_SOURCES = $(CORE_DIR)/lora_frame.c $(CORE_DIR)/lora_crypto.c \
+	$(CORE_DIR)/aead_chacha20poly1305.c $(CORE_DIR)/chacha20.c $(CORE_DIR)/poly1305.c
+# cbba_board_selftest.c defines its own snapshot_record()/g_simulation_
+# trace_enabled stand-ins, which collide with simulation.c; sim_runner.c
+# needs simulation.c's generate_world().
+CBBA_BOARD_SELFTEST_CORE_SOURCES = $(filter-out $(CORE_DIR)/simulation.c $(CORE_DIR)/sim_runner.c,$(CORE_SOURCES))
+
+check-selftests: check-handshake-selftest check-lora-frame-selftest \
+	check-mission-link-selftest check-override-selftest \
+	check-cbba-board-selftest check-sx1262-rx-selftest-dk \
+	check-sx126x-rx-selftest-pico check-comms-transport-selftest
+	@echo "check-selftests: all eight laptop/tools selftests passed"
+
+check-handshake-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/handshake_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/handshake_selftest \
+		$(TOOLS_DIR)/handshake_selftest.c $(CORE_DIR)/mission_link_handshake.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./handshake_selftest
+
+check-lora-frame-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/lora_frame_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/lora_frame_selftest \
+		$(TOOLS_DIR)/lora_frame_selftest.c $(LORA_CRYPTO_SOURCES) $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./lora_frame_selftest
+
+check-mission-link-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/mission_link_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/mission_link_selftest \
+		$(TOOLS_DIR)/mission_link_selftest.c $(CORE_SOURCES) $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./mission_link_selftest
+
+check-override-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/override_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/override_selftest \
+		$(TOOLS_DIR)/override_selftest.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./override_selftest
+
+check-cbba-board-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/cbba_board_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/cbba_board_selftest \
+		$(TOOLS_DIR)/cbba_board_selftest.c $(CBBA_BOARD_SELFTEST_CORE_SOURCES) $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./cbba_board_selftest
+
+check-sx1262-rx-selftest-dk:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/sx1262_rx_selftest_dk.c"
+	@$(CC) $(SELFTEST_CFLAGS) -I$(SX126X_DIR) -o $(SELFTEST_BIN_DIR)/sx1262_rx_selftest_dk \
+		$(TOOLS_DIR)/sx1262_rx_selftest_dk.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(SX126X_DIR)/sx126x.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./sx1262_rx_selftest_dk
+
+check-sx126x-rx-selftest-pico:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/sx126x_rx_selftest_pico.c"
+	@$(CC) $(SELFTEST_CFLAGS) -I$(SX126X_DIR) -o $(SELFTEST_BIN_DIR)/sx126x_rx_selftest_pico \
+		$(TOOLS_DIR)/sx126x_rx_selftest_pico.c $(SX126X_DIR)/sx126x.c $(LORA_CRYPTO_SOURCES) \
+		$(CORE_DIR)/comms_transport.c $(CORE_DIR)/mission_state.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./sx126x_rx_selftest_pico
+
+check-comms-transport-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/comms_transport_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/comms_transport_selftest \
+		$(TOOLS_DIR)/comms_transport_selftest.c $(LORA_CRYPTO_SOURCES) \
+		$(CORE_DIR)/comms_transport.c $(CORE_DIR)/mission_state.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./comms_transport_selftest
+
+# --- Laptop bridge (Python) selftests ----------------------------------------
+# Handshake coordinator, telemetry frame parser, override acks, and team
+# status reports (parsers, trackers, full USART1 scanner chain, and app.py's
+# routes when Flask is installed). No serial port or board needed; run from laptop/tools
+# because the tests import those modules directly.
+check-bridge-selftests:
+	@cd $(TOOLS_DIR) && $(PYTHON) handshake_selftest.py > /dev/null && echo "  handshake_selftest.py passed"
+	@cd $(TOOLS_DIR) && $(PYTHON) telemetry_bridge_selftest.py > /dev/null && echo "  telemetry_bridge_selftest.py passed"
+	@cd $(TOOLS_DIR) && $(PYTHON) override_ack_selftest.py
+	@cd $(TOOLS_DIR) && $(PYTHON) team_status_selftest.py
+
+# --- Two-board reboot recovery -----------------------------------------------
+# One board reboots while the other stays up; the link must recover by
+# itself. Every combination of {board 1 reboots, board 0 reboots} x
+# {quiet, CBBA traffic}, built against BOTH boards' mission_link_task.c,
+# REBOOT_HARNESS_RUNS times each (the two processes aren't lockstep, so
+# one pass proves little - use REBOOT_HARNESS_RUNS=25 before trusting a
+# change to comms/crypto/handshake code). See laptop/tools/two_board_
+# reboot_harness.c for what each scenario asserts.
+REBOOT_HARNESS_RUNS ?= 3
+REBOOT_HARNESS_BIN_DIR = build/reboot-harness
+
+check-two-board-reboot-harness:
+	@mkdir -p $(REBOOT_HARNESS_BIN_DIR)
+	@set -e; for board in STM32N6570-DK Raspberry_Pi_Pico; do \
+		echo "  CC      $(TOOLS_DIR)/two_board_reboot_harness.c (board/$$board)"; \
+		$(CC) -std=gnu11 -Wall -Wextra -Wpedantic -I$(CORE_DIR) -Iboard/$$board -I$(LAPTOP_DIR) \
+			-I$(TOOLS_DIR)/harness_stubs -o $(REBOOT_HARNESS_BIN_DIR)/$$board \
+			$(TOOLS_DIR)/two_board_reboot_harness.c board/$$board/mission_link_task.c \
+			$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(CORE_SOURCES) -lm; \
+	done
+	@fail=0; for board in STM32N6570-DK Raspberry_Pi_Pico; do \
+		for mode in board1 board0; do for traffic in quiet cbba; do \
+			pass=0; i=0; while [ $$i -lt $(REBOOT_HARNESS_RUNS) ]; do \
+				if ./$(REBOOT_HARNESS_BIN_DIR)/$$board $$mode $$traffic > $(REBOOT_HARNESS_BIN_DIR)/last.log 2>&1; \
+				then pass=$$((pass+1)); else cp $(REBOOT_HARNESS_BIN_DIR)/last.log \
+					$(REBOOT_HARNESS_BIN_DIR)/fail-$$board-$$mode-$$traffic-$$i.log; fi; \
+				i=$$((i+1)); done; \
+			echo "  $$board: $$mode reboot, $$traffic traffic: $$pass/$(REBOOT_HARNESS_RUNS)"; \
+			[ $$pass -eq $(REBOOT_HARNESS_RUNS) ] || fail=1; \
+		done; done; \
+	done; \
+	if [ $$fail -ne 0 ]; then echo "check-two-board-reboot-harness: FAILED - logs in $(REBOOT_HARNESS_BIN_DIR)/fail-*.log"; exit 1; fi
+	@echo "check-two-board-reboot-harness: every reboot scenario recovered on both boards"
 

@@ -146,6 +146,20 @@ print(f"Timelines processed: {n_timelines}")
 print(f"Onset (real fault active) above-floor runs: {len(onset_runs_baseline_len)}")
 print(f"Noise (no fault active) above-floor runs:   {len(noise_runs_baseline_len)}")
 
+# Both rates below are means over these lists. An empty list makes a rate
+# NaN, every NaN comparison in the VERDICT chain is False, and the chain
+# used to fall through to a confident "does NOT meaningfully improve"
+# verdict with exit 0 - a verdict from no data at all. Refuse instead.
+if not onset_runs_baseline_len or not noise_runs_baseline_len:
+    sys.stdout.flush()
+    print(f"\nERROR: {CSV_PATH} has no {'fault-onset' if not onset_runs_baseline_len else 'no-fault'} "
+          "above-floor runs, so false-reject/false-accept cannot be measured.\n"
+          "This needs a dataset generated with fault injection, e.g.\n"
+          "  ./tron 1 30 400 --fault-profile=combined\n"
+          "(a plain `make smoke` / `./tron 1 1 200` dataset has no faults).",
+          file=sys.stderr)
+    sys.exit(1)
+
 onset_baseline = np.array(onset_runs_baseline_len)
 onset_new = np.array(onset_runs_new_len)
 noise_baseline = np.array(noise_runs_baseline_len)
