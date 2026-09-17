@@ -56,7 +56,9 @@ CORE_SOURCES = $(wildcard $(CORE_DIR)/*.c)
 LAPTOP_SOURCES = $(CORE_SOURCES) \
 	$(LAPTOP_DIR)/main.c \
 	$(LAPTOP_DIR)/debug.c \
-	$(LAPTOP_DIR)/snapshot.c
+	$(LAPTOP_DIR)/snapshot.c \
+	$(LAPTOP_DIR)/mission_feed.c \
+	$(LAPTOP_DIR)/mission_mirror.c
 
 LAPTOP_INCLUDES = -I$(CORE_DIR) -I$(LAPTOP_DIR)
 
@@ -65,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-two-board-reboot-harness check-bridge-selftests
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests
 
 all: $(TARGET) $(LABELER)
 
@@ -657,8 +659,9 @@ CBBA_BOARD_SELFTEST_CORE_SOURCES = $(filter-out $(CORE_DIR)/simulation.c $(CORE_
 check-selftests: check-handshake-selftest check-lora-frame-selftest \
 	check-mission-link-selftest check-override-selftest \
 	check-cbba-board-selftest check-sx1262-rx-selftest-dk \
-	check-sx126x-rx-selftest-pico check-comms-transport-selftest
-	@echo "check-selftests: all eight laptop/tools selftests passed"
+	check-sx126x-rx-selftest-pico check-comms-transport-selftest \
+	check-mission-link-roster-selftest check-mission-mirror-selftest
+	@echo "check-selftests: all ten laptop/tools selftests passed"
 
 check-handshake-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)
@@ -712,6 +715,26 @@ check-sx126x-rx-selftest-pico:
 		$(CORE_DIR)/comms_transport.c $(CORE_DIR)/mission_state.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./sx126x_rx_selftest_pico
 
+check-mission-link-roster-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/mission_link_roster_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -I$(TOOLS_DIR)/harness_stubs -I$(BOARD_DIR) \
+		-o $(SELFTEST_BIN_DIR)/mission_link_roster_selftest \
+		$(TOOLS_DIR)/mission_link_roster_selftest.c $(BOARD_DIR)/mission_link_task.c \
+		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./mission_link_roster_selftest
+
+# laptop/mission_mirror.c: the laptop's board-mission picture built from
+# board status reports - see laptop/tools/mission_mirror_selftest.c.
+check-mission-mirror-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/mission_mirror_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS \
+		-o $(SELFTEST_BIN_DIR)/mission_mirror_selftest \
+		$(TOOLS_DIR)/mission_mirror_selftest.c $(LAPTOP_DIR)/mission_mirror.c \
+		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./mission_mirror_selftest
+
 check-comms-transport-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)
 	@echo "  CC      $(TOOLS_DIR)/comms_transport_selftest.c"
@@ -721,15 +744,17 @@ check-comms-transport-selftest:
 	@cd $(SELFTEST_BIN_DIR) && ./comms_transport_selftest
 
 # --- Laptop bridge (Python) selftests ----------------------------------------
-# Handshake coordinator, telemetry frame parser, override acks, and team
-# status reports (parsers, trackers, full USART1 scanner chain, and app.py's
-# routes when Flask is installed). No serial port or board needed; run from laptop/tools
+# Handshake coordinator, telemetry frame parser, override acks, team status
+# reports and the mission feed (parsers, trackers, full USART1 scanner chain,
+# a real `tron --mission-feed` run, and app.py's routes when Flask is
+# installed). The mission feed test needs ./tron built (make all). No serial port or board needed; run from laptop/tools
 # because the tests import those modules directly.
 check-bridge-selftests:
 	@cd $(TOOLS_DIR) && $(PYTHON) handshake_selftest.py > /dev/null && echo "  handshake_selftest.py passed"
 	@cd $(TOOLS_DIR) && $(PYTHON) telemetry_bridge_selftest.py > /dev/null && echo "  telemetry_bridge_selftest.py passed"
 	@cd $(TOOLS_DIR) && $(PYTHON) override_ack_selftest.py
 	@cd $(TOOLS_DIR) && $(PYTHON) team_status_selftest.py
+	@cd $(TOOLS_DIR) && $(PYTHON) mission_feed_selftest.py
 
 # --- Two-board reboot recovery -----------------------------------------------
 # One board reboots while the other stays up; the link must recover by
@@ -764,4 +789,22 @@ check-two-board-reboot-harness:
 	done; \
 	if [ $$fail -ne 0 ]; then echo "check-two-board-reboot-harness: FAILED - logs in $(REBOOT_HARNESS_BIN_DIR)/fail-*.log"; exit 1; fi
 	@echo "check-two-board-reboot-harness: every reboot scenario recovered on both boards"
+
+# Laptop as clock master, through the real board code on two processes: a
+# clock tick from USART1 reaches both boards (latest wins), and a team
+# board 1 moves shows up in the v3 status board 0 writes for the laptop.
+# See laptop/tools/two_board_mission_harness.c.
+MISSION_HARNESS_BIN_DIR = build/mission-harness
+
+check-two-board-mission-harness:
+	@mkdir -p $(MISSION_HARNESS_BIN_DIR)
+	@set -e; for board in STM32N6570-DK Raspberry_Pi_Pico; do \
+		echo "  CC      $(TOOLS_DIR)/two_board_mission_harness.c (board/$$board)"; \
+		$(CC) -std=gnu11 -Wall -Wextra -Wpedantic -I$(CORE_DIR) -Iboard/$$board -I$(LAPTOP_DIR) \
+			-I$(TOOLS_DIR)/harness_stubs -o $(MISSION_HARNESS_BIN_DIR)/$$board \
+			$(TOOLS_DIR)/two_board_mission_harness.c board/$$board/mission_link_task.c \
+			$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(CORE_SOURCES) -lm; \
+		./$(MISSION_HARNESS_BIN_DIR)/$$board; \
+	done
+	@echo "check-two-board-mission-harness: clock, map, sites and positions crossed both boards"
 

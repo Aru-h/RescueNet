@@ -82,36 +82,43 @@ __attribute__((weak)) int lora_radio_tx_busy(void)
  *
  * ToA (Semtech AN1200.13 formula), for SF7 / BW125kHz / coding rate
  * 4/5 / explicit header / payload CRC on / 8-symbol preamble, sized
- * against the largest single frame this project actually sends -
- * LORA_FRAME_MAX_WIRE_SIZE (lora_frame.h): 3 (header) + 144 (a full
- * CBBAMessage_t payload, core/cbba.c) + 19 (AEAD trailer: Poly1305
- * tag + counter fragment + checksum - see lora_frame.h's
- * "Encryption" section) = 166 bytes. RE-DERIVED from the original
- * 147-byte figure after core/lora_frame.c grew an AEAD envelope (see
- * core/lora_crypto.h/core/aead_chacha20poly1305.h) - re-run this same
- * formula again if LORA_FRAME_MAX_WIRE_SIZE ever changes again, same
- * "don't let it silently drift" policy as lora_frame.h's own
- * CBBAMessage_t-size comment:
+ * against LORA_FRAME_MAX_WIRE_SIZE (lora_frame.h) - the largest frame
+ * the wire format can carry, not necessarily the largest one actually
+ * sent today (core/cbba.c's CBBAWireMessage_t, the biggest real
+ * payload as of the traffic-reduction pass that added it, is only
+ * 101 bytes - see that type's own doc - well under this ceiling; this
+ * stays sized to the format's own max so a future payload type that
+ * fills LORA_FRAME_MAX_PAYLOAD isn't under-costed on the channel).
+ * RE-DERIVED again here (was 166, before that 147) now that
+ * LORA_FRAME_HEADER_SIZE (7) + LORA_FRAME_MAX_PAYLOAD (144) +
+ * LORA_FRAME_TRAILER_SIZE (21) = 172 bytes - the 166 this replaced
+ * still used the trailer's PRE-4-byte-counter-growth size (19,
+ * before LORA_FRAME_COUNTER_FRAG_SIZE grew to a full 4-byte counter -
+ * see lora_frame.h's own "Encryption" section), so it had quietly
+ * drifted 6 bytes stale. Re-run this same formula again if
+ * LORA_FRAME_MAX_WIRE_SIZE ever changes again, same "don't let it
+ * silently drift" policy as lora_frame.h's own CBBAMessage_t-size
+ * comment:
  *
  *   Tsym          = 2^SF / BW = 2^7 / 125000               = 1.024 ms
  *   Tpreamble     = (8 + 4.25) * Tsym                       = 12.544 ms
- *   payloadSymbNb = 8 + ceil((8*166 - 4*7 + 28 + 16) / (4*7)) * 5
- *                 = 8 + ceil(1344 / 28) * 5 = 8 + 48*5      = 248 symbols
- *   Tpayload      = 248 * Tsym                              = 253.952 ms
- *   Ttotal        = Tpreamble + Tpayload                    = 266.496 ms
+ *   payloadSymbNb = 8 + ceil((8*172 - 4*7 + 28 + 16) / (4*7)) * 5
+ *                 = 8 + ceil(1392 / 28) * 5 = 8 + 50*5      = 258 symbols
+ *   Tpayload      = 258 * Tsym                              = 264.192 ms
+ *   Ttotal        = Tpreamble + Tpayload                    = 276.736 ms
  *
- * i.e. ~623 bytes/sec for a 166-byte frame at SF7. Converted to this
+ * i.e. ~621.5 bytes/sec for a 172-byte frame at SF7. Converted to this
  * project's sim-tick unit via TICK_TIME_SEC=36 (mission_state.h - one
  * sim tick represents 36 real seconds, so a sub-second real LoRa
  * round-trip has to come out "fast" against a 36-second tick, not
  * "free"):
  *
- *   BYTES_PER_TICK = (166 bytes / 0.266496 s) * 36 s/tick ~= 22424
+ *   BYTES_PER_TICK = (172 bytes / 0.276736 s) * 36 s/tick ~= 22376
  *
  * Caveats, stated rather than hidden: this is still a single linear
  * bytes-per-tick constant standing in for a genuinely non-linear ToA
  * curve (fixed preamble cost + per-symbol quantization, not a
- * straight line through the origin) - exact at the 166-byte point it
+ * straight line through the origin) - exact at the 172-byte point it
  * was calibrated against, an approximation elsewhere. It also bakes
  * in SF7, an 8-symbol preamble, coding rate 4/5, explicit header, and
  * CRC on - the actual register-level radio configuration is still
@@ -121,7 +128,7 @@ __attribute__((weak)) int lora_radio_tx_busy(void)
  * chosen and confirmed on real hardware. +1u below still guarantees
  * every send costs at least one tick even for a tiny payload, so the
  * channel is never free regardless of size. */
-#define COMMS_TRANSPORT_CHANNEL_BYTES_PER_TICK 22424u
+#define COMMS_TRANSPORT_CHANNEL_BYTES_PER_TICK 22376u
 #endif
 
 static uint32_t g_channel_busy_until_tick;
@@ -823,6 +830,11 @@ uint32_t comms_transport_discard_received_except(uint32_t keep_type_mask)
     return dropped;
 }
 
+uint32_t comms_transport_inbox_free_slots(void)
+{
+    return COMMS_TRANSPORT_INBOX_CAPACITY - g_inbox_count;
+}
+
 /* Shares g_inbox_head/tail/count with comms_transport_inbox_push() - see
  * that function's concurrency-invariant comment above. Not yet safe to
  * call from a real ISR context caller pushing concurrently. */
@@ -859,4 +871,51 @@ int comms_transport_deliver_received(uint8_t frame_type, const uint8_t *payload,
     }
     return comms_transport_inbox_push(COMMS_TRANSPORT_UNKNOWN_SENDER, frame_type,
                                        payload, payload_len);
+}
+
+static uint32_t g_own_frame_drop_count;
+
+CommsRadioPollAction_t comms_transport_radio_poll_action(uint32_t events)
+{
+    CommsRadioPollAction_t action;
+    uint32_t rx_done = events & COMMS_RADIO_EVENT_RX_DONE;
+    uint32_t tx_done = events & COMMS_RADIO_EVENT_TX_DONE;
+
+    action.read_packet = (rx_done != 0u && tx_done == 0u) ? 1u : 0u;
+    /* Anything but a plain RX_DONE ends a transmission (a TIMEOUT here
+       can only be the TX timeout: receive runs in continuous mode). */
+    action.tx_finished = (rx_done == 0u || tx_done != 0u ||
+                          (events & COMMS_RADIO_EVENT_TIMEOUT) != 0u) ? 1u : 0u;
+    return action;
+}
+
+int comms_transport_receive_radio_packet(const uint8_t *packet, uint32_t packet_len)
+{
+    uint8_t frame_type;
+    uint8_t sender_board_id;
+    uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
+    uint8_t payload_len;
+
+    /* Byte 2 is sender_board_id (lora_frame.h wire layout). Checked
+       before parsing, so a frame claiming this board never touches the
+       crypto state for this board's own id. */
+    if (packet_len > 2u && packet[2] == g_comms_transport_this_board_id)
+    {
+        g_own_frame_drop_count++;
+        return 0;
+    }
+
+    if (lora_frame_try_parse(packet, packet_len, &frame_type, &sender_board_id,
+                              payload, &payload_len) != 1)
+    {
+        return 0;
+    }
+
+    (void)sender_board_id;
+    return comms_transport_deliver_received(frame_type, payload, payload_len) == 0 ? 1 : 0;
+}
+
+uint32_t comms_transport_own_frame_drop_count(void)
+{
+    return g_own_frame_drop_count;
 }

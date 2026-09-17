@@ -308,6 +308,44 @@ def test_due_for_req_timing():
         "the laptop stayed connected waits for a Req that would otherwise never come")
 
 
+def test_consume_newly_ready_tracks_edges_including_reboot():
+    """consume_newly_ready() is the signal telemetry_bridge.TelemetryBridge
+    uses to trigger MissionFeed.force_full_resend() - see that method's own
+    doc. It must fire on a board's first-ever ready reply, drain (not
+    re-report) on repeated identical replies, and fire AGAIN if that board
+    later goes not-ready (DK's synthetic ready=False relay after a real
+    reboot - core/mission_link_task.c's peer-session-count check) and then
+    replies ready once more - the actual reboot-recovery case this exists
+    for, not just first boot."""
+    coord = HandshakeCoordinator()
+    coord.start()
+
+    assert coord.consume_newly_ready() == [], "nothing ready yet"
+
+    coord.note_reply(0, MISSION_LINK_PROTOCOL_VERSION, ready=True)
+    assert coord.consume_newly_ready() == [0], "board 0's first ready reply is an edge"
+    assert coord.consume_newly_ready() == [], "draining twice in a row must not re-report the same edge"
+
+    coord.note_reply(1, MISSION_LINK_PROTOCOL_VERSION, ready=True)
+    assert coord.consume_newly_ready() == [1], "board 1's first ready reply is its own edge"
+
+    coord.note_reply(1, MISSION_LINK_PROTOCOL_VERSION, ready=True)
+    assert coord.consume_newly_ready() == [], "an identical repeat reply is not a new edge"
+
+    # Reboot: DK's synthetic ready=False relay for peer 1 (see
+    # core/mission_link_task.c's g_peer_session_count_seen check) flips it
+    # back to not-ready first - itself not a "newly ready" edge.
+    coord.note_reply(1, MISSION_LINK_PROTOCOL_VERSION, ready=False)
+    assert coord.consume_newly_ready() == [], "going NOT ready is never a newly-ready edge"
+
+    # The real post-reboot Reply, once board 1 re-completes its own init.
+    coord.note_reply(1, MISSION_LINK_PROTOCOL_VERSION, ready=True)
+    assert coord.consume_newly_ready() == [1], (
+        "re-becoming ready after a reboot's not-ready dip must edge again - "
+        "this is the exact signal a rebooted board's lost roster/map needs "
+        "an immediate re-send instead of waiting for MissionFeed's backstop")
+
+
 def main():
     tests = [
         test_pack_req,
@@ -319,6 +357,7 @@ def main():
         test_multi_peer_independence,
         test_dk_only_override_rejected_before_timeout,
         test_due_for_req_timing,
+        test_consume_newly_ready_tracks_edges_including_reboot,
     ]
 
     for test in tests:

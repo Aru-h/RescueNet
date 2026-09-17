@@ -292,4 +292,61 @@ int comms_transport_poll_received_types(uint32_t type_mask,
    16-slot inbox so the frames boot is waiting for get refused. */
 uint32_t comms_transport_discard_received_except(uint32_t keep_type_mask);
 
+/* Free inbox slots right now. For waits that should give up once nothing
+   more can be delivered (cbba_ingest_remote_mesh_replies()). */
+uint32_t comms_transport_inbox_free_slots(void);
+
+/* ---------------------------------------------------------------
+ * Radio driver glue - shared by both boards' sx1262_hal.c
+ * ---------------------------------------------------------------
+ * Both HALs used to carry their own copy of this logic, and the desktop
+ * selftests a third transcription of it, which had already drifted. The
+ * HALs now only translate chip IRQ bits and do the SPI calls. */
+
+/* Radio-independent IRQ events a poll observed (and has cleared). */
+#define COMMS_RADIO_EVENT_RX_DONE ((uint32_t)0x1u)
+#define COMMS_RADIO_EVENT_TX_DONE ((uint32_t)0x2u)
+#define COMMS_RADIO_EVENT_TIMEOUT ((uint32_t)0x4u)
+
+typedef struct
+{
+    /* The RX buffer holds a packet received from another board: read it
+       and pass it to comms_transport_receive_radio_packet(). */
+    uint8_t read_packet;
+    /* Any transmission is over: clear the driver's TX-busy flag and put
+       the radio back into receive mode (it falls back to standby after a
+       TX, so without this it stays deaf). */
+    uint8_t tx_finished;
+} CommsRadioPollAction_t;
+
+/* What one poll must do with the events it saw.
+
+   RX_DONE and TX_DONE can arrive together: the chip keeps IRQ flags until
+   they are cleared, so a packet that lands between one poll and the next
+   transmit is still flagged when that transmit completes. Both HALs used
+   to treat RX_DONE as "not a TX event", so in that case the TX-busy flag
+   was never cleared and receive never re-armed - the DK (no fallback)
+   stopped transmitting and receiving for good (found by review). The
+   radio's single buffer is shared by TX and RX, so a packet flagged
+   alongside TX_DONE was overwritten by this board's own transmission and
+   is not read. */
+CommsRadioPollAction_t comms_transport_radio_poll_action(uint32_t events);
+
+/* One packet the radio received: drops it if it claims to come from this
+   board, otherwise parses (lora_frame_try_parse()) and delivers
+   (comms_transport_deliver_received()). Returns 1 if a frame was
+   delivered to the inbox, 0 otherwise.
+
+   A board never receives its own transmissions on a working link, and
+   lora_frame_try_parse() cannot refuse them itself (the same-board
+   loopback path in comms_transport_send() legitimately parses frames from
+   this board). Without this check a board accepted and acted on its own
+   frames - replayed, echoed, or read back out of the shared radio buffer
+   (found by review: board 1 delivered its own override ack to itself). */
+int comms_transport_receive_radio_packet(const uint8_t *packet, uint32_t packet_len);
+
+/* Packets comms_transport_receive_radio_packet() dropped because they
+   claimed to come from this board. Diagnostics only. */
+uint32_t comms_transport_own_frame_drop_count(void);
+
 #endif /* COMMS_TRANSPORT_H */

@@ -71,6 +71,17 @@
  *                          dashboard display smoothly, not the
  *                          per-status-field change trigger alone.
  *
+ *   MissionLinkMapRow_t   laptop -> board, route map rows at start, on
+ *                          change and periodically - section 5c.
+ *
+ *   MissionLinkSites_t    laptop -> board, safe zones and gateways, with
+ *                          the rosters - section 5d.
+ *
+ *   MissionLinkClock_t    laptop -> board, ONGOING, after every laptop
+ *                          tick plus periodic re-sends. Boards run
+ *                          their own ticks only up to it - see
+ *                          section 5b.
+ *
  * CBBAMessage_t (core/cbba.c) is NOT part of this link - that is
  * board<->board LoRa mesh traffic, orthogonal to this laptop<->board
  * channel.
@@ -84,7 +95,7 @@
  * (equipment_flags, fitness_tier - both otherwise derivable from
  * team_id % 5, but generate_teams() is laptop-side now, so the board
  * takes what it's given rather than re-deriving), and starting
- * physical state (loc_x/y, stamina). Everything else in TeamState_t
+ * physical state (loc_x/y, stamina, equipment_level). Everything else in TeamState_t
  * (incident_queue_*, fault_state, cached_remaining_path_cost, ...) is
  * either derived at runtime by the board itself or belongs to one of
  * the ongoing messages below - this is a one-shot bootstrap, not a
@@ -94,6 +105,11 @@
  * TeamState_t.stamina is float - matches the precedent already set
  * for LoRaTwinSummary_t's stamina field, for the same reason (no
  * meaningful precision loss for a 0-100 gauge, half the wire cost).
+ *
+ * equipment_level (0-EQ_MAX_LEVEL) is carried because nothing on a
+ * board would otherwise set it: generate_teams() is the only place that
+ * fills it, and a board never runs that, so every board team started at
+ * 0 - resting for its first ~14 ticks before it was allowed to work.
  */
 typedef struct __attribute__((packed))
 {
@@ -104,10 +120,11 @@ typedef struct __attribute__((packed))
     int16_t  loc_x;
     int16_t  loc_y;
     uint8_t  stamina;           /* 0-100, quantized from TeamState_t's float */
+    uint8_t  equipment_level;   /* 0-EQ_MAX_LEVEL */
 } MissionLinkRoster_t;
 
 #define MISSION_LINK_ROSTER_PAYLOAD_SIZE \
-    ((uint32_t)sizeof(MissionLinkRoster_t)) /* 9 bytes */
+    ((uint32_t)sizeof(MissionLinkRoster_t)) /* 10 bytes */
 
 /* ---------------------------------------------------------------
  * 2. MissionLinkIncident_t - laptop -> board, ongoing, per-incident
@@ -286,9 +303,17 @@ CommsPrecedence_t mission_link_fault_precedence(const MissionLinkFault_t *msg);
  * overwrites the projection - last-write-wins by arrival, same
  * pattern CBBA already uses for timestamp[] conflict resolution.
  *
- * Still no live team position in this struct (see v1's note on that -
- * unchanged, still a hypothetical future field addition, not implied
- * by anything added here).
+ * SCHEMA v3 adds loc_x/loc_y, the team's live grid position. Boards
+ * move their own teams, so without it the laptop only ever knew each
+ * team's roster starting cell. A position change is its own send
+ * trigger (mission_link_status_tx_step()); a moving team changes cell
+ * at most once per tick, and the laptop's clock frame paces ticks.
+ *
+ * assigned_incident_id only ever names a laptop-issued task (one that
+ * arrived as a MissionLinkIncident_t). A board-local system task
+ * (equipment cache, evacuee run) takes its id from the board's own
+ * counter, which can collide with laptop ids, so it is reported as
+ * MISSION_LINK_NO_INCIDENT.
  */
 typedef struct __attribute__((packed))
 {
@@ -300,10 +325,12 @@ typedef struct __attribute__((packed))
     uint8_t  work_rate;          /* board-computed, fault-adjusted */
     uint8_t  stamina_at_report;  /* 0-100, quantized - see MissionLinkRoster_t.stamina */
     uint32_t report_tick;        /* anchor timestamp (board's g_current_tick) */
+    int16_t  loc_x;              /* schema v3: live position */
+    int16_t  loc_y;
 } MissionLinkStatus_t;
 
 #define MISSION_LINK_STATUS_PAYLOAD_SIZE \
-    ((uint32_t)sizeof(MissionLinkStatus_t)) /* 15 bytes (was 3 in schema v1) */
+    ((uint32_t)sizeof(MissionLinkStatus_t)) /* 19 bytes (15 in v2, 3 in v1) */
 
 /*
  * COMMS_PRECEDENCE_FLASH if stamina_at_report or equipment_level is
@@ -404,13 +431,131 @@ CommsPrecedence_t mission_link_status_precedence(const MissionLinkStatus_t *msg)
 #define MISSION_LINK_STATUS_MAGIC1   ((uint8_t)0x9Fu)
 
 #define MISSION_LINK_ROSTER_WIRE_SIZE \
-    ((uint32_t)(2u + MISSION_LINK_ROSTER_PAYLOAD_SIZE + 1u))   /* 12 bytes */
+    ((uint32_t)(2u + MISSION_LINK_ROSTER_PAYLOAD_SIZE + 1u))   /* 13 bytes */
 #define MISSION_LINK_INCIDENT_WIRE_SIZE \
     ((uint32_t)(2u + MISSION_LINK_INCIDENT_PAYLOAD_SIZE + 1u)) /* 19 bytes */
 #define MISSION_LINK_FAULT_WIRE_SIZE \
     ((uint32_t)(2u + MISSION_LINK_FAULT_PAYLOAD_SIZE + 1u))    /* 14 bytes */
 #define MISSION_LINK_STATUS_WIRE_SIZE \
-    ((uint32_t)(2u + MISSION_LINK_STATUS_PAYLOAD_SIZE + 1u))   /* 18 bytes (was 6 in schema v1) */
+    ((uint32_t)(2u + MISSION_LINK_STATUS_PAYLOAD_SIZE + 1u))   /* 22 bytes (18 in v2, 6 in v1) */
+
+/* ---------------------------------------------------------------
+ * 5b. MissionLinkClock_t - laptop -> board, the mission clock
+ * ---------------------------------------------------------------
+ * The laptop is the single clock master, the way distributed
+ * simulations (IEEE 1278 DIS / 1516 HLA time management, ROS's /clock
+ * with use_sim_time) keep separate simulators on one timeline: no
+ * participant free-runs its own tick. After finishing tick N (and
+ * sending that tick's incident/fault frames) the laptop sends
+ * tick = N, and a board may run its own sim ticks up to N, never past.
+ * How fast N advances - 36 real seconds per tick (TICK_TIME_SEC) for a
+ * demo, faster for a rehearsal - is purely a laptop setting; boards
+ * just follow. The laptop re-sends the current tick periodically, so a
+ * lost frame only delays a board, and the latest frame wins (not the
+ * highest), so a restarted laptop mission is followed too.
+ *
+ * A board that falls more than MISSION_LINK_CLOCK_MAX_CATCHUP_TICKS
+ * behind (it rebooted mid-mission, or sat out a long radio outage)
+ * jumps its tick forward instead of replaying every missed tick: each
+ * replayed tick includes a CBBA round with a reply wait, and replaying
+ * hours of movement on stale data is not what the team did anyway.
+ * See mission_link_clock_step_plan() (mission_link_codec.h).
+ */
+typedef struct __attribute__((packed))
+{
+    uint32_t tick;
+} MissionLinkClock_t;
+
+#define MISSION_LINK_CLOCK_PAYLOAD_SIZE \
+    ((uint32_t)sizeof(MissionLinkClock_t)) /* 4 bytes */
+
+#define MISSION_LINK_CLOCK_MAGIC0 ((uint8_t)0xCBu)
+#define MISSION_LINK_CLOCK_MAGIC1 ((uint8_t)0xBCu)
+
+#define MISSION_LINK_CLOCK_WIRE_SIZE \
+    ((uint32_t)(2u + MISSION_LINK_CLOCK_PAYLOAD_SIZE + 1u))    /* 7 bytes */
+
+#define MISSION_LINK_CLOCK_MAX_CATCHUP_TICKS 3u
+
+/* ---------------------------------------------------------------
+ * 5c. MissionLinkMapRow_t - laptop -> board, the route map
+ * ---------------------------------------------------------------
+ * A board never generates the environment (the laptop is the world
+ * authority), but its CBBA bids, movement, safe-zone choice and
+ * execution twin all price routes through core/path.c, which reads
+ * two things per cell: passable, and travel cost. Without this a
+ * board's map is "everything passable at cost 1" and its teams walk
+ * straight through rubble, water and fire.
+ *
+ * One frame per grid row y, one byte per cell x:
+ *   0      not passable
+ *   1-255  passable, this travel cost (environment_cell_travel_cost())
+ * The laptop sends every row at mission start, again whenever any cell
+ * in that row changes (hazard spread, aftershocks, road damage,
+ * environment faults), and all rows periodically so a lost frame or a
+ * rebooted board catches up. A board uses a row as soon as it has it;
+ * until then that row keeps the no-map default.
+ *
+ * MISSION_LINK_MAP_WIDTH/HEIGHT restate GRID_WIDTH/GRID_HEIGHT because
+ * this header cannot include mission_state.h (see section 5a); core/
+ * mission_link.c static-asserts that they match.
+ */
+#define MISSION_LINK_MAP_WIDTH  36u
+#define MISSION_LINK_MAP_HEIGHT 36u
+#define MISSION_LINK_MAP_BLOCKED ((uint8_t)0u)
+
+typedef struct __attribute__((packed))
+{
+    uint8_t row;                                /* grid y */
+    uint8_t cells[MISSION_LINK_MAP_WIDTH];      /* indexed by grid x */
+} MissionLinkMapRow_t;
+
+#define MISSION_LINK_MAP_ROW_PAYLOAD_SIZE \
+    ((uint32_t)sizeof(MissionLinkMapRow_t)) /* 37 bytes */
+
+#define MISSION_LINK_MAP_ROW_MAGIC0 ((uint8_t)0xDAu)
+#define MISSION_LINK_MAP_ROW_MAGIC1 ((uint8_t)0xADu)
+
+#define MISSION_LINK_MAP_ROW_WIRE_SIZE \
+    ((uint32_t)(2u + MISSION_LINK_MAP_ROW_PAYLOAD_SIZE + 1u))  /* 40 bytes */
+
+/* ---------------------------------------------------------------
+ * 5d. MissionLinkSites_t - laptop -> board, safe zones and gateways
+ * ---------------------------------------------------------------
+ * Where teams rest (begin_return_to_safe_zone()) and where evacuee runs
+ * go. Placed once by world generation on the laptop and fixed after
+ * that; sent with the rosters and re-sent with them. Evacuee counts
+ * are NOT here - they are laptop-side world state (evacuee runs are
+ * staged by the laptop, see laptop/mission_mirror.h).
+ *
+ * Counts restated as literals for the same reason as section 5c.
+ */
+#define MISSION_LINK_MAX_SAFE_ZONES 4u
+#define MISSION_LINK_NUM_GATEWAYS   3u
+
+typedef struct __attribute__((packed))
+{
+    int16_t loc_x;
+    int16_t loc_y;
+    uint8_t capacity;
+} MissionLinkSafeZoneSite_t;
+
+typedef struct __attribute__((packed))
+{
+    uint8_t num_safe_zones;
+    MissionLinkSafeZoneSite_t safe_zones[MISSION_LINK_MAX_SAFE_ZONES];
+    int16_t gateway_x[MISSION_LINK_NUM_GATEWAYS];
+    int16_t gateway_y[MISSION_LINK_NUM_GATEWAYS];
+} MissionLinkSites_t;
+
+#define MISSION_LINK_SITES_PAYLOAD_SIZE \
+    ((uint32_t)sizeof(MissionLinkSites_t)) /* 33 bytes */
+
+#define MISSION_LINK_SITES_MAGIC0 ((uint8_t)0xE5u)
+#define MISSION_LINK_SITES_MAGIC1 ((uint8_t)0x5Eu)
+
+#define MISSION_LINK_SITES_WIRE_SIZE \
+    ((uint32_t)(2u + MISSION_LINK_SITES_PAYLOAD_SIZE + 1u))    /* 36 bytes */
 
 /* ---------------------------------------------------------------
  * 5a. Heartbeat cadence for MissionLinkStatus_t's periodic re-anchor
@@ -421,18 +566,29 @@ CommsPrecedence_t mission_link_status_precedence(const MissionLinkStatus_t *msg)
  * own include comment), so mission_link.h -> cbba.h -> mission_state.h
  * -> mission_link.h would be a circular include. Kept as an
  * independent literal instead, picked as a small multiple of
- * CBBA_ROUND_TIMEOUT_MS (530 ms) per this prompt's design note - a
- * multiple, not an unrelated number, so heartbeat traffic and CBBA's
- * own per-round mesh timing budget stay on a shared cadence rather
- * than an arbitrary one that could drift into colliding with it once
- * Prompt 2's channel-busy calibration lands. core/mission_link.c
- * carries a _Static_assert (where cbba.h CAN be safely included, since
- * a .c file has no downstream includers to cycle through) that this
- * stays a multiple of CBBA_ROUND_TIMEOUT_MS - if that ever fires,
- * update the multiplier below rather than the assert. 4x round-trip
- * budgets bounds worst-case staleness at ~2.1s while giving CBBA's
- * own traffic several full rounds of headroom between heartbeats. */
-#define MISSION_LINK_HEARTBEAT_INTERVAL_MS ((uint32_t)2120u) /* 530ms * 4 */
+ * CBBA_ROUND_TIMEOUT_MS (1250 ms - recalibrated, see that macro's own
+ * doc comment in cbba.h) per this prompt's design note - a multiple,
+ * not an unrelated number, so heartbeat traffic and CBBA's own
+ * per-round mesh timing budget stay on a shared cadence rather than an
+ * arbitrary one that could drift into colliding with it once Prompt
+ * 2's channel-busy calibration lands. core/mission_link.c carries a
+ * _Static_assert (where cbba.h CAN be safely included, since a .c file
+ * has no downstream includers to cycle through) that this stays a
+ * multiple of CBBA_ROUND_TIMEOUT_MS - if that ever fires, update the
+ * multiplier below rather than the assert.
+ *
+ * Multiplier kept at 4x (unchanged) when CBBA_ROUND_TIMEOUT_MS was
+ * recalibrated from 530ms to 1250ms - the resulting ~5s worst-case
+ * staleness bound (was ~2.1s) is a deliberate lengthening of the LoRa
+ * heartbeat's own cadence (heartbeat traffic alone was ~23% of channel
+ * share at any sim speed - see this project's airtime-budget review),
+ * achieved via the SAME recalibration as CBBA_ROUND_TIMEOUT_MS rather
+ * than a second, unrelated tuning knob. laptop/tools/telemetry_
+ * bridge.py's MISSION_LINK_HEARTBEAT_INTERVAL_SEC mirror and
+ * TEAM_STATUS_STALE_SEC (3x that) must be updated to match whenever
+ * this changes - there is no automatic sync between this C constant
+ * and that Python literal. */
+#define MISSION_LINK_HEARTBEAT_INTERVAL_MS ((uint32_t)5000u) /* 1250ms * 4 */
 
 /* ---------------------------------------------------------------
  * 6. Board-side incident cache
@@ -461,6 +617,21 @@ CommsPrecedence_t mission_link_status_precedence(const MissionLinkStatus_t *msg)
    contract as mission_link_find_incident_slot()'s return value in
    mission_link.c. */
 MissionLinkIncident_t *board_incident_cache_get(uint32_t incident_id);
+
+/* Board route map (section 5c). Returns 1 and writes the cell's map
+   byte to *cell_out if row y has arrived and (x, y) is on the grid,
+   else 0 - the caller keeps its no-map default. core/environment.c's
+   environment_cell_is_navigable()/_travel_cost() are the callers. */
+uint8_t mission_link_map_cell(int x, int y, uint8_t *cell_out);
+
+/* Rows received since mission_link_map_reset() (0..MISSION_LINK_MAP_HEIGHT). */
+uint32_t mission_link_map_rows_received(void);
+
+/* Forgets the map - a board calls this at boot. */
+void mission_link_map_reset(void);
+
+/* 1 once a MissionLinkSites_t has been applied since mission_link_map_reset(). */
+uint8_t mission_link_sites_received(void);
 
 /* Inserts inc into the cache, or updates the existing slot if
    inc->incident_id is already cached. If the cache is full and

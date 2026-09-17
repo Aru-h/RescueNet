@@ -592,6 +592,16 @@ static int run_board0(void)
     roster.loc_x = 29;
     roster.loc_y = 17;
     roster.stamina = 80u;
+    /* Same reject-on-out-of-range treatment as loc_x/loc_y above applies
+       to equipment_level (0-EQ_MAX_LEVEL, see mission_link_apply_roster())
+       - this field was left unset here, so it held whatever garbage was on
+       this stack frame. On this build that garbage byte was consistently
+       > EQ_MAX_LEVEL, so board 1 silently whole-message-rejected every
+       roster this harness ever sent it (g_teams[5] stayed zeroed, the
+       override in the same batch still landing fine since it has no such
+       field) - found while chasing a deterministic check-two-board-harness
+       failure that survived reverting every unrelated change. */
+    roster.equipment_level = 0u;
 
     {
         MissionLinkHandshakeReq_t laptop_req;

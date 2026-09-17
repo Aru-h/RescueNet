@@ -38,6 +38,10 @@ uint32_t allocate_incident_id(void);
 void update_all_incident_work(void);
 void update_all_passive_effects(void);
 void complete_incident_stage(IncidentState_t *incident);
+/* See their definitions in incident.c - board side of laptop-issued
+   stage changes and resolutions. */
+void incident_release_teams_for_authority(IncidentState_t *task);
+void incident_close_for_authority(IncidentState_t *task);
 void complete_return_to_rest(TeamState_t *team);
 int incident_needs_support(const IncidentState_t *incident);
 /* Board-hosted-team work rate: deterministic, fault-adjusted (equipment_

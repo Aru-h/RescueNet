@@ -265,28 +265,27 @@ sx126x_hal_status_t sx126x_hal_wakeup(const void *context)
  *     no GPIO - the fake radio's irq status standing at non-zero is
  *     this test's substitute "DIO1 asserted" signal) -----------------
  * -----------------------------------------------------------------------
- * Kept in lock-step with sx1262_poll_rx()'s real logic:
- *   get_irq_status -> clear_irq_status(irq_status) unconditionally ->
- *   if !(irq_status & RX_DONE) return -> get_rx_buffer_status ->
- *   read_buffer -> lora_frame_try_parse() -> on rc==1, deliver_received().
- * Does NOT include sx1262_poll_rx()'s sx1262_enter_rx() re-arm call on
- * the TxDone/Timeout branch - that call is board-only (drives real
- * SPI/GPIO), not something a host build can meaningfully verify; this
- * test only checks the delivery-or-not outcome that branch shares with
- * the real function (nothing gets delivered).
+ * Same shape as sx1262_poll_rx(): get_irq_status -> clear_irq_status ->
+ * translate to COMMS_RADIO_EVENT_* -> comms_transport_radio_poll_action()
+ * -> if read_packet: get_rx_buffer_status -> read_buffer ->
+ * comms_transport_receive_radio_packet(). The decision and the
+ * parse/deliver step are the real shared functions both HALs call, not
+ * a transcription. The tx_finished half (clearing g_lora_tx_busy and
+ * re-arming RX) is board-only; *out_tx_finished reports whether the HAL
+ * would have done it.
  *
- * Returns lora_frame_try_parse()'s own rc (1/0/-1) when RxDone was
- * seen, or 2 (a sentinel outside that range) for the "no RxDone"
- * case, so tests can tell "correctly did nothing because there was
- * nothing to do" apart from "tried to parse and got 0/-1".
+ * Returns 1 if a frame was delivered, 0 if a packet was read but dropped,
+ * or 2 if no packet was read at all.
  */
-static int simulate_rx_poll(uint8_t *out_type, uint8_t *out_payload, uint8_t *out_payload_len)
+static int simulate_rx_poll(uint8_t *out_tx_finished)
 {
     sx126x_irq_mask_t irq_status;
     sx126x_rx_buffer_status_t rx_buf_status;
     uint8_t frame_bytes[LORA_FRAME_MAX_WIRE_SIZE];
-    uint8_t sender_board_id;
-    int rc;
+    uint32_t events = 0u;
+    CommsRadioPollAction_t action;
+
+    *out_tx_finished = 0u;
 
     if (sx126x_get_irq_status(NULL, &irq_status) != SX126X_STATUS_OK)
     {
@@ -295,36 +294,23 @@ static int simulate_rx_poll(uint8_t *out_type, uint8_t *out_payload, uint8_t *ou
 
     (void)sx126x_clear_irq_status(NULL, irq_status);
 
-    if ((irq_status & SX126X_IRQ_RX_DONE) == 0u)
-    {
-        return 2;
-    }
+    if ((irq_status & SX126X_IRQ_RX_DONE) != 0u) events |= COMMS_RADIO_EVENT_RX_DONE;
+    if ((irq_status & SX126X_IRQ_TX_DONE) != 0u) events |= COMMS_RADIO_EVENT_TX_DONE;
+    if ((irq_status & SX126X_IRQ_TIMEOUT) != 0u) events |= COMMS_RADIO_EVENT_TIMEOUT;
 
-    if (sx126x_get_rx_buffer_status(NULL, &rx_buf_status) != SX126X_STATUS_OK)
-    {
-        return 2;
-    }
+    action = comms_transport_radio_poll_action(events);
+    *out_tx_finished = action.tx_finished;
 
-    if (rx_buf_status.pld_len_in_bytes > (uint8_t)sizeof(frame_bytes))
-    {
-        return 2;
-    }
-
-    if (sx126x_read_buffer(NULL, rx_buf_status.buffer_start_pointer,
+    if (!action.read_packet ||
+        sx126x_get_rx_buffer_status(NULL, &rx_buf_status) != SX126X_STATUS_OK ||
+        rx_buf_status.pld_len_in_bytes > (uint8_t)sizeof(frame_bytes) ||
+        sx126x_read_buffer(NULL, rx_buf_status.buffer_start_pointer,
                             frame_bytes, rx_buf_status.pld_len_in_bytes) != SX126X_STATUS_OK)
     {
         return 2;
     }
 
-    rc = lora_frame_try_parse(frame_bytes, rx_buf_status.pld_len_in_bytes, out_type,
-                               &sender_board_id, out_payload, out_payload_len);
-    if (rc == 1)
-    {
-        (void)sender_board_id;
-        (void)comms_transport_deliver_received(*out_type, out_payload, *out_payload_len);
-    }
-
-    return rc;
+    return comms_transport_receive_radio_packet(frame_bytes, rx_buf_status.pld_len_in_bytes);
 }
 
 /*
@@ -337,9 +323,7 @@ static void test_happy_path_round_trip(void)
 {
     uint8_t payload[7] = { 0xDEu, 0xADu, 0xBEu, 0xEFu, 0x01u, 0x02u, 0x03u };
     uint8_t wire_buf[LORA_FRAME_MAX_WIRE_SIZE];
-    uint8_t out_type = 0xFFu;
-    uint8_t out_payload[LORA_FRAME_MAX_PAYLOAD];
-    uint8_t out_payload_len = 0xFFu;
+    uint8_t tx_finished = 0u;
     uint32_t wire_len;
     int rc;
 
@@ -359,7 +343,7 @@ static void test_happy_path_round_trip(void)
 
     fake_radio_load_rx_packet(wire_buf, wire_len);
 
-    rc = simulate_rx_poll(&out_type, out_payload, &out_payload_len);
+    rc = simulate_rx_poll(&tx_finished);
     CHECK(rc == 1);
 
     /* IRQ bits actually cleared (DIO1 would deassert on real
@@ -383,9 +367,7 @@ static void test_max_size_payload_round_trip(void)
 {
     uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
     uint8_t wire_buf[LORA_FRAME_MAX_WIRE_SIZE];
-    uint8_t out_type = 0xFFu;
-    uint8_t out_payload[LORA_FRAME_MAX_PAYLOAD];
-    uint8_t out_payload_len = 0xFFu;
+    uint8_t tx_finished = 0u;
     uint32_t wire_len;
     uint32_t i;
     int rc;
@@ -408,7 +390,7 @@ static void test_max_size_payload_round_trip(void)
 
     fake_radio_load_rx_packet(wire_buf, wire_len);
 
-    rc = simulate_rx_poll(&out_type, out_payload, &out_payload_len);
+    rc = simulate_rx_poll(&tx_finished);
     CHECK(rc == 1);
 
     CHECK(comms_transport_poll_received(&polled_sender_team_id, &polled_frame_type,
@@ -422,9 +404,7 @@ static void test_corrupted_frame_rejected(void)
 {
     uint8_t payload[5] = { 0x11u, 0x22u, 0x33u, 0x44u, 0x55u };
     uint8_t wire_buf[LORA_FRAME_MAX_WIRE_SIZE];
-    uint8_t out_type = 0xFFu;
-    uint8_t out_payload[LORA_FRAME_MAX_PAYLOAD];
-    uint8_t out_payload_len = 0xFFu;
+    uint8_t tx_finished = 0u;
     uint32_t wire_len;
     int rc;
 
@@ -450,8 +430,8 @@ static void test_corrupted_frame_rejected(void)
 
     fake_radio_load_rx_packet(wire_buf, wire_len);
 
-    rc = simulate_rx_poll(&out_type, out_payload, &out_payload_len);
-    CHECK(rc == -1);
+    rc = simulate_rx_poll(&tx_finished);
+    CHECK(rc == 0);
 
     CHECK(sx126x_get_irq_status(NULL, &irq_after) == SX126X_STATUS_OK);
     CHECK(irq_after == (sx126x_irq_mask_t)SX126X_IRQ_NONE);
@@ -463,9 +443,7 @@ static void test_corrupted_frame_rejected(void)
 
 static void test_timeout_only_delivers_nothing(void)
 {
-    uint8_t out_type = 0xFFu;
-    uint8_t out_payload[LORA_FRAME_MAX_PAYLOAD];
-    uint8_t out_payload_len = 0xFFu;
+    uint8_t tx_finished = 0u;
     int rc;
 
     uint8_t polled_sender_team_id = 0xFFu;
@@ -482,11 +460,88 @@ static void test_timeout_only_delivers_nothing(void)
        see simulate_rx_poll()'s own doc). */
     g_fake_irq_status = (uint16_t)SX126X_IRQ_TIMEOUT;
 
-    rc = simulate_rx_poll(&out_type, out_payload, &out_payload_len);
+    rc = simulate_rx_poll(&tx_finished);
     CHECK(rc == 2);
+    CHECK(tx_finished == 1u); /* a TX timeout still ends the transmission */
 
     CHECK(comms_transport_poll_received(&polled_sender_team_id, &polled_frame_type,
                                          polled_payload, &polled_payload_len) == 0);
+}
+
+/* A packet flagged together with TX_DONE was overwritten by this board's
+   own transmission (TX and RX share the radio buffer): it must not be
+   read, and the transmission must still count as finished. Before the
+   fix, RX_DONE won and TX-busy was never cleared - the DK stopped
+   transmitting and receiving for good. */
+static void test_rx_done_with_tx_done_finishes_tx(void)
+{
+    uint8_t payload[4] = { 1u, 2u, 3u, 4u };
+    uint8_t wire_buf[LORA_FRAME_MAX_WIRE_SIZE];
+    uint32_t wire_len;
+    uint8_t tx_finished = 0u;
+    int rc;
+    uint8_t polled_sender_team_id, polled_frame_type, polled_payload_len;
+    uint8_t polled_payload[LORA_FRAME_MAX_PAYLOAD];
+    sx126x_irq_mask_t irq_after;
+
+    lora_crypto_reset();
+    comms_transport_init();
+
+    wire_len = lora_frame_pack(LORA_FRAME_TYPE_MISSION_LINK, 1u, payload,
+                                (uint8_t)sizeof(payload), wire_buf);
+    fake_radio_load_rx_packet(wire_buf, wire_len);
+    g_fake_irq_status = (uint16_t)(SX126X_IRQ_RX_DONE | SX126X_IRQ_TX_DONE);
+
+    rc = simulate_rx_poll(&tx_finished);
+    CHECK(rc == 2);
+    CHECK(tx_finished == 1u);
+    CHECK(sx126x_get_irq_status(NULL, &irq_after) == SX126X_STATUS_OK);
+    CHECK(irq_after == (sx126x_irq_mask_t)SX126X_IRQ_NONE);
+    CHECK(comms_transport_poll_received(&polled_sender_team_id, &polled_frame_type,
+                                         polled_payload, &polled_payload_len) == 0);
+
+    /* A plain RX_DONE does not end a transmission (RX is continuous). */
+    fake_radio_load_rx_packet(wire_buf, wire_len);
+    rc = simulate_rx_poll(&tx_finished);
+    CHECK(rc == 1);
+    CHECK(tx_finished == 0u);
+}
+
+/* A packet claiming this board as its sender is dropped before parsing
+   and counted, even though it authenticates. */
+static void test_own_frame_dropped(void)
+{
+    uint8_t payload[6] = { 6u, 1u, 2u, 3u, 4u, 1u };
+    uint8_t wire_buf[LORA_FRAME_MAX_WIRE_SIZE];
+    uint32_t wire_len;
+    uint8_t tx_finished = 0u;
+    uint32_t drops_before;
+    int rc;
+    uint8_t polled_sender_team_id, polled_frame_type, polled_payload_len;
+    uint8_t polled_payload[LORA_FRAME_MAX_PAYLOAD];
+
+    lora_crypto_reset();
+    g_comms_transport_this_board_id = 1u;
+    comms_transport_init();
+    drops_before = comms_transport_own_frame_drop_count();
+
+    wire_len = lora_frame_pack(LORA_FRAME_TYPE_OVERRIDE_ACK, 1u, payload,
+                                (uint8_t)sizeof(payload), wire_buf);
+    fake_radio_load_rx_packet(wire_buf, wire_len);
+
+    rc = simulate_rx_poll(&tx_finished);
+    CHECK(rc == 0);
+    CHECK(comms_transport_own_frame_drop_count() == drops_before + 1u);
+    CHECK(comms_transport_poll_received(&polled_sender_team_id, &polled_frame_type,
+                                         polled_payload, &polled_payload_len) == 0);
+
+    /* The same frame from the other board's id is still delivered. */
+    lora_crypto_reset();
+    g_comms_transport_this_board_id = 0u;
+    comms_transport_init();
+    fake_radio_load_rx_packet(wire_buf, wire_len);
+    rc = simulate_rx_poll(&tx_finished);
+    CHECK(rc == 1);
 }
 
 int main(void)
@@ -495,6 +550,8 @@ int main(void)
     test_max_size_payload_round_trip();
     test_corrupted_frame_rejected();
     test_timeout_only_delivers_nothing();
+    test_rx_done_with_tx_done_finishes_tx();
+    test_own_frame_dropped();
 
     if (g_failures == 0)
     {

@@ -71,6 +71,10 @@
 #include "mission_link.h"
 #include "mission_link_codec.h"
 #include "mission_state.h"
+#include "environment.h"
+#include "path.h"
+#include "simulation.h"
+#include "incident.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -153,6 +157,7 @@ static MissionLinkRoster_t make_roster(void)
     r.loc_x = -1200;
     r.loc_y = 340;
     r.stamina = 87u;
+    r.equipment_level = 64u;
 
     return r;
 }
@@ -669,6 +674,439 @@ static void test_apply_incident_wires_cache(void)
     CHECK(got == NULL);
 }
 
+/* ---------------------------------------------------------------
+ * Board-side merge of laptop incident frames (mission_link.c's
+ * mission_link_apply_incident() ownership comment). This build is
+ * board 0 with five teams per board, so teams 0-4 are local.
+ * --------------------------------------------------------------- */
+
+static IncidentState_t *board_slot_for(uint32_t incident_id)
+{
+    uint32_t i;
+
+    for (i = 0u; i < NUM_INCIDENTS; i++)
+    {
+        if (g_incidents[i].slot_occupied && g_incidents[i].incident_id == incident_id)
+        {
+            return &g_incidents[i];
+        }
+    }
+    return NULL;
+}
+
+/* A local team working incident_id the way the board's own allocation
+   leaves it. */
+static IncidentState_t *board_team_working(uint8_t team_id, uint32_t incident_id,
+                                           uint16_t laptop_work, uint16_t board_work)
+{
+    MissionLinkIncident_t msg = make_incident_with_id(incident_id, 2u, laptop_work);
+    IncidentState_t *inc;
+
+    msg.status = (uint8_t)INC_OPEN;
+    msg.req_capability = 2u; /* SPEC_MEDICAL */
+    msg.incident_type = 2u;  /* INCIDENT_MASS_CASUALTY */
+    mission_link_apply_incident(&msg);
+    inc = board_slot_for(incident_id);
+    if (inc == NULL)
+    {
+        return NULL;
+    }
+
+    memset(&g_teams[team_id], 0, sizeof(g_teams[team_id]));
+    g_teams[team_id].team_id = team_id;
+    g_teams[team_id].stamina = 90.0f;
+    g_teams[team_id].equipment_level = 90u;
+    g_teams[team_id].status = STATUS_ON_SCENE;
+    g_teams[team_id].assigned_task_pool = TASK_POOL_INCIDENT;
+    g_teams[team_id].assigned_task_slot = (uint8_t)(inc - g_incidents);
+    g_teams[team_id].resting_zone_id = NO_ASSIGNMENT;
+    inc->assigned_team = team_id;
+    inc->status = INC_IN_PROGRESS;
+    inc->work_remaining = board_work;
+    return inc;
+}
+
+static void clear_board_incidents(void)
+{
+    uint32_t i;
+
+    for (i = 0u; i < NUM_INCIDENTS; i++)
+    {
+        g_incidents[i].slot_occupied = 0u;
+    }
+}
+
+static void test_apply_incident_keeps_board_execution(void)
+{
+    MissionLinkIncident_t resend;
+    IncidentState_t *inc;
+
+    clear_board_incidents();
+    inc = board_team_working(2u, 9100u, 100u, 40u);
+    CHECK(inc != NULL);
+    if (inc == NULL)
+    {
+        return;
+    }
+
+    /* The laptop's periodic re-send lags the board: still OPEN, old work. */
+    resend = make_incident_with_id(9100u, 1u, 100u);
+    resend.status = (uint8_t)INC_OPEN;
+    resend.req_capability = 2u;
+    resend.incident_type = 2u;
+    resend.victim_count = 6u;
+    mission_link_apply_incident(&resend);
+
+    CHECK(inc->status == INC_IN_PROGRESS);
+    CHECK(inc->assigned_team == 2u);
+    CHECK(inc->work_remaining == 40u);
+    CHECK(inc->priority == 1u && inc->victim_count == 6u); /* laptop's fields do apply */
+    CHECK(g_teams[2].status == STATUS_ON_SCENE);
+    CHECK(board_incident_cache_get(9100u) != NULL &&
+          board_incident_cache_get(9100u)->work_remaining == 40u);
+}
+
+static void test_apply_incident_not_local_takes_laptop_status(void)
+{
+    MissionLinkIncident_t msg;
+    IncidentState_t *inc;
+
+    clear_board_incidents();
+    /* Another board's team has it: the laptop says ASSIGNED. */
+    msg = make_incident_with_id(9200u, 2u, 100u);
+    msg.status = (uint8_t)INC_ASSIGNED;
+    mission_link_apply_incident(&msg);
+    inc = board_slot_for(9200u);
+    CHECK(inc != NULL && inc->status == INC_ASSIGNED);
+
+    /* That team gave it up; the laptop re-opens it. No local team held
+       it, so the board must follow rather than keep ASSIGNED forever. */
+    msg.status = (uint8_t)INC_OPEN;
+    msg.work_remaining = 70u;
+    mission_link_apply_incident(&msg);
+    CHECK(inc != NULL && inc->status == INC_OPEN && inc->work_remaining == 70u);
+}
+
+static void test_apply_incident_moved_sends_team_back_en_route(void)
+{
+    MissionLinkIncident_t moved;
+    IncidentState_t *inc;
+
+    clear_board_incidents();
+    inc = board_team_working(3u, 9300u, 100u, 55u);
+    CHECK(inc != NULL);
+    if (inc == NULL)
+    {
+        return;
+    }
+
+    moved = make_incident_with_id(9300u, 2u, 100u);
+    moved.status = (uint8_t)INC_IN_PROGRESS;
+    moved.req_capability = 2u;
+    moved.incident_type = 2u;
+    moved.loc_x = (int16_t)(inc->loc_x + 2);
+    moved.loc_y = inc->loc_y;
+    mission_link_apply_incident(&moved);
+
+    CHECK(inc->loc_x == moved.loc_x);
+    CHECK(g_teams[3].status == STATUS_EN_ROUTE);
+    CHECK(inc->status == INC_ASSIGNED && inc->assigned_team == 3u);
+}
+
+static void test_apply_incident_new_stage_releases_team(void)
+{
+    MissionLinkIncident_t next_stage;
+    IncidentState_t *inc;
+
+    clear_board_incidents();
+    inc = board_team_working(1u, 9400u, 100u, 5u);
+    CHECK(inc != NULL);
+    if (inc == NULL)
+    {
+        return;
+    }
+
+    next_stage = make_incident_with_id(9400u, 2u, 100u);
+    next_stage.status = (uint8_t)INC_OPEN;
+    next_stage.req_capability = 3u; /* SPEC_EXTRACTION */
+    next_stage.incident_type = 2u;
+    mission_link_apply_incident(&next_stage);
+
+    CHECK(inc->slot_occupied && inc->req_capability == 3u);
+    CHECK(inc->status == INC_OPEN && inc->work_remaining == 100u);
+    CHECK(inc->assigned_team == NO_ASSIGNMENT);
+    CHECK(g_teams[1].assigned_task_pool == TASK_POOL_NONE);
+    CHECK(g_teams[1].status != STATUS_ON_SCENE);
+}
+
+static void test_apply_incident_resolved_releases_and_frees(void)
+{
+    MissionLinkIncident_t resolved;
+    IncidentState_t *inc;
+
+    clear_board_incidents();
+    inc = board_team_working(4u, 9500u, 100u, 30u);
+    CHECK(inc != NULL);
+    if (inc == NULL)
+    {
+        return;
+    }
+
+    resolved = make_incident_with_id(9500u, 2u, 0u);
+    resolved.status = (uint8_t)INC_RESOLVED;
+    resolved.req_capability = 2u;
+    resolved.incident_type = 2u;
+    mission_link_apply_incident(&resolved);
+
+    CHECK(board_slot_for(9500u) == NULL);
+    CHECK(g_teams[4].assigned_task_pool == TASK_POOL_NONE);
+    CHECK(g_teams[4].status != STATUS_ON_SCENE);
+    CHECK(board_incident_cache_get(9500u) == NULL);
+
+    /* A re-sent resolution for an incident this board never had (or
+       already closed) takes no slot. */
+    resolved.incident_id = 9501u;
+    mission_link_apply_incident(&resolved);
+    CHECK(board_slot_for(9501u) == NULL);
+}
+
+static void test_clock_codec_and_step_plan(void)
+{
+    MissionLinkClock_t clock;
+    MissionLinkClock_t parsed;
+    uint8_t wire[MISSION_LINK_CLOCK_WIRE_SIZE];
+    uint8_t payload[MISSION_LINK_CLOCK_PAYLOAD_SIZE];
+    uint32_t start = 0xFFFFFFFFu;
+
+    clock.tick = 0x01020304u;
+    CHECK(mission_link_pack_clock(&clock, wire) == MISSION_LINK_CLOCK_WIRE_SIZE);
+    CHECK(wire[0] == MISSION_LINK_CLOCK_MAGIC0 && wire[1] == MISSION_LINK_CLOCK_MAGIC1);
+    CHECK(mission_link_parse_clock(wire, sizeof(wire), &parsed) == 1 && parsed.tick == clock.tick);
+    CHECK(mission_link_parse_clock(wire, sizeof(wire) - 1u, &parsed) == 0);
+    wire[3] ^= 0x10u;
+    CHECK(mission_link_parse_clock(wire, sizeof(wire), &parsed) == -1);
+    mission_link_pack_clock_payload(&clock, payload);
+    mission_link_parse_clock_payload(payload, &parsed);
+    CHECK(parsed.tick == clock.tick);
+
+    mission_link_clock_reset();
+    CHECK(!mission_link_clock_received() && mission_link_authorized_tick() == 0u);
+    clock.tick = 40u;
+    mission_link_apply_clock(&clock);
+    clock.tick = 12u;                     /* latest wins, not highest */
+    mission_link_apply_clock(&clock);
+    CHECK(mission_link_clock_received() && mission_link_authorized_tick() == 12u);
+
+    CHECK(mission_link_clock_step_plan(5u, 5u, &start) == 0u && start == 0xFFFFFFFFu);
+    CHECK(mission_link_clock_step_plan(9u, 5u, &start) == 0u);
+    CHECK(mission_link_clock_step_plan(4u, 5u, &start) == 1u && start == 4u);
+    CHECK(mission_link_clock_step_plan(2u, 2u + MISSION_LINK_CLOCK_MAX_CATCHUP_TICKS, &start) == 1u &&
+          start == 2u);
+    CHECK(mission_link_clock_step_plan(2u, 3u + MISSION_LINK_CLOCK_MAX_CATCHUP_TICKS, &start) == 1u &&
+          start == 2u + MISSION_LINK_CLOCK_MAX_CATCHUP_TICKS);
+    CHECK(mission_link_clock_step_plan(0u, 900u, &start) == 1u && start == 899u);
+}
+
+static void test_status_reports_position_and_hides_board_system_tasks(void)
+{
+    MissionLinkStatus_t st;
+
+    memset(&g_teams[2], 0, sizeof(g_teams[2]));
+    g_teams[2].team_id = 2u;
+    g_teams[2].loc_x = 33;
+    g_teams[2].loc_y = 7;
+    g_teams[2].stamina = 50.0f;
+    g_teams[2].assigned_task_pool = TASK_POOL_SYSTEM;
+    g_teams[2].assigned_task_slot = 0u;
+    g_system_tasks[0].slot_occupied = 1u;
+    g_system_tasks[0].incident_id = 3u; /* board-local id, may collide */
+
+    mission_link_build_status(2u, &st);
+    CHECK(st.loc_x == 33 && st.loc_y == 7);
+    CHECK(st.assigned_incident_id == MISSION_LINK_NO_INCIDENT);
+    g_system_tasks[0].slot_occupied = 0u;
+}
+
+/* ---------------------------------------------------------------
+ * Route map, sites, and board-side evacuee legs (mission_link.h
+ * sections 5c/5d). This process never generates an environment, so it
+ * routes exactly like a board.
+ * --------------------------------------------------------------- */
+
+static void test_map_row_codec_and_board_routing(void)
+{
+    MissionLinkMapRow_t row;
+    MissionLinkMapRow_t parsed;
+    uint8_t wire[MISSION_LINK_MAP_ROW_WIRE_SIZE];
+    uint8_t cell = 0u;
+    int next_x = -1;
+    int next_y = -1;
+    int cost;
+    uint8_t y;
+
+    CHECK(mission_link_map_encode_cell(0u, 9u) == MISSION_LINK_MAP_BLOCKED);
+    CHECK(mission_link_map_encode_cell(1u, 0u) == 1u); /* passable never encodes as blocked */
+    CHECK(mission_link_map_encode_cell(1u, 7u) == 7u);
+
+    mission_link_map_reset();
+    CHECK(mission_link_map_rows_received() == 0u);
+    CHECK(environment_cell_is_navigable(5, 5) == 1u);  /* no map yet: old default */
+    CHECK(environment_cell_travel_cost(5, 5) == 1u);
+
+    memset(&row, 0, sizeof(row));
+    row.row = 5u;
+    memset(row.cells, 2, sizeof(row.cells));
+    row.cells[5] = MISSION_LINK_MAP_BLOCKED;
+    row.cells[6] = 9u;
+    CHECK(mission_link_pack_map_row(&row, wire) == MISSION_LINK_MAP_ROW_WIRE_SIZE);
+    CHECK(mission_link_parse_map_row(wire, sizeof(wire), &parsed) == 1);
+    CHECK(memcmp(&parsed, &row, sizeof(row)) == 0);
+    CHECK(mission_link_parse_map_row(wire, sizeof(wire) - 1u, &parsed) == 0);
+    wire[20] ^= 0x40u;
+    CHECK(mission_link_parse_map_row(wire, sizeof(wire), &parsed) == -1);
+
+    CHECK(mission_link_apply_map_row(&row) == 1u);
+    CHECK(mission_link_apply_map_row(&row) == 1u);      /* repeat: still one row */
+    CHECK(mission_link_map_rows_received() == 1u);
+    CHECK(mission_link_map_cell(5, 5, &cell) == 1u && cell == MISSION_LINK_MAP_BLOCKED);
+    CHECK(mission_link_map_cell(5, 6, &cell) == 0u);    /* row 6 not here yet */
+    CHECK(mission_link_map_cell(-1, 5, &cell) == 0u && mission_link_map_cell(36, 5, &cell) == 0u);
+    CHECK(environment_cell_is_navigable(5, 5) == 0u);
+    CHECK(environment_cell_travel_cost(6, 5) == 9u);
+    CHECK(environment_cell_is_navigable(5, 6) == 1u);  /* unmapped row keeps the default */
+
+    row.row = 200u;
+    CHECK(mission_link_apply_map_row(&row) == 0u);
+    CHECK(mission_link_map_rows_received() == 1u);
+
+    /* A full map: open ground, with a wall across x=10 except a gap at
+       y=30. A team crossing from (5,5) to (15,5) must head for the gap
+       rather than step straight through the wall. */
+    for (y = 0u; y < MISSION_LINK_MAP_HEIGHT; y++)
+    {
+        memset(&row, 0, sizeof(row));
+        row.row = y;
+        memset(row.cells, 1, sizeof(row.cells));
+        if (y != 30u)
+        {
+            row.cells[10] = MISSION_LINK_MAP_BLOCKED;
+        }
+        (void)mission_link_apply_map_row(&row);
+    }
+    CHECK(mission_link_map_rows_received() == MISSION_LINK_MAP_HEIGHT);
+
+    cost = find_next_path_step(9, 5, 11, 5, 0, &next_x, &next_y);
+    CHECK(cost > 2);                               /* not the 2-step straight line */
+    CHECK(!(next_x == 10 && next_y == 5));         /* never into the wall */
+    CHECK(next_x == 9 && next_y == 6);             /* toward the gap */
+
+    mission_link_map_reset();
+    CHECK(environment_cell_is_navigable(10, 5) == 1u); /* reset forgets the map */
+}
+
+static void test_sites_codec_and_apply(void)
+{
+    MissionLinkSites_t sites;
+    MissionLinkSites_t parsed;
+    uint8_t wire[MISSION_LINK_SITES_WIRE_SIZE];
+
+    memset(&sites, 0, sizeof(sites));
+    sites.num_safe_zones = 2u;
+    sites.safe_zones[0].loc_x = 3;
+    sites.safe_zones[0].loc_y = 4;
+    sites.safe_zones[0].capacity = 40u;
+    sites.safe_zones[1].loc_x = 30;
+    sites.safe_zones[1].loc_y = 31;
+    sites.safe_zones[1].capacity = 25u;
+    sites.gateway_x[0] = 0;  sites.gateway_y[0] = 17;
+    sites.gateway_x[1] = 35; sites.gateway_y[1] = 2;
+    sites.gateway_x[2] = 20; sites.gateway_y[2] = 35;
+
+    CHECK(mission_link_pack_sites(&sites, wire) == MISSION_LINK_SITES_WIRE_SIZE);
+    CHECK(mission_link_parse_sites(wire, sizeof(wire), &parsed) == 1 &&
+          memcmp(&parsed, &sites, sizeof(sites)) == 0);
+
+    mission_link_map_reset();
+    g_safezones[1].evacuee_count = 12u;
+    CHECK(!mission_link_sites_received());
+    CHECK(mission_link_apply_sites(&sites) == 1u);
+    CHECK(mission_link_sites_received());
+    CHECK(g_num_safe_zones == 2u);
+    CHECK(g_safezones[1].loc_x == 30 && g_safezones[1].loc_y == 31 && g_safezones[1].capacity == 25u);
+    CHECK(g_safezones[1].evacuee_count == 12u); /* not on the wire: kept */
+    CHECK(g_evacuation_gateways[2].loc_x == 20 && g_evacuation_gateways[2].loc_y == 35);
+
+    /* Bad frames change nothing. */
+    parsed = sites;
+    parsed.num_safe_zones = 5u;
+    CHECK(mission_link_apply_sites(&parsed) == 0u);
+    parsed = sites;
+    parsed.safe_zones[0].loc_x = 36;
+    CHECK(mission_link_apply_sites(&parsed) == 0u);
+    parsed = sites;
+    parsed.gateway_y[1] = -1;
+    CHECK(mission_link_apply_sites(&parsed) == 0u);
+    CHECK(g_num_safe_zones == 2u && g_safezones[0].loc_x == 3);
+}
+
+static void test_board_evacuee_leg_waits_for_laptop(void)
+{
+    IncidentState_t *inc;
+    SimRole_t saved = g_sim_role;
+
+    clear_board_incidents();
+    inc = board_team_working(0u, 9600u, 100u, 0u);
+    CHECK(inc != NULL);
+    if (inc == NULL)
+    {
+        return;
+    }
+    inc->incident_type = INCIDENT_EVACUEE_OFFBOARD;
+    inc->req_capability = SPEC_EXTRACTION;
+    /* A loading leg with people still waiting and a reachable gateway:
+       the fast simulation would load them and head for the gateway. */
+    inc->victim_count = 0u;
+    inc->evac_safezone_id = 0u;
+    inc->evac_capacity = 5u;
+    g_safezones[0].loc_x = 3;
+    g_safezones[0].loc_y = 3;
+    g_safezones[0].evacuee_count = 7u;
+    g_evacuation_gateways[0].loc_x = 3;
+    g_evacuation_gateways[0].loc_y = 8;
+
+    g_sim_role = SIM_ROLE_BOARD;
+    complete_incident_stage(inc);
+    g_sim_role = saved;
+
+    CHECK(g_safezones[0].evacuee_count == 7u);        /* headcounts stay the laptop's */
+    CHECK(board_slot_for(9600u) == NULL);             /* leg over, nothing staged here */
+    CHECK(g_teams[0].assigned_task_pool == TASK_POOL_NONE);
+    CHECK(g_teams[0].status != STATUS_ON_SCENE);
+}
+
+/* A board never runs generate_teams(), so the roster is the only thing
+   that sets a team's equipment - without it every board team started at
+   0 and rested before it could work. */
+static void test_roster_sets_equipment_level(void)
+{
+    MissionLinkRoster_t r = make_roster();
+    uint32_t rejects = mission_link_roster_reject_count();
+
+    r.loc_x = 4;
+    r.loc_y = 6;
+    g_teams[r.team_id].equipment_level = 0u;
+    mission_link_apply_roster(&r);
+    CHECK(g_teams[r.team_id].equipment_level == 64u);
+    CHECK(mission_link_roster_reject_count() == rejects);
+
+    r.equipment_level = EQ_MAX_LEVEL + 1u;               /* out of range: whole roster rejected */
+    r.stamina = 12u;
+    mission_link_apply_roster(&r);
+    CHECK(mission_link_roster_reject_count() == rejects + 1u);
+    CHECK(g_teams[r.team_id].equipment_level == 64u);
+    CHECK(g_teams[r.team_id].stamina == 87.0f);
+}
+
 int main(void)
 {
     test_roster_both_channels_agree();
@@ -697,6 +1135,18 @@ int main(void)
     test_incident_cache_insert_lookup_update();
     test_incident_cache_get_missing_returns_null();
     test_apply_incident_wires_cache();
+
+    test_apply_incident_keeps_board_execution();
+    test_apply_incident_not_local_takes_laptop_status();
+    test_apply_incident_moved_sends_team_back_en_route();
+    test_apply_incident_new_stage_releases_team();
+    test_apply_incident_resolved_releases_and_frees();
+    test_clock_codec_and_step_plan();
+    test_status_reports_position_and_hides_board_system_tasks();
+    test_map_row_codec_and_board_routing();
+    test_sites_codec_and_apply();
+    test_board_evacuee_leg_waits_for_laptop();
+    test_roster_sets_equipment_level();
 
     if (g_failures == 0)
     {
