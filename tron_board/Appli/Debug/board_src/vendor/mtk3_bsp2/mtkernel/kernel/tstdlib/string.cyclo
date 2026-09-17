@@ -1,7 +1,0 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tstdlib/string.c:24:7:knl_memset	6
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tstdlib/string.c:65:7:knl_memcpy	2
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tstdlib/string.c:79:4:knl_strlen	2
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tstdlib/string.c:91:7:knl_strcpy	2
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tstdlib/string.c:103:7:knl_strncpy	4
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tstdlib/string.c:123:5:knl_strcmp	3
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/vendor/mtk3_bsp2/mtkernel/kernel/tstdlib/string.c:138:7:knl_strcat	3

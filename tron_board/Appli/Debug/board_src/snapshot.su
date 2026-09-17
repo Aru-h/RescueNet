@@ -1,8 +1,0 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/snapshot.c:73:10:board_snapshot_ring_pending	4	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/snapshot.c:78:6:snapshot_begin_run	16	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/snapshot.c:102:13:board_snapshot_ring_push	24	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/snapshot.c:128:6:snapshot_record	16	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/snapshot.c:144:6:snapshot_record_resolved	24	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/snapshot.c:154:6:snapshot_end_run	4	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/snapshot.c:163:6:snapshot_close_dataset	4	static
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/board/STM32N6570-DK/snapshot.c:183:10:board_snapshot_ring_drain	40	static
