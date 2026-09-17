@@ -29,7 +29,8 @@ to tell any of these apart, so this module reads raw bytes (not readline())
 and scans for frame boundaries itself, per the wire contracts documented in
 core/telemetry_frame.h and core/mission_link_handshake.h:
 
-    byte 0-1   magic          0xA5 0x5A (telemetry) or 0xB6 0x6B (handshake)
+    byte 0-1   magic          0xA5 0x5A (telemetry), 0xB6 0x6B (handshake),
+                              0x96 0x69 (override ack), 0xF9 0x9F (team status)
     byte 2-N   payload        frame-type-specific (see each header)
     byte N+1   checksum       1-byte additive checksum over the payload
 
@@ -299,9 +300,325 @@ class HandshakeReplyParser:
                 ))
                 del self._buf[:HANDSHAKE_REPLY_WIRE_SIZE]
             else:
+                # Pass the rejected byte on rather than deleting it: the
+                # magic pair can occur inside another binary frame (an
+                # override ack's incident_id, a telemetry cycle count), and
+                # swallowing that byte would corrupt the frame for the
+                # parser downstream.
+                events.append(("passthrough", bytes(self._buf[:1])))
                 del self._buf[:1]
 
         return events
+
+
+# --- Override acknowledgement (mirrors core/mission_link_override.h section 3)
+
+OVERRIDE_ACK_MAGIC0 = 0x96
+OVERRIDE_ACK_MAGIC1 = 0x69
+OVERRIDE_ACK_MAGIC = bytes((OVERRIDE_ACK_MAGIC0, OVERRIDE_ACK_MAGIC1))
+
+# MissionLinkOverrideAck_t: team_id (u8), incident_id (u32 LE), result (u8), packed.
+_OVERRIDE_ACK_STRUCT = struct.Struct("<BIB")
+OVERRIDE_ACK_PAYLOAD_SIZE = _OVERRIDE_ACK_STRUCT.size
+assert OVERRIDE_ACK_PAYLOAD_SIZE == 6
+OVERRIDE_ACK_WIRE_SIZE = 2 + OVERRIDE_ACK_PAYLOAD_SIZE + 1  # 9
+
+OVERRIDE_ACK_APPLIED = 1
+OVERRIDE_ACK_RELAYED = 2
+OVERRIDE_ACK_NOT_READY = 3
+OVERRIDE_ACK_RELAY_FAILED = 4
+OVERRIDE_ACK_BAD_TEAM = 5
+
+# Seconds to wait for a final ack before calling an override unconfirmed.
+# Nothing on the link retransmits, so a lost relay or ack never arrives;
+# generous because a relayed override crosses LoRa twice behind other
+# traffic.
+OVERRIDE_ACK_TIMEOUT_SEC = 10.0
+
+
+def override_ack_checksum(payload: bytes) -> int:
+    """Same additive checksum as core/mission_link_override.c."""
+    return sum(payload) & 0xFF
+
+
+def pack_override_ack(team_id: int, incident_id: int, result: int) -> bytes:
+    """Test helper - mirrors mission_link_override_pack_ack(). The laptop
+    only receives acks."""
+    payload = _OVERRIDE_ACK_STRUCT.pack(team_id, incident_id, result)
+    return OVERRIDE_ACK_MAGIC + payload + bytes((override_ack_checksum(payload),))
+
+
+class OverrideAckParser:
+    """Byte-stream scanner for MissionLinkOverrideAck_t frames, same shape
+    and resync policy as HandshakeReplyParser. feed() returns events:
+        ("ack", {"team_id": int, "incident_id": int, "result": int})
+        ("passthrough", bytes)  -- not part of an ack; feed onward.
+    """
+
+    def __init__(self):
+        self._buf = bytearray()
+
+    def feed(self, data: bytes):
+        if data:
+            self._buf.extend(data)
+
+        events = []
+
+        while True:
+            idx = self._buf.find(OVERRIDE_ACK_MAGIC)
+
+            if idx == -1:
+                if self._buf and self._buf[-1] == OVERRIDE_ACK_MAGIC0:
+                    if len(self._buf) > 1:
+                        events.append(("passthrough", bytes(self._buf[:-1])))
+                        del self._buf[:-1]
+                elif self._buf:
+                    events.append(("passthrough", bytes(self._buf)))
+                    self._buf.clear()
+                break
+
+            if idx > 0:
+                events.append(("passthrough", bytes(self._buf[:idx])))
+                del self._buf[:idx]
+
+            if len(self._buf) < OVERRIDE_ACK_WIRE_SIZE:
+                break
+
+            payload = bytes(self._buf[2:2 + OVERRIDE_ACK_PAYLOAD_SIZE])
+            if override_ack_checksum(payload) == self._buf[2 + OVERRIDE_ACK_PAYLOAD_SIZE]:
+                team_id, incident_id, result = _OVERRIDE_ACK_STRUCT.unpack(payload)
+                events.append(("ack", {"team_id": team_id, "incident_id": incident_id,
+                                       "result": result}))
+                del self._buf[:OVERRIDE_ACK_WIRE_SIZE]
+            else:
+                events.append(("passthrough", bytes(self._buf[:1])))
+                del self._buf[:1]
+
+        return events
+
+
+class OverrideTracker:
+    """What the dashboard knows about each team's latest override.
+
+    States: "sent" (written to USART1, nothing back yet), "relayed" (board
+    0 queued it for the hosting board), then one final state - "applied",
+    "rejected_not_ready", "rejected_bad_team", "relay_failed", or
+    "unconfirmed" (no final ack within OVERRIDE_ACK_TIMEOUT_SEC).
+
+    One entry per team: a newer override for the same team replaces the
+    older one, matching the board, where a team holds a single pin. An ack
+    is applied only if its incident_id matches the team's current entry,
+    so a late ack for a replaced override can't mislabel the new one.
+    Thread-safe: acks arrive on the serial read thread, queries on Flask's.
+    """
+
+    _FINAL_FOR_RESULT = {
+        OVERRIDE_ACK_APPLIED: "applied",
+        OVERRIDE_ACK_NOT_READY: "rejected_not_ready",
+        OVERRIDE_ACK_RELAY_FAILED: "relay_failed",
+        OVERRIDE_ACK_BAD_TEAM: "rejected_bad_team",
+    }
+    FINAL_STATES = frozenset(_FINAL_FOR_RESULT.values()) | {"unconfirmed"}
+
+    def __init__(self, timeout_sec: float = OVERRIDE_ACK_TIMEOUT_SEC):
+        self.timeout_sec = timeout_sec
+        self._entries = {}  # team_id -> dict
+        self._lock = threading.Lock()
+
+    def note_sent(self, team_id: int, incident_id: int, now: float = None):
+        now = time.time() if now is None else now
+        with self._lock:
+            self._entries[team_id] = {
+                "team_id": team_id,
+                "incident_id": incident_id,
+                "state": "sent",
+                "sent_at": now,
+                "updated_at": now,
+            }
+
+    def note_ack(self, team_id: int, incident_id: int, result: int, now: float = None) -> bool:
+        """Returns True if the ack updated an entry."""
+        now = time.time() if now is None else now
+        with self._lock:
+            entry = self._entries.get(team_id)
+            if entry is None or entry["incident_id"] != incident_id:
+                return False
+            if entry["state"] in self.FINAL_STATES:
+                return False
+            if result == OVERRIDE_ACK_RELAYED:
+                entry["state"] = "relayed"
+            elif result in self._FINAL_FOR_RESULT:
+                entry["state"] = self._FINAL_FOR_RESULT[result]
+            else:
+                return False
+            entry["updated_at"] = now
+            return True
+
+    def _expire(self, entry: dict, now: float):
+        if entry["state"] not in self.FINAL_STATES and now - entry["sent_at"] > self.timeout_sec:
+            entry["state"] = "unconfirmed"
+            entry["updated_at"] = now
+
+    def get(self, team_id: int, now: float = None):
+        now = time.time() if now is None else now
+        with self._lock:
+            entry = self._entries.get(team_id)
+            if entry is None:
+                return None
+            self._expire(entry, now)
+            return dict(entry)
+
+    def all(self, now: float = None):
+        now = time.time() if now is None else now
+        with self._lock:
+            for entry in self._entries.values():
+                self._expire(entry, now)
+            return [dict(e) for e in sorted(self._entries.values(), key=lambda e: e["team_id"])]
+
+
+# --- Team status reports (mirrors core/mission_link.h, MissionLinkStatus_t v2)
+
+MISSION_LINK_STATUS_MAGIC0 = 0xF9
+MISSION_LINK_STATUS_MAGIC1 = 0x9F
+MISSION_LINK_STATUS_MAGIC = bytes((MISSION_LINK_STATUS_MAGIC0, MISSION_LINK_STATUS_MAGIC1))
+
+# team_id, status, equipment_level, assigned_incident_id (u32),
+# work_remaining_at_report (u16), work_rate, stamina_at_report, report_tick (u32)
+_STATUS_STRUCT = struct.Struct("<BBBIHBBI")
+MISSION_LINK_STATUS_PAYLOAD_SIZE = _STATUS_STRUCT.size
+assert MISSION_LINK_STATUS_PAYLOAD_SIZE == 15
+MISSION_LINK_STATUS_WIRE_SIZE = 2 + MISSION_LINK_STATUS_PAYLOAD_SIZE + 1  # 18
+
+MISSION_LINK_NO_INCIDENT = 0xFFFFFFFF
+
+# Index = TeamStatus_t value in core/mission_state.h
+TEAM_STATUS_NAMES = ["AVAILABLE", "EN_ROUTE", "ON_SCENE", "RESTING"]
+
+# Boards re-send every MISSION_LINK_HEARTBEAT_INTERVAL_MS (2120 ms) even when
+# nothing changed; three missed heartbeats means the team's board has gone quiet.
+MISSION_LINK_HEARTBEAT_INTERVAL_SEC = 2.12
+TEAM_STATUS_STALE_SEC = 3 * MISSION_LINK_HEARTBEAT_INTERVAL_SEC
+
+
+def mission_link_status_checksum(payload: bytes) -> int:
+    """Mirrors core/mission_link.c's mission_link_checksum()."""
+    return sum(payload) & 0xFF
+
+
+def pack_mission_link_status(team_id: int, status: int, equipment_level: int,
+                             assigned_incident_id: int, work_remaining: int,
+                             work_rate: int, stamina: int, report_tick: int) -> bytes:
+    """Mirrors mission_link_pack_status(). The laptop never sends these;
+    this exists for tests."""
+    payload = _STATUS_STRUCT.pack(team_id, status, equipment_level, assigned_incident_id,
+                                  work_remaining, work_rate, stamina, report_tick)
+    return MISSION_LINK_STATUS_MAGIC + payload + bytes((mission_link_status_checksum(payload),))
+
+
+class MissionLinkStatusParser:
+    """Byte-stream scanner for MissionLinkStatus_t frames (board 0 writes its
+    own teams' reports and forwards the other boards'), same shape and
+    resync policy as OverrideAckParser. feed() returns events:
+        ("status", {team_id, status, equipment_level, assigned_incident_id,
+                    work_remaining_at_report, work_rate, stamina_at_report,
+                    report_tick})
+        ("passthrough", bytes)  -- not part of a status frame; feed onward.
+    """
+
+    def __init__(self):
+        self._buf = bytearray()
+
+    def feed(self, data: bytes):
+        if data:
+            self._buf.extend(data)
+
+        events = []
+
+        while True:
+            idx = self._buf.find(MISSION_LINK_STATUS_MAGIC)
+
+            if idx == -1:
+                if self._buf and self._buf[-1] == MISSION_LINK_STATUS_MAGIC0:
+                    if len(self._buf) > 1:
+                        events.append(("passthrough", bytes(self._buf[:-1])))
+                        del self._buf[:-1]
+                elif self._buf:
+                    events.append(("passthrough", bytes(self._buf)))
+                    self._buf.clear()
+                break
+
+            if idx > 0:
+                events.append(("passthrough", bytes(self._buf[:idx])))
+                del self._buf[:idx]
+
+            if len(self._buf) < MISSION_LINK_STATUS_WIRE_SIZE:
+                break
+
+            payload = bytes(self._buf[2:2 + MISSION_LINK_STATUS_PAYLOAD_SIZE])
+            if mission_link_status_checksum(payload) == self._buf[2 + MISSION_LINK_STATUS_PAYLOAD_SIZE]:
+                (team_id, status, equipment_level, assigned_incident_id, work_remaining,
+                 work_rate, stamina, report_tick) = _STATUS_STRUCT.unpack(payload)
+                events.append(("status", {
+                    "team_id": team_id,
+                    "status": status,
+                    "equipment_level": equipment_level,
+                    "assigned_incident_id": assigned_incident_id,
+                    "work_remaining_at_report": work_remaining,
+                    "work_rate": work_rate,
+                    "stamina_at_report": stamina,
+                    "report_tick": report_tick,
+                }))
+                del self._buf[:MISSION_LINK_STATUS_WIRE_SIZE]
+            else:
+                events.append(("passthrough", bytes(self._buf[:1])))
+                del self._buf[:1]
+
+        return events
+
+
+class TeamStatusTracker:
+    """Latest MissionLinkStatus_t report per team, last write wins (the
+    board re-anchors on every report - see mission_link.h section 4).
+
+    get()/all() add received_at, age_sec, stale (no report for
+    TEAM_STATUS_STALE_SEC, i.e. several missed heartbeats), status_name and
+    assigned (False when assigned_incident_id is MISSION_LINK_NO_INCIDENT).
+    No laptop-side extrapolation of work/stamina here: report_tick is the
+    board's sim tick, which the laptop has no clock for.
+    Thread-safe: reports arrive on the serial read thread, queries on Flask's.
+    """
+
+    def __init__(self, stale_sec: float = TEAM_STATUS_STALE_SEC):
+        self.stale_sec = stale_sec
+        self._entries = {}  # team_id -> dict
+        self._lock = threading.Lock()
+
+    def note(self, report: dict, now: float = None):
+        now = time.time() if now is None else now
+        with self._lock:
+            entry = dict(report)
+            entry["received_at"] = now
+            self._entries[report["team_id"]] = entry
+
+    def _view(self, entry: dict, now: float) -> dict:
+        view = dict(entry)
+        view["age_sec"] = max(0.0, now - entry["received_at"])
+        view["stale"] = view["age_sec"] > self.stale_sec
+        status = entry["status"]
+        view["status_name"] = TEAM_STATUS_NAMES[status] if status < len(TEAM_STATUS_NAMES) else None
+        view["assigned"] = entry["assigned_incident_id"] != MISSION_LINK_NO_INCIDENT
+        return view
+
+    def get(self, team_id: int, now: float = None):
+        now = time.time() if now is None else now
+        with self._lock:
+            entry = self._entries.get(team_id)
+            return None if entry is None else self._view(entry, now)
+
+    def all(self, now: float = None):
+        now = time.time() if now is None else now
+        with self._lock:
+            return [self._view(self._entries[t], now) for t in sorted(self._entries)]
 
 
 class HandshakeCoordinator:
@@ -379,6 +696,15 @@ class HandshakeCoordinator:
     """
 
     REQ_RETRY_INTERVAL_SEC = 2.0
+    # Slow keepalive Req even after board 0 has replied ready. A DK that
+    # reboots while the laptop stays connected waits at its handshake gate
+    # for a Req, and without this the laptop (which still believes board 0
+    # is ready) never sends one again - the same "asker stops asking" hang
+    # board 0 had toward rebooted LoRa peers. The DK answers every Req it
+    # receives (mission_link_task.c g_own_reply_resend_pending), and
+    # note_reply() just overwrites, so an up-to-date DK costs one 6-byte
+    # reply per interval.
+    REQ_KEEPALIVE_INTERVAL_SEC = 5.0
     PEER_TIMEOUT_SEC = 30.0
 
     #: Total boards this deployment expects, board 0 (DK) included.
@@ -440,11 +766,11 @@ class HandshakeCoordinator:
         due right now."""
         if self._started_at is None:
             return False
-        if self.board0_ready:
-            return False
         if self._req_sent_at is None:
             return True
-        return (time.time() - self._req_sent_at) >= self.REQ_RETRY_INTERVAL_SEC
+        interval = (self.REQ_KEEPALIVE_INTERVAL_SEC if self.board0_ready
+                    else self.REQ_RETRY_INTERVAL_SEC)
+        return (time.time() - self._req_sent_at) >= interval
 
     def note_req_sent(self):
         self._req_sent_at = time.time()
@@ -538,7 +864,9 @@ class HandshakeCoordinator:
 class TelemetryBridge:
     """Manages serial communication, packet parsing, and command transmission
 
-    between the host Streamlit dashboard and the target STM32N6 board.
+    between the laptop and the target STM32N6 board. This is the one
+    implementation: app.py's Flask dashboard imports it (app.py used to
+    carry its own copy of this class, which had to be kept in step by hand).
     """
 
     def __init__(self, port: str = "/dev/ttyACM0", baudrate: int = 115200):
@@ -549,26 +877,39 @@ class TelemetryBridge:
         self.nodes_ready = set()
         self.telemetry_queue = queue.Queue()
         self.thread = None
+        self.mission_started = False
         self._parser = TelemetryFrameParser()
         self._text_buf = bytearray()
         self.handshake = HandshakeCoordinator()
+        self._override_ack_parser = OverrideAckParser()
+        self.overrides = OverrideTracker()
+        self._status_parser = MissionLinkStatusParser()
+        self.team_status = TeamStatusTracker()
 
-    def connect(self) -> bool:
+    def connect(self, port: str = None, baudrate: int = None) -> bool:
         """Opens the USB serial port connected to the STM32N6 board and spins up
 
         the background read loop thread for asynchronous stream ingestion.
+        port/baudrate override the constructor's values when given.
         """
         if serial is None:
             print("Failed to connect: pyserial is not installed "
-                  "(pip install pyserial)")
+                  "(pip install pyserial, or run app.py in sim-only "
+                  "mode instead - see SIM_ONLY/--no-hardware)")
             return False
         try:
+            if port is not None:
+                self.port = port
+            if baudrate is not None:
+                self.baudrate = int(baudrate)
             # 0.1s timeout ensures the read loop can check self.running flags
             # promptly during disconnect requests without locking indefinitely.
             self.serial_conn = serial.Serial(
                 self.port, self.baudrate, timeout=0.1
             )
             self.running = True
+            self.nodes_ready.clear()
+            self.mission_started = False
             self.handshake.start()
             self.thread = threading.Thread(
                 target=self._read_loop, daemon=True
@@ -641,17 +982,43 @@ class TelemetryBridge:
                 if not chunk:
                     continue
 
-                leftover = self.handshake.feed(chunk)
-
-                for kind, payload in self._parser.feed(leftover):
-                    if kind == "frame":
-                        self.telemetry_queue.put(payload)
-                    else:
-                        self._consume_text_bytes(payload)
+                self.ingest_bytes(chunk)
 
             except Exception as e:
                 print(f"Serial read error: {e}")
                 break
+
+    def ingest_bytes(self, chunk: bytes):
+        """One pass of raw USART1 bytes through every scanner: handshake
+        replies, override acks, team status reports, then telemetry frames;
+        whatever is left is debug text. Split out of _read_loop so tests can
+        drive the whole chain without a serial port.
+
+        The telemetry parser goes last because it drops the first byte of
+        a candidate that fails its checksum; every scanner before it passes
+        such bytes on, so a magic pair inside another frame can't damage it."""
+        leftover = self.handshake.feed(chunk)
+
+        after_acks = bytearray()
+        for kind, payload in self._override_ack_parser.feed(leftover):
+            if kind == "ack":
+                self.overrides.note_ack(payload["team_id"], payload["incident_id"],
+                                        payload["result"])
+            else:
+                after_acks.extend(payload)
+
+        remaining = bytearray()
+        for kind, payload in self._status_parser.feed(bytes(after_acks)):
+            if kind == "status":
+                self.team_status.note(payload)
+            else:
+                remaining.extend(payload)
+
+        for kind, payload in self._parser.feed(bytes(remaining)):
+            if kind == "frame":
+                self.telemetry_queue.put(payload)
+            else:
+                self._consume_text_bytes(payload)
 
     def send_start(self) -> bool:
         """Transmits the explicit text/binary START command packet down the USB line
@@ -688,6 +1055,7 @@ class TelemetryBridge:
         if self.serial_conn and self.serial_conn.is_open:
             try:
                 self.serial_conn.write(b"START\n")
+                self.mission_started = True
                 print("Sent START command packet to board.")
                 return True
             except Exception as e:
@@ -705,3 +1073,7 @@ class TelemetryBridge:
         if self.serial_conn and self.serial_conn.is_open:
             self.serial_conn.close()
             print("Closed USB serial connection.")
+        self.serial_conn = None
+        self.nodes_ready.clear()
+        self.mission_started = False
+        self.handshake = HandshakeCoordinator()

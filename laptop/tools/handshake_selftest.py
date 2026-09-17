@@ -296,8 +296,16 @@ def test_due_for_req_timing():
     time.sleep(0.08)
     assert coord.due_for_req() is True, "must be due again once the retry interval elapses"
 
+    coord.REQ_KEEPALIVE_INTERVAL_SEC = 0.3
+    coord.note_req_sent()
     coord.note_reply(0, MISSION_LINK_PROTOCOL_VERSION, ready=True)
-    assert coord.due_for_req() is False, "must stop retrying once board 0 has replied ready"
+    time.sleep(0.08)
+    assert coord.due_for_req() is False, "once board 0 is ready, the fast retry interval must no longer apply"
+
+    time.sleep(0.3)
+    assert coord.due_for_req() is True, (
+        "must send a slow keepalive Req once ready - a DK that rebooted while "
+        "the laptop stayed connected waits for a Req that would otherwise never come")
 
 
 def main():
