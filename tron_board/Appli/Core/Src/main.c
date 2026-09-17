@@ -207,6 +207,40 @@ void PeriphCommonClock_Config(void)
 
   /* USER CODE BEGIN RIF_Init 1 */
 
+  /* Bug fix: this CubeMX-generated block grants RIF (Resource Isolation
+     Framework - this chip's actual TrustZone-adjacent security
+     controller, separate from plain secure/non-secure aliasing) secure+
+     privileged access to a curated GPIO pin list and to ADC12, but was
+     never updated for board/STM32N6570-DK/sx1262_hal.c's SX1262 wiring:
+     neither SPI5 nor any of the 9 pins that HAL actually drives
+     (PA3/PG2/PH8/PE15 for SPI5 itself, PE10/PD0/PE9/PH5/PD6 for BUSY/
+     DIO1/RESET/RXEN/TXEN) were ever granted here. RIF defaults a
+     protected resource's CID/security/privilege filter closed, not
+     open, and a rejected access is silently dropped (no bus fault) with
+     only a flag in the IAC block (see HAL_RIF_IAC_GetFlag()) that
+     nothing in this codebase checks - this matches the exact symptom
+     chased all session in sx1262_hal.c (CFG2.MASTER/CR1.SPE writes that
+     "succeed" per readback of... nothing, register state never
+     actually latching) far better than the secure/non-secure-alias
+     theory that file's own diff pursued: this Appli project already
+     builds with -mcmse (see tron_board/Appli/.cproject, both Debug and
+     Release configs), so CPU_IN_SECURE_STATE is already defined here
+     and the plain (non-"_S") SPI5/GPIOx macros already meant the same
+     thing as their explicit _S siblings - that fix could not have
+     changed anything on real hardware. This is the actual grant that
+     was missing, mirroring the ADC12 pattern already above. */
+  HAL_RIF_RISC_SetSlaveSecureAttributes(RIF_RISC_PERIPH_INDEX_SPI5, RIF_ATTRIBUTE_SEC | RIF_ATTRIBUTE_NPRIV);
+
+  HAL_GPIO_ConfigPinAttributes(GPIOA, GPIO_PIN_3,  GPIO_PIN_SEC | GPIO_PIN_NPRIV); /* SPI5_NSS  (sx1262_hal.c SX1262_NSS_PORT/PIN)   */
+  HAL_GPIO_ConfigPinAttributes(GPIOG, GPIO_PIN_2,  GPIO_PIN_SEC | GPIO_PIN_NPRIV); /* SPI5_MOSI (sx1262_hal.c SX1262_MOSI_PORT/PIN)  */
+  HAL_GPIO_ConfigPinAttributes(GPIOH, GPIO_PIN_8,  GPIO_PIN_SEC | GPIO_PIN_NPRIV); /* SPI5_MISO (sx1262_hal.c SX1262_MISO_PORT/PIN)  */
+  HAL_GPIO_ConfigPinAttributes(GPIOE, GPIO_PIN_15, GPIO_PIN_SEC | GPIO_PIN_NPRIV); /* SPI5_SCK  (sx1262_hal.c SX1262_SCK_PORT/PIN)   */
+  HAL_GPIO_ConfigPinAttributes(GPIOE, GPIO_PIN_10, GPIO_PIN_SEC | GPIO_PIN_NPRIV); /* BUSY      (sx1262_hal.c SX1262_BUSY_PORT/PIN)  */
+  HAL_GPIO_ConfigPinAttributes(GPIOD, GPIO_PIN_0,  GPIO_PIN_SEC | GPIO_PIN_NPRIV); /* DIO1      (sx1262_hal.c SX1262_DIO1_PORT/PIN)  */
+  HAL_GPIO_ConfigPinAttributes(GPIOE, GPIO_PIN_9,  GPIO_PIN_SEC | GPIO_PIN_NPRIV); /* RESET     (sx1262_hal.c SX1262_RESET_PORT/PIN) */
+  HAL_GPIO_ConfigPinAttributes(GPIOH, GPIO_PIN_5,  GPIO_PIN_SEC | GPIO_PIN_NPRIV); /* RXEN      (sx1262_hal.c SX1262_RXEN_PORT/PIN)  */
+  HAL_GPIO_ConfigPinAttributes(GPIOD, GPIO_PIN_6,  GPIO_PIN_SEC | GPIO_PIN_NPRIV); /* TXEN      (sx1262_hal.c SX1262_TXEN_PORT/PIN)  */
+
   /* USER CODE END RIF_Init 1 */
   /* USER CODE BEGIN RIF_Init 2 */
 

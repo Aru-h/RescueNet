@@ -163,6 +163,15 @@ extern uint32_t mission_link_task_any_roster_applied(void);
 
 extern void sx1262_hal_init(void);
 
+/* TEMPORARY diagnostic - see sx1262_hal.c's own comment above this
+   function. DELETE once Goal 2's hardware fault is found. */
+extern void sx1262_hal_spi_loopback_test(void);
+
+/* board/STM32N6570-DK/usart1_driver.c - enables the USART1 RXNE
+   interrupt and NVIC line; see that file's own top comment for why
+   this has to be interrupt-driven rather than polled. */
+extern void board_usart1_rx_init(void);
+
 /*
  * RX counterpart to sx1262_hal_init() above (board/STM32N6570-DK/
  * sx1262_hal.c). Non-blocking, cheap-when-idle poll of the SX1262's
@@ -296,7 +305,25 @@ LOCAL void sim_task(INT stacd, void *exinf)
        doesn't depend on sim_runner_init()/mission_link state, so it
        goes first. See sx1262_hal.c's own top-of-file comment for the
        wiring this assumes. */
+    tm_putstring((UB*)"tron: sim_task entered\n");
     sx1262_hal_init();
+
+    /* TEMPORARY diagnostic - see sx1262_hal.c's own comment on this
+       function. Requires MOSI(D11)-MISO(D12) physically jumpered and
+       the SX1262 module disconnected. DELETE once Goal 2's hardware
+       fault is found. */
+    sx1262_hal_spi_loopback_test();
+
+    /* Real (interrupt-driven) USART1 RX - see usart1_driver.c's own
+       top-of-file note for why this has to be a real NVIC interrupt
+       rather than a polled read: a polled board_usart1_read_byte()
+       demonstrably loses bytes to overrun whenever comms_transport's
+       relay-to-peer SPI attempts (below, in the wait loop) block the
+       main loop for a while, which they do on every retry when no
+       SX1262 module is actually attached. Must run before the wait
+       loop below, same as sx1262_hal_init() above - both are one-time
+       hardware bring-up, not per-tick work. */
+    board_usart1_rx_init();
 
     tm_putstring((UB*)"tron: sim_runner_init\n");
 

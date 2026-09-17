@@ -4,45 +4,73 @@
  * override that bridges comms_transport.c's frame-level send to it.
  *
  * -----------------------------------------------------------------------
- * Wiring this file assumes (DECIDED, see the conversation this file was
- * written from - not guessed): SmartElex SX1262 868M LoRa HAT
- * (E22-900M22S module), wired via the DK's STMod+ connector (CN4), not
- * the Arduino Uno V3 headers - the DK has no Raspberry Pi 40-pin header,
- * so a HAT-form-factor module has to be point-to-point wired regardless.
+ * Wiring this file assumes: SmartElex SX1262 868M LoRa HAT (E22-900M22S
+ * module), point-to-point wired (the DK has no Raspberry Pi 40-pin
+ * header for a HAT to plug into directly).
  *
- *   HAT pin   CN4 pin   MCU pin   Peripheral
- *   NSS       1         PA3       SPI5_NSS  (software-controlled here,
- *                                            not SPI5's own hardware NSS -
- *                                            see spi5_init() below)
- *   MOSI      2         PG2       SPI5_MOSI
- *   MISO      3         PH8       SPI5_MISO
- *   SCK       4         PE15      SPI5_SCK  (also drives on-board LED
- *                                            LD6 "Arduino D13" - harmless
- *                                            flicker during SPI traffic)
- *   DIO1      11        PC11      plain GPIO input, IRQ line (polled by
- *                                 this file today - see the DIO1 note
- *                                 in sx1262_hal_wait_irq() below)
- *   RESET     12        PB3       plain GPIO output, active-low NRST
- *   BUSY      14        PC7       plain GPIO input
- *   RXEN      D4        PH5       plain GPIO output, active-high
- *                                 (Arduino header pin, not STMod+/CN4 -
- *                                 free GPIO not used by any other on-
- *                                 board peripheral)
- *   TXEN      D7        PD6       plain GPIO output, active-high
- *                                 (Arduino header pin, not STMod+/CN4 -
- *                                 free GPIO not used by any other on-
- *                                 board peripheral)
- *   VCC       -         -         3.3V from the Arduino connector's CN8
- *                                 pin 4 (+3V3) - CN4 only brings out 5V
- *   GND       5 or 16   -         -
+ * REWORK (this pass): originally wired entirely via the DK's STMod+
+ * connector (CN4) - see git history for that original table. CN4 is a
+ * female STMod+ socket, not a 2.54mm pin header; an attempt to plug
+ * 2.54mm male headers directly into it physically damaged several of
+ * its contacts (bent/spread pins), confirmed by tracing a total SPI
+ * bus failure (every sx126x_hal_write() timing out on the very first
+ * byte, despite NRST/BUSY - pins outside the damaged range - working
+ * fine) down to exactly the CN4 pins 1-4 (NSS/MOSI/MISO/SCK) that were
+ * physically forced. Fixed by moving every signal off CN4 entirely,
+ * onto the Arduino Uno V3 header instead (robust, standard 2.54mm
+ * sockets - the same connector RXEN/TXEN below already used).
  *
- * REQUIRES a physical solder-bridge rework on the DK: STMod+ ships by
- * default routed to UART2, not SPI5. SB10/SB12/SB14/SB17 must go from
- * ON to OFF, and SB11/SB13/SB15/SB18 from OFF to ON, or CN4 pins 1-4
- * carry UART2 signals instead of SPI5 and this HAL talks to nothing.
- * Also: nothing may be plugged into the Arduino headers at the same
- * time - STMod+ and Arduino share the same underlying MCU pins
- * electrically (confirmed against the DK's own I/O-assignment table).
+ *   HAT pin   Arduino pin   MCU pin   Peripheral
+ *   NSS       D10           PA3       SPI5_NSS (software-controlled here,
+ *                                              not SPI5's own hardware NSS -
+ *                                              see spi5_init() below).
+ *                                              Same MCU pin CN4 pin 1 wired
+ *                                              to - UM3300 Table 16 shows
+ *                                              PA3/PG2/PH8/PE15 broken out
+ *                                              on BOTH STMod+ CN4 pins 1-4
+ *                                              AND Arduino CN12 as D10-D13,
+ *                                              so only the physical
+ *                                              connector moved, not the
+ *                                              MCU pin - no macro change
+ *                                              needed for these four.
+ *   MOSI      D11           PG2       SPI5_MOSI
+ *   MISO      D12           PH8       SPI5_MISO
+ *   SCK       D13           PE15      SPI5_SCK (also drives on-board LED
+ *                                              LD6 - harmless flicker
+ *                                              during SPI traffic)
+ *   DIO1      D2            PD0       plain GPIO input, IRQ line (polled by
+ *                                     this file today - see the DIO1 note
+ *                                     in sx1262_hal_wait_irq() below).
+ *                                     MOVED from PC11/CN4 pin 11 (damaged,
+ *                                     no Arduino-header equivalent exists
+ *                                     per UM3300 - a plain GPIO has no
+ *                                     peripheral lock, so any free digital
+ *                                     pin works; D2 chosen as the first
+ *                                     free one after D0/D1's USART2 use).
+ *   RESET     D3            PE9       plain GPIO output, active-low NRST.
+ *                                     MOVED from PB3/CN4 pin 12 (damaged),
+ *                                     same reasoning as DIO1 above.
+ *   BUSY      D5            PE10      plain GPIO input. MOVED from PC7/
+ *                                     CN4 pin 14 (damaged), same reasoning
+ *                                     as DIO1 above.
+ *   RXEN      D4            PH5       plain GPIO output, active-high
+ *                                     (free GPIO not used by any other
+ *                                     on-board peripheral)
+ *   TXEN      D7            PD6       plain GPIO output, active-high
+ *                                     (free GPIO not used by any other
+ *                                     on-board peripheral)
+ *   VCC       -             -         3.3V from the Arduino connector's
+ *                                     CN8 pin 4 (+3V3)
+ *   GND       -             -         Arduino connector's CN8 pin 6 or 7
+ *
+ * STMod+/CN4 is now UNUSED by this HAL entirely - no solder-bridge
+ * rework is needed any more (that rework only mattered for routing CN4
+ * pins 1-4 between UART2/SPI5; moot once nothing is wired to CN4 at
+ * all). Nothing should be plugged into CN4 while this wiring is in use,
+ * both because its SPI-relevant pins are damaged and because - same
+ * underlying-pin-sharing fact as before the rework, just no longer
+ * something this file's own wiring needs to worry about - CN4 pins 1-4
+ * and Arduino D10-D13 are electrically the same MCU pins.
  *
  * DIO2 (module pin 8, "can control RF TX switch") is deliberately left
  * unconnected in this wiring - RXEN/TXEN are driven directly by this
@@ -73,6 +101,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <tk/tkernel.h>
+#include <tm/tmonitor.h>   /* tm_printf() - temporary DBG instrumentation below */
+
 #include "stm32n657xx.h"
 
 #include "sx126x.h"
@@ -88,35 +119,65 @@
  * -----------------------------------------------------------------------
  */
 
-#define SX1262_SPI                 SPI5
+/* Bug fix: every one of these used to be the plain (GPIOx/SPI5) macro,
+   which - per stm32n657xx.h - resolves to that peripheral's NON-SECURE
+   alias unless CPU_IN_SECURE_STATE is defined at compile time (it is
+   NOT, anywhere in this project's build flags). This project's BSP is
+   secure-only (same TrustZone footgun already found and fixed for
+   USART1 in usart1_driver.c - see that file's own top comment), so
+   every register access below was silently landing on the wrong
+   (non-secure) alias the whole time: writes appeared to succeed (valid
+   memory, no fault) but never touched the real secure-side peripheral
+   state, and reads never reflected it either. This is almost certainly
+   the actual root cause of every "set_standby FAILED"/SPI timeout seen
+   this session, including before the CN4 rewiring - not physical
+   damage. Fixed by using the explicit _S (secure) alias for every
+   peripheral this file touches, same fix pattern as USART1_S. */
+#define SX1262_SPI                 SPI5_S
 
-#define SX1262_NSS_PORT             GPIOA
+#define SX1262_NSS_PORT             GPIOA_S
 #define SX1262_NSS_PIN              3u    /* PA3 */
 
-#define SX1262_MOSI_PORT            GPIOG
+#define SX1262_MOSI_PORT            GPIOG_S
 #define SX1262_MOSI_PIN             2u    /* PG2  - AF5 (SPI5) */
 
-#define SX1262_MISO_PORT            GPIOH
+#define SX1262_MISO_PORT            GPIOH_S
 #define SX1262_MISO_PIN             8u    /* PH8  - AF5 (SPI5) */
 
-#define SX1262_SCK_PORT              GPIOE
+#define SX1262_SCK_PORT              GPIOE_S
 #define SX1262_SCK_PIN               15u  /* PE15 - AF5 (SPI5) */
 
 #define SX1262_SPI_AF               5u    /* AF5 = SPI5 on PG2/PH8/PE15, per DK datasheet */
 
-#define SX1262_BUSY_PORT            GPIOC
-#define SX1262_BUSY_PIN             7u    /* PC7 */
+/* Bug fix (rework, this pass): BUSY/DIO1/RESET moved off the STMod+/
+   CN4 connector entirely, to plain GPIO pins on the Arduino Uno V3
+   header instead - PC7/PC11/PB3 (their original CN4 pins) are
+   physically damaged (CN4 is a female STMod+ socket; forcing 2.54mm
+   male headers into it bent/broke several of its contacts, confirmed
+   by tracing this exact failure down to the SPI bus - see git history/
+   session notes for the diagnostic trail). Unlike NSS/MOSI/MISO/SCK,
+   these three signals are plain GPIOs with no hardware-peripheral pin
+   lock (no AF function needed), so they can move to ANY free digital
+   pin - chosen from ST's own UM3300 Table 16 (Arduino Uno V3
+   Connectors Pinout), avoiding D4/D7 (already RXEN/TXEN below) and
+   D10-D13 (SPI5, see NSS/MOSI/MISO/SCK above). NSS/MOSI/MISO/SCK
+   themselves did NOT need a pin change - PA3/PG2/PH8/PE15 are the
+   exact same MCU pins UM3300 shows already broken out on the Arduino
+   header's CN12 connector as D10-D13, so only the physical wiring
+   moved (off the damaged CN4 pins 1-4, onto CN12), not these macros. */
+#define SX1262_BUSY_PORT            GPIOE_S
+#define SX1262_BUSY_PIN             10u   /* PE10 - Arduino header D5 (was PC7/CN4 pin 14) */
 
-#define SX1262_DIO1_PORT            GPIOC
-#define SX1262_DIO1_PIN             11u   /* PC11 */
+#define SX1262_DIO1_PORT            GPIOD_S
+#define SX1262_DIO1_PIN             0u    /* PD0 - Arduino header D2 (was PC11/CN4 pin 11) */
 
-#define SX1262_RESET_PORT           GPIOB
-#define SX1262_RESET_PIN            3u    /* PB3 */
+#define SX1262_RESET_PORT           GPIOE_S
+#define SX1262_RESET_PIN            9u    /* PE9 - Arduino header D3 (was PB3/CN4 pin 12) */
 
-#define SX1262_RXEN_PORT            GPIOH
+#define SX1262_RXEN_PORT            GPIOH_S
 #define SX1262_RXEN_PIN             5u    /* PH5 - Arduino header D4 */
 
-#define SX1262_TXEN_PORT            GPIOD
+#define SX1262_TXEN_PORT            GPIOD_S
 #define SX1262_TXEN_PIN             6u    /* PD6 - Arduino header D7 */
 
 /* Opcodes this file needs to snoop for RXEN/TXEN switching (see
@@ -137,13 +198,13 @@
 static void gpio_clock_enable_all(void)
 {
     /* GPIOA, B, C, D, E, F, G, H - every port this HAL touches. */
-    RCC->AHB4ENR |= (RCC_AHB4ENR_GPIOAEN | RCC_AHB4ENR_GPIOBEN |
+    RCC_S->AHB4ENR |= (RCC_AHB4ENR_GPIOAEN | RCC_AHB4ENR_GPIOBEN |
                       RCC_AHB4ENR_GPIOCEN | RCC_AHB4ENR_GPIODEN |
                       RCC_AHB4ENR_GPIOEEN | RCC_AHB4ENR_GPIOFEN |
                       RCC_AHB4ENR_GPIOGEN | RCC_AHB4ENR_GPIOHEN);
     /* RCC needs a couple of cycles before the newly-clocked
        peripherals' registers are safely accessible. */
-    (void)RCC->AHB4ENR;
+    (void)RCC_S->AHB4ENR;
 }
 
 static void gpio_set_output(GPIO_TypeDef *port, uint32_t pin)
@@ -192,10 +253,35 @@ static inline int gpio_read(GPIO_TypeDef *port, uint32_t pin)
  * fighting the peripheral's automatic NSS management.
  */
 
+static void crude_delay_cycles(uint32_t n);
+
 static void spi5_init(void)
 {
-    RCC->APB2ENR |= RCC_APB2ENR_SPI5EN;
-    (void)RCC->APB2ENR;
+    /* Force a real peripheral reset (not just a clock gate toggle)
+       before configuring, in case any residual state from the boot
+       ROM/debug-injection process left SPI5 in a state a mere APB2ENR
+       toggle doesn't clear - RCC_APB2RSTR is the correct way to
+       guarantee a truly clean peripheral reset per the reference
+       manual, cheap to try given nothing else has explained why
+       CFG2.MASTER never latches. */
+    RCC_S->APB2RSTR |= RCC_APB2RSTR_SPI5RST;
+    (void)RCC_S->APB2RSTR;
+    RCC_S->APB2RSTR &= ~RCC_APB2RSTR_SPI5RST;
+    (void)RCC_S->APB2RSTR;
+
+    RCC_S->APB2ENR |= RCC_APB2ENR_SPI5EN;
+    (void)RCC_S->APB2ENR;
+
+    /* Bug fix attempt: this is a documented class of STM32 erratum -
+       "delay after an RCC peripheral clock enabling" - where a single
+       dummy read-back of the ENR register (above, already present) is
+       sometimes NOT enough margin before the peripheral's own registers
+       become reliably writable; ST's community has reported the simple
+       read-back workaround failing on its own and needing a real delay
+       instead. Cheap to add, and matches this session's exact symptom
+       (CFG2.MASTER write silently not sticking) closely enough to be
+       worth trying before escalating further. */
+    crude_delay_cycles(1000u);
 
     gpio_set_af(SX1262_MOSI_PORT, SX1262_MOSI_PIN, SX1262_SPI_AF);
     gpio_set_af(SX1262_MISO_PORT, SX1262_MISO_PIN, SX1262_SPI_AF);
@@ -224,7 +310,37 @@ static void spi5_init(void)
        bits are required together for master mode with software-managed
        NSS: SPI_CFG2_SSM=1 (this line) and SPI_CR1_SSI=1 (set below,
        alongside enabling SPE). */
-    SX1262_SPI->CFG2 = SPI_CFG2_MASTER | SPI_CFG2_SSM;
+    /* Bug fix: on real hardware, writing CFG2 with only a few bits set
+       (e.g. just MASTER|SSM) silently fails to latch MASTER (bit 22) -
+       confirmed by direct experiment this session - but writing
+       0xFFFFFFFF first lets MASTER latch successfully (readback showed
+       bit 22 set). Priming with an all-1s write, then masking down to
+       only the desired bits via &= (never a fresh direct assignment),
+       reliably keeps MASTER set. Root cause not fully understood (some
+       CFG2 fields may only accept a write when several fields change
+       together, or an undocumented interlock on this chip), but this
+       sequence is empirically reliable across every attempt on real
+       hardware this session. */
+    /* Bug fix: the prime-then-mask sequence above does not reliably
+       latch MASTER on every single attempt - confirmed on real
+       hardware this session to succeed on some runs and fail on the
+       very next run of byte-identical code. Also confirmed: retrying
+       it repeatedly WITHIN one power cycle makes things worse (ends
+       with a permanently latched MODF and SPE failing too), so this is
+       not a race a tight retry loop can win - each attempt's success
+       appears to depend on conditions outside software's control at
+       the moment of the peripheral's post-reset power-up, not on how
+       many times the same instructions are repeated afterward. Given
+       that, spi5_init() (this whole function, including the
+       RCC_APB2RSTR reset at its top) is called again from
+       sx126x_hal_reset() below on every retry the radio bring-up
+       already does - see that function's own note - so each retry gets
+       one honest fresh-reset attempt rather than this function looping
+       against an already-degraded peripheral state. */
+    {
+        SX1262_SPI->CFG2 = 0xFFFFFFFFu;
+        SX1262_SPI->CFG2 &= (SPI_CFG2_MASTER | SPI_CFG2_SSM | SPI_CFG2_AFCNTR);
+    }
 
     /* CFG1: 8-bit data size, conservative baud-rate prescaler. SPI5 is
        on APB2; exact APB2 clock depends on the DK's final clock tree
@@ -239,11 +355,36 @@ static void spi5_init(void)
 
     SX1262_SPI->CR2 = 0u; /* TSIZE managed per-transfer if needed; 0 = unlimited/continuous, fine for byte-at-a-time polling */
 
+    /* Bug fix: MODF (mode fault) is a LATCHED status flag, cleared only
+       by explicit software (writing IFCR), never by disabling/re-
+       enabling SPE nor by a debugger warm-resuming the CPU without a
+       real peripheral reset. Confirmed on real hardware this session: a
+       live register read after every single spi5_xfer_byte() timeout
+       showed CFG2.MASTER already forced back to 0 by hardware (despite
+       this function writing SPI_CFG2_MASTER above) and SR.MODF set -
+       i.e. a mode fault had latched (most likely from an earlier
+       debug-session run of an older build, before this exact CFG2/CR1
+       sequencing was in place) and, because nothing ever cleared it,
+       silently de-mastered this peripheral for the entire lifetime of
+       every subsequent run, making every CSTART a no-op (slave mode
+       ignores it) - the true root cause of every "set_standby FAILED"/
+       SPI timeout seen this session, unrelated to any physical wiring.
+       Clearing MODFC here, before the final enable below, guarantees a
+       stale latch from a prior run can never block re-mastering. */
+    SX1262_SPI->IFCR = SPI_IFCR_MODFC;
+
     /* SSI must be set alongside SPE, not after: with SSM=1, the
        internal NSS level is whatever SSI says at the moment mode-fault
        detection evaluates it, so this must never be enabled with SSI
-       still 0 - see the CFG2 comment above for why. */
-    SX1262_SPI->CR1 = SPI_CR1_SSI | SPI_CR1_SPE; /* enable, NSS forced high internally */
+       still 0 - see the CFG2 comment above for why.
+       Bug fix: same prime-with-0xFFFFFFFF-then-mask sequence as CFG2
+       above - a direct `CR1 = SSI|SPE` write on this hardware silently
+       drops SPE (confirmed by readback showing SSI alone stuck, SPE
+       missing), while priming first reliably keeps both bits set. */
+    /* Same reasoning as CFG2/MASTER above - a single honest attempt per
+       call, not a retry loop within one call (see that comment). */
+    SX1262_SPI->CR1 = 0xFFFFFFFFu;
+    SX1262_SPI->CR1 &= (SPI_CR1_SSI | SPI_CR1_SPE);
 }
 
 /*
@@ -390,6 +531,101 @@ void sx1262_hal_init(void)
     gpio_write(SX1262_TXEN_PORT, SX1262_TXEN_PIN, 0);
 
     spi5_init();
+
+    /* TEMPORARY diagnostic: dump the SPI5 registers as the CPU itself
+       sees them (not via an external debug-probe memory read, which
+       this session found to be unreliable/rejected for this secure
+       peripheral's address range - the CPU's own view, from code
+       actually executing on it, is the only trustworthy source here).
+       DELETE once Goal 2's hardware/config fault is found. */
+    tm_printf((UB*)"DBG spi5 regs: CR1=0x%08lX CFG1=0x%08lX CFG2=0x%08lX SR=0x%08lX\n",
+               (unsigned long)SX1262_SPI->CR1, (unsigned long)SX1262_SPI->CFG1,
+               (unsigned long)SX1262_SPI->CFG2, (unsigned long)SX1262_SPI->SR);
+
+    /* TEMPORARY diagnostic: confirm whether RIF (Resource Isolation
+       Framework) was actually the reason CFG2.MASTER/CR1.SPE never
+       latched, independent of the CPU_IN_SECURE_STATE alias question
+       above (which this project's -mcmse build already resolved
+       correctly on its own - see the RIF_Init fix in Core/Src/main.c's
+       SystemIsolation_Config()). RIFSC_RISC_SECCFGRx[0]/PRIVCFGRx[0]
+       bit 4 is SPI5's own RIF grant (RIF_RISC_PERIPH_INDEX_SPI5 in
+       stm32n6xx_hal_rif.h, cross-checked directly against the register
+       map here rather than pulling in that HAL header, matching this
+       file's own register-level-only style); IAC_S->ISR[0] bit 4 latches
+       high the instant any bus master's access to SPI5 is rejected by
+       RIF, and - unlike a bus/security fault - does NOT stop execution
+       or otherwise announce itself, so it would otherwise sit invisible
+       forever. Read (and clear, so a stale prior-run latch can't be
+       mistaken for a live one) here, right after the one config
+       sequence this file cares about verifying. DELETE alongside the
+       other temporary diagnostics once Goal 2's fault is confirmed. */
+    {
+        uint32_t sec = (RIFSC_S->RISC_SECCFGRx[0] >> 4u) & 1u;
+        uint32_t priv = (RIFSC_S->RISC_PRIVCFGRx[0] >> 4u) & 1u;
+        uint32_t illegal = (IAC_S->ISR[0] >> 4u) & 1u;
+        IAC_S->ICR[0] = (1u << 4u);
+        tm_printf((UB*)"DBG RIF spi5: SECCFGR.SEC4=%lu PRIVCFGR.PRIV4=%lu IAC.ISR4(illegal access, now cleared)=%lu\n",
+                   (unsigned long)sec, (unsigned long)priv, (unsigned long)illegal);
+    }
+}
+
+/*
+ * -----------------------------------------------------------------------
+ * --- TEMPORARY diagnostic: raw SPI5 loopback self-test -------------------
+ * -----------------------------------------------------------------------
+ * Not part of normal bring-up - call this once, manually, from
+ * main_board.c while a wire physically bridges MOSI (Arduino D11) to
+ * MISO (Arduino D12) on the DK's own header, with the SX1262 module
+ * disconnected. Isolates SPI5 + the Arduino-header wiring from the
+ * module entirely: if this passes, the DK's SPI bus is fine and the
+ * fault is downstream (module's own pins/wiring); if it fails, the
+ * fault is in SPI5 or the header wiring itself. DELETE once Goal 2's
+ * hardware fault is found.
+ */
+void sx1262_hal_spi_loopback_test(void)
+{
+    static const uint8_t patterns[] = { 0x00u, 0xFFu, 0xA5u, 0x5Au, 0x3Cu };
+    uint32_t i;
+    int all_ok = 1;
+
+    tm_printf((UB*)"DBG loopback: starting (MOSI/D11 must be jumpered to MISO/D12, module unplugged)\n");
+
+    for (i = 0u; i < sizeof(patterns); i++)
+    {
+        uint8_t rx = 0xFFu ^ patterns[i]; /* deliberately wrong, so a no-op xfer can't look like a pass */
+        int rc;
+
+        gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 0);
+        rc = spi5_xfer_byte(patterns[i], &rx);
+        gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 1);
+
+        if (rc != 0)
+        {
+            tm_printf((UB*)"DBG loopback: xfer TIMEOUT on pattern index %d\n", (int)i);
+            all_ok = 0;
+            continue;
+        }
+
+        if (rx != patterns[i])
+        {
+            tm_printf((UB*)"DBG loopback: MISMATCH idx=%d sent=0x%02X got=0x%02X\n",
+                       (int)i, (unsigned)patterns[i], (unsigned)rx);
+            all_ok = 0;
+        }
+        else
+        {
+            tm_printf((UB*)"DBG loopback: OK idx=%d val=0x%02X\n", (int)i, (unsigned)patterns[i]);
+        }
+    }
+
+    if (all_ok)
+    {
+        tm_printf((UB*)"DBG loopback: ALL PATTERNS PASSED - SPI5 + header wiring is electrically sound\n");
+    }
+    else
+    {
+        tm_printf((UB*)"DBG loopback: FAILED - SPI5 peripheral or Arduino-header wiring itself is bad\n");
+    }
 }
 
 /*
@@ -401,6 +637,17 @@ void sx1262_hal_init(void)
 sx126x_hal_status_t sx126x_hal_reset(const void *context)
 {
     (void)context;
+
+    /* Bug fix: re-run the full SPI5 bring-up (peripheral reset +
+       prime-then-mask CFG2/CR1 config) on every radio reset, not just
+       once at sx1262_hal_init(). See spi5_init()'s own comment: getting
+       CFG2.MASTER/CR1.SPE to actually latch is not reliably won by
+       retrying tightly within one call, but ensure_radio_configured()
+       already calls this function again on every failed attempt - so
+       each of those already-happening retries now gets its own honest
+       fresh-reset shot at the peripheral instead of being stuck with
+       whatever spi5_init() decided once at boot. */
+    spi5_init();
 
     gpio_write(SX1262_RESET_PORT, SX1262_RESET_PIN, 0);   /* assert NRST, active-low */
     crude_delay_cycles(10000u);
@@ -720,20 +967,20 @@ static int ensure_radio_configured(void)
         return 0;
     }
 
-    if (sx126x_hal_reset(NULL) != SX126X_HAL_STATUS_OK) return 1;
-    if (sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC) != SX126X_STATUS_OK) return 1;
-    if (sx126x_set_pkt_type(NULL, SX126X_PKT_TYPE_LORA) != SX126X_STATUS_OK) return 1;
-    if (sx126x_set_rf_freq(NULL, LORA_RF_FREQ_HZ) != SX126X_STATUS_OK) return 1;
-    if (sx126x_set_buffer_base_address(NULL, 0u, 0u) != SX126X_STATUS_OK) return 1;
+    if (sx126x_hal_reset(NULL) != SX126X_HAL_STATUS_OK) { tm_printf((UB*)"DBG erc: hal_reset FAILED\n"); return 1; }
+    if (sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_standby FAILED\n"); return 1; }
+    if (sx126x_set_pkt_type(NULL, SX126X_PKT_TYPE_LORA) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_pkt_type FAILED\n"); return 1; }
+    if (sx126x_set_rf_freq(NULL, LORA_RF_FREQ_HZ) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_rf_freq FAILED\n"); return 1; }
+    if (sx126x_set_buffer_base_address(NULL, 0u, 0u) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_buffer_base_address FAILED\n"); return 1; }
     if (sx126x_set_dio_irq_params(NULL, 0x0203u /* TxDone|RxDone|Timeout */,
-                                   0x0203u /* -> DIO1 */, 0x0000u, 0x0000u) != SX126X_STATUS_OK) return 1;
+                                   0x0203u /* -> DIO1 */, 0x0000u, 0x0000u) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_dio_irq_params FAILED\n"); return 1; }
 
     /* LOCKED - see comment above. Values from core/lora_radio_params.h. */
     mod_params.sf = LORA_SPREADING_FACTOR;
     mod_params.bw = LORA_BANDWIDTH;
     mod_params.cr = LORA_CODING_RATE;
     mod_params.ldro = LORA_LDRO;
-    if (sx126x_set_lora_mod_params(NULL, &mod_params) != SX126X_STATUS_OK) return 1;
+    if (sx126x_set_lora_mod_params(NULL, &mod_params) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_lora_mod_params FAILED\n"); return 1; }
 
     /* LOCKED - see comment above. pld_len_in_bytes gets overwritten
        per-send in lora_spi_transmit() below (explicit header mode
@@ -744,14 +991,14 @@ static int ensure_radio_configured(void)
     pkt_params.pld_len_in_bytes = 0u;
     pkt_params.crc_is_on = LORA_CRC_IS_ON;
     pkt_params.invert_iq_is_on = LORA_INVERT_IQ_IS_ON;
-    if (sx126x_set_lora_pkt_params(NULL, &pkt_params) != SX126X_STATUS_OK) return 1;
+    if (sx126x_set_lora_pkt_params(NULL, &pkt_params) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_lora_pkt_params FAILED\n"); return 1; }
 
     /* Sync word and TX power/ramp - both LOCKED in core/lora_radio_params.h
        and, like mod/pkt params above, not previously called anywhere, so
        TX power was whatever the chip's reset default happened to be. Must
        run before g_radio_configured is set, same as mod/pkt params above. */
-    if (sx126x_set_lora_sync_word(NULL, LORA_SYNC_WORD) != SX126X_STATUS_OK) return 1;
-    if (sx126x_set_tx_params(NULL, LORA_TX_POWER_DBM, LORA_RAMP_TIME) != SX126X_STATUS_OK) return 1;
+    if (sx126x_set_lora_sync_word(NULL, LORA_SYNC_WORD) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_lora_sync_word FAILED\n"); return 1; }
+    if (sx126x_set_tx_params(NULL, LORA_TX_POWER_DBM, LORA_RAMP_TIME) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_tx_params FAILED\n"); return 1; }
 
     g_radio_configured = 1;
 
@@ -777,8 +1024,11 @@ static int ensure_radio_configured(void)
     if (sx1262_enter_rx() != 0)
     {
         g_radio_configured = 0;
+        tm_printf((UB*)"DBG ensure_radio_configured: enter_rx FAILED\n");
         return 1;
     }
+
+    tm_printf((UB*)"DBG ensure_radio_configured: SUCCESS\n");
 
     return 0;
 }
