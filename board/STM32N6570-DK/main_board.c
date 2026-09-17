@@ -483,27 +483,14 @@ void board_usart1_write(const uint8_t *bytes, uint32_t len)
     }
 }
 
-/* Non-blocking: the next received byte, or -1 if none. Overrun, framing
-   and noise errors are cleared (a set ORE stops reception on this
-   peripheral) and counted - a lost byte shows up as a checksum reject in
-   mission_link_task.c's parser, which resyncs. */
-int board_usart1_read_byte(void)
-{
-    uint32_t isr = USART1->ISR;
-
-    if ((isr & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE)) != 0u)
-    {
-        USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF;
-        g_usart1_rx_error_count++;
-    }
-
-    if ((isr & USART_ISR_RXNE_RXFNE) == 0u)
-    {
-        return -1;
-    }
-
-    return (int)(USART1->RDR & 0xFFu);
-}
+/* Real board_usart1_read_byte() lives in usart1_driver.c (interrupt-
+   driven ring buffer) - see this file's own sim_task() comment at
+   board_usart1_rx_init()'s call site for why the polling version this
+   used to be here was replaced. g_usart1_rx_error_count is currently
+   only ever read (board_report_link_diagnostics() below) - the ISR
+   clears ORE/FE/NE itself but doesn't feed this counter, so that one
+   diagnostic line under-reports until usart1_driver.c exposes a hook
+   for it; not a functional gap, just a stale diagnostic. */
 
 /* tm_com_init() leaves USART1 with a one-byte receive register, so any
    byte not read before the next one arrives is lost - and this board is
