@@ -1,6 +1,34 @@
 #include "lora_frame.h"
 #include "aead_chacha20poly1305.h"
 
+/* See lora_frame_auth_fail_count()/lora_frame_accept_count() in
+   lora_frame.h. Plain counters, not reset by lora_crypto_reset(): they
+   describe what this boot has seen, not crypto state. */
+static uint32_t g_lora_frame_auth_fail_count;
+static uint32_t g_lora_frame_accept_count;
+static uint32_t g_lora_frame_session_hold_count;
+static uint32_t g_lora_frame_replay_count;
+
+uint32_t lora_frame_replay_count(void)
+{
+    return g_lora_frame_replay_count;
+}
+
+uint32_t lora_frame_session_hold_count(void)
+{
+    return g_lora_frame_session_hold_count;
+}
+
+uint32_t lora_frame_auth_fail_count(void)
+{
+    return g_lora_frame_auth_fail_count;
+}
+
+uint32_t lora_frame_accept_count(void)
+{
+    return g_lora_frame_accept_count;
+}
+
 /*
  * Additive checksum over `len` bytes at `bytes`, mod 256 - same scheme
  * as TELEMETRY_FRAME_CHECKSUM() in telemetry_frame.h, just expressed
@@ -34,6 +62,7 @@ uint32_t lora_frame_pack(uint8_t frame_type, uint8_t sender_board_id,
     uint8_t *tag_out;
     uint8_t *counter_frag_out;
     uint8_t *checksum_out;
+    uint32_t epoch;
 
     if (payload_len > LORA_FRAME_MAX_PAYLOAD)
     {
@@ -48,6 +77,11 @@ uint32_t lora_frame_pack(uint8_t frame_type, uint8_t sender_board_id,
     out_buf[0] = frame_type;
     out_buf[1] = payload_len;
     out_buf[2] = sender_board_id;
+    epoch = lora_crypto_tx_epoch();
+    out_buf[3] = (uint8_t)(epoch & 0xffu);
+    out_buf[4] = (uint8_t)((epoch >> 8) & 0xffu);
+    out_buf[5] = (uint8_t)((epoch >> 16) & 0xffu);
+    out_buf[6] = (uint8_t)((epoch >> 24) & 0xffu);
 
     ciphertext = &out_buf[LORA_FRAME_HEADER_SIZE];
     tag_out = &ciphertext[payload_len];
@@ -55,9 +89,9 @@ uint32_t lora_frame_pack(uint8_t frame_type, uint8_t sender_board_id,
     checksum_out = &counter_frag_out[LORA_FRAME_COUNTER_FRAG_SIZE];
 
     counter = lora_crypto_next_tx_counter();
-    lora_crypto_build_nonce(sender_board_id, counter, nonce);
+    lora_crypto_build_nonce(sender_board_id, epoch, counter, nonce);
 
-    /* AAD = the three clear header bytes just written above - see
+    /* AAD = the clear header bytes just written above - see
        lora_frame.h's "Encryption" section for why these three fields
        specifically are authenticated but not encrypted. Cannot fail
        here (payload_len already checked against LORA_FRAME_MAX_PAYLOAD,
@@ -70,6 +104,8 @@ uint32_t lora_frame_pack(uint8_t frame_type, uint8_t sender_board_id,
 
     counter_frag_out[0] = (uint8_t)(counter & 0xffu);
     counter_frag_out[1] = (uint8_t)((counter >> 8) & 0xffu);
+    counter_frag_out[2] = (uint8_t)((counter >> 16) & 0xffu);
+    counter_frag_out[3] = (uint8_t)((counter >> 24) & 0xffu);
 
     *checksum_out = lora_frame_checksum(ciphertext, payload_len);
 
@@ -85,15 +121,15 @@ int lora_frame_try_parse(const uint8_t *buf, uint32_t buf_len,
     uint8_t sender_board_id;
     const uint8_t *ciphertext;
     const uint8_t *tag;
-    uint16_t wire_frag;
     uint8_t expected_checksum;
     uint32_t counter;
+    uint32_t epoch;
+    int rx_class;
     uint8_t nonce[AEAD_CHACHA20POLY1305_NONCE_BYTES];
 
-    if (buf_len < LORA_FRAME_HEADER_SIZE)
+    if (buf_len < 2u)
     {
-        /* Not even frame_type + payload_len + sender_board_id have
-           arrived yet. */
+        /* payload_len (byte 1) hasn't arrived yet. */
         return 0;
     }
 
@@ -109,6 +145,14 @@ int lora_frame_try_parse(const uint8_t *buf, uint32_t buf_len,
         return -1;
     }
 
+    /* Checked only after the payload_len reject above, so an impossible
+       length is rejected from byte 1 alone instead of waiting for the
+       rest of a header that can never belong to a valid frame. */
+    if (buf_len < LORA_FRAME_HEADER_SIZE)
+    {
+        return 0;
+    }
+
     frame_size = LORA_FRAME_HEADER_SIZE + (uint32_t)payload_len + LORA_FRAME_TRAILER_SIZE;
 
     if (buf_len < frame_size)
@@ -121,8 +165,10 @@ int lora_frame_try_parse(const uint8_t *buf, uint32_t buf_len,
     sender_board_id = buf[2];
     ciphertext = &buf[LORA_FRAME_HEADER_SIZE];
     tag = &ciphertext[payload_len];
-    wire_frag = (uint16_t)(tag[LORA_FRAME_TAG_SIZE]
-                            | ((uint16_t)tag[LORA_FRAME_TAG_SIZE + 1u] << 8));
+    counter = (uint32_t)tag[LORA_FRAME_TAG_SIZE] |
+              ((uint32_t)tag[LORA_FRAME_TAG_SIZE + 1u] << 8) |
+              ((uint32_t)tag[LORA_FRAME_TAG_SIZE + 2u] << 16) |
+              ((uint32_t)tag[LORA_FRAME_TAG_SIZE + 3u] << 24);
 
     expected_checksum = lora_frame_checksum(ciphertext, payload_len);
 
@@ -133,8 +179,21 @@ int lora_frame_try_parse(const uint8_t *buf, uint32_t buf_len,
         return -1;
     }
 
-    counter = lora_crypto_reconstruct_counter(sender_board_id, wire_frag);
-    lora_crypto_build_nonce(sender_board_id, counter, nonce);
+    epoch = (uint32_t)buf[3] | ((uint32_t)buf[4] << 8) |
+            ((uint32_t)buf[5] << 16) | ((uint32_t)buf[6] << 24);
+    rx_class = lora_crypto_rx_classify(sender_board_id, epoch);
+
+    /* Replay floor applies to the sender's CONFIRMED session only - a new
+       session legitimately restarts its counter (see core/lora_crypto.h).
+       Checked before the AEAD verify: a replayed frame would verify. */
+    if (rx_class == LORA_CRYPTO_RX_TRUSTED &&
+        lora_crypto_counter_is_replay(sender_board_id, counter))
+    {
+        g_lora_frame_replay_count++;
+        return -1;
+    }
+
+    lora_crypto_build_nonce(sender_board_id, epoch, counter, nonce);
 
     if (!aead_chacha20poly1305_open(g_lora_crypto_psk, nonce,
                                      buf, LORA_FRAME_HEADER_SIZE,
@@ -148,10 +207,49 @@ int lora_frame_try_parse(const uint8_t *buf, uint32_t buf_len,
            here - see that function's own doc on why committing an
            unverified counter would be a self-inflicted problem, not
            a security fix. */
+        g_lora_frame_auth_fail_count++;
         return -1;
     }
 
-    lora_crypto_accept_counter(sender_board_id, counter);
+    if (rx_class == LORA_CRYPTO_RX_UNCONFIRMED)
+    {
+        /* Authentic, but possibly a replay from an earlier session of
+           this sender - held until the sender proves the session is
+           live (core/lora_crypto.h "Session control"). Only a matching
+           RESPONSE (confirms) or a CHALLENGE (answered) gets through,
+           and neither ever reaches the inbox. Nothing is committed
+           here: no floor, no epoch. */
+        if (buf[0] != LORA_FRAME_TYPE_SESSION ||
+            !lora_crypto_session_rx(sender_board_id, epoch, counter, rx_class,
+                                    out_payload, payload_len))
+        {
+            if (buf[0] != LORA_FRAME_TYPE_SESSION)
+            {
+                lora_crypto_note_unconfirmed_session(sender_board_id, epoch);
+            }
+            g_lora_frame_session_hold_count++;
+            return -1;
+        }
+    }
+    else
+    {
+        if (rx_class == LORA_CRYPTO_RX_BOOTSTRAP)
+        {
+            lora_crypto_confirm_session(sender_board_id, epoch, counter);
+        }
+        else
+        {
+            lora_crypto_accept_counter(sender_board_id, counter);
+        }
+
+        if (buf[0] == LORA_FRAME_TYPE_SESSION)
+        {
+            (void)lora_crypto_session_rx(sender_board_id, epoch, counter, rx_class,
+                                         out_payload, payload_len);
+        }
+    }
+
+    g_lora_frame_accept_count++;
 
     *out_type = buf[0];
     *out_sender_board_id = sender_board_id;

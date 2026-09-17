@@ -31,15 +31,44 @@
  * MissionLinkHandshakeReq_t/Reply_t ride the exact same encrypted
  * envelope as every other frame_type with no special-casing.
  *
- * KNOWN, DELIBERATE, DOCUMENTED TRADEOFF (per the reference doc):
- * because the key is static but each board's counter resets to 0 on
- * reboot, a frame captured before a reboot is technically replayable
- * immediately after that reboot (the counter/nonce space restarts
- * while the key does not - see this file's per-sender counter
- * state below). This is accepted for the contest build given the
- * time budget; a real deployment would need the doc's "full
- * solution" (root-secret + per-boot-derived session key) to close
- * this gap. Documenting it here, not hiding it - see this project's
+ * Per-boot session epoch (added after the static-PSK design above was
+ * found to break at runtime on a reboot): each board picks a random
+ * 32-bit epoch at boot (lora_crypto_set_tx_epoch(), fed from the
+ * SX1262's own RNG by board code). It rides in every frame header
+ * (authenticated AAD, see core/lora_frame.h) and in the nonce. Two
+ * reboot problems this closes:
+ *
+ *   1. NONCE REUSE. Before this, a reboot restarted the TX counter
+ *      under the same static key, so the first frames after every
+ *      reboot reused (key, nonce) pairs from before it - a real
+ *      ChaCha20-Poly1305 break (keystream reuse, Poly1305 key reuse),
+ *      not only the replay risk this comment used to document. A new
+ *      epoch gives a fresh nonce space per boot.
+ *   2. LOCKOUT. The peer that stayed up kept its replay floor for the
+ *      rebooted sender, so every post-reboot frame reconstructed above
+ *      that floor, failed AEAD, and was silently dropped until the
+ *      rebooted board had re-sent more frames than it ever sent before.
+ *      Measured: floor 200 -> first 201 genuine frames lost; a board 0
+ *      reboot hung boot outright (its ~40 relay Reqs never got through).
+ *
+ * A frame under a NEW epoch from a sender already known under another
+ * epoch is not trusted on its own: a replayed frame from any earlier
+ * session also verifies (same static key). So the receiver holds such
+ * frames (drops them, schedules a challenge) and only switches that
+ * sender to the new epoch once the sender answers a fresh challenge
+ * nonce from the new epoch (see "Session control" below). A replay of an
+ * old session cannot answer, so it can neither switch the receiver back
+ * to that session nor disturb the currently confirmed one.
+ *
+ * REMAINING, DOCUMENTED TRADEOFF: a receiver with NO state for a sender
+ * (its own first contact, e.g. right after the receiver itself booted)
+ * still trusts the first authenticated frame it sees from that sender
+ * (bootstrap). An attacker replaying a captured old-session frame at
+ * exactly that moment gets it accepted once; the genuine sender's next
+ * frame (new epoch) then triggers a challenge and the receiver moves to
+ * the genuine session. Closing that last window needs a challenge on
+ * first contact as well, which delays every boot by a round trip - not
+ * done here. Documenting it here, not hiding it - see this project's
  * own "empirical verification / correctness over assertion" norm:
  * a known gap that's written down is a design decision, one that's
  * quietly true anyway is a bug waiting to be found.
@@ -64,12 +93,14 @@ extern const uint8_t g_lora_crypto_psk[LORA_CRYPTO_KEY_BYTES];
  * to a generous upper bound on board count, not the real board
  * count) but are intentionally decoupled headers. sender_board_id
  * values >= this cap are rejected defensively (see
- * lora_crypto_reconstruct_counter()/_accept_counter() below) rather
+ * lora_crypto_counter_is_replay()/_accept_counter() below) rather
  * than indexing out of bounds.
  */
 #ifndef LORA_CRYPTO_MAX_SENDERS
 #define LORA_CRYPTO_MAX_SENDERS 8u
 #endif
+_Static_assert(LORA_CRYPTO_MAX_SENDERS <= 256u,
+               "sender_board_id is one byte on the wire - more senders cannot be addressed");
 
 /*
  * ---------------------------------------------------------------
@@ -101,6 +132,26 @@ uint32_t lora_crypto_next_tx_counter(void);
    documents as a known, one-time-per-real-reboot tradeoff; calling
    it mid-session multiplies that window). */
 void lora_crypto_reset(void);
+
+/* Sets this board's session epoch for every frame it seals from now on,
+   and schedules one LORA_CRYPTO_SESSION_HELLO frame (sent by core/comms_
+   transport.c's dispatcher) so peers that stayed up notice the new
+   session promptly instead of waiting for this board's next real frame.
+   Call once at boot, before the first frame is sent, with a value that
+   differs from every previous boot's (board code uses the SX1262 RNG).
+   Defaults to 0 until set, which is fine for single-process laptop
+   builds and tests; two boots of a real board with the same epoch get
+   the old lockout/nonce-reuse behavior back. lora_crypto_reset() sets
+   it back to 0 and cancels the pending HELLO. */
+void lora_crypto_set_tx_epoch(uint32_t epoch);
+uint32_t lora_crypto_tx_epoch(void);
+
+/* This board's own id, so session control frames addressed to another
+   board are ignored. Configuration, like the PSK: NOT cleared by
+   lora_crypto_reset(). core/comms_transport.c's comms_transport_init()
+   sets it from g_comms_transport_this_board_id. Until set, control frames
+   are accepted regardless of their target byte. */
+void lora_crypto_set_local_board_id(uint8_t board_id);
 
 /*
  * ---------------------------------------------------------------
@@ -152,44 +203,42 @@ void lora_crypto_reset(void);
  *      would fail silently instead, which is worse, not better -
  *      see check-board-ids-distinct's own Makefile comment).
  */
-void lora_crypto_build_nonce(uint8_t sender_board_id, uint32_t counter,
+void lora_crypto_build_nonce(uint8_t sender_board_id, uint32_t epoch, uint32_t counter,
                               uint8_t out_nonce[AEAD_CHACHA20POLY1305_NONCE_BYTES]);
+/* ^ As of the per-boot session epoch (see this file's top comment), the
+   layout is: byte 0 = sender_board_id, bytes 1..4 = epoch (LE), bytes
+   5..7 = zero, bytes 8..11 = counter (LE). Everything said above about
+   the sender byte still holds; the epoch bytes are what keep a rebooted
+   board's restarted counter from reusing a nonce under the static key. */
 
 /*
  * ---------------------------------------------------------------
- * RX side: per-sender counter reconstruction + replay rejection.
+ * RX side: per-sender replay rejection.
  * ---------------------------------------------------------------
- * lora_frame.h's wire format only carries the low 16 bits of the
- * 32-bit counter (LORA_FRAME_COUNTER_FRAG_SIZE) - mirrors LoRaWAN's
- * own frame-counter scheme, per the reference doc. These two
- * functions implement that scheme's receive side, keyed per
+ * lora_frame.h's wire format carries the full 32-bit counter
+ * (LORA_FRAME_COUNTER_FRAG_SIZE, 4 bytes). These two functions
+ * implement the receive side's replay floor, keyed per
  * sender_board_id so this board's own loopback traffic (same-board
  * team-to-team sends, see core/comms_transport.c) and a genuine
  * peer's traffic never share reconstruction state even though both
  * ride the same wire format.
  */
 
-/* Reconstructs the full 32-bit counter from `wire_frag` given
-   sender_board_id's last-ACCEPTED counter (see
-   lora_crypto_accept_counter() below - "accepted" means "this
-   board's AEAD open() already verified a frame at that counter
-   value", not merely "seen"). Picks the smallest value congruent to
-   wire_frag (mod 65536) that is strictly greater than the last
-   accepted value for this sender - i.e. the closest plausible next
-   counter, tolerating any number of dropped frames in between
-   without needing a replay window. If this sender_board_id has
-   never had an accepted frame yet, returns wire_frag verbatim (any
-   starting point is accepted from a sender's first-ever frame - see
-   lora_crypto_accept_counter()'s own doc for why bootstrapping this
-   way is safe: an attacker who doesn't hold the PSK still can't
-   produce a frame that verifies, no matter what counter value they
-   pick).
-   sender_board_id must be < LORA_CRYPTO_MAX_SENDERS - out-of-range
-   values return wire_frag verbatim as a defensive fallback (the
-   caller's subsequent AEAD verify is still the real gate; a bad
-   reconstruction here just means that verify fails, not that
-   anything is trusted on the strength of this function alone). */
-uint32_t lora_crypto_reconstruct_counter(uint8_t sender_board_id, uint16_t wire_frag);
+/* 1 if `counter` is at or below sender_board_id's replay floor for its
+   CONFIRMED session (see lora_crypto_accept_counter() below), 0 otherwise
+   - including for a sender with no state yet or an out-of-range id.
+   lora_frame_try_parse() checks this before paying for an AEAD verify on
+   a frame of the sender's confirmed session.
+
+   History: the wire used to carry only the low 16 bits of the counter
+   and this was lora_crypto_reconstruct_counter(), which guessed the
+   upper bits as "the smallest value above the floor". That guess has no
+   floor to work from for a new session or a first contact, so once a
+   peer's counter passed 65535 a board that rebooted could never decode
+   it again (found by review, reproduced in a two-process harness: board
+   0 had sent ~700k frames, the rebooted peer then hung). The full 32-bit
+   counter now rides the wire (+2 bytes/frame), so nothing is guessed. */
+int lora_crypto_counter_is_replay(uint8_t sender_board_id, uint32_t counter);
 
 /* Records that a frame from sender_board_id at exactly `counter` has
    been AEAD-verified (aead_chacha20poly1305_open() returned 1) and
@@ -206,5 +255,85 @@ uint32_t lora_crypto_reconstruct_counter(uint8_t sender_board_id, uint16_t wire_
    policy as core/mission_link_handshake.h's own HANDSHAKE_MAX_BOARDS
    out-of-range handling). */
 void lora_crypto_accept_counter(uint8_t sender_board_id, uint32_t counter);
+
+/*
+ * ---------------------------------------------------------------
+ * Session epochs + session control (reboot recovery).
+ * ---------------------------------------------------------------
+ * core/lora_frame.c's lora_frame_try_parse() is the only caller of the
+ * RX functions below, in this order: classify the frame's (sender,
+ * epoch); reject TRUSTED frames at or below the floor
+ * (lora_crypto_counter_is_replay()); verify AEAD; then commit via confirm_session() (BOOTSTRAP),
+ * accept_counter() (TRUSTED), or hold the frame (UNCONFIRMED).
+ *
+ * Session control frames ride LORA_FRAME_TYPE_SESSION (core/lora_frame.h)
+ * with a fixed LORA_CRYPTO_SESSION_PAYLOAD_SIZE payload:
+ *   byte 0     subtype  HELLO / CHALLENGE / RESPONSE
+ *   byte 1     target   board the frame is addressed to (0xFF = all)
+ *   bytes 2-9  nonce    CHALLENGE: fresh value from the challenger;
+ *                       RESPONSE: the challenge nonce echoed back
+ * Exchange after board A reboots while board B stays up:
+ *   A -> HELLO (or any frame) under new epoch E2 -> B holds it, schedules
+ *   B -> CHALLENGE(target A, nonce N) under B's confirmed epoch
+ *   A -> RESPONSE(target B, nonce N) under E2
+ *   B: nonce matches its outstanding challenge -> A confirmed at E2, floor
+ *      = that response's counter; lora_crypto_peer_session_count(A) bumps.
+ * Challenge nonces are this board's own epoch plus a per-boot sequence
+ * number, so they never repeat across boots as long as epochs don't.
+ * They only need to be unique, not secret: nobody without the key can
+ * seal a RESPONSE, and a recorded RESPONSE carries an old nonce.
+ */
+#define LORA_CRYPTO_SESSION_NONCE_BYTES   8u
+#define LORA_CRYPTO_SESSION_PAYLOAD_SIZE  (2u + LORA_CRYPTO_SESSION_NONCE_BYTES)
+#define LORA_CRYPTO_SESSION_HELLO         ((uint8_t)0u)
+#define LORA_CRYPTO_SESSION_CHALLENGE     ((uint8_t)1u)
+#define LORA_CRYPTO_SESSION_RESPONSE      ((uint8_t)2u)
+#define LORA_CRYPTO_SESSION_TARGET_ALL    ((uint8_t)0xFFu)
+
+#define LORA_CRYPTO_RX_TRUSTED      0 /* epoch already confirmed for this sender
+                                         (or sender out of tracked range) */
+#define LORA_CRYPTO_RX_BOOTSTRAP    1 /* no state for this sender yet */
+#define LORA_CRYPTO_RX_UNCONFIRMED  2 /* known sender, different epoch */
+
+int lora_crypto_rx_classify(uint8_t sender_board_id, uint32_t epoch);
+
+/* Commits a new session for sender_board_id: epoch becomes its confirmed
+   epoch and `counter` its replay floor (may be LOWER than the previous
+   session's floor - that's the point). Clears any outstanding challenge
+   and increments lora_crypto_peer_session_count(). Only after AEAD has
+   verified, and for a new epoch only on a matching challenge RESPONSE. */
+void lora_crypto_confirm_session(uint8_t sender_board_id, uint32_t epoch, uint32_t counter);
+
+/* Records an AEAD-verified frame of `epoch` from a not-yet-confirmed
+   session: schedules a CHALLENGE to that sender for that epoch. Reuses the
+   outstanding nonce only if it was issued for this same epoch; otherwise
+   issues a fresh one, and only a RESPONSE under that epoch echoing that
+   nonce confirms it (see lora_crypto_note_unconfirmed_session() in the .c
+   for the replay this binding closes). */
+void lora_crypto_note_unconfirmed_session(uint8_t sender_board_id, uint32_t epoch);
+
+/* Handles an AEAD-verified LORA_FRAME_TYPE_SESSION payload. rx_class is
+   lora_crypto_rx_classify()'s result for the frame; BOOTSTRAP/TRUSTED
+   frames must already have been committed by the caller. Returns 1 if
+   the frame is acceptable as delivered (the caller returns 1 from
+   lora_frame_try_parse(); comms_transport_deliver_received() then drops
+   it, control frames never reach the inbox), 0 if it must be held like
+   any other unconfirmed-session frame (a challenge has been scheduled). */
+int lora_crypto_session_rx(uint8_t sender_board_id, uint32_t epoch, uint32_t counter,
+                           int rx_class, const uint8_t *payload, uint8_t payload_len);
+
+/* Pops the next due session control payload (RESPONSEs first, then
+   CHALLENGEs, then this board's boot HELLO) into out_payload (at least
+   LORA_CRYPTO_SESSION_PAYLOAD_SIZE bytes). Returns 1 if one was written,
+   0 if nothing is due. core/comms_transport.c's dispatcher sends it as a
+   LORA_FRAME_TYPE_SESSION frame ahead of every TX queue. */
+int lora_crypto_take_session_tx(uint8_t *out_payload, uint8_t *out_payload_len);
+
+/* Number of sessions ever confirmed for sender_board_id this boot: 1 after
+   first contact, +1 per confirmed new epoch. A value above 1 means that
+   sender rebooted (or otherwise started a new session) while this board
+   stayed up - board 0's mission-link handshake uses the change to re-run
+   that peer's handshake leg. 0 for an out-of-range sender. */
+uint32_t lora_crypto_peer_session_count(uint8_t sender_board_id);
 
 #endif /* LORA_CRYPTO_H */

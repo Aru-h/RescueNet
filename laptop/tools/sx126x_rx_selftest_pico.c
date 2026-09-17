@@ -61,7 +61,7 @@
  * Build:
  *   gcc -std=gnu11 -Wall -Wextra -Wpedantic -Icore \
  *       -Icore/vendor/sx126x_driver/src \
- *       -o sx126x_rx_selftest laptop/tools/sx126x_rx_selftest.c \
+ *       -o sx126x_rx_selftest laptop/tools/sx126x_rx_selftest_pico.c \
  *       core/vendor/sx126x_driver/src/sx126x.c \
  *       core/lora_frame.c core/lora_crypto.c \
  *       core/aead_chacha20poly1305.c core/chacha20.c core/poly1305.c \

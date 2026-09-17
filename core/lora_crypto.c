@@ -31,6 +31,23 @@ static uint32_t g_tx_counter = 0u;
 static uint32_t g_rx_last_counter[LORA_CRYPTO_MAX_SENDERS];
 static uint8_t g_rx_seen[LORA_CRYPTO_MAX_SENDERS];
 
+/* Session epoch state - see lora_crypto.h's top comment and "Session
+   epochs + session control" section. */
+static uint32_t g_tx_epoch;
+static uint8_t g_hello_due;
+static uint8_t g_local_board_id;
+static uint8_t g_local_board_id_known;
+static uint32_t g_challenge_seq;
+
+static uint32_t g_rx_epoch[LORA_CRYPTO_MAX_SENDERS];
+static uint32_t g_rx_session_count[LORA_CRYPTO_MAX_SENDERS];
+static uint8_t g_challenge_pending[LORA_CRYPTO_MAX_SENDERS];
+static uint32_t g_challenge_epoch[LORA_CRYPTO_MAX_SENDERS];
+static uint8_t g_challenge_due[LORA_CRYPTO_MAX_SENDERS];
+static uint8_t g_challenge_nonce[LORA_CRYPTO_MAX_SENDERS][LORA_CRYPTO_SESSION_NONCE_BYTES];
+static uint8_t g_response_due[LORA_CRYPTO_MAX_SENDERS];
+static uint8_t g_response_nonce[LORA_CRYPTO_MAX_SENDERS][LORA_CRYPTO_SESSION_NONCE_BYTES];
+
 /* Non-atomic read-then-increment on g_tx_counter, no lock. Safe today for
  * the same reason documented in comms_transport_inbox_push()'s
  * concurrency-invariant comment: both board targets create exactly one
@@ -52,16 +69,54 @@ void lora_crypto_reset(void)
     g_tx_counter = 0u;
     memset(g_rx_last_counter, 0, sizeof(g_rx_last_counter));
     memset(g_rx_seen, 0, sizeof(g_rx_seen));
+
+    g_tx_epoch = 0u;
+    g_hello_due = 0u;
+    g_challenge_seq = 0u;
+    memset(g_rx_epoch, 0, sizeof(g_rx_epoch));
+    memset(g_rx_session_count, 0, sizeof(g_rx_session_count));
+    memset(g_challenge_pending, 0, sizeof(g_challenge_pending));
+    memset(g_challenge_epoch, 0, sizeof(g_challenge_epoch));
+    memset(g_challenge_due, 0, sizeof(g_challenge_due));
+    memset(g_challenge_nonce, 0, sizeof(g_challenge_nonce));
+    memset(g_response_due, 0, sizeof(g_response_due));
+    memset(g_response_nonce, 0, sizeof(g_response_nonce));
 }
 
-void lora_crypto_build_nonce(uint8_t sender_board_id, uint32_t counter,
+void lora_crypto_set_tx_epoch(uint32_t epoch)
+{
+    g_tx_epoch = epoch;
+    g_hello_due = 1u;
+}
+
+uint32_t lora_crypto_tx_epoch(void)
+{
+    return g_tx_epoch;
+}
+
+void lora_crypto_set_local_board_id(uint8_t board_id)
+{
+    g_local_board_id = board_id;
+    g_local_board_id_known = 1u;
+}
+
+static void put_le32(uint8_t *out, uint32_t value)
+{
+    out[0] = (uint8_t)(value & 0xffu);
+    out[1] = (uint8_t)((value >> 8) & 0xffu);
+    out[2] = (uint8_t)((value >> 16) & 0xffu);
+    out[3] = (uint8_t)((value >> 24) & 0xffu);
+}
+
+void lora_crypto_build_nonce(uint8_t sender_board_id, uint32_t epoch, uint32_t counter,
                               uint8_t out_nonce[AEAD_CHACHA20POLY1305_NONCE_BYTES])
 {
     uint32_t i;
 
     out_nonce[0] = sender_board_id;
+    put_le32(&out_nonce[1], epoch);
 
-    for (i = 1u; i < 8u; i++)
+    for (i = 5u; i < 8u; i++)
     {
         out_nonce[i] = 0u;
     }
@@ -72,59 +127,14 @@ void lora_crypto_build_nonce(uint8_t sender_board_id, uint32_t counter,
     out_nonce[11] = (uint8_t)((counter >> 24) & 0xffu);
 }
 
-uint32_t lora_crypto_reconstruct_counter(uint8_t sender_board_id, uint16_t wire_frag)
+int lora_crypto_counter_is_replay(uint8_t sender_board_id, uint32_t counter)
 {
-    uint32_t last_accepted;
-    uint32_t candidate;
-    uint64_t bumped; /* uint64_t so the +0x10000 bump below can never
-                         silently wrap a uint32_t and produce a
-                         SMALLER candidate than last_accepted - see
-                         the overflow check below. */
-
-    if (sender_board_id >= LORA_CRYPTO_MAX_SENDERS)
+    if (sender_board_id >= LORA_CRYPTO_MAX_SENDERS || !g_rx_seen[sender_board_id])
     {
-        return (uint32_t)wire_frag;
+        return 0;
     }
 
-    if (!g_rx_seen[sender_board_id])
-    {
-        /* Bootstrap: no prior accepted counter for this sender -
-           any starting point is fine, see this function's own
-           header doc for why. */
-        return (uint32_t)wire_frag;
-    }
-
-    last_accepted = g_rx_last_counter[sender_board_id];
-
-    /* Candidate in the same 16-bit "window" as last_accepted. */
-    candidate = (last_accepted & 0xffff0000u) | (uint32_t)wire_frag;
-
-    if (candidate <= last_accepted)
-    {
-        /* wire_frag's window has already been fully consumed - the
-           real counter must be in the NEXT window up (mirrors
-           LoRaWAN's own frame-counter reconstruction). */
-        bumped = (uint64_t)candidate + 0x10000u;
-
-        if (bumped > 0xffffffffu)
-        {
-            /* This sender's 32-bit counter has wrapped entirely -
-               astronomically unlikely for a contest build (would
-               require ~4 billion frames from one sender) but handled
-               rather than silently truncated: fall back to the
-               un-bumped candidate. The AEAD tag verify downstream is
-               still the real gate on whether this reconstruction was
-               actually correct - a wrong guess here just fails to
-               decrypt, it never fails OPEN (see this file's header
-               doc on lora_crypto_accept_counter() for the same
-               principle applied to the accept side). */
-            return candidate;
-        }
-
-        candidate = (uint32_t)bumped;
-    }
-
-    return candidate;
+    return (counter <= g_rx_last_counter[sender_board_id]) ? 1 : 0;
 }
 
 void lora_crypto_accept_counter(uint8_t sender_board_id, uint32_t counter)
@@ -134,23 +144,13 @@ void lora_crypto_accept_counter(uint8_t sender_board_id, uint32_t counter)
         return;
     }
 
-    /* Bug fix: this used to overwrite g_rx_last_counter unconditionally,
-     * trusting whatever counter lora_crypto_reconstruct_counter() handed
-     * back. That function's own 32-bit-wrap fallback (see its comment)
-     * can, in an astronomically unlikely edge case, return a candidate
-     * <= last_accepted - and a replayed old (but still AEAD-valid)
-     * frame at exactly that point would then roll this sender's
-     * anti-replay floor backward, reopening the window for every
-     * counter between the new (lower) floor and the old one. In every
-     * other path through reconstruct_counter(), the candidate it
-     * returns is already > last_accepted by construction, so this
-     * monotonic check has no effect on normal operation - it only
-     * forecloses that one edge case. Safe to enforce here regardless of
-     * what reconstruct_counter() computes: this function is only ever
-     * called after the AEAD tag has already verified (see lora_frame_
-     * try_parse()), so refusing to lower the floor never rejects a
-     * frame - it only guards the bookkeeping this floor exists to
-     * protect. */
+    /* Never lowers the floor within a session: a lower counter here
+     * would reopen the replay window for every counter between the new
+     * floor and the old one. lora_frame_try_parse() already rejects
+     * counters at or below the floor before this is reached, so this is
+     * defense in depth, not a path normal traffic takes. A new session
+     * legitimately restarts the floor - that goes through
+     * lora_crypto_confirm_session() instead, never through here. */
     if (g_rx_seen[sender_board_id] && counter <= g_rx_last_counter[sender_board_id])
     {
         return;
@@ -158,4 +158,215 @@ void lora_crypto_accept_counter(uint8_t sender_board_id, uint32_t counter)
 
     g_rx_last_counter[sender_board_id] = counter;
     g_rx_seen[sender_board_id] = 1u;
+}
+
+/*
+ * ---------------------------------------------------------------
+ * Session epochs + session control - see lora_crypto.h.
+ * ---------------------------------------------------------------
+ */
+
+int lora_crypto_rx_classify(uint8_t sender_board_id, uint32_t epoch)
+{
+    if (sender_board_id >= LORA_CRYPTO_MAX_SENDERS)
+    {
+        return LORA_CRYPTO_RX_TRUSTED; /* untracked: no floor, no session
+                                          state - counter_is_replay()/
+                                          accept_counter() ignore it */
+    }
+
+    if (!g_rx_seen[sender_board_id])
+    {
+        return LORA_CRYPTO_RX_BOOTSTRAP;
+    }
+
+    return (epoch == g_rx_epoch[sender_board_id]) ? LORA_CRYPTO_RX_TRUSTED
+                                                  : LORA_CRYPTO_RX_UNCONFIRMED;
+}
+
+void lora_crypto_confirm_session(uint8_t sender_board_id, uint32_t epoch, uint32_t counter)
+{
+    if (sender_board_id >= LORA_CRYPTO_MAX_SENDERS)
+    {
+        return;
+    }
+
+    g_rx_epoch[sender_board_id] = epoch;
+    g_rx_last_counter[sender_board_id] = counter;
+    g_rx_seen[sender_board_id] = 1u;
+    g_rx_session_count[sender_board_id]++;
+    g_challenge_pending[sender_board_id] = 0u;
+    g_challenge_due[sender_board_id] = 0u;
+}
+
+void lora_crypto_note_unconfirmed_session(uint8_t sender_board_id, uint32_t epoch)
+{
+    if (sender_board_id >= LORA_CRYPTO_MAX_SENDERS)
+    {
+        return;
+    }
+
+    /* One outstanding challenge per sender, BOUND to the epoch it was
+       issued for. Evidence of any other epoch replaces it with a fresh
+       nonce - never re-issues an old one. Found by review: with a nonce
+       shared across epochs, a RESPONSE recorded from session E2 (and kept
+       from reaching this board) could later be replayed to confirm E2
+       after that sender had already moved on to E3, delivering replayed
+       E2 frames. Now that recorded RESPONSE names a nonce that is no
+       longer outstanding. Cost: an attacker who keeps replaying frames
+       of an old epoch can keep replacing the live one's challenge - an
+       active DoS, no worse than jamming, never a wrong session. */
+    if (!g_challenge_pending[sender_board_id] ||
+        g_challenge_epoch[sender_board_id] != epoch)
+    {
+        /* Unique per challenge for as long as epochs differ across boots
+           - see lora_crypto.h's "Session control" doc. */
+        put_le32(&g_challenge_nonce[sender_board_id][0], g_tx_epoch);
+        put_le32(&g_challenge_nonce[sender_board_id][4], g_challenge_seq);
+        g_challenge_seq++;
+        g_challenge_epoch[sender_board_id] = epoch;
+        g_challenge_pending[sender_board_id] = 1u;
+    }
+
+    /* Re-sent once per held frame, so a lost CHALLENGE (or RESPONSE) is
+       retried at the rate the rebooted peer keeps transmitting - bounded
+       by that peer's own traffic, never self-sustaining. */
+    g_challenge_due[sender_board_id] = 1u;
+}
+
+int lora_crypto_session_rx(uint8_t sender_board_id, uint32_t epoch, uint32_t counter,
+                           int rx_class, const uint8_t *payload, uint8_t payload_len)
+{
+    int trusted = (rx_class != LORA_CRYPTO_RX_UNCONFIRMED) ? 1 : 0;
+    uint8_t subtype;
+    uint8_t target;
+    const uint8_t *nonce;
+
+    if (sender_board_id >= LORA_CRYPTO_MAX_SENDERS ||
+        payload_len < LORA_CRYPTO_SESSION_PAYLOAD_SIZE)
+    {
+        if (!trusted)
+        {
+            lora_crypto_note_unconfirmed_session(sender_board_id, epoch);
+        }
+        return trusted;
+    }
+
+    subtype = payload[0];
+    target = payload[1];
+    nonce = &payload[2];
+
+    if (subtype != LORA_CRYPTO_SESSION_HELLO &&
+        target != LORA_CRYPTO_SESSION_TARGET_ALL &&
+        g_local_board_id_known && target != g_local_board_id)
+    {
+        /* Addressed to a different board. Still authenticated evidence
+           of that sender's session, so an unconfirmed one gets
+           challenged like any other held frame. */
+        if (!trusted)
+        {
+            lora_crypto_note_unconfirmed_session(sender_board_id, epoch);
+        }
+        return trusted;
+    }
+
+    if (subtype == LORA_CRYPTO_SESSION_CHALLENGE)
+    {
+        /* Answering reveals nothing (the response only echoes a nonce
+           under this board's own current session), so challenges are
+           answered even from an unconfirmed session - otherwise two
+           boards that each hold the other's new session would wait on
+           each other forever. One pending response per sender: a flood
+           of replayed challenges costs at most one response per
+           dispatch. */
+        memcpy(g_response_nonce[sender_board_id], nonce, LORA_CRYPTO_SESSION_NONCE_BYTES);
+        g_response_due[sender_board_id] = 1u;
+
+        if (!trusted)
+        {
+            lora_crypto_note_unconfirmed_session(sender_board_id, epoch);
+        }
+        return 1;
+    }
+
+    if (subtype == LORA_CRYPTO_SESSION_RESPONSE &&
+        g_challenge_pending[sender_board_id] &&
+        (trusted || g_challenge_epoch[sender_board_id] == epoch) &&
+        memcmp(nonce, g_challenge_nonce[sender_board_id], LORA_CRYPTO_SESSION_NONCE_BYTES) == 0)
+    {
+        if (trusted)
+        {
+            /* The already-confirmed session answered - whatever held
+               frame triggered the challenge was not from a live new
+               session (e.g. a replay). Nothing to switch. */
+            g_challenge_pending[sender_board_id] = 0u;
+            g_challenge_due[sender_board_id] = 0u;
+        }
+        else
+        {
+            lora_crypto_confirm_session(sender_board_id, epoch, counter);
+        }
+        return 1;
+    }
+
+    /* HELLO, a stale/unsolicited RESPONSE, or an unknown subtype. */
+    if (!trusted)
+    {
+        lora_crypto_note_unconfirmed_session(sender_board_id, epoch);
+    }
+    return trusted;
+}
+
+int lora_crypto_take_session_tx(uint8_t *out_payload, uint8_t *out_payload_len)
+{
+    uint32_t i; /* not uint8_t: `i < LORA_CRYPTO_MAX_SENDERS` never ends
+                   if that cap is overridden to 256 (found by review) */
+
+    for (i = 0u; i < LORA_CRYPTO_MAX_SENDERS; i++)
+    {
+        if (g_response_due[i])
+        {
+            out_payload[0] = LORA_CRYPTO_SESSION_RESPONSE;
+            out_payload[1] = (uint8_t)i;
+            memcpy(&out_payload[2], g_response_nonce[i], LORA_CRYPTO_SESSION_NONCE_BYTES);
+            *out_payload_len = (uint8_t)LORA_CRYPTO_SESSION_PAYLOAD_SIZE;
+            g_response_due[i] = 0u;
+            return 1;
+        }
+    }
+
+    for (i = 0u; i < LORA_CRYPTO_MAX_SENDERS; i++)
+    {
+        if (g_challenge_due[i] && g_challenge_pending[i])
+        {
+            out_payload[0] = LORA_CRYPTO_SESSION_CHALLENGE;
+            out_payload[1] = (uint8_t)i;
+            memcpy(&out_payload[2], g_challenge_nonce[i], LORA_CRYPTO_SESSION_NONCE_BYTES);
+            *out_payload_len = (uint8_t)LORA_CRYPTO_SESSION_PAYLOAD_SIZE;
+            g_challenge_due[i] = 0u;
+            return 1;
+        }
+    }
+
+    if (g_hello_due)
+    {
+        out_payload[0] = LORA_CRYPTO_SESSION_HELLO;
+        out_payload[1] = LORA_CRYPTO_SESSION_TARGET_ALL;
+        memset(&out_payload[2], 0, LORA_CRYPTO_SESSION_NONCE_BYTES);
+        *out_payload_len = (uint8_t)LORA_CRYPTO_SESSION_PAYLOAD_SIZE;
+        g_hello_due = 0u;
+        return 1;
+    }
+
+    return 0;
+}
+
+uint32_t lora_crypto_peer_session_count(uint8_t sender_board_id)
+{
+    if (sender_board_id >= LORA_CRYPTO_MAX_SENDERS)
+    {
+        return 0u;
+    }
+
+    return g_rx_session_count[sender_board_id];
 }

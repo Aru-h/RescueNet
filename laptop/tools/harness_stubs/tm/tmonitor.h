@@ -9,8 +9,7 @@
  * need this file linked against a real target, defeating the point
  * of a desktop-only harness), this stub supplies just enough to link:
  * INT (the µT-Kernel integer typedef the real call casts through) and
- * a tm_putchar that writes to stderr, so USART1 TX bytes are at least
- * visible during a harness run instead of silently discarded.
+ * a tm_putchar that hands each USART1 TX byte to the capture hook below.
  *
  * NOT a real BSP header - do not add this to check-board's or
  * check-pico's own include paths; it exists solely so
@@ -20,31 +19,25 @@
 #ifndef HARNESS_STUB_TM_TMONITOR_H
 #define HARNESS_STUB_TM_TMONITOR_H
 
-#include <stdio.h>
-
 typedef int INT;
 
-/* Writes to a log file, not stderr - stderr is reserved for this
-   harness's own human-readable [board0]/[board1]/[harness] status
-   lines (see two_board_harness.c's own fprintf calls); mixing those
-   with raw binary USART1 protocol bytes on the same stream produces
-   garbled, invalid-UTF8 terminal output. The bytes themselves aren't
-   needed to judge pass/fail (see two_board_harness.c's own assertion,
-   which checks g_teams[] state directly, not USART1 traffic) - this
-   file exists only so the write has somewhere real to go rather than
-   being silently discarded, in case anyone wants to inspect it later. */
+/* USART1 TX bytes are not written anywhere by default: this used to append
+   every byte to a log file in /tmp that no test read and nothing ever
+   trimmed (it reached hundreds of MB across harness runs). Not stderr
+   either - stderr carries the harness's own [board0]/[board1]/[harness]
+   status lines, and raw binary frames there garble the terminal.
+   A harness that needs to check what a board wrote to USART1
+   (two_board_harness.c checks override acks) defines this hook strongly.
+   A weak do-nothing definition rather than a weak declaration, because
+   the macOS linker rejects an undefined weak reference. */
+__attribute__((weak)) void harness_usart1_tx_byte(int c)
+{
+    (void)c;
+}
+
 static inline INT tm_putchar(INT c)
 {
-    static FILE *log = NULL;
-    if (log == NULL)
-    {
-        log = fopen("/tmp/two_board_harness_usart1.log", "ab");
-    }
-    if (log != NULL)
-    {
-        (void)fputc(c, log);
-        (void)fflush(log);
-    }
+    harness_usart1_tx_byte(c);
     return c;
 }
 

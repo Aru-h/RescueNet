@@ -112,9 +112,11 @@ static void test_max_payload_round_trip(void)
                                   LORA_FRAME_MAX_PAYLOAD, wire_buf);
 
     CHECK(packed_len == LORA_FRAME_MAX_WIRE_SIZE);
-    CHECK(LORA_FRAME_MAX_WIRE_SIZE == 166u); /* see lora_frame.h's own doc
-                                                 on why 166, not the
-                                                 reference doc's 165 */
+    CHECK(LORA_FRAME_MAX_WIRE_SIZE == 172u); /* see lora_frame.h's own doc:
+                                                 the reference doc's 165,
+                                                 +1 sender_board_id, +4
+                                                 per-boot session epoch,
+                                                 +2 full 32-bit counter */
 
     rc = lora_frame_try_parse(wire_buf, packed_len, &out_type, &out_sender,
                                out_payload, &out_len);

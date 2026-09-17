@@ -46,34 +46,7 @@ gcc -std=gnu11 -Wall -Wextra -O1 \
     "${REPO_ROOT}/laptop/tools/two_board_cbba_harness.c" \
     "${REPO_ROOT}/laptop/debug.c" \
     "${REPO_ROOT}/laptop/snapshot.c" \
-    "${REPO_ROOT}/core/cbba.c" \
-    "${REPO_ROOT}/core/comms_transport.c" \
-    "${REPO_ROOT}/core/lora_frame.c" \
-    "${REPO_ROOT}/core/lora_crypto.c" \
-    "${REPO_ROOT}/core/aead_chacha20poly1305.c" \
-    "${REPO_ROOT}/core/chacha20.c" \
-    "${REPO_ROOT}/core/poly1305.c" \
-    "${REPO_ROOT}/core/mission_state.c" \
-    "${REPO_ROOT}/core/team.c" \
-    "${REPO_ROOT}/core/random.c" \
-    "${REPO_ROOT}/core/scoring.c" \
-    "${REPO_ROOT}/core/path.c" \
-    "${REPO_ROOT}/core/allocator.c" \
-    "${REPO_ROOT}/core/mission_state_utils.c" \
-    "${REPO_ROOT}/core/incident.c" \
-    "${REPO_ROOT}/core/mission_link.c" \
-    "${REPO_ROOT}/core/mission_link_handshake.c" \
-    "${REPO_ROOT}/core/mission_link_override.c" \
-    "${REPO_ROOT}/core/environment.c" \
-    "${REPO_ROOT}/core/fault_config.c" \
-    "${REPO_ROOT}/core/fault_injector.c" \
-    "${REPO_ROOT}/core/grid.c" \
-    "${REPO_ROOT}/core/watchdog.c" \
-    "${REPO_ROOT}/core/recovery_manager.c" \
-    "${REPO_ROOT}/core/search_zones.c" \
-    "${REPO_ROOT}/core/mission_execution_twin.c" \
-    "${REPO_ROOT}/core/safezone.c" \
-    "${REPO_ROOT}/core/test_metrics.c" \
+    "${REPO_ROOT}"/core/*.c \
     -lm
 
 if [ $? -ne 0 ]; then

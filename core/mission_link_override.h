@@ -10,11 +10,11 @@
  * mission_link.h's four simulation-data message types (roster/incident/
  * fault/status) and not folded into that header for the same reason
  * core/mission_link_handshake.h gives for its own liveness probe: this
- * message's shape and lifecycle (operator-issued, no reply, no periodic
- * resend) has nothing in common with how those four are produced and
- * consumed. This is a one-shot directive, not something that expects a
- * reply - the laptop side (laptop/tools/app.py) only ever packs this, never
- * parses it; only the receiving board parses it.
+ * message's shape and lifecycle (operator-issued, no periodic resend)
+ * has nothing in common with how those four are produced and consumed.
+ * The laptop only packs the directive; what comes back is a
+ * MissionLinkOverrideAck_t (section 3 below), so the dashboard can tell
+ * "applied" from "rejected" from "never heard back".
  *
  * End-to-end path this header/mission_link_override.c serve:
  *
@@ -38,12 +38,9 @@
  *      calls comms_transport_board_id_for_team(msg.team_id) to decide
  *      whether that's this board (apply in-process) or a different
  *      one (relay over comms_transport_send() using
- *      LORA_FRAME_TYPE_OVERRIDE below, the same Option-2 pattern
- *      mission_link.h's own doc comment already established for
- *      roster/incident/fault/status, and the same "flag a new
- *      LORA_FRAME_TYPE_* value here rather than editing lora_frame.h
- *      directly" precedent core/mission_link_handshake.h already set
- *      for LORA_FRAME_TYPE_HANDSHAKE).
+ *      core/lora_frame.h's LORA_FRAME_TYPE_OVERRIDE, the same Option-2
+ *      pattern mission_link.h's own doc comment already established
+ *      for roster/incident/fault/status).
  *   5. Either way, the board that actually hosts team_id calls
  *      mission_link_override_apply(), which sets that team's
  *      CBBAAgentState_t.override_active/override_incident_id pin (see
@@ -131,6 +128,7 @@ _Static_assert(sizeof(MissionLinkOverride_t) == 5u,
  *   mission_link.h        STATUS_MAGIC0/1              0xF9 0x9F
  *   mission_link_handshake.h  HANDSHAKE_MAGIC0/1       0xB6 0x6B
  *   mission_link_override.h   OVERRIDE_MAGIC0/1        0x87 0x78  <-- this file
+ *   mission_link_override.h   OVERRIDE_ACK_MAGIC0/1    0x96 0x69  <-- this file (section 3)
  *
  * 0x87 matches none of the other first bytes above, and 0x87 != 0x78
  * (the property every pair here needs individually). 0x87 is >0x7E
@@ -168,18 +166,14 @@ _Static_assert(sizeof(MissionLinkOverride_t) == 5u,
 
 /*
  * LoRa relay frame type for the DK<->NUCLEO hop (comms_transport_
- * send() / lora_frame_pack()), same "flag it here, don't edit
- * lora_frame.h directly" pattern core/mission_link_handshake.h
- * already established for LORA_FRAME_TYPE_HANDSHAKE. core/lora_frame.h
- * currently defines LORA_FRAME_TYPE_CBBA=0 and
- * LORA_FRAME_TYPE_MISSION_LINK=1 directly; mission_link_handshake.h
- * claims value 2 (flagged, not yet folded into lora_frame.h as of
- * this file's writing). Value 3 is unused by any of those, so it's
- * picked here - flagged, same as HANDSHAKE's, for whoever owns
- * lora_frame.h to fold both into that header's own LORA_FRAME_TYPE_*
- * list as the single canonical source once these prompt sets
- * converge, so a fourth file doesn't later pick 2 or 3 again for
- * something unrelated.
+ * send() / lora_frame_pack()): LORA_FRAME_TYPE_OVERRIDE. It is defined
+ * in core/lora_frame.h's LORA_FRAME_TYPE_* list, not here. This file
+ * used to define it as 3 on its own, and core/fault_comms.c later took
+ * 3 for LORA_FRAME_TYPE_FAULT_BROADCAST - exactly the collision this
+ * comment warned about. A receiver can't tell the two apart (fault_
+ * comms_ingest_remote_frames() would silently drop a 5-byte override
+ * as a wrong-size broadcast), so the value moved to lora_frame.h,
+ * where a _Static_assert rejects any duplicate.
  *
  * Why a dedicated value instead of reusing LORA_FRAME_TYPE_MISSION_
  * LINK=1 with a fifth MISSION_LINK_MSG_* sub-type byte (verified
@@ -194,7 +188,6 @@ _Static_assert(sizeof(MissionLinkOverride_t) == 5u,
  * receipt, same role MISSION_LINK_MSG_* plays for the other four, just
  * one layer up.
  */
-#define LORA_FRAME_TYPE_OVERRIDE ((uint8_t)3u)
 
 /*
  * Packs msg into out_buf using the USART1 magic-byte layout documented
@@ -257,17 +250,15 @@ void mission_link_override_apply(const MissionLinkOverride_t *msg);
  * board hosts msg->team_id, or relays it over comms_transport_send()
  * (real LoRa once that driver exists, an in-process queue today - see
  * comms_transport.h) to whichever board does, using
- * LORA_FRAME_TYPE_OVERRIDE above. Named and referenced by laptop/tools/
+ * core/lora_frame.h's LORA_FRAME_TYPE_OVERRIDE. Named and referenced by laptop/tools/
  * app.py's /api/board/override route docstring - that route's own job
  * ends at writing the USART1 frame; THIS function is what decides,
  * once DK's USART1 RX path has parsed that frame, whether team_id
  * lives on this board or needs relaying to NUCLEO.
  *
- * Not called from anywhere in this project yet - the USART1 RX hook
- * on DK (board/STM32N6570-DK/mission_link_task.c) is what should call this
- * once it has a freshly-parsed MissionLinkOverride_t, same "hook
- * note, don't touch the file directly" rule this header's top comment
- * already states for that file.
+ * Called by both boards' mission_link_task.c USART1 RX path (board 0)
+ * once it has a freshly-parsed MissionLinkOverride_t, after that file's
+ * own readiness and range checks.
  *
  * SHAPE, not byte-for-byte reuse, of core/mission_link.h's own
  * four-message dual-channel pattern (verified directly against
@@ -281,7 +272,7 @@ void mission_link_override_apply(const MissionLinkOverride_t *msg);
  * prepended to the payload - extending that shared enum with a fifth
  * value would mean editing mission_link_codec.h, infrastructure that
  * landed as part of that same already-finished four-message work and
- * isn't this file's to touch. LORA_FRAME_TYPE_OVERRIDE above is a
+ * isn't this file's to touch. LORA_FRAME_TYPE_OVERRIDE (lora_frame.h) is a
  * second, dedicated frame type instead: the frame_type field itself
  * disambiguates on receipt, so no sub-type byte or relay-size macro
  * is needed here - the relay payload is exactly the bare
@@ -310,5 +301,73 @@ void mission_link_override_apply(const MissionLinkOverride_t *msg);
  * already a silent no-op, not an error.
  */
 int mission_link_override_route_or_apply(const MissionLinkOverride_t *msg);
+
+/* ---------------------------------------------------------------
+ * 3. MissionLinkOverrideAck_t - board -> laptop, one per outcome
+ * ---------------------------------------------------------------
+ * Without this the dashboard only knew the bytes left the laptop: an
+ * override that arrived before a board's handshake finished, or was
+ * lost on the radio, looked exactly like one that was applied.
+ *
+ * Who sends what, for one override (both boards' mission_link_task.c):
+ *   board 0, on USART1 receipt:
+ *     NOT_READY     board 0's handshake isn't complete - nothing done
+ *     BAD_TEAM      team_id >= NUM_TEAMS - nothing done
+ *     APPLIED       board 0 hosts the team and applied it (final)
+ *     RELAYED       queued for the hosting board (not final - its own
+ *                   ack follows)
+ *     RELAY_FAILED  board 0 couldn't queue the relay - nothing done
+ *   hosting board, on LoRa receipt (sent back over LoRa as
+ *   LORA_FRAME_TYPE_OVERRIDE_ACK; board 0 forwards it to USART1):
+ *     NOT_READY     that board's handshake isn't complete
+ *     APPLIED       applied (final)
+ * A board that doesn't host the team ignores a relayed override and
+ * sends nothing. No ack at all after RELAYED means the relay or its ack
+ * was lost - the laptop treats that as "unconfirmed" after a timeout
+ * (laptop/tools/telemetry_bridge.py's OverrideTracker), since nothing on
+ * this link retransmits.
+ *
+ * Echoes team_id and incident_id so the laptop can match the ack to the
+ * override it sent and ignore one for an override it has since replaced.
+ */
+typedef struct __attribute__((packed))
+{
+    uint8_t  team_id;
+    uint32_t incident_id;
+    uint8_t  result; /* MISSION_LINK_OVERRIDE_ACK_* below */
+} MissionLinkOverrideAck_t;
+
+_Static_assert(sizeof(MissionLinkOverrideAck_t) == 6u,
+               "MissionLinkOverrideAck_t must be exactly 6 bytes (packed)");
+
+#define MISSION_LINK_OVERRIDE_ACK_APPLIED      ((uint8_t)1u)
+#define MISSION_LINK_OVERRIDE_ACK_RELAYED      ((uint8_t)2u)
+#define MISSION_LINK_OVERRIDE_ACK_NOT_READY    ((uint8_t)3u)
+#define MISSION_LINK_OVERRIDE_ACK_RELAY_FAILED ((uint8_t)4u)
+#define MISSION_LINK_OVERRIDE_ACK_BAD_TEAM     ((uint8_t)5u)
+
+#define MISSION_LINK_OVERRIDE_ACK_PAYLOAD_SIZE \
+    ((uint32_t)sizeof(MissionLinkOverrideAck_t)) /* 6 bytes */
+
+/* 0x96 is non-ASCII and matches no other first byte in section 2's
+   registry; MAGIC1 is its nibble swap, like every other pair. */
+#define MISSION_LINK_OVERRIDE_ACK_MAGIC0 ((uint8_t)0x96u)
+#define MISSION_LINK_OVERRIDE_ACK_MAGIC1 ((uint8_t)0x69u)
+
+#define MISSION_LINK_OVERRIDE_ACK_WIRE_SIZE \
+    ((uint32_t)(2u + MISSION_LINK_OVERRIDE_ACK_PAYLOAD_SIZE + 1u)) /* 9 bytes */
+
+/* USART1 framing (magic0, magic1, payload, checksum), same contracts as
+   mission_link_override_pack()/_parse() above. */
+uint32_t mission_link_override_pack_ack(const MissionLinkOverrideAck_t *ack,
+                                         uint8_t *out_buf);
+int mission_link_override_parse_ack(const uint8_t *buf, uint32_t buf_len,
+                                     MissionLinkOverrideAck_t *out);
+
+/* Bare payload for the LoRa hop (LORA_FRAME_TYPE_OVERRIDE_ACK). */
+void mission_link_override_pack_ack_payload(const MissionLinkOverrideAck_t *ack,
+                                             uint8_t *out_payload);
+void mission_link_override_parse_ack_payload(const uint8_t *payload,
+                                              MissionLinkOverrideAck_t *out);
 
 #endif /* MISSION_LINK_OVERRIDE_H */

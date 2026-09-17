@@ -34,7 +34,8 @@
  *   gcc -std=gnu11 -Wall -Wextra -Wpedantic -Icore \
  *       -o override_selftest laptop/tools/override_selftest.c \
  *       core/allocator.c core/cbba.c core/comms_transport.c \
- *       core/environment.c core/fault_config.c core/fault_injector.c \
+ *       core/environment.c core/fault_buffer.c core/fault_comms.c \
+ *       core/fault_config.c core/fault_injector.c core/fault_predictor.c \
  *       core/grid.c core/incident.c core/lora_frame.c \
  *       core/lora_crypto.c core/aead_chacha20poly1305.c \
  *       core/chacha20.c core/poly1305.c \

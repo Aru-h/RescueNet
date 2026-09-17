@@ -223,6 +223,12 @@ void mission_link_handshake_parse_reply_payload(const uint8_t *payload,
 #ifndef HANDSHAKE_NUCLEO_TIMEOUT_TICKS
 #define HANDSHAKE_NUCLEO_TIMEOUT_TICKS 20000u
 #endif
+/* Req cadence toward a peer AFTER its timeout latched: slower than the
+   normal retry, never zero - see mission_link_handshake_should_send_
+   relay_req() for why board 0 no longer stops asking. */
+#ifndef HANDSHAKE_RELAY_SLOW_RETRY_INTERVAL_TICKS
+#define HANDSHAKE_RELAY_SLOW_RETRY_INTERVAL_TICKS 5000u
+#endif
 
 /* Call once at boot, after this board knows its own id
    (g_comms_transport_this_board_id - see core/comms_transport.h).
@@ -371,5 +377,25 @@ int mission_link_handshake_get_relay_reply(uint8_t peer_board_id, uint32_t now,
    every single run. This function is the fix: check readiness without
    ever touching the clock. */
 int mission_link_handshake_relay_reply_seen(uint8_t peer_board_id);
+
+/* Whether peer_board_id's relay leg has ALREADY latched timed out -
+   same no-clock, no-side-effect plain read as relay_reply_seen() just
+   above, for the same reason (never an extra cbba_now_ms() call). Does
+   not itself evaluate the timeout; mission_link_task_step() does that.
+   Once this is 1 (and no reply was seen), board 0 has stopped sending
+   Reqs to that peer and reports it to the laptop as not ready, so the
+   laptop will not send mission data. A board waiting on a roster uses
+   this to say so instead of looking like a dead link. */
+int mission_link_handshake_relay_timed_out_seen(uint8_t peer_board_id);
+
+/* Re-opens peer_board_id's relay leg as if board 0 had just booted, for
+   that peer only: no reply recorded, not timed out, Req due immediately,
+   and a fresh HANDSHAKE_NUCLEO_TIMEOUT_TICKS window counted from the next
+   `now` this file sees. Board 0 calls it when that peer is detected to
+   have rebooted (core/lora_crypto.h lora_crypto_peer_session_count()):
+   without it, board 0 never sends that peer another Req once a reply was
+   recorded (or the timeout latched), and a rebooted peer waits at its
+   handshake gate forever. Out-of-range peer ids are ignored. */
+void mission_link_handshake_reset_relay_leg(uint8_t peer_board_id);
 
 #endif /* MISSION_LINK_HANDSHAKE_H */

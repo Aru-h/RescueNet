@@ -42,7 +42,8 @@
  *       core/mission_link.c core/mission_link_handshake.c \
  *       core/environment.c core/fault_config.c \
  *       core/fault_injector.c core/grid.c core/watchdog.c \
- *       core/recovery_manager.c core/search_zones.c \
+ *       core/recovery_manager.c core/fault_predictor.c \
+ *       core/search_zones.c \
  *       core/mission_execution_twin.c core/safezone.c \
  *       core/test_metrics.c -lm
  * Run:

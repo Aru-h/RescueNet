@@ -1056,23 +1056,18 @@ void cbba_ingest_remote_mesh_replies(void)
         /* Peek first — skip frames owned by other consumers without
            consuming them. Only dequeue once we know it's ours. */
         uint8_t peeked_type;
-        if(!comms_transport_peek_frame_type(&peeked_type))
-            continue; /* inbox empty - keep waiting until timeout */
+        if(!comms_transport_poll_received_types(COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_CBBA),
+                                                 &sender_team_id, &frame_type,
+                                                 payload, &payload_len))
+        {
+            if(!comms_transport_peek_frame_type(&peeked_type))
+                continue; /* inbox empty - keep waiting until timeout */
 
-        if(peeked_type != LORA_FRAME_TYPE_CBBA)
-        {
-            /* Not ours — leave it in the inbox for fault_comms or
-               mission_link to consume. Break out of the polling loop
-               so we don't spin on a non-CBBA frame forever. */
+            /* Only other consumers' frames are waiting - leave them for
+               fault_comms/mission_link and stop polling, same exit as
+               before; CBBA frames further back are no longer missed
+               (see comms_transport_poll_received_types()). */
             break;
-        }
-        
-        if(!comms_transport_poll_received(&sender_team_id, &frame_type,
-                                           payload, &payload_len))
-        {
-            continue; /* nothing waiting right now - keep waiting until
-                          the timeout, rather than giving up on the
-                          first empty poll */
         }
 
         if(frame_type != LORA_FRAME_TYPE_CBBA)

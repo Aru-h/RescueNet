@@ -247,8 +247,14 @@ static void test_relay_retry_and_timeout_policy(void)
     CHECK(mission_link_handshake_relay_timed_out(peer, HANDSHAKE_NUCLEO_TIMEOUT_TICKS) == 1);
     /* Sticky. */
     CHECK(mission_link_handshake_relay_timed_out(peer, HANDSHAKE_NUCLEO_TIMEOUT_TICKS + 1u) == 1);
-    /* No more Reqs into the void. */
-    CHECK(mission_link_handshake_should_send_relay_req(peer, HANDSHAKE_NUCLEO_TIMEOUT_TICKS + 1u) == 0);
+    /* After the timeout: no fast retries, but a slow retry keeps going -
+       a peer that becomes reachable late can only answer a Req (board 0
+       used to stop asking here for good, which left such a peer hung). */
+    CHECK(mission_link_handshake_should_send_relay_req(peer, HANDSHAKE_NUCLEO_TIMEOUT_TICKS + 1u) == 1);
+    CHECK(mission_link_handshake_should_send_relay_req(
+              peer, HANDSHAKE_NUCLEO_TIMEOUT_TICKS + 1u + HANDSHAKE_NUCLEO_RETRY_INTERVAL_TICKS) == 0);
+    CHECK(mission_link_handshake_should_send_relay_req(
+              peer, HANDSHAKE_NUCLEO_TIMEOUT_TICKS + 1u + HANDSHAKE_RELAY_SLOW_RETRY_INTERVAL_TICKS) == 1);
 
     rc = mission_link_handshake_get_relay_reply(peer, HANDSHAKE_NUCLEO_TIMEOUT_TICKS, &relay);
     CHECK(rc == 1);
