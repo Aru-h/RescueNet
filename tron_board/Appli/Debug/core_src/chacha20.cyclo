@@ -1,6 +1,0 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/chacha20.c:13:17:chacha20_rotl32	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/chacha20.c:20:13:chacha20_quarter_round	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/chacha20.c:28:17:chacha20_load_le32	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/chacha20.c:36:13:chacha20_store_le32	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/chacha20.c:44:6:chacha20_block	4
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/chacha20.c:97:6:chacha20_xor	4

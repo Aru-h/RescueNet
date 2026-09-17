@@ -46,6 +46,8 @@ Thumbs.db
 *~
 .vscode/
 __pycache__/
+.venv/
+.pytest_cache/
 *.pyc
 *.dSYM/
 
@@ -53,9 +55,36 @@ __pycache__/
 # same as tron_board/.osx.project, which is tracked deliberately)
 .project
 .cproject
+# ...except the firmware project's own. They hold only relative paths, and
+# Appli/.cproject carries the include paths and linked folders for core/ and
+# board/ - without them a fresh clone can't build the DK firmware.
+!tron_board/.project
+!tron_board/Appli/.project
+!tron_board/Appli/.cproject
+!tron_board/FSBL/.project
+!tron_board/FSBL/.cproject
 
 # Local dashboard tool run-history state - not source
 .dashboard_history.json
+
+# Laptop build outputs (the root Makefile's TARGET and LABELER) and the
+# dataset ./tron writes into its working directory - all regenerated
+/tron
+/label_snapshots
+/tron_snapshot_dataset.csv
+
+# The CMake rule above ("Makefile") also matches this project's own
+# hand-written root Makefile, which is source - keep it trackable
+!/Makefile
+
+# Local working files, kept on disk but not part of the repo:
+# a finished fix plan, the design doc of the retired consensus_weighting
+# subsystem, a one-off pandas snippet, and an old stress-run log archive
+# (stress_test.sh regenerates it; check-two-board-cbba-harness is the gate)
+/TRON_FIX_PLAN.md
+/consensus_weighting_design.md
+/check.py
+/stress_results.tar.gz
 
 # Vendored T-License 2.2 BSPs — fetch separately per board vendor/README.md,
 # do not commit (not a redistribution-friendly license to bundle verbatim)

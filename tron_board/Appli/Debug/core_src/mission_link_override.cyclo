@@ -1,7 +1,0 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/mission_link_override.c:28:16:override_checksum	2
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/mission_link_override.c:46:6:mission_link_override_pack_payload	2
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/mission_link_override.c:58:6:mission_link_override_parse_payload	2
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/mission_link_override.c:75:10:mission_link_override_pack	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/mission_link_override.c:91:5:mission_link_override_parse	6
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/mission_link_override.c:132:6:mission_link_override_apply	2
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/mission_link_override.c:150:5:mission_link_override_route_or_apply	3

@@ -1,4 +1,0 @@
-../Core/Inc/partition_stm32n657xx.h:686:22:TZ_SAU_Setup	1
-../Core/Src/system_stm32n6xx_s.c:176:6:SystemInit	1
-../Core/Src/system_stm32n6xx_s.c:260:6:SystemCoreClockUpdate	24
-../Core/Src/system_stm32n6xx_s.c:413:24:SECURE_SystemCoreClockUpdate	1

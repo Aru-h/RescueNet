@@ -1,5 +1,0 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/fault_config.c:7:13:set_duration_range	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/fault_config.c:16:6:fault_config_reset	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/fault_config.c:22:6:fault_config_apply_profile	6
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/fault_config.c:90:16:fault_profile_from_string	7
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/fault_config.c:109:13:fault_profile_to_string	6
