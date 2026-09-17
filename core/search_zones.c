@@ -38,11 +38,17 @@ typedef struct { int16_t x, y; } SearchZonePoint_t;
  * routes over any navigable cell, road or not, so a road-only reachability
  * check systematically mismatches what a search team can actually reach -
  * this is why the frontier-picker fix was deferred until a navigable-cell
- * version existed (see TRON_FIX_PLAN.md). Rebuilt fresh on every call:
+ * version existed (see commit 94347d3). Rebuilt fresh on every call:
  * search_zone_pick_frontier_cell() and search_zone_coverage_percent() are
  * together called well under 2 times per tick across every team combined
  * (measured directly), so a fresh full-grid BFS per call is cheap, not a
  * hot path - no caching/invalidation machinery needed. */
+/* Everything below that reads g_environment runs on the laptop only
+ * (search_sweep_step() and sweep generation are world events,
+ * sim_tick()). A board has no grid (environment.h,
+ * ENVIRONMENT_HAS_WORLD_STORAGE) and gets the answers the old all-zero
+ * grid gave: district 0, nothing to cover, no frontier. */
+#if ENVIRONMENT_HAS_WORLD_STORAGE
 static void navigable_reachable_map(int16_t from_x, int16_t from_y,
                                      uint8_t reach[GRID_WIDTH][GRID_HEIGHT])
 {
@@ -81,6 +87,8 @@ static void navigable_reachable_map(int16_t from_x, int16_t from_y,
     }
 }
 
+#endif /* ENVIRONMENT_HAS_WORLD_STORAGE */
+
 uint8_t zone_id_for_location(int16_t x, int16_t y)
 {
     if(x < 0) x = 0;
@@ -88,7 +96,11 @@ uint8_t zone_id_for_location(int16_t x, int16_t y)
     if(x >= GRID_WIDTH)  x = GRID_WIDTH  - 1;
     if(y >= GRID_HEIGHT) y = GRID_HEIGHT - 1;
 
+#if ENVIRONMENT_HAS_WORLD_STORAGE
     return g_environment[x][y].district_id;
+#else
+    return 0;
+#endif
 }
 
 uint8_t search_zone_trust(uint8_t district_id, uint32_t current_tick)
@@ -116,6 +128,19 @@ uint8_t search_zone_trust(uint8_t district_id, uint32_t current_tick)
     return (uint8_t)trust;
 }
 
+uint8_t search_zone_needs_sweep(uint8_t district_id, uint32_t current_tick)
+{
+    if(district_id >= NUM_SEARCH_ZONES)
+        return 0;
+
+    /* Never swept: nothing about this district has been checked since
+     * the earthquake, whatever the staleness clock says at tick 0. */
+    if(g_search_zones[district_id].sweep_count == 0)
+        return 1;
+
+    return search_zone_trust(district_id, current_tick) < ZONE_SWEEP_DISPATCH_TRUST_PERCENT;
+}
+
 void search_zone_mark_cell_covered(uint8_t district_id ,int16_t x, int16_t y, uint32_t current_tick)
 {
     if(x < 0 || y < 0 || x >= GRID_WIDTH || y >= GRID_HEIGHT)
@@ -140,6 +165,9 @@ uint8_t search_zone_coverage_percent(uint8_t district_id)
     if(district_id >= NUM_SEARCH_ZONES)
         return 0;
 
+#if !ENVIRONMENT_HAS_WORLD_STORAGE
+    return 100;  /* nothing reachable to cover, as below */
+#else
     /* Anchor the reachability flood at the district's own center - falling
      * back to the first navigable cell belonging to this district if the
      * center itself isn't navigable (e.g. a building ended up on it during
@@ -195,6 +223,7 @@ uint8_t search_zone_coverage_percent(uint8_t district_id)
         covered = navigable_total;  /* covered_cells can include now-non-navigable/now-unreachable cells */
 
     return (uint8_t)((covered * 100u) / navigable_total);
+#endif
 }
 
 extern uint32_t g_diag_sweep_genuine_complete[NUM_SEARCH_ZONES];
@@ -271,6 +300,11 @@ uint8_t search_zone_pick_frontier_cell(uint8_t district_id, int16_t from_x, int1
     if(district_id >= NUM_SEARCH_ZONES || out_x == NULL || out_y == NULL)
         return 0;
 
+#if !ENVIRONMENT_HAS_WORLD_STORAGE
+    (void)from_x;
+    (void)from_y;
+    return 0;
+#else
     uint32_t cycle_start = g_search_zones[district_id].cycle_started_tick;
 
     uint8_t reach[GRID_WIDTH][GRID_HEIGHT];
@@ -314,6 +348,7 @@ uint8_t search_zone_pick_frontier_cell(uint8_t district_id, int16_t from_x, int1
     *out_x = best_x;
     *out_y = best_y;
     return 1;
+#endif
 }
 
 

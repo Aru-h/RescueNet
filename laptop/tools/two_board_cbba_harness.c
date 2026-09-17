@@ -232,11 +232,13 @@
 #include "grid.h"
 #include "random.h"
 
-/* Same platform-glue global cbba_board_selftest.c's own build already
-   needs (select_best_team()/debug_print_generator_*() reference it) -
-   real definition normally lives in laptop/main.c, which this harness
-   deliberately doesn't link (it defines its own main()). */
-uint8_t g_simulation_trace_enabled = 0;
+/* g_simulation_trace_enabled's real definition lives in core/simulation.c,
+   which this harness now links (recovery_manager.c and laptop/debug.c pull
+   in fault_predictor/sim_tick/move_team, so every core source is linked).
+   This file used to carry its own duplicate definition back when
+   simulation.c was left out of the build; it's set to 0 in main() instead,
+   since simulation.c's own initializer turns trace on. */
+extern uint8_t g_simulation_trace_enabled;
 
 /* cbba_team_is_local() is deliberately NOT declared in cbba.h (same
    "public, but header-private" convention cbba_board_selftest.c's own
@@ -740,6 +742,8 @@ int main(void)
        side finishing first and the other's next write() landing on a
        closed pipe is an expected timing outcome, not a bug. */
     signal(SIGPIPE, SIG_IGN);
+
+    g_simulation_trace_enabled = 0;
 
     build_world();
 

@@ -1,5 +1,0 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/lora_crypto.c:34:10:lora_crypto_next_tx_counter	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/lora_crypto.c:41:6:lora_crypto_reset	1
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/lora_crypto.c:48:6:lora_crypto_build_nonce	2
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/lora_crypto.c:66:10:lora_crypto_reconstruct_counter	5
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/core/lora_crypto.c:121:6:lora_crypto_accept_counter	2

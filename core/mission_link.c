@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "debug.h"          /* debug_trace() - eviction logging only */
@@ -382,6 +383,371 @@ int mission_link_parse_status(const uint8_t *buf, uint32_t buf_len,
 }
 
 /* ---------------------------------------------------------------
+ * Mission clock (mission_link.h section 5b)
+ * ---------------------------------------------------------------
+ */
+
+void mission_link_pack_clock_payload(const MissionLinkClock_t *msg,
+                                     uint8_t *out_payload)
+{
+    const uint8_t *src = (const uint8_t *)msg;
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_CLOCK_PAYLOAD_SIZE; i++)
+    {
+        out_payload[i] = src[i];
+    }
+}
+
+void mission_link_parse_clock_payload(const uint8_t *payload,
+                                      MissionLinkClock_t *out)
+{
+    uint8_t *dst = (uint8_t *)out;
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_CLOCK_PAYLOAD_SIZE; i++)
+    {
+        dst[i] = payload[i];
+    }
+}
+
+uint32_t mission_link_pack_clock(const MissionLinkClock_t *msg, uint8_t *out_buf)
+{
+    uint8_t *payload_start = &out_buf[2];
+
+    out_buf[0] = MISSION_LINK_CLOCK_MAGIC0;
+    out_buf[1] = MISSION_LINK_CLOCK_MAGIC1;
+
+    mission_link_pack_clock_payload(msg, payload_start);
+
+    out_buf[2u + MISSION_LINK_CLOCK_PAYLOAD_SIZE] =
+        mission_link_checksum(payload_start, MISSION_LINK_CLOCK_PAYLOAD_SIZE);
+
+    return MISSION_LINK_CLOCK_WIRE_SIZE;
+}
+
+int mission_link_parse_clock(const uint8_t *buf, uint32_t buf_len, MissionLinkClock_t *out)
+{
+    if (buf_len < 2u)
+    {
+        return 0;
+    }
+
+    if (buf[0] != MISSION_LINK_CLOCK_MAGIC0 ||
+        buf[1] != MISSION_LINK_CLOCK_MAGIC1)
+    {
+        return -1;
+    }
+
+    if (buf_len < MISSION_LINK_CLOCK_WIRE_SIZE)
+    {
+        return 0;
+    }
+
+    if (buf[2u + MISSION_LINK_CLOCK_PAYLOAD_SIZE] !=
+        mission_link_checksum(&buf[2], MISSION_LINK_CLOCK_PAYLOAD_SIZE))
+    {
+        return -1;
+    }
+
+    mission_link_parse_clock_payload(&buf[2], out);
+
+    return 1;
+}
+
+/* ---------------------------------------------------------------
+ * Route map and sites (mission_link.h sections 5c/5d)
+ * ---------------------------------------------------------------
+ */
+
+_Static_assert(MISSION_LINK_MAP_WIDTH == GRID_WIDTH && MISSION_LINK_MAP_HEIGHT == GRID_HEIGHT,
+               "mission_link.h's map dimensions must match mission_state.h's grid");
+_Static_assert(MISSION_LINK_MAX_SAFE_ZONES == MAX_SAFE_ZONES &&
+               MISSION_LINK_NUM_GATEWAYS == NUM_EVACUATION_GATEWAYS,
+               "mission_link.h's site counts must match mission_state.h");
+
+void mission_link_pack_map_row_payload(const MissionLinkMapRow_t *msg, uint8_t *out_payload)
+{
+    const uint8_t *src = (const uint8_t *)msg;
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_MAP_ROW_PAYLOAD_SIZE; i++)
+    {
+        out_payload[i] = src[i];
+    }
+}
+
+void mission_link_parse_map_row_payload(const uint8_t *payload, MissionLinkMapRow_t *out)
+{
+    uint8_t *dst = (uint8_t *)out;
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_MAP_ROW_PAYLOAD_SIZE; i++)
+    {
+        dst[i] = payload[i];
+    }
+}
+
+uint32_t mission_link_pack_map_row(const MissionLinkMapRow_t *msg, uint8_t *out_buf)
+{
+    uint8_t *payload_start = &out_buf[2];
+
+    out_buf[0] = MISSION_LINK_MAP_ROW_MAGIC0;
+    out_buf[1] = MISSION_LINK_MAP_ROW_MAGIC1;
+    mission_link_pack_map_row_payload(msg, payload_start);
+    out_buf[2u + MISSION_LINK_MAP_ROW_PAYLOAD_SIZE] =
+        mission_link_checksum(payload_start, MISSION_LINK_MAP_ROW_PAYLOAD_SIZE);
+
+    return MISSION_LINK_MAP_ROW_WIRE_SIZE;
+}
+
+int mission_link_parse_map_row(const uint8_t *buf, uint32_t buf_len, MissionLinkMapRow_t *out)
+{
+    if (buf_len < 2u)
+    {
+        return 0;
+    }
+    if (buf[0] != MISSION_LINK_MAP_ROW_MAGIC0 || buf[1] != MISSION_LINK_MAP_ROW_MAGIC1)
+    {
+        return -1;
+    }
+    if (buf_len < MISSION_LINK_MAP_ROW_WIRE_SIZE)
+    {
+        return 0;
+    }
+    if (buf[2u + MISSION_LINK_MAP_ROW_PAYLOAD_SIZE] !=
+        mission_link_checksum(&buf[2], MISSION_LINK_MAP_ROW_PAYLOAD_SIZE))
+    {
+        return -1;
+    }
+    mission_link_parse_map_row_payload(&buf[2], out);
+    return 1;
+}
+
+void mission_link_pack_sites_payload(const MissionLinkSites_t *msg, uint8_t *out_payload)
+{
+    const uint8_t *src = (const uint8_t *)msg;
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_SITES_PAYLOAD_SIZE; i++)
+    {
+        out_payload[i] = src[i];
+    }
+}
+
+void mission_link_parse_sites_payload(const uint8_t *payload, MissionLinkSites_t *out)
+{
+    uint8_t *dst = (uint8_t *)out;
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_SITES_PAYLOAD_SIZE; i++)
+    {
+        dst[i] = payload[i];
+    }
+}
+
+uint32_t mission_link_pack_sites(const MissionLinkSites_t *msg, uint8_t *out_buf)
+{
+    uint8_t *payload_start = &out_buf[2];
+
+    out_buf[0] = MISSION_LINK_SITES_MAGIC0;
+    out_buf[1] = MISSION_LINK_SITES_MAGIC1;
+    mission_link_pack_sites_payload(msg, payload_start);
+    out_buf[2u + MISSION_LINK_SITES_PAYLOAD_SIZE] =
+        mission_link_checksum(payload_start, MISSION_LINK_SITES_PAYLOAD_SIZE);
+
+    return MISSION_LINK_SITES_WIRE_SIZE;
+}
+
+int mission_link_parse_sites(const uint8_t *buf, uint32_t buf_len, MissionLinkSites_t *out)
+{
+    if (buf_len < 2u)
+    {
+        return 0;
+    }
+    if (buf[0] != MISSION_LINK_SITES_MAGIC0 || buf[1] != MISSION_LINK_SITES_MAGIC1)
+    {
+        return -1;
+    }
+    if (buf_len < MISSION_LINK_SITES_WIRE_SIZE)
+    {
+        return 0;
+    }
+    if (buf[2u + MISSION_LINK_SITES_PAYLOAD_SIZE] !=
+        mission_link_checksum(&buf[2], MISSION_LINK_SITES_PAYLOAD_SIZE))
+    {
+        return -1;
+    }
+    mission_link_parse_sites_payload(&buf[2], out);
+    return 1;
+}
+
+uint8_t mission_link_map_encode_cell(uint8_t navigable, uint8_t travel_cost)
+{
+    if (!navigable)
+    {
+        return MISSION_LINK_MAP_BLOCKED;
+    }
+    /* A passable cell must never encode as "blocked". */
+    return (travel_cost == 0u) ? 1u : travel_cost;
+}
+
+/* The board's copy of the laptop's route map - 1296 bytes, plus which
+   rows have arrived. */
+static uint8_t g_mission_link_map[MISSION_LINK_MAP_WIDTH][MISSION_LINK_MAP_HEIGHT];
+static uint8_t g_mission_link_map_row_known[MISSION_LINK_MAP_HEIGHT];
+static uint32_t g_mission_link_map_rows_received;
+static uint8_t g_mission_link_sites_received;
+
+uint8_t mission_link_apply_map_row(const MissionLinkMapRow_t *msg)
+{
+    uint32_t x;
+
+    if (msg->row >= MISSION_LINK_MAP_HEIGHT)
+    {
+        return 0u;
+    }
+
+    for (x = 0u; x < MISSION_LINK_MAP_WIDTH; x++)
+    {
+        g_mission_link_map[x][msg->row] = msg->cells[x];
+    }
+
+    if (!g_mission_link_map_row_known[msg->row])
+    {
+        g_mission_link_map_row_known[msg->row] = 1u;
+        g_mission_link_map_rows_received++;
+    }
+
+    return 1u;
+}
+
+uint8_t mission_link_map_cell(int x, int y, uint8_t *cell_out)
+{
+    if (x < 0 || y < 0 || x >= (int)MISSION_LINK_MAP_WIDTH || y >= (int)MISSION_LINK_MAP_HEIGHT ||
+        !g_mission_link_map_row_known[y])
+    {
+        return 0u;
+    }
+
+    *cell_out = g_mission_link_map[x][y];
+    return 1u;
+}
+
+uint32_t mission_link_map_rows_received(void)
+{
+    return g_mission_link_map_rows_received;
+}
+
+uint8_t mission_link_sites_received(void)
+{
+    return g_mission_link_sites_received;
+}
+
+void mission_link_map_reset(void)
+{
+    uint32_t y;
+
+    for (y = 0u; y < MISSION_LINK_MAP_HEIGHT; y++)
+    {
+        g_mission_link_map_row_known[y] = 0u;
+    }
+    g_mission_link_map_rows_received = 0u;
+    g_mission_link_sites_received = 0u;
+}
+
+uint8_t mission_link_apply_sites(const MissionLinkSites_t *msg)
+{
+    uint32_t i;
+
+    if (msg->num_safe_zones > MISSION_LINK_MAX_SAFE_ZONES)
+    {
+        return 0u;
+    }
+    for (i = 0u; i < msg->num_safe_zones; i++)
+    {
+        const MissionLinkSafeZoneSite_t *site = &msg->safe_zones[i];
+
+        if (site->loc_x < 0 || site->loc_x >= GRID_WIDTH || site->loc_y < 0 || site->loc_y >= GRID_HEIGHT)
+        {
+            return 0u;
+        }
+    }
+    for (i = 0u; i < MISSION_LINK_NUM_GATEWAYS; i++)
+    {
+        if (msg->gateway_x[i] < 0 || msg->gateway_x[i] >= GRID_WIDTH ||
+            msg->gateway_y[i] < 0 || msg->gateway_y[i] >= GRID_HEIGHT)
+        {
+            return 0u;
+        }
+    }
+
+    for (i = 0u; i < msg->num_safe_zones; i++)
+    {
+        g_safezones[i].safezone_id = (uint8_t)i;
+        g_safezones[i].loc_x = msg->safe_zones[i].loc_x;
+        g_safezones[i].loc_y = msg->safe_zones[i].loc_y;
+        g_safezones[i].capacity = msg->safe_zones[i].capacity;
+    }
+    g_num_safe_zones = msg->num_safe_zones;
+
+    for (i = 0u; i < MISSION_LINK_NUM_GATEWAYS; i++)
+    {
+        g_evacuation_gateways[i].gateway_id = (uint8_t)i;
+        g_evacuation_gateways[i].loc_x = msg->gateway_x[i];
+        g_evacuation_gateways[i].loc_y = msg->gateway_y[i];
+    }
+
+    g_mission_link_sites_received = 1u;
+    return 1u;
+}
+
+static uint32_t g_mission_link_authorized_tick;
+static uint8_t g_mission_link_clock_received;
+
+void mission_link_apply_clock(const MissionLinkClock_t *msg)
+{
+    g_mission_link_authorized_tick = msg->tick;
+    g_mission_link_clock_received = 1u;
+}
+
+uint8_t mission_link_clock_received(void)
+{
+    return g_mission_link_clock_received;
+}
+
+uint32_t mission_link_authorized_tick(void)
+{
+    return g_mission_link_authorized_tick;
+}
+
+void mission_link_clock_reset(void)
+{
+    g_mission_link_authorized_tick = 0u;
+    g_mission_link_clock_received = 0u;
+}
+
+uint8_t mission_link_clock_step_plan(uint32_t local_tick, uint32_t authorized_tick,
+                                     uint32_t *start_tick)
+{
+    if (local_tick >= authorized_tick)
+    {
+        return 0u;
+    }
+
+    if (authorized_tick - local_tick > MISSION_LINK_CLOCK_MAX_CATCHUP_TICKS)
+    {
+        *start_tick = authorized_tick - 1u;
+    }
+    else
+    {
+        *start_tick = local_tick;
+    }
+
+    return 1u;
+}
+
+/* ---------------------------------------------------------------
  * Board-side incident cache (BoardIncidentCache_t, mission_state.h)
  * ---------------------------------------------------------------
  * Local to this file - nothing outside mission_link.c needs the raw
@@ -505,6 +871,20 @@ void board_incident_cache_remove(uint32_t incident_id)
  * ---------------------------------------------------------------
  */
 
+/* Counts whole-message rejects below. Both reject paths are silent by
+   design (no logging in portable core/), which leaves a board that gates
+   its boot on mission_link_task_any_roster_applied() unable to tell "a
+   roster was rejected" apart from "no roster ever arrived" - the two look
+   identical from outside, and both boards' roster-wait loops block forever
+   on either. This counter is what lets platform code surface that
+   difference; nothing in core/ acts on it. */
+static uint32_t g_roster_reject_count;
+
+uint32_t mission_link_roster_reject_count(void)
+{
+    return g_roster_reject_count;
+}
+
 void mission_link_apply_roster(const MissionLinkRoster_t *msg)
 {
     TeamState_t *team;
@@ -514,6 +894,7 @@ void mission_link_apply_roster(const MissionLinkRoster_t *msg)
         /* Out-of-range team_id: nothing on this board to bootstrap.
            Defensive only - mission generation on the laptop side
            guarantees valid team_id values in practice. */
+        g_roster_reject_count++;
         return;
     }
 
@@ -531,6 +912,16 @@ void mission_link_apply_roster(const MissionLinkRoster_t *msg)
            any future bug upstream) would silently become an out-of-
            bounds array index the first time this team tries to path
            anywhere. */
+        g_roster_reject_count++;
+        return;
+    }
+
+    if (msg->equipment_level > EQ_MAX_LEVEL)
+    {
+        /* Same whole-message reject: a level above the gauge's maximum
+           can only be corruption, and the work-rate/abort logic in
+           core/team.c and core/incident.c assumes 0-EQ_MAX_LEVEL. */
+        g_roster_reject_count++;
         return;
     }
 
@@ -549,6 +940,7 @@ void mission_link_apply_roster(const MissionLinkRoster_t *msg)
        this is exactly what was sent, not a lossy round-trip on this
        side. */
     team->stamina = (float)msg->stamina;
+    team->equipment_level = msg->equipment_level;
 }
 
 /* Finds the local slot already tracking incident_id, if any. Matched
@@ -586,12 +978,134 @@ static IncidentState_t *mission_link_find_free_incident_slot(void)
     return NULL;
 }
 
+/*
+ * Who owns which incident field once the laptop mirrors board reports
+ * (see mission_link.h's MissionLinkStatus_t doc):
+ *
+ *   laptop  creation, location, priority, type, victims, discovery, the
+ *           stage (req_capability plus that stage's starting work) and
+ *           resolution;
+ *   board   execution - which team has it (assigned_team), OPEN ->
+ *           ASSIGNED -> IN_PROGRESS, and work_remaining while a team is
+ *           on it.
+ *
+ * The laptop re-sends incidents periodically, and its copy of an
+ * execution field can be a report or two behind. Copying its status and
+ * work_remaining over a board's live assignment would turn an incident
+ * a team is standing on back to OPEN (CBBA would hand it out again) and
+ * undo the work done since the last report. So for an incident this
+ * board already has:
+ *
+ *   RESOLVED       the laptop closed it (work finished on the last
+ *                  stage, a sweep met its coverage, ...): release the
+ *                  teams on it and free the slot.
+ *   new stage      req_capability changed: the laptop branched the
+ *                  incident (complete_incident_stage() runs there, not
+ *                  here). Take every field; any team still on the old
+ *                  stage is released.
+ *   same stage     take the laptop's descriptive fields; keep status,
+ *                  assigned_team and work_remaining while the incident
+ *                  is ASSIGNED or IN_PROGRESS here. If the location
+ *                  moved (a search sweep's next frontier cell) and a
+ *                  team was already on scene, it heads for the new
+ *                  cell.
+ */
+/* core/cbba.c - public but not declared in cbba.h (see its comment). */
+extern bool cbba_team_is_local(uint8_t team_id);
+
+static void mission_link_retarget_on_scene_teams(IncidentState_t *incident)
+{
+    uint8_t slot = (uint8_t)(incident - g_incidents);
+    uint8_t t;
+
+    for (t = 0u; t < NUM_TEAMS; t++)
+    {
+        TeamState_t *team = &g_teams[t];
+
+        if (team->assigned_task_pool == TASK_POOL_INCIDENT &&
+            team->assigned_task_slot == slot &&
+            team->status == STATUS_ON_SCENE)
+        {
+            team->status = STATUS_EN_ROUTE;
+        }
+    }
+
+    if (incident->status == INC_IN_PROGRESS)
+    {
+        incident->status = INC_ASSIGNED;
+    }
+}
+
 void mission_link_apply_incident(const MissionLinkIncident_t *msg)
 {
     IncidentState_t *incident = mission_link_find_incident_slot(msg->incident_id);
 
+    if (incident != NULL)
+    {
+        /* Only a team hosted HERE makes this board the owner of the
+           incident's execution state; an ASSIGNED status copied from
+           the laptop (another board's team has it) is not. */
+        uint8_t executing = ((incident->status == INC_ASSIGNED ||
+                              incident->status == INC_IN_PROGRESS) &&
+                             incident->assigned_team < NUM_TEAMS &&
+                             cbba_team_is_local(incident->assigned_team));
+
+        if (msg->status == (uint8_t)INC_RESOLVED)
+        {
+            incident_close_for_authority(incident);
+            board_incident_cache_remove(msg->incident_id);
+            return;
+        }
+
+        if ((uint8_t)incident->req_capability != msg->req_capability)
+        {
+            if (executing)
+            {
+                incident_release_teams_for_authority(incident);
+            }
+            executing = 0u;
+        }
+
+        if (executing)
+        {
+            uint8_t moved = (incident->loc_x != msg->loc_x ||
+                             incident->loc_y != msg->loc_y);
+
+            incident->loc_x = msg->loc_x;
+            incident->loc_y = msg->loc_y;
+            incident->priority = (Priority_t)msg->priority;
+            incident->incident_type = (IncidentType_t)msg->incident_type;
+            incident->victim_count = msg->victim_count;
+            incident->discovered = msg->discovered;
+
+            if (moved)
+            {
+                mission_link_retarget_on_scene_teams(incident);
+            }
+
+            {
+                /* Cache view: the laptop's descriptive fields, this
+                   board's own execution state. */
+                MissionLinkIncident_t cached = *msg;
+                cached.status = (uint8_t)incident->status;
+                cached.work_remaining = incident->work_remaining;
+                board_incident_cache_put(&cached);
+            }
+            return;
+        }
+    }
+
     if (incident == NULL)
     {
+        if (msg->status == (uint8_t)INC_RESOLVED)
+        {
+            /* Closed before this board ever saw it (or a re-send of a
+               resolution this board already applied): nothing to do,
+               and no reason to spend a slot on it. */
+            board_incident_cache_remove(msg->incident_id);
+            return;
+        }
+
         incident = mission_link_find_free_incident_slot();
 
         if (incident == NULL)
@@ -673,12 +1187,13 @@ void mission_link_apply_fault(const MissionLinkFault_t *msg)
 }
 
 /*
- * Finds the IncidentState_t (either pool) team_id is currently assigned
- * to, if any - the same pool/slot resolution pattern already used at
+ * Finds the laptop-issued incident (g_incidents[]) team_id is currently
+ * assigned to, if any - the same pool/slot resolution pattern used at
  * every other assigned_task_pool/assigned_task_slot read site in this
  * project (see e.g. core/team.c's update_team() STATUS_ON_SCENE case,
- * core/simulation.c's move_team()). Returns NULL for TASK_POOL_NONE or
- * a stale/cleared slot - both mean "nothing to anchor this report to",
+ * core/simulation.c's move_team()). Returns NULL for TASK_POOL_NONE, a
+ * board-local system task (see below) or a stale/cleared slot - all
+ * mean "nothing to anchor this report to",
  * which mission_link_build_status() below reports via
  * MISSION_LINK_NO_INCIDENT rather than treating as an error.
  */
@@ -691,13 +1206,11 @@ static const IncidentState_t *mission_link_team_current_task(const TeamState_t *
         return task->slot_occupied ? task : NULL;
     }
 
-    if (team->assigned_task_pool == TASK_POOL_SYSTEM &&
-        team->assigned_task_slot < NUM_SYSTEM_TASKS)
-    {
-        const IncidentState_t *task = &g_system_tasks[team->assigned_task_slot];
-        return task->slot_occupied ? task : NULL;
-    }
-
+    /* A system task here is board-local (equipment cache, evacuee run):
+       its id comes from this board's own counter and can collide with a
+       laptop incident id, so it is not reported - see mission_link.h's
+       MissionLinkStatus_t doc (schema v3). Laptop-issued work, search
+       sweeps included, always lives in g_incidents[] on a board. */
     return NULL;
 }
 
@@ -720,6 +1233,8 @@ void mission_link_build_status(uint8_t team_id, MissionLinkStatus_t *out)
         out->work_rate = 0u;
         out->stamina_at_report = 0u;
         out->report_tick = g_current_tick;
+        out->loc_x = 0;
+        out->loc_y = 0;
         return;
     }
 
@@ -728,6 +1243,8 @@ void mission_link_build_status(uint8_t team_id, MissionLinkStatus_t *out)
 
     out->status = team->status;
     out->equipment_level = team->equipment_level;
+    out->loc_x = team->loc_x;
+    out->loc_y = team->loc_y;
 
     /* Anchor snapshot - see mission_link.h's MissionLinkStatus_t doc
        (schema v2) for why these are anchor values, not per-tick

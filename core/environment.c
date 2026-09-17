@@ -48,6 +48,7 @@ enum {
     NAV_NODE_BRIDGE
 };
 
+#if ENVIRONMENT_HAS_WORLD_STORAGE
 /* Promoted from stack to BSS to eliminate the ~11.7 KB stack frame in
  * carve_path_between(). Called only from stage_generate_roads() which
  * is single-threaded and non-reentrant, so a file-scope static is safe. */
@@ -64,6 +65,7 @@ static uint8_t    g_carve_visited[GRID_WIDTH][GRID_HEIGHT];
 static GridPoint_t g_road_reachable_queue[GRID_WIDTH * GRID_HEIGHT];
 EnvironmentCell_t g_environment[GRID_WIDTH][GRID_HEIGHT];
 EnvironmentBuilding_t g_environment_buildings[MAX_ENV_BUILDINGS];
+#endif /* ENVIRONMENT_HAS_WORLD_STORAGE */
 EnvironmentSummary_t g_environment_summary;
 HazardPropagationConfig_t g_hazard_config =
 {
@@ -93,10 +95,13 @@ uint8_t environment_get_district_center(uint8_t district_id, int16_t *x, int16_t
     *y = g_districts[district_id].center_y;
     return 1;
 }
+#if ENVIRONMENT_HAS_WORLD_STORAGE
 static EnvironmentNavNode_t g_nav_nodes[MAX_ENV_NAV_NODES];
 static EnvironmentNavEdge_t g_nav_edges[MAX_ENV_NAV_EDGES];
+#endif
 static GatewaySite_t g_gateway_sites[NUM_EVACUATION_GATEWAYS];
 
+#if ENVIRONMENT_HAS_WORLD_STORAGE
 static uint8_t g_coast_orientation = 0;
 static int16_t g_river_center[GRID_WIDTH];
 static uint8_t g_has_river = 0;
@@ -204,12 +209,14 @@ static float fractal_noise(float x, float y, float scale, int octaves, float per
 
     return total / weight;
 }
+#endif /* ENVIRONMENT_HAS_WORLD_STORAGE */
 
 static uint8_t in_bounds(int x, int y)
 {
     return x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT;
 }
 
+#if ENVIRONMENT_HAS_WORLD_STORAGE
 static uint8_t is_water_cell(int x, int y)
 {
     if(!in_bounds(x, y))
@@ -2042,13 +2049,45 @@ void environment_validate_hazard_reachability(void)
     }
 }
 
+#else /* !ENVIRONMENT_HAS_WORLD_STORAGE */
+
+/* A board never builds a world (see environment.h); these exist only
+ * because generate_world() is compiled into the board image too. Leaving
+ * g_environment_summary.generated at 0 is exactly the board's state. */
+void generate_environment(uint32_t seed)
+{
+    (void)seed;
+}
+
+void environment_apply_earthquake(uint32_t seed)
+{
+    (void)seed;
+}
+
+void environment_validate_hazard_reachability(void)
+{
+}
+#endif /* ENVIRONMENT_HAS_WORLD_STORAGE */
+
 uint8_t environment_cell_is_navigable(int x, int y)
 {
+    uint8_t map_cell;
+
     if(!in_bounds(x, y))
         return 0;
     if(!g_environment_summary.generated)
+    {
+        /* A board: no environment of its own, routes on the laptop's
+         * map once that row has arrived (mission_link.h section 5c). */
+        if(mission_link_map_cell(x, y, &map_cell))
+            return map_cell != MISSION_LINK_MAP_BLOCKED;
         return 1;
+    }
+#if ENVIRONMENT_HAS_WORLD_STORAGE
     return g_environment[x][y].navigable;
+#else
+    return 1;   /* not reached: never generated on a board */
+#endif
 }
 
 uint8_t environment_cell_is_flood(int x, int y)
@@ -2057,16 +2096,32 @@ uint8_t environment_cell_is_flood(int x, int y)
         return 0;
     if(!g_environment_summary.generated)
         return 0;
+#if ENVIRONMENT_HAS_WORLD_STORAGE
     return g_environment[x][y].flood;
+#else
+    return 0;   /* not reached: never generated on a board */
+#endif
 }
 
 uint8_t environment_cell_travel_cost(int x, int y)
 {
+    uint8_t map_cell;
+
     if(!in_bounds(x, y))
         return 0;
     if(!g_environment_summary.generated)
+    {
+        /* See environment_cell_is_navigable(). A blocked cell's cost is
+         * never used for routing; 1 keeps the old default for it. */
+        if(mission_link_map_cell(x, y, &map_cell) && map_cell != MISSION_LINK_MAP_BLOCKED)
+            return map_cell;
         return 1;
+    }
+#if ENVIRONMENT_HAS_WORLD_STORAGE
     return g_environment[x][y].travel_cost;
+#else
+    return 1;   /* not reached: never generated on a board */
+#endif
 }
 
 uint8_t environment_cell_base_safety(int x, int y)
@@ -2075,7 +2130,11 @@ uint8_t environment_cell_base_safety(int x, int y)
         return 100;
     if(!g_environment_summary.generated)
         return 100;
+#if ENVIRONMENT_HAS_WORLD_STORAGE
     return g_environment[x][y].base_safety;
+#else
+    return 100; /* not reached: never generated on a board */
+#endif
 }
 
 /* Non-atomic read-modify-write on g_environment_summary's counters, no
@@ -2090,6 +2149,13 @@ void environment_set_cell_operational_state(int x, int y, uint8_t travel_cost, u
     if(!in_bounds(x, y))
         return;
 
+#if !ENVIRONMENT_HAS_WORLD_STORAGE
+    /* Only fault_injector_step() calls this, and it never runs on a
+     * board (sim_tick()); board routing reads the laptop's map. */
+    (void)travel_cost;
+    (void)navigable;
+    (void)road_blocked;
+#else
     EnvironmentCell_t *cell = &g_environment[x][y];
 
     if(g_environment_summary.generated)
@@ -2108,6 +2174,7 @@ void environment_set_cell_operational_state(int x, int y, uint8_t travel_cost, u
     cell->travel_cost = travel_cost;
     cell->navigable = navigable;
     cell->road_blocked = road_blocked;
+#endif
 }
 
 void environment_register_safe_zone(uint8_t safezone_id, int16_t x, int16_t y)
@@ -2116,10 +2183,12 @@ void environment_register_safe_zone(uint8_t safezone_id, int16_t x, int16_t y)
     if(!in_bounds(x, y))
         return;
 
+#if ENVIRONMENT_HAS_WORLD_STORAGE
     g_environment[x][y].infrastructure_type = INFRA_SAFE_ZONE;
     g_environment[x][y].safe_zone_candidate = 1;
     g_environment[x][y].road_blocked = 0;
     g_environment[x][y].navigable = 1;
+#endif
 }
 
 void environment_register_gateway(uint8_t gateway_id, int16_t x, int16_t y)
@@ -2132,9 +2201,11 @@ void environment_register_gateway(uint8_t gateway_id, int16_t x, int16_t y)
         .x = x,
         .y = y
     };
+#if ENVIRONMENT_HAS_WORLD_STORAGE
     g_environment[x][y].infrastructure_type = INFRA_GATEWAY;
     g_environment[x][y].road_blocked = 0;
     g_environment[x][y].navigable = 1;
+#endif
 }
 
 uint8_t environment_find_safe_zone_site(uint8_t index, uint8_t total, int16_t *x, int16_t *y)
@@ -2147,6 +2218,7 @@ uint8_t environment_find_safe_zone_site(uint8_t index, uint8_t total, int16_t *x
 
     target = (uint16_t)(((uint32_t)index * g_environment_summary.safe_zone_candidate_count) / total);
 
+#if ENVIRONMENT_HAS_WORLD_STORAGE
     for(int cx = 0; cx < GRID_WIDTH; cx++)
     {
         for(int cy = 0; cy < GRID_HEIGHT; cy++)
@@ -2161,6 +2233,10 @@ uint8_t environment_find_safe_zone_site(uint8_t index, uint8_t total, int16_t *x
             }
         }
     }
+#else
+    (void)seen;
+    (void)target;   /* no candidates: count is 0, returned above */
+#endif
 
     return 0;
 }
@@ -2180,6 +2256,7 @@ uint8_t environment_find_gateway_site(uint8_t index, int16_t *x, int16_t *y)
     return 0;
 }
 
+#if ENVIRONMENT_HAS_WORLD_STORAGE
 static uint8_t building_can_spawn_incident(const EnvironmentBuilding_t *building, IncidentType_t type)
 {
     if(building == NULL || building->building_id == ENV_NO_BUILDING)
@@ -2713,6 +2790,13 @@ void environment_update_hazard_propagation(uint32_t tick)
     apply_aftershocks(tick);
     degrade_blocked_roads(tick);
 }
+#else /* !ENVIRONMENT_HAS_WORLD_STORAGE */
+
+void environment_update_hazard_propagation(uint32_t tick)
+{
+    (void)tick;   /* nothing generated, nothing to spread */
+}
+#endif /* ENVIRONMENT_HAS_WORLD_STORAGE */
 
 uint8_t environment_pop_pending_hazard_event(IncidentType_t *type, int16_t *x, int16_t *y)
 {
@@ -2734,6 +2818,7 @@ uint8_t environment_pop_pending_hazard_event(IncidentType_t *type, int16_t *x, i
     return 0;
 }
 
+#if ENVIRONMENT_HAS_WORLD_STORAGE
 uint8_t environment_find_incident_site(IncidentType_t type, int16_t *x, int16_t *y)
 {
     if(x == NULL || y == NULL)
@@ -2789,6 +2874,27 @@ uint8_t environment_find_incident_site_in_zone(IncidentType_t type, uint8_t zone
             return 0;
     }
 }
+#else /* !ENVIRONMENT_HAS_WORLD_STORAGE */
+
+/* Incidents are placed by the laptop and reach a board as
+ * MissionLinkIncident_t frames; a board has no sites to offer. */
+uint8_t environment_find_incident_site(IncidentType_t type, int16_t *x, int16_t *y)
+{
+    (void)type;
+    (void)x;
+    (void)y;
+    return 0;
+}
+
+uint8_t environment_find_incident_site_in_zone(IncidentType_t type, uint8_t zone_id, int16_t *x, int16_t *y)
+{
+    (void)type;
+    (void)zone_id;
+    (void)x;
+    (void)y;
+    return 0;
+}
+#endif /* ENVIRONMENT_HAS_WORLD_STORAGE */
 
 const char *environment_district_name(uint8_t district)
 {

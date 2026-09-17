@@ -78,19 +78,31 @@ void assign_incident(uint8_t team_id, uint8_t incident_slot)
 
 void allocate_all_incidents(void)
 {
+    /* SimRole_t (simulation.h): a board creates no world tasks of its
+     * own, and the laptop mirroring a board mission allocates nothing -
+     * the boards' CBBA does, and their reports say who took what. */
+    if(g_sim_role == SIM_ROLE_WORLD_MIRROR)
+    {
+        search_generate_sweep_tasks(g_current_tick);
+        generate_evacuee_offboard_incidents();
+        return;
+    }
+
     cbba_run();
 
     /* Generates open UNSEARCHED_SECTOR system tasks for stale districts
      * before the competitive system-task loop below runs, so a
      * freshly-generated task can be picked up in the same tick rather
      * than sitting open for one extra cycle. */
-    search_generate_sweep_tasks(g_current_tick);
+    if(g_sim_role != SIM_ROLE_BOARD)
+        search_generate_sweep_tasks(g_current_tick);
 
     /* Same idea for EVACUEE_OFFBOARD: tops up any safe zone that has a
      * waiting backlog and no run already in flight. This was previously
      * dead code - create_evacuee_offboard_incident() existed but had no
      * caller anywhere, so evacuees just piled up at safe zones forever. */
-    generate_evacuee_offboard_incidents();
+    if(g_sim_role != SIM_ROLE_BOARD)
+        generate_evacuee_offboard_incidents();
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {

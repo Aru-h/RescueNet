@@ -42,6 +42,9 @@
 #define MISSION_LINK_MSG_INCIDENT ((uint8_t)1u)
 #define MISSION_LINK_MSG_FAULT    ((uint8_t)2u)
 #define MISSION_LINK_MSG_STATUS   ((uint8_t)3u)
+#define MISSION_LINK_MSG_CLOCK    ((uint8_t)4u)
+#define MISSION_LINK_MSG_MAP_ROW  ((uint8_t)5u)
+#define MISSION_LINK_MSG_SITES    ((uint8_t)6u)
 
 /* Wire size of a comms_transport-relayed message: 1 sub-type byte +
    the bare payload (no magic bytes, no checksum byte - lora_frame.h's
@@ -55,6 +58,12 @@
     ((uint8_t)(1u + MISSION_LINK_FAULT_PAYLOAD_SIZE))
 #define MISSION_LINK_STATUS_RELAY_SIZE \
     ((uint8_t)(1u + MISSION_LINK_STATUS_PAYLOAD_SIZE))
+#define MISSION_LINK_CLOCK_RELAY_SIZE \
+    ((uint8_t)(1u + MISSION_LINK_CLOCK_PAYLOAD_SIZE))
+#define MISSION_LINK_MAP_ROW_RELAY_SIZE \
+    ((uint8_t)(1u + MISSION_LINK_MAP_ROW_PAYLOAD_SIZE))
+#define MISSION_LINK_SITES_RELAY_SIZE \
+    ((uint8_t)(1u + MISSION_LINK_SITES_PAYLOAD_SIZE))
 
 /* ---------------------------------------------------------------
  * Channel 1: USART1 magic-byte framing (laptop <-> board 0 only)
@@ -157,12 +166,20 @@ void mission_link_parse_status_payload(const uint8_t *payload,
    indexing g_teams[] out of bounds. */
 void mission_link_apply_roster(const MissionLinkRoster_t *msg);
 
+/* Monotonic count of rosters mission_link_apply_roster() rejected whole
+   (bad team_id, or a location outside the grid). Both rejects are silent,
+   so a board gating boot on a roster arriving cannot otherwise distinguish
+   "rejected" from "never sent" - see each board's own main_board.c
+   roster-wait loop, which uses this to report the difference. */
+uint32_t mission_link_roster_reject_count(void);
+
 /* Ongoing: updates the board's local partial view of this incident
    (creating a new local slot on first sight - matched by incident_id,
    not by array position, since this board's slot layout has no
-   reason to mirror the laptop's). work_remaining is read-only input
-   here (CBBA bid quality), never written back - see mission_link.h's
-   MissionLinkIncident_t doc for why that's deliberate. */
+   reason to mirror the laptop's). The laptop owns what the incident is
+   and its stages/resolution; this board keeps its own execution state
+   (assignment, status, work_remaining) while one of its teams is on it -
+   see the ownership comment above this function in mission_link.c. */
 void mission_link_apply_incident(const MissionLinkIncident_t *msg);
 
 /* Ongoing: mirrors msg->active[]/severity[] into
@@ -180,5 +197,66 @@ void mission_link_apply_fault(const MissionLinkFault_t *msg);
    needs per-team "last sent" bookkeeping that belongs to the task
    driving the send cadence, not to this stateless codec file. */
 void mission_link_build_status(uint8_t team_id, MissionLinkStatus_t *out);
+
+/* ---------------------------------------------------------------
+ * Mission clock (mission_link.h section 5b)
+ * ---------------------------------------------------------------
+ */
+uint32_t mission_link_pack_clock(const MissionLinkClock_t *msg, uint8_t *out_buf);
+int mission_link_parse_clock(const uint8_t *buf, uint32_t buf_len, MissionLinkClock_t *out);
+void mission_link_pack_clock_payload(const MissionLinkClock_t *msg, uint8_t *out_payload);
+void mission_link_parse_clock_payload(const uint8_t *payload, MissionLinkClock_t *out);
+
+/* Records the laptop's latest tick. Latest frame wins, not highest -
+   see mission_link.h section 5b. */
+void mission_link_apply_clock(const MissionLinkClock_t *msg);
+
+/* 1 once any clock frame has arrived since mission_link_clock_reset(). */
+uint8_t mission_link_clock_received(void);
+
+/* The laptop's latest tick (0 before any clock frame). */
+uint32_t mission_link_authorized_tick(void);
+
+/* Forgets the clock - a board calls this at boot. */
+void mission_link_clock_reset(void);
+
+/* Decides whether a board with local tick local_tick may run one more
+   sim tick given the laptop's authorized_tick. Returns 1 if it may and
+   writes the tick it should run FROM into *start_tick: local_tick
+   normally, or authorized_tick - 1 when the board is more than
+   MISSION_LINK_CLOCK_MAX_CATCHUP_TICKS behind and should jump rather
+   than replay. Returns 0 (and leaves *start_tick alone) when the board
+   is already at or past the laptop's tick. Pure - no state. */
+uint8_t mission_link_clock_step_plan(uint32_t local_tick, uint32_t authorized_tick,
+                                     uint32_t *start_tick);
+
+/* ---------------------------------------------------------------
+ * Route map and sites (mission_link.h sections 5c/5d)
+ * ---------------------------------------------------------------
+ */
+uint32_t mission_link_pack_map_row(const MissionLinkMapRow_t *msg, uint8_t *out_buf);
+int mission_link_parse_map_row(const uint8_t *buf, uint32_t buf_len, MissionLinkMapRow_t *out);
+void mission_link_pack_map_row_payload(const MissionLinkMapRow_t *msg, uint8_t *out_payload);
+void mission_link_parse_map_row_payload(const uint8_t *payload, MissionLinkMapRow_t *out);
+
+uint32_t mission_link_pack_sites(const MissionLinkSites_t *msg, uint8_t *out_buf);
+int mission_link_parse_sites(const uint8_t *buf, uint32_t buf_len, MissionLinkSites_t *out);
+void mission_link_pack_sites_payload(const MissionLinkSites_t *msg, uint8_t *out_payload);
+void mission_link_parse_sites_payload(const uint8_t *payload, MissionLinkSites_t *out);
+
+/* The map byte for one cell, from the environment's own view: 0 if not
+   passable, else its travel cost clamped to 1-255. Used by the laptop
+   to build rows, so sender and receiver agree on the encoding. */
+uint8_t mission_link_map_encode_cell(uint8_t navigable, uint8_t travel_cost);
+
+/* Stores a row for the board's route map. Rows outside the grid are
+   ignored. Returns 1 if applied. */
+uint8_t mission_link_apply_map_row(const MissionLinkMapRow_t *msg);
+
+/* Copies the sites into g_safezones[]/g_num_safe_zones/
+   g_evacuation_gateways[]. A safe zone's evacuee_count is kept (it is
+   not on the wire). A count above MAX_SAFE_ZONES or a site off the grid
+   rejects the whole frame. Returns 1 if applied. */
+uint8_t mission_link_apply_sites(const MissionLinkSites_t *msg);
 
 #endif /* MISSION_LINK_CODEC_H */

@@ -32,6 +32,56 @@
 
 
 
+/*
+ * Send-on-change cache for cbba_broadcast_local_teams() (definition
+ * further down this file, where the send loop lives). Only winner[]/
+ * winning_bid[] are cached - the fields that carry a local team's real
+ * consensus claim - NOT timestamp[], which cbba_receive_and_update()
+ * bumps on every received message regardless of whether this team's
+ * own winner/bid changed (receiver->timestamp[sender_id] =
+ * g_current_tick unconditionally). Caching timestamp[] too would make
+ * "did anything change" true almost every round even when nothing
+ * this team believes actually changed, defeating the point of this
+ * cache.
+ *
+ * CBBA_FORCE_RESEND_TICKS bounds staleness for a peer that missed an
+ * earlier change (a dropped frame, or a peer that rebooted mid-
+ * session and lost what it had heard) - see core/lora_frame.c's
+ * "drop and resync" policy for why frames can legitimately vanish.
+ * Without a periodic unconditional resend, "send only on change"
+ * could leave a desynced peer stuck forever once nothing new happens
+ * to trigger a fresh send.
+ */
+#define CBBA_FORCE_RESEND_TICKS 4u
+
+typedef struct
+{
+    uint8_t winner[NUM_INCIDENTS];
+    float winning_bid[NUM_INCIDENTS];
+    uint32_t ticks_since_send;
+    bool ever_sent;
+} CBBALastBroadcast_t;
+
+static CBBALastBroadcast_t s_last_broadcast[NUM_TEAMS];
+
+/* Monotonic count of frames cbba_broadcast_local_teams() actually handed to
+   comms_transport_send() (per local team, per destination board) - i.e. how
+   many times the send-on-change gate above let a send through, as opposed to
+   skipping it because nothing changed. Test-observable proxy for "did this
+   round's traffic reduction actually happen" - see cbba.h. */
+static uint32_t s_cbba_broadcast_send_count;
+
+uint32_t cbba_broadcast_send_count(void)
+{
+    return s_cbba_broadcast_send_count;
+}
+
+static void cbba_reset_broadcast_change_cache(void)
+{
+    memset(s_last_broadcast, 0, sizeof(s_last_broadcast));
+    s_cbba_broadcast_send_count = 0u;
+}
+
 #define CBBA_ROUTE_IMPROVEMENT_EPSILON 0.0001f
 #define CBBA_RELOCATE_MARGIN 0.005f
 
@@ -53,6 +103,84 @@
  * bypassing that mechanism - see cbba_apply_override_pin() below.
  */
 #define CBBA_OVERRIDE_PIN_BID 1.0e9f
+
+/*
+ * Compact ON-WIRE encoding of CBBAMessage_t (defined further down this
+ * file), used ONLY at the comms_transport_send()/poll_received()
+ * boundary in cbba_broadcast_local_teams()/cbba_ingest_remote_mesh_
+ * replies() - the real board-to-board mesh path. cbba_consensus()'s
+ * in-process gossip (used by the laptop/desktop build and most
+ * selftests) keeps working directly on full-precision CBBAMessage_t
+ * and is completely unaffected by this encoding - only real boards pay
+ * for the smaller wire size, and only real boards pay the quantization
+ * cost below.
+ *
+ * winner[]/timestamp[] are unchanged (already 1 and 4 bytes/entry -
+ * timestamp[] deliberately NOT compacted further here: cbba_receive_
+ * and_update()'s third-party-relay tie-break (Choi/Brunet/How Table I)
+ * depends on absolute ordering of these values across the whole mesh,
+ * and a narrower wire width would risk silent wraparound/ordering bugs
+ * for a long-running mission - a correctness risk judged not worth the
+ * marginal extra bytes saved). winning_bid[] moves from a 4-byte float
+ * to a 2-byte fixed-point winning_bid_q[] (values*1000, ~0.001
+ * resolution) - see cbba_pack_bid()/cbba_unpack_bid() below for the
+ * range/precision reasoning and the override-pin sentinel.
+ *
+ * sizeof(CBBAMessage_t) [144B, see that type's own doc] shrinks to
+ * sizeof(CBBAWireMessage_t) [101B] on the wire: 1 (sender_id) +
+ * 20 (winner[20]) + 40 (winning_bid_q[20], 2B each) + 40
+ * (timestamp[10], 4B each) = 101, no padding (already 4-byte aligned
+ * after the odd 21 leading bytes round up per the packed attribute).
+ */
+typedef struct __attribute__((packed))
+{
+    uint8_t sender_id;
+    uint8_t winner[NUM_INCIDENTS];
+    uint16_t winning_bid_q[NUM_INCIDENTS];
+    uint32_t timestamp[NUM_TEAMS];
+} CBBAWireMessage_t;
+
+/* uint16 fixed-point scale for winning_bid_q[] above: value*1000, so
+   0..65.534 is representable at ~0.001 resolution. calculate_score()/
+   calculate_route_utility() (core/scoring.c) build every REAL bid from
+   weighted 0..1 component factors (g_default_scoring_weights sums to
+   exactly 1.0) accumulated over at most CBBA_MAX_BUNDLE_SIZE tasks, so
+   a real bid comfortably fits well under 65 long before this range is
+   a practical concern - the clamp below is a safety net against a
+   pathological bundle, not something normal operation is expected to
+   hit. 0xFFFF is reserved as a sentinel for CBBA_OVERRIDE_PIN_BID
+   (1e9f, defined just above), which would otherwise overflow this
+   encoding entirely; CBBA_WIRE_BID_MAX_RAW leaves that one value free
+   for it. */
+#define CBBA_WIRE_BID_SCALE      1000.0f
+#define CBBA_WIRE_BID_OVERRIDE_SENTINEL 0xFFFFu
+#define CBBA_WIRE_BID_MAX_RAW    0xFFFEu
+
+static uint16_t cbba_pack_bid(float bid)
+{
+    float scaled;
+
+    if(bid >= CBBA_OVERRIDE_PIN_BID)
+        return CBBA_WIRE_BID_OVERRIDE_SENTINEL;
+
+    if(bid < 0.0f)
+        bid = 0.0f;
+
+    scaled = bid * CBBA_WIRE_BID_SCALE + 0.5f; /* round to nearest */
+
+    if(scaled > (float)CBBA_WIRE_BID_MAX_RAW)
+        return CBBA_WIRE_BID_MAX_RAW;
+
+    return (uint16_t)scaled;
+}
+
+static float cbba_unpack_bid(uint16_t raw)
+{
+    if(raw == CBBA_WIRE_BID_OVERRIDE_SENTINEL)
+        return CBBA_OVERRIDE_PIN_BID;
+
+    return (float)raw / CBBA_WIRE_BID_SCALE;
+}
 
 static uint32_t g_cbba_two_opt_improvements = 0;
 static uint32_t g_cbba_relocate_improvements = 0;
@@ -495,6 +623,8 @@ void cbba_init(void)
         twin->expected_operating_state = g_teams[i].status;
 
     }
+
+    cbba_reset_broadcast_change_cache();
 }
 
 
@@ -942,6 +1072,11 @@ __attribute__((weak)) uint32_t cbba_now_ms(void)
     return s_sim_clock_ms;
 }
 
+/* Weak default: nothing to service - see cbba.h. */
+__attribute__((weak)) void cbba_wait_poll(void)
+{
+}
+
 /* Sends every locally-hosted team's current belief snapshot to every
    OTHER board over comms_transport (real LoRa once that driver
    exists, an in-process queue round-trip today when boards happen to
@@ -951,8 +1086,13 @@ __attribute__((weak)) uint32_t cbba_now_ms(void)
 /* Not static - see cbba_team_is_local()'s comment above for why. */
 void cbba_broadcast_local_teams(void)
 {
-    uint8_t num_boards = (uint8_t)((NUM_TEAMS + 4u) / 5u); /* team_id/5
-        rule - see comms_transport_board_id_for_team() */
+    /* The transport's own board split, not a re-derived team_id/5: the
+       laptop build puts every team on board 0 (COMMS_TRANSPORT_TEAMS_PER_
+       BOARD=NUM_TEAMS), and a hardcoded 2 boards made it "send" to board 1
+       - team 5, which that build maps back to board 0 - so every tick
+       looped 10 frames through pack/seal/open into its own inbox, which
+       nothing drained (found by review: 16/16 slots full after 50 ticks). */
+    uint8_t num_boards = comms_transport_board_count();
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
@@ -963,26 +1103,88 @@ void cbba_broadcast_local_teams(void)
 
         cbba_broadcast(team_id, &msg);
 
-        for(uint8_t board = 0; board < num_boards; board++)
         {
-            uint8_t representative_team_id;
+            /* Send-on-change gate: skip the mesh broadcast entirely
+               when this team's winner[]/winning_bid[] belief matches
+               what was last actually put on the wire for it, unless
+               CBBA_FORCE_RESEND_TICKS worth of ticks have passed since
+               the last send (see CBBALastBroadcast_t's comment above
+               for why timestamp[] is deliberately excluded from this
+               comparison, and why the force-resend floor exists). */
+            CBBALastBroadcast_t *last = &s_last_broadcast[team_id];
+            bool changed = !last->ever_sent;
+            const float CBBA_BROADCAST_BID_EPSILON = 0.0001f;
 
-            if(board == g_comms_transport_this_board_id)
-                continue;
+            if(!changed)
+            {
+                for(int j = 0; j < NUM_INCIDENTS; j++)
+                {
+                    float diff = last->winning_bid[j] - msg.winning_bid[j];
 
-            /* Any team_id on that board reaches the whole board -
-               comms_transport routes by board, not by the specific
-               receiver_team_id passed here (see comms_transport.h);
-               the receiving board fans this out to all of ITS local
-               teams itself, in cbba_ingest_remote_mesh_replies()
-               below. */
-            representative_team_id = (uint8_t)(board * 5u);
+                    if(diff < 0.0f)
+                        diff = -diff;
 
-            (void)comms_transport_send(team_id, representative_team_id,
-                                        LORA_FRAME_TYPE_CBBA,
-                                        COMMS_PRECEDENCE_PRIORITY,
-                                        (const uint8_t *)&msg,
-                                        (uint8_t)sizeof(msg));
+                    if(last->winner[j] != msg.winner[j] ||
+                       diff > CBBA_BROADCAST_BID_EPSILON)
+                    {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+
+            if(!changed && last->ticks_since_send < CBBA_FORCE_RESEND_TICKS)
+            {
+                last->ticks_since_send++;
+                continue; /* nothing new to tell the other board(s) yet */
+            }
+
+            for(int j = 0; j < NUM_INCIDENTS; j++)
+            {
+                last->winner[j] = msg.winner[j];
+                last->winning_bid[j] = msg.winning_bid[j];
+            }
+            last->ticks_since_send = 0u;
+            last->ever_sent = true;
+            s_cbba_broadcast_send_count++;
+        }
+
+        {
+            /* Pack once per team, reused for every destination board -
+               see CBBAWireMessage_t's own comment above for why this
+               is smaller than CBBAMessage_t and why that's safe. */
+            CBBAWireMessage_t wire;
+
+            wire.sender_id = msg.sender_id;
+            for(int j = 0; j < NUM_INCIDENTS; j++)
+            {
+                wire.winner[j] = msg.winner[j];
+                wire.winning_bid_q[j] = cbba_pack_bid(msg.winning_bid[j]);
+            }
+            for(int k = 0; k < NUM_TEAMS; k++)
+                wire.timestamp[k] = msg.timestamp[k];
+
+            for(uint8_t board = 0; board < num_boards; board++)
+            {
+                uint8_t representative_team_id;
+
+                if(board == g_comms_transport_this_board_id)
+                    continue;
+
+                /* Any team_id on that board reaches the whole board -
+                   comms_transport routes by board, not by the specific
+                   receiver_team_id passed here (see comms_transport.h);
+                   the receiving board fans this out to all of ITS local
+                   teams itself, in cbba_ingest_remote_mesh_replies()
+                   below. */
+                representative_team_id = comms_transport_representative_team_for_board(board);
+
+                (void)comms_transport_send(team_id, representative_team_id,
+                                            LORA_FRAME_TYPE_CBBA,
+                                            COMMS_PRECEDENCE_PRIORITY,
+                                            (const uint8_t *)&wire,
+                                            (uint8_t)sizeof(wire));
+            }
         }
     }
 }
@@ -1052,43 +1254,55 @@ void cbba_ingest_remote_mesh_replies(void)
         uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
         uint8_t payload_len;
         CBBAMessage_t msg;
+        CBBAWireMessage_t wire;
 
-        /* Peek first — skip frames owned by other consumers without
-           consuming them. Only dequeue once we know it's ours. */
-        uint8_t peeked_type;
-        if(!comms_transport_peek_frame_type(&peeked_type))
-            continue; /* inbox empty - keep waiting until timeout */
+        /* Takes only CBBA frames, from anywhere in the inbox. */
+        if(!comms_transport_poll_received_types(COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_CBBA),
+                                                 &sender_team_id, &frame_type,
+                                                 payload, &payload_len))
+        {
+            /* No CBBA frame yet. Other consumers' frames may be waiting;
+               they are left in place (poll_received_types() skips them)
+               and the wait goes on - it used to give up the moment any
+               non-CBBA frame (a status heartbeat, a relay) was queued,
+               ending the round before the peer's reply could arrive.
+               Only a full inbox ends it early: no reply can be delivered
+               into it. */
+            if(comms_transport_inbox_free_slots() == 0u)
+                break;
 
-        if(peeked_type != LORA_FRAME_TYPE_CBBA)
-        {
-            /* Not ours — leave it in the inbox for fault_comms or
-               mission_link to consume. Break out of the polling loop
-               so we don't spin on a non-CBBA frame forever. */
-            break;
-        }
-        
-        if(!comms_transport_poll_received(&sender_team_id, &frame_type,
-                                           payload, &payload_len))
-        {
-            continue; /* nothing waiting right now - keep waiting until
-                          the timeout, rather than giving up on the
-                          first empty poll */
+            cbba_wait_poll();
+            continue;
         }
 
         if(frame_type != LORA_FRAME_TYPE_CBBA)
             continue; /* mission-link's RX task (Prompt 3) owns those */
 
-        if(payload_len != sizeof(CBBAMessage_t))
+        if(payload_len != sizeof(CBBAWireMessage_t))
             continue; /* protocol drift or a corrupt frame - drop it
                           and keep draining rather than aborting the
                           whole round over one bad message */
 
-        memcpy(&msg, payload, sizeof(msg));
+        memcpy(&wire, payload, sizeof(wire));
         (void)sender_team_id; /* msg.sender_id (wire field, set by
             cbba_broadcast()) is authoritative - see comms_transport.h's
             "Open question" note: sender identity for a genuinely
             separate board isn't on the wire at the comms_transport
             layer today, only inside CBBAMessage_t itself */
+
+        /* Unpack back to full-precision CBBAMessage_t before handing
+           off to cbba_receive_and_update() - that function (shared
+           with cbba_consensus()'s in-process gossip) always works on
+           full float bids/timestamps, so quantization is entirely
+           contained to the wire hop above and this unpack. */
+        msg.sender_id = wire.sender_id;
+        for(int j = 0; j < NUM_INCIDENTS; j++)
+        {
+            msg.winner[j] = wire.winner[j];
+            msg.winning_bid[j] = cbba_unpack_bid(wire.winning_bid_q[j]);
+        }
+        for(int k = 0; k < NUM_TEAMS; k++)
+            msg.timestamp[k] = wire.timestamp[k];
 
         ingested_replies++;
 #ifdef CBBA_DEBUG_TIMING

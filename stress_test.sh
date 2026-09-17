@@ -17,14 +17,7 @@ echo "[stress] building with -DCBBA_DEBUG_TIMING ..."
 gcc -std=gnu11 -Wall -Wextra -O1 -DCBBA_DEBUG_TIMING \
     -Icore -Ilaptop -o "$BIN" \
     laptop/tools/two_board_cbba_harness.c laptop/debug.c laptop/snapshot.c \
-    core/cbba.c core/comms_transport.c core/lora_frame.c core/lora_crypto.c \
-    core/aead_chacha20poly1305.c core/chacha20.c core/poly1305.c \
-    core/mission_state.c core/team.c core/random.c core/scoring.c core/path.c \
-    core/allocator.c core/mission_state_utils.c core/incident.c core/mission_link.c \
-    core/mission_link_handshake.c core/mission_link_override.c core/environment.c \
-    core/fault_config.c core/fault_injector.c core/grid.c core/watchdog.c \
-    core/recovery_manager.c core/search_zones.c core/mission_execution_twin.c \
-    core/safezone.c core/test_metrics.c -lm
+    core/*.c -lm
 if [ $? -ne 0 ]; then echo "[stress] BUILD FAILED"; exit 1; fi
 
 run_phase() {

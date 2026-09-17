@@ -355,6 +355,13 @@ static uint32_t g_board_init_tick; /* `now` value at
                                        zero point */
 static uint8_t g_board_init_tick_valid;
 
+/* Per-peer timeout restart after mission_link_handshake_reset_relay_leg():
+   when valid, that peer's timeout counts from g_leg_start_tick[peer]
+   instead of g_board_init_tick. Pending = seed on the next `now` seen. */
+static uint32_t g_leg_start_tick[HANDSHAKE_MAX_BOARDS];
+static uint8_t g_leg_start_valid[HANDSHAKE_MAX_BOARDS];
+static uint8_t g_leg_start_pending[HANDSHAKE_MAX_BOARDS];
+
 void mission_link_handshake_board_init(uint8_t this_board_id)
 {
     uint8_t i;
@@ -377,6 +384,38 @@ void mission_link_handshake_board_init(uint8_t this_board_id)
         g_relay_reply[i].board_id = i;
         g_relay_reply[i].protocol_version = 0u;
         g_relay_reply[i].ready = 0u;
+        g_leg_start_tick[i] = 0u;
+        g_leg_start_valid[i] = 0u;
+        g_leg_start_pending[i] = 0u;
+    }
+}
+
+void mission_link_handshake_reset_relay_leg(uint8_t peer_board_id)
+{
+    if (peer_board_id >= HANDSHAKE_MAX_BOARDS)
+    {
+        return;
+    }
+
+    g_relay_req_sent_once[peer_board_id] = 0u;
+    g_relay_req_last_sent_valid[peer_board_id] = 0u;
+    g_relay_req_last_sent_tick[peer_board_id] = 0u;
+    g_relay_reply_seen[peer_board_id] = 0u;
+    g_relay_timed_out[peer_board_id] = 0u;
+    g_relay_reply[peer_board_id].board_id = peer_board_id;
+    g_relay_reply[peer_board_id].protocol_version = 0u;
+    g_relay_reply[peer_board_id].ready = 0u;
+    g_leg_start_valid[peer_board_id] = 0u;
+    g_leg_start_pending[peer_board_id] = 1u;
+}
+
+static void mission_link_handshake_seed_leg_clock_if_needed(uint8_t peer_board_id, uint32_t now)
+{
+    if (g_leg_start_pending[peer_board_id])
+    {
+        g_leg_start_tick[peer_board_id] = now;
+        g_leg_start_valid[peer_board_id] = 1u;
+        g_leg_start_pending[peer_board_id] = 0u;
     }
 }
 
@@ -462,13 +501,28 @@ int mission_link_handshake_should_send_relay_req(uint8_t peer_board_id, uint32_t
     }
 
     mission_link_handshake_seed_timeout_clock_if_needed(now);
+    mission_link_handshake_seed_leg_clock_if_needed(peer_board_id, now);
 
-    if (g_relay_reply_seen[peer_board_id] || g_relay_timed_out[peer_board_id])
+    if (g_relay_reply_seen[peer_board_id])
     {
         return 0;
     }
 
-    if (!g_relay_req_sent_once[peer_board_id])
+    if (g_relay_timed_out[peer_board_id])
+    {
+        /* Timed out stays latched (the laptop has been told ready=0), but
+           keep asking - slowly. Stopping for good meant a peer that became
+           reachable after the timeout (slow boot, a link outage, or a
+           reboot recovery that took longer - reproduced in a two-process
+           harness: all ~40 Reqs were held while the peer confirmed this
+           board's new LoRa session, then no Req ever came again) could
+           never answer, since a peer only replies to a Req. A late reply
+           is still recorded and relayed as ready=1 (note_remote_reply()). */
+        due = (!g_relay_req_last_sent_valid[peer_board_id] ||
+               (now - g_relay_req_last_sent_tick[peer_board_id]) >=
+                   HANDSHAKE_RELAY_SLOW_RETRY_INTERVAL_TICKS) ? 1 : 0;
+    }
+    else if (!g_relay_req_sent_once[peer_board_id])
     {
         due = 1; /* send-on-boot, per this file's top-comment policy */
     }
@@ -517,7 +571,11 @@ int mission_link_handshake_relay_timed_out(uint8_t peer_board_id, uint32_t now)
         return 0;
     }
 
-    if ((now - g_board_init_tick) >= HANDSHAKE_NUCLEO_TIMEOUT_TICKS)
+    mission_link_handshake_seed_leg_clock_if_needed(peer_board_id, now);
+
+    if ((now - (g_leg_start_valid[peer_board_id] ? g_leg_start_tick[peer_board_id]
+                                                  : g_board_init_tick))
+        >= HANDSHAKE_NUCLEO_TIMEOUT_TICKS)
     {
         g_relay_timed_out[peer_board_id] = 1u;
         return 1;
@@ -583,4 +641,15 @@ int mission_link_handshake_relay_reply_seen(uint8_t peer_board_id)
     }
 
     return (int)g_relay_reply_seen[peer_board_id];
+}
+
+int mission_link_handshake_relay_timed_out_seen(uint8_t peer_board_id)
+{
+    /* Plain array read, no clock - see relay_reply_seen() just above. */
+    if (peer_board_id >= HANDSHAKE_MAX_BOARDS)
+    {
+        return 0;
+    }
+
+    return (int)g_relay_timed_out[peer_board_id];
 }

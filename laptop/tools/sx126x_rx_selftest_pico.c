@@ -38,15 +38,11 @@
  *      accepts it, comms_transport_deliver_received() pushes it, and
  *      it's visible afterward via comms_transport_poll_received().
  *      Also asserts clear_irq_status() was called with exactly the
- *      bits get_irq_status() reported, and that standby+set_rx (the
- *      enter/re-arm sequence) was issued both before AND after -
- *      i.e. re-arm actually happens post-handling, not just on the
- *      first entry.
+ *      bits get_irq_status() reported, and that a plain RX_DONE does
+ *      NOT re-arm (RX is continuous).
  *   2. Corrupted frame (one ciphertext byte flipped after the fake
  *      radio "received" it): lora_frame_try_parse() rejects it, nothing
- *      reaches the inbox, but the poll still clears IRQ status and
- *      still re-arms RX (a dropped packet must not leave the radio
- *      stuck in standby).
+ *      reaches the inbox, and the poll still clears IRQ status.
  *   3. No IRQ pending (get_irq_status() returns SX126X_IRQ_NONE):
  *      the poll does not touch get_rx_buffer_status/read_buffer at
  *      all (nothing to read), but still clears (a no-op clear of an
@@ -56,12 +52,19 @@
  *      covers both bits, not just RX_DONE - proves the poll clears
  *      whatever was actually observed, not a hardcoded RX_DONE-only
  *      mask (see sx1262_rx_poll()'s own comment on why: Timeout is
- *      also routed to DIO1 and must not be left latched).
+ *      also routed to DIO1 and must not be left latched), and RX is
+ *      re-armed because a TIMEOUT ends a transmission.
+ *   5. RX_DONE together with TX_DONE: nothing is read (the shared radio
+ *      buffer holds this board's own transmission) and RX is re-armed.
+ *
+ *   The poll's decision and the parse/deliver step are the real shared
+ *   comms_transport_radio_poll_action()/comms_transport_receive_radio_
+ *   packet() both HALs call.
  *
  * Build:
  *   gcc -std=gnu11 -Wall -Wextra -Wpedantic -Icore \
  *       -Icore/vendor/sx126x_driver/src \
- *       -o sx126x_rx_selftest laptop/tools/sx126x_rx_selftest.c \
+ *       -o sx126x_rx_selftest laptop/tools/sx126x_rx_selftest_pico.c \
  *       core/vendor/sx126x_driver/src/sx126x.c \
  *       core/lora_frame.c core/lora_crypto.c \
  *       core/aead_chacha20poly1305.c core/chacha20.c core/poly1305.c \
@@ -253,38 +256,39 @@ static void test_rx_poll(void)
 {
     sx126x_irq_mask_t irq = SX126X_IRQ_NONE;
     sx126x_rx_buffer_status_t rx_status;
+    uint32_t events = 0u;
+    CommsRadioPollAction_t action;
 
     if (sx126x_get_irq_status(NULL, &irq) != SX126X_STATUS_OK)
     {
         return;
     }
 
-    if ((irq & SX126X_IRQ_RX_DONE) != 0u)
+    (void)sx126x_clear_irq_status(NULL, irq);
+
+    if ((irq & SX126X_IRQ_RX_DONE) != 0u) events |= COMMS_RADIO_EVENT_RX_DONE;
+    if ((irq & SX126X_IRQ_TX_DONE) != 0u) events |= COMMS_RADIO_EVENT_TX_DONE;
+    if ((irq & SX126X_IRQ_TIMEOUT) != 0u) events |= COMMS_RADIO_EVENT_TIMEOUT;
+
+    action = comms_transport_radio_poll_action(events);
+
+    if (action.read_packet)
     {
         uint8_t raw[LORA_FRAME_MAX_WIRE_SIZE];
-        uint8_t out_type = 0u;
-        uint8_t out_sender_board_id = 0u;
-        uint8_t out_payload[LORA_FRAME_MAX_PAYLOAD];
-        uint8_t out_payload_len = 0u;
 
         if (sx126x_get_rx_buffer_status(NULL, &rx_status) == SX126X_STATUS_OK &&
             rx_status.pld_len_in_bytes <= sizeof(raw) &&
             sx126x_read_buffer(NULL, rx_status.buffer_start_pointer, raw,
                                 rx_status.pld_len_in_bytes) == SX126X_STATUS_OK)
         {
-            if (lora_frame_try_parse(raw, rx_status.pld_len_in_bytes, &out_type,
-                                      &out_sender_board_id, out_payload,
-                                      &out_payload_len) == 1)
-            {
-                (void)out_sender_board_id;
-                (void)comms_transport_deliver_received(out_type, out_payload,
-                                                         out_payload_len);
-            }
+            (void)comms_transport_receive_radio_packet(raw, rx_status.pld_len_in_bytes);
         }
     }
 
-    (void)sx126x_clear_irq_status(NULL, irq);
-    test_enter_rx();
+    if (action.tx_finished)
+    {
+        test_enter_rx();
+    }
 }
 
 /*
@@ -320,9 +324,11 @@ static void test_happy_path(void)
 
     CHECK(g_fake_clear_call_count == 1);
     CHECK(g_fake_last_cleared_mask == (uint16_t)SX126X_IRQ_RX_DONE);
-    /* re-armed after handling - standby/set_rx each called a second time */
-    CHECK(g_fake_standby_call_count == 2);
-    CHECK(g_fake_set_rx_call_count == 2);
+    /* Not re-armed: RX is continuous, the chip is still listening after
+       a reception (this test's old transcription re-armed every poll,
+       which the real HAL never did). */
+    CHECK(g_fake_standby_call_count == 1);
+    CHECK(g_fake_set_rx_call_count == 1);
 
     CHECK(comms_transport_poll_received(&out_sender_team_id, &out_frame_type,
                                          out_payload, &out_payload_len) == 1);
@@ -336,7 +342,7 @@ static void test_happy_path(void)
                                          out_payload, &out_payload_len) == 0);
 }
 
-static void test_corrupted_frame_dropped_but_still_rearms(void)
+static void test_corrupted_frame_dropped(void)
 {
     uint8_t payload[4] = { 0x01u, 0x02u, 0x03u, 0x04u };
     uint32_t packed_len;
@@ -365,12 +371,11 @@ static void test_corrupted_frame_dropped_but_still_rearms(void)
     CHECK(comms_transport_poll_received(&out_sender_team_id, &out_frame_type,
                                          out_payload, &out_payload_len) == 0);
 
-    /* But the radio still got cleared and re-armed - a dropped packet
-       must not leave RX disabled. */
+    /* The IRQ still got cleared; RX stays armed (continuous). */
     CHECK(g_fake_clear_call_count == 1);
     CHECK(g_fake_last_cleared_mask == (uint16_t)SX126X_IRQ_RX_DONE);
-    CHECK(g_fake_standby_call_count == 2);
-    CHECK(g_fake_set_rx_call_count == 2);
+    CHECK(g_fake_standby_call_count == 1);
+    CHECK(g_fake_set_rx_call_count == 1);
 }
 
 static void test_no_irq_pending_is_a_cheap_noop(void)
@@ -423,14 +428,47 @@ static void test_rx_done_with_timeout_bit_also_set(void)
        hardcoded RX_DONE-only mask. */
     CHECK(g_fake_last_cleared_mask ==
           (uint16_t)(SX126X_IRQ_RX_DONE | SX126X_IRQ_TIMEOUT));
+    /* TIMEOUT can only be a TX timeout (RX is continuous): the
+       transmission is over, so RX is re-armed. */
+    CHECK(g_fake_standby_call_count == 2);
+    CHECK(g_fake_set_rx_call_count == 2);
+}
+
+/* RX_DONE flagged together with TX_DONE: the buffer holds this board's
+   own transmission, so nothing is read, and the transmission ends (RX
+   re-armed). Before the fix, RX_DONE won and RX was never re-armed. */
+static void test_rx_done_with_tx_done(void)
+{
+    uint8_t payload[3] = { 0x11u, 0x22u, 0x33u };
+    uint32_t packed_len;
+    uint8_t out_sender_team_id, out_frame_type, out_payload_len;
+    uint8_t out_payload[LORA_FRAME_MAX_PAYLOAD];
+
+    lora_crypto_reset();
+    comms_transport_init();
+    fake_hal_reset_state();
+
+    packed_len = lora_frame_pack(LORA_FRAME_TYPE_MISSION_LINK, 4u, payload,
+                                  (uint8_t)sizeof(payload), g_fake_rx_buf);
+    g_fake_rx_buf_len = (uint8_t)packed_len;
+
+    test_enter_rx();
+    g_fake_irq_status = (uint16_t)(SX126X_IRQ_RX_DONE | SX126X_IRQ_TX_DONE);
+    test_rx_poll();
+
+    CHECK(comms_transport_poll_received(&out_sender_team_id, &out_frame_type,
+                                         out_payload, &out_payload_len) == 0);
+    CHECK(g_fake_standby_call_count == 2);
+    CHECK(g_fake_set_rx_call_count == 2);
 }
 
 int main(void)
 {
     test_happy_path();
-    test_corrupted_frame_dropped_but_still_rearms();
+    test_corrupted_frame_dropped();
     test_no_irq_pending_is_a_cheap_noop();
     test_rx_done_with_timeout_bit_also_set();
+    test_rx_done_with_tx_done();
 
     if (g_failures == 0)
     {

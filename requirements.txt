@@ -1,2 +1,7 @@
 flask
 pyserial
+# Analysis gates only (check-environment-e2e-stress,
+# check-persistence-bounded-forgiveness); not needed by the dashboard.
+numpy
+pandas
+scikit-learn

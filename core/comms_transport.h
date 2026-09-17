@@ -205,7 +205,7 @@ int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
                           uint8_t frame_type, CommsPrecedence_t precedence,
                           const uint8_t *payload, uint8_t payload_len);
 
-/* Non-preemptive strict-priority TX dispatcher - the piece that
+/* Non-preemptive priority TX dispatcher - the piece that
    actually moves a cross-board send from "enqueued" to "on air".
    Meant to be called once per tick, from main_board.c's own tick
    loop, alongside the existing RX-poll call (sx1262_rx_poll()/
@@ -219,7 +219,9 @@ int comms_transport_send(uint8_t sender_team_id, uint8_t receiver_team_id,
    standalone before that HAL work exists), does nothing this tick.
    Otherwise, scans the 4 TX queues from COMMS_PRECEDENCE_FLASH down
    to COMMS_PRECEDENCE_ROUTINE, takes the oldest entry from the first
-   non-empty one, packs it (lora_frame_pack() - TX counter advances
+   non-empty one (except that ROUTINE gets a turn after a few PRIORITY
+   dispatches in a row while it waits, so CBBA load can't starve it -
+   see comms_transport_tx_dequeue_highest()), packs it (lora_frame_pack() - TX counter advances
    here, not at enqueue time), and hands it to lora_spi_transmit().
    At most one frame is dispatched per call - real LoRa airtime for
    even a small frame spans many ticks at this project's tick rate, so
@@ -262,5 +264,89 @@ uint32_t comms_transport_channel_busy_until_tick(void);
  * returns 0 if the inbox is empty.  Does NOT remove the frame.
  * Use this to check ownership before calling comms_transport_poll_received(). */
 int comms_transport_peek_frame_type(uint8_t *out_frame_type);
+
+/* Bit for frame_type in the type masks below (LORA_FRAME_TYPE_* < 32). */
+#define COMMS_FRAME_TYPE_BIT(frame_type) ((uint32_t)1u << (frame_type))
+
+/* Like comms_transport_poll_received(), but takes the OLDEST frame whose
+   type is in type_mask from anywhere in the inbox, leaving every other
+   frame in place and in order. Returns 1 if one was found, 0 otherwise.
+
+   Exists because every receiver used to peek the head and stop at the
+   first frame type it didn't own ("leave it for the next consumer"). That
+   only works while every consumer runs every tick: in both boards' boot
+   wait loops only mission_link_task_step() runs, so one CBBA frame from a
+   peer that is already mid-mission sat at the head forever and the
+   handshake Req / roster behind it were never read - boot hung. Measured
+   in a two-process harness: board 1 never applied its roster once board 0
+   was sending CBBA. */
+int comms_transport_poll_received_types(uint32_t type_mask,
+                                         uint8_t *out_sender_team_id,
+                                         uint8_t *out_frame_type,
+                                         uint8_t *out_payload,
+                                         uint8_t *out_payload_len);
+
+/* Drops every inbox frame whose type is NOT in keep_type_mask; returns how
+   many were dropped. For the boot wait loops: before the simulation
+   starts nothing reads CBBA/fault traffic, and left alone it fills the
+   16-slot inbox so the frames boot is waiting for get refused. */
+uint32_t comms_transport_discard_received_except(uint32_t keep_type_mask);
+
+/* Free inbox slots right now. For waits that should give up once nothing
+   more can be delivered (cbba_ingest_remote_mesh_replies()). */
+uint32_t comms_transport_inbox_free_slots(void);
+
+/* ---------------------------------------------------------------
+ * Radio driver glue - shared by both boards' sx1262_hal.c
+ * ---------------------------------------------------------------
+ * Both HALs used to carry their own copy of this logic, and the desktop
+ * selftests a third transcription of it, which had already drifted. The
+ * HALs now only translate chip IRQ bits and do the SPI calls. */
+
+/* Radio-independent IRQ events a poll observed (and has cleared). */
+#define COMMS_RADIO_EVENT_RX_DONE ((uint32_t)0x1u)
+#define COMMS_RADIO_EVENT_TX_DONE ((uint32_t)0x2u)
+#define COMMS_RADIO_EVENT_TIMEOUT ((uint32_t)0x4u)
+
+typedef struct
+{
+    /* The RX buffer holds a packet received from another board: read it
+       and pass it to comms_transport_receive_radio_packet(). */
+    uint8_t read_packet;
+    /* Any transmission is over: clear the driver's TX-busy flag and put
+       the radio back into receive mode (it falls back to standby after a
+       TX, so without this it stays deaf). */
+    uint8_t tx_finished;
+} CommsRadioPollAction_t;
+
+/* What one poll must do with the events it saw.
+
+   RX_DONE and TX_DONE can arrive together: the chip keeps IRQ flags until
+   they are cleared, so a packet that lands between one poll and the next
+   transmit is still flagged when that transmit completes. Both HALs used
+   to treat RX_DONE as "not a TX event", so in that case the TX-busy flag
+   was never cleared and receive never re-armed - the DK (no fallback)
+   stopped transmitting and receiving for good (found by review). The
+   radio's single buffer is shared by TX and RX, so a packet flagged
+   alongside TX_DONE was overwritten by this board's own transmission and
+   is not read. */
+CommsRadioPollAction_t comms_transport_radio_poll_action(uint32_t events);
+
+/* One packet the radio received: drops it if it claims to come from this
+   board, otherwise parses (lora_frame_try_parse()) and delivers
+   (comms_transport_deliver_received()). Returns 1 if a frame was
+   delivered to the inbox, 0 otherwise.
+
+   A board never receives its own transmissions on a working link, and
+   lora_frame_try_parse() cannot refuse them itself (the same-board
+   loopback path in comms_transport_send() legitimately parses frames from
+   this board). Without this check a board accepted and acted on its own
+   frames - replayed, echoed, or read back out of the shared radio buffer
+   (found by review: board 1 delivered its own override ack to itself). */
+int comms_transport_receive_radio_packet(const uint8_t *packet, uint32_t packet_len);
+
+/* Packets comms_transport_receive_radio_packet() dropped because they
+   claimed to come from this board. Diagnostics only. */
+uint32_t comms_transport_own_frame_drop_count(void);
 
 #endif /* COMMS_TRANSPORT_H */

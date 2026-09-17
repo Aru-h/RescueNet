@@ -188,6 +188,18 @@
     <div>
       <h1>CONCORD / REMCE — Local Test Dashboard</h1>
       <div class="sub" id="statusLine">checking project…</div>
+      <div class="sub hidden" id="boardMissionBar">
+        <span id="boardMissionText">Waiting for board handshake…</span>
+        <select id="boardMissionSpeed" title="Mission pace. Real time is one tick per 36 s, as in a real deployment."
+                style="margin-left:8px;font-size:12px;">
+          <option value="1">Real time (36 s/tick)</option>
+          <option value="10">10× (3.6 s/tick)</option>
+          <option value="60">60× (0.6 s/tick)</option>
+        </select>
+        <button type="button" id="startMissionBtn" onclick="startBoardMission()" disabled
+                title="Sends START, then runs the mission: the laptop sends the world and the clock, the boards run the teams, and Live Ops shows what the boards report (uses the Seed, Ticks and Fault profile fields below)"
+                style="margin-left:8px;padding:2px 10px;font-size:12px;">Start board mission</button>
+      </div>
     </div>
     <div style="text-align: right;">
       <div class="sub" id="lastRunLine"></div>
@@ -414,6 +426,7 @@ async function connectHardware() {
     
     if (data.status === 'success') {
       document.getElementById('statusLine').innerHTML = `<span style="color:var(--accent);">Connected to ${port}</span>`;
+      startBoardMissionPolling();
       showScreen('main-dashboard');
       checkStatus().catch(console.error);
       loadHistory().catch(console.error);
@@ -445,7 +458,120 @@ function enterSimulationMode() {
 async function exitDashboard() {
   await fetch('/api/board/disconnect', {method: 'POST'}).catch(()=>console.log("Disconnected locally"));
   stopLive();
+  stopBoardMissionPolling();
   showScreen('startup-screen');
+}
+
+/* Board mission: once the handshake allows it, /api/board/launch sends START
+   and starts the mission - the laptop sends rosters, incidents, faults and
+   the clock, the boards run the teams, and /api/board/mission/stream carries
+   the resulting picture (teams as the boards report them) into Live Ops. */
+let boardMissionTimer = null;
+
+function startBoardMissionPolling() {
+  document.getElementById('boardMissionBar').classList.remove('hidden');
+  stopBoardMissionPolling();
+  boardMissionTimer = setInterval(() => refreshBoardMission().catch(console.error), 1000);
+  refreshBoardMission().catch(console.error);
+}
+
+function stopBoardMissionPolling() {
+  if (boardMissionTimer) { clearInterval(boardMissionTimer); boardMissionTimer = null; }
+  if (boardMissionAbort) { boardMissionAbort.abort(); boardMissionAbort = null; }
+  document.getElementById('boardMissionBar').classList.add('hidden');
+}
+
+async function refreshBoardMission() {
+  const r = await fetch('/api/status');
+  const board = (await r.json()).board;
+  const text = document.getElementById('boardMissionText');
+  const btn = document.getElementById('startMissionBtn');
+  const m = board.mission;
+  if (m && m.error) {
+    text.textContent = `Mission feed error: ${m.error}`;
+  } else if (m && (m.running || m.frames_pending > 0)) {
+    const pace = m.time_scale ? ` at ${Number(m.time_scale.toFixed(1))}× real time` : '';
+    text.textContent = `Mission running${pace}: tick ${m.last_tick}, ${m.open_incidents} open incidents, ${m.frames_sent} frames sent, ${m.reports_forwarded} board reports`;
+  } else if (m) {
+    text.textContent = `Mission feed finished: ${m.frames_sent} frames sent`;
+  } else if (board.all_ready) {
+    text.textContent = 'Boards ready.';
+  } else {
+    text.textContent = 'Waiting for board handshake…';
+  }
+  btn.disabled = !board.all_ready || Boolean(m && m.running);
+}
+
+async function startBoardMission() {
+  const btn = document.getElementById('startMissionBtn');
+  btn.disabled = true;
+  const body = {
+    seed: parseInt(document.getElementById("seed").value || "1"),
+    ticks: parseInt(document.getElementById("ticks").value || "2000"),
+    fault_profile: document.getElementById("faultProfile").value,
+    time_scale: parseFloat(document.getElementById("boardMissionSpeed").value || "1"),
+  };
+  try {
+    const r = await fetch('/api/board/launch', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if (data.status !== 'success') {
+      document.getElementById('boardMissionText').textContent = data.message || 'Could not start the board mission';
+    } else {
+      followBoardMission().catch(console.error);
+    }
+  } catch (e) {
+    document.getElementById('boardMissionText').textContent = 'Network error starting the board mission';
+  }
+  refreshBoardMission().catch(console.error);
+}
+/* Streams the running board mission into Live Ops - same message shapes as
+   runLive(), so the same drawing code renders it. */
+let boardMissionAbort = null;
+
+async function followBoardMission() {
+  if (boardMissionAbort) boardMissionAbort.abort();
+  boardMissionAbort = new AbortController();
+  showTab("live");
+  drawGrid();
+  telemetryReset();
+  let lastChartRenderMs = 0;
+  try {
+    const resp = await fetch('/api/board/mission/stream', { signal: boardMissionAbort.signal });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop();
+      for (const part of parts) {
+        if (!part.startsWith("data: ")) continue;
+        const msg = JSON.parse(part.slice(6));
+        if (msg.type === "static_env") {
+          staticEnvironment = msg.env;
+        } else if (msg.type === "frame") {
+          const accepted = telemetryProcessFrame(msg.frame);
+          drawFrame(msg.frame);
+          updateLiveTables(msg.frame);
+          if (accepted && performance.now() - lastChartRenderMs >= 75) {
+            renderLiveCharts();
+            lastChartRenderMs = performance.now();
+          }
+        } else if (msg.type === "mission_end") {
+          renderLiveCharts();
+          document.getElementById("liveTickLabel").textContent += "  ·  board mission ended";
+        } else if (msg.type === "error") {
+          document.getElementById('boardMissionText').textContent = msg.message;
+        }
+      }
+    }
+  } catch (e) {
+    if (e.name !== "AbortError") console.error(e);
+  }
 }
 /* ------------------------- */
 
@@ -1073,6 +1199,13 @@ function drawFrame(frame, skipInspector) {
 function renderInspector() {
   const el = document.getElementById("mapInspector");
 
+  // An override result or in-progress status outranks the preview card:
+  // map redraws while waiting for the board's ack must not replace it.
+  if (overrideStatus) {
+    drawOverrideStatus(el);
+    return;
+  }
+
   if (pendingOverride) {
     const p = pendingOverride;
     const specName = SPEC_NAMES[p.teamIndex % SPEC_NAMES.length] || "team";
@@ -1150,6 +1283,7 @@ function handleMapClick(evt) {
 
 let dragState = null; 
 let pendingOverride = null; 
+let overrideStatus = null; // {title, detail, withOk} while an override status card is showing
 
 function mapCanvasCoords(evt) {
   const rect = mapCanvas.getBoundingClientRect();
@@ -1233,6 +1367,65 @@ function drawDragOverlay() {
   }
 }
 
+// Final and in-progress states reported by /api/board/override/status
+// (laptop/tools/telemetry_bridge.py OverrideTracker).
+const OVERRIDE_STATE_TEXT = {
+  sent: ["Waiting for the board…", "Sent to board 0 - waiting for it to acknowledge."],
+  relayed: ["Relayed…", "Board 0 forwarded it over LoRa - waiting for the team's board to confirm."],
+  applied: ["✓ Override Applied", "The team's board applied it. It takes effect on that board's next allocation pass."],
+  rejected_not_ready: ["⚠ Override Rejected", "A board hadn't finished its handshake yet, so nothing was changed. Try again once the board is ready."],
+  rejected_bad_team: ["⚠ Override Rejected", "The board doesn't recognize that team id, so nothing was changed."],
+  relay_failed: ["⚠ Override Not Delivered", "Board 0's radio queue was full, so the override never left it. Try again."],
+  unconfirmed: ["⚠ Override Unconfirmed", "No confirmation came back in time. It may or may not have been applied - the relay or its acknowledgement was probably lost on the radio."],
+};
+const OVERRIDE_FINAL_STATES = new Set(["applied", "rejected_not_ready", "rejected_bad_team", "relay_failed", "unconfirmed"]);
+
+function drawOverrideStatus(el) {
+  const { title, detail, withOk } = overrideStatus;
+  el.innerHTML = `
+    <div class="override-card">
+      <div class="override-title">${title}</div>
+      <div style="font-size:12.5px;">${detail}</div>
+      ${withOk ? `<div class="override-actions" style="margin-top:10px;">
+        <button id="overrideAckBtn" class="override-btn cancel">OK</button>
+      </div>` : ""}
+    </div>`;
+  if (withOk) {
+    document.getElementById("overrideAckBtn").addEventListener("click", () => {
+      overrideStatus = null;
+      pendingOverride = null;
+      selectedMarker = null;
+      renderInspector();
+    });
+  }
+}
+
+function showOverrideResult(title, detail, withOk) {
+  overrideStatus = { title, detail, withOk };
+  drawOverrideStatus(document.getElementById("mapInspector"));
+}
+
+function pollOverrideAck(teamId, incidentId) {
+  fetch(`/api/board/override/status?team_id=${teamId}`)
+    .then((resp) => resp.json())
+    .then((body) => {
+      const entry = body && body.override;
+      if (!entry || entry.incident_id !== incidentId) {
+        showOverrideResult("⚠ Override Status Unknown", (body && body.message) || "This override is no longer being tracked (a newer one for the same team replaced it).", true);
+        return;
+      }
+      const [title, text] = OVERRIDE_STATE_TEXT[entry.state] || ["Override status", entry.state];
+      const detail = `Team ${teamId} → Incident ${incidentId}: ${text}`;
+      if (OVERRIDE_FINAL_STATES.has(entry.state)) {
+        showOverrideResult(title, detail, true);
+      } else {
+        showOverrideResult(title, detail, false);
+        setTimeout(() => pollOverrideAck(teamId, incidentId), 500);
+      }
+    })
+    .catch((err) => showOverrideResult("⚠ Override Status Unknown", `Request error: ${err}`, true));
+}
+
 function confirmPendingOverride() {
   const el = document.getElementById("mapInspector");
   const p = pendingOverride;
@@ -1260,24 +1453,13 @@ function confirmPendingOverride() {
   })
     .then((resp) => resp.json().then((body) => ({ ok: resp.ok, body })))
     .then(({ ok, body }) => {
-      const title = ok ? "✓ Override Sent" : "⚠ Override Failed";
-      const detail = ok
-        ? `Team ${teamId} → Incident ${incidentId} sent to the board. It'll show up in ` +
-          `<code>g_incidents[].assigned_team</code> on the next tick once the board applies it.`
-        : (body && body.message) || "Unknown error";
-      el.innerHTML = `
-        <div class="override-card">
-          <div class="override-title">${title}</div>
-          <div style="font-size:12.5px;">${detail}</div>
-          <div class="override-actions" style="margin-top:10px;">
-            <button id="overrideAckBtn" class="override-btn cancel">OK</button>
-          </div>
-        </div>`;
-      document.getElementById("overrideAckBtn").addEventListener("click", () => {
-        pendingOverride = null;
-        selectedMarker = null;
-        renderInspector();
-      });
+      if (!ok) {
+        showOverrideResult("⚠ Override Failed", (body && body.message) || "Unknown error", true);
+        return;
+      }
+      // The POST only means the bytes left the laptop - wait for the
+      // board's acknowledgement (core/mission_link_override.h section 3).
+      pollOverrideAck(teamId, incidentId);
     })
     .catch((err) => {
       el.innerHTML = `

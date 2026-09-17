@@ -99,6 +99,7 @@
                                        handshake wire transport itself —
                                        see "Channel 0: handshake" section
                                        near the bottom of this file. */
+#include "mission_link_override.h"
 #include "mission_state.h"
 #include "recovery_manager.h" /* RECOVERY_ACTION_ABORT_MISSION gate in
                                   mission_link_status_tx_step() below */
@@ -159,7 +160,18 @@ __attribute__((weak)) int board_usart1_read_byte(void)
  * comment for why tm_putchar (raw byte) and not tm_printf (text) is
  * the right call here.
  */
-static void mission_link_usart1_write(const uint8_t *bytes, uint32_t len)
+/*
+ * Raw USART1 write. Board firmware overrides this (main_board.c) with the
+ * BSP's tm_snd_dat(): the BSP's tm_putchar() sends a CR before every LF
+ * byte (0x0A), which corrupted any binary frame containing the value 10 -
+ * a team id, an equipment level, a checksum byte - so the laptop dropped
+ * it on a checksum mismatch (found by review). This weak default, used
+ * only by the desktop harnesses (whose tm_putchar stub is raw), keeps the
+ * old byte-at-a-time path.
+ */
+extern void board_usart1_write(const uint8_t *bytes, uint32_t len);
+
+__attribute__((weak)) void board_usart1_write(const uint8_t *bytes, uint32_t len)
 {
     uint32_t i;
 
@@ -169,19 +181,30 @@ static void mission_link_usart1_write(const uint8_t *bytes, uint32_t len)
     }
 }
 
+static void mission_link_usart1_write(const uint8_t *bytes, uint32_t len)
+{
+    board_usart1_write(bytes, len);
+}
+
 /* ---------------------------------------------------------------
  * Channel 1: USART1 RX (board 0 only) - accumulate + resync/parse
  * ---------------------------------------------------------------
- * Small flat buffer, not a ring: at BOARD_TICK_DELAY_MS=0 (flat-out
- * bring-up, per main_board.c's own default) this is drained every
- * tick, so it never needs to hold more than a handful of bytes -
- * matches the sizing reasoning board/STM32N6570-DK/snapshot.c's ring
- * capacity comment already gives for a similar "drained often enough
- * that backlog stays small" case, just smaller here since there's no
- * equivalent overflow policy to design for.
+ * Small flat buffer, not a ring. Drained every main-loop pass, but also
+ * filled (not parsed) through CBBA's reply wait - see
+ * mission_link_task_usart1_pump() - which can last CBBA_ROUND_TIMEOUT_MS
+ * while the laptop keeps sending, so it holds several frames. The laptop
+ * sends at most 10 frames/s (telemetry_bridge.MissionFeed).
+ *
+ * RECALIBRATED alongside CBBA_ROUND_TIMEOUT_MS's own recalibration
+ * (core/cbba.h, 530ms -> 1250ms): a 1250 ms wait now sees about 12.5
+ * frames (was ~6 at 530ms); 1024 bytes is 25.6 of the largest
+ * (40-byte map row) frames, preserving roughly the same ~2x margin
+ * over the raw estimate the original 512-byte/530ms sizing had
+ * (512 bytes / 40 = 12.8 frames vs. the ~6 raw estimate). It was 64
+ * when it was only ever drained once per tick.
  */
 #ifndef MISSION_LINK_RX_BUF_CAPACITY
-#define MISSION_LINK_RX_BUF_CAPACITY 64u
+#define MISSION_LINK_RX_BUF_CAPACITY 1024u
 #endif
 
 static uint8_t g_rx_buf[MISSION_LINK_RX_BUF_CAPACITY];
@@ -213,6 +236,53 @@ static uint32_t g_rx_buf_len;
  * handshake gate.
  */
 static uint32_t g_roster_applied_count;
+
+/* One roster per team per boot. The laptop re-sends every roster
+   periodically, because a roster relayed over LoRa can be lost and a
+   board with no roster never leaves its boot wait. Re-applying one
+   mid-mission would reset that team's position and stamina to the
+   mission-start values, so only the first accepted roster for a team is
+   applied; repeats are ignored. Cleared by mission_link_task_init() (a
+   rebooted board needs its rosters again). */
+static uint8_t g_roster_applied_for_team[NUM_TEAMS];
+
+/* Applies a roster unless this team already has one, and counts it only
+   if mission_link_apply_roster() accepted it - a rejected roster (bad
+   team_id or location) used to count too, which let the boot wait end
+   on data that was just thrown away. */
+static void mission_link_apply_roster_once(const MissionLinkRoster_t *msg)
+{
+    uint32_t rejects_before;
+
+    if (msg->team_id < NUM_TEAMS && g_roster_applied_for_team[msg->team_id])
+    {
+        return;
+    }
+
+    rejects_before = mission_link_roster_reject_count();
+    mission_link_apply_roster(msg);
+    if (mission_link_roster_reject_count() != rejects_before)
+    {
+        return;
+    }
+
+    g_roster_applied_for_team[msg->team_id] = 1u;
+    g_roster_applied_count++;
+}
+
+/* Set on EVERY handshake Req this board receives (either channel), not
+   just the first; cleared when mission_link_handshake_tx_step() below
+   actually sends this board's own Reply. A repeated Req is the asker
+   saying "I still have no Reply from you": board 0 only retries its
+   relay Req while it has not recorded one (mission_link_handshake_
+   should_send_relay_req()), and those retries exist precisely because
+   LoRa loses frames. Without this, g_own_reply_sent latched after the
+   first Reply and every retry was ignored, so ONE lost Reply was
+   unrecoverable: board 0 retried until HANDSHAKE_NUCLEO_TIMEOUT_TICKS,
+   reported this ready board to the laptop as timed out (ready=0), and
+   this board then waited forever for a roster that never came. Bounded
+   by the asker's own retry cadence, so this cannot flood the link. */
+static uint8_t g_own_reply_resend_pending;
 
 uint32_t mission_link_task_any_roster_applied(void)
 {
@@ -288,10 +358,12 @@ static void mission_link_route_or_apply_roster(const MissionLinkRoster_t *msg)
 
     target_board = comms_transport_board_id_for_team(msg->team_id);
 
-    if (target_board == g_comms_transport_this_board_id)
+    /* An out-of-range team_id goes through the local apply too, which
+       rejects and counts it, instead of being relayed to a board id that
+       doesn't exist. */
+    if (msg->team_id >= NUM_TEAMS || target_board == g_comms_transport_this_board_id)
     {
-        mission_link_apply_roster(msg);
-        g_roster_applied_count++;
+        mission_link_apply_roster_once(msg);
         return;
     }
 
@@ -390,6 +462,147 @@ static void mission_link_apply_and_relay_incident(const MissionLinkIncident_t *m
 }
 
 /*
+ * Sends one already-packed relay payload (sub-type byte + payload) to
+ * every other board - the fan-out for messages every board needs: the
+ * mission clock, route map rows and sites (core/mission_link.h sections
+ * 5b-5d). PRIORITY, like CBBA traffic: each is re-sent by the laptop, so
+ * a late or lost one only delays a board.
+ */
+static void mission_link_relay_to_other_boards(const uint8_t *relay_buf, uint8_t relay_len)
+{
+    uint8_t board_id;
+    uint8_t board_count = comms_transport_board_count();
+
+    for (board_id = 0u; board_id < board_count; board_id++)
+    {
+        if (board_id == g_comms_transport_this_board_id)
+        {
+            continue;
+        }
+
+        (void)comms_transport_send(0u, mission_link_representative_team(board_id),
+                                    LORA_FRAME_TYPE_MISSION_LINK,
+                                    COMMS_PRECEDENCE_PRIORITY,
+                                    relay_buf, relay_len);
+    }
+}
+
+static void mission_link_apply_and_relay_clock(const MissionLinkClock_t *msg)
+{
+    uint8_t relay_buf[MISSION_LINK_CLOCK_RELAY_SIZE];
+
+    if (!mission_link_handshake_ready_now())
+    {
+        return;
+    }
+
+    mission_link_apply_clock(msg);
+
+    relay_buf[0] = MISSION_LINK_MSG_CLOCK;
+    mission_link_pack_clock_payload(msg, &relay_buf[1]);
+    mission_link_relay_to_other_boards(relay_buf, MISSION_LINK_CLOCK_RELAY_SIZE);
+}
+
+static void mission_link_apply_and_relay_map_row(const MissionLinkMapRow_t *msg)
+{
+    uint8_t relay_buf[MISSION_LINK_MAP_ROW_RELAY_SIZE];
+
+    if (!mission_link_handshake_ready_now() || !mission_link_apply_map_row(msg))
+    {
+        return;
+    }
+
+    relay_buf[0] = MISSION_LINK_MSG_MAP_ROW;
+    mission_link_pack_map_row_payload(msg, &relay_buf[1]);
+    mission_link_relay_to_other_boards(relay_buf, MISSION_LINK_MAP_ROW_RELAY_SIZE);
+}
+
+static void mission_link_apply_and_relay_sites(const MissionLinkSites_t *msg)
+{
+    uint8_t relay_buf[MISSION_LINK_SITES_RELAY_SIZE];
+
+    /* A rejected frame is not relayed either: every board would reject it. */
+    if (!mission_link_handshake_ready_now() || !mission_link_apply_sites(msg))
+    {
+        return;
+    }
+
+    relay_buf[0] = MISSION_LINK_MSG_SITES;
+    mission_link_pack_sites_payload(msg, &relay_buf[1]);
+    mission_link_relay_to_other_boards(relay_buf, MISSION_LINK_SITES_RELAY_SIZE);
+}
+
+/*
+ * Reports what happened to one override (core/mission_link_override.h
+ * section 3). Board 0 writes the ack straight to USART1; any other board
+ * sends it over LoRa, and board 0 forwards it in
+ * mission_link_comms_transport_rx_step() below.
+ */
+static void mission_link_send_override_ack(const MissionLinkOverride_t *msg, uint8_t result)
+{
+    MissionLinkOverrideAck_t ack;
+
+    ack.team_id = msg->team_id;
+    ack.incident_id = msg->incident_id;
+    ack.result = result;
+
+    if (g_comms_transport_this_board_id == 0u)
+    {
+        uint8_t wire_buf[MISSION_LINK_OVERRIDE_ACK_WIRE_SIZE];
+
+        (void)mission_link_override_pack_ack(&ack, wire_buf);
+        mission_link_usart1_write(wire_buf, MISSION_LINK_OVERRIDE_ACK_WIRE_SIZE);
+    }
+    else
+    {
+        uint8_t payload[MISSION_LINK_OVERRIDE_ACK_PAYLOAD_SIZE];
+
+        mission_link_override_pack_ack_payload(&ack, payload);
+        /* Receiver team 0 addresses board 0 (the only board with USART1). */
+        (void)comms_transport_send(msg->team_id, 0u, LORA_FRAME_TYPE_OVERRIDE_ACK,
+                                    COMMS_PRECEDENCE_IMMEDIATE, payload,
+                                    (uint8_t)MISSION_LINK_OVERRIDE_ACK_PAYLOAD_SIZE);
+    }
+}
+
+/*
+ * Dashboard override (laptop/tools/app.py's /api/board/override) arriving
+ * on USART1. Same readiness gate as the roster/fault routers above, but
+ * every outcome is acknowledged: applied here if this board hosts
+ * msg->team_id, otherwise relayed as LORA_FRAME_TYPE_OVERRIDE, which the
+ * hosting board applies and acknowledges in
+ * mission_link_comms_transport_rx_step() below.
+ */
+static void mission_link_route_or_apply_override(const MissionLinkOverride_t *msg)
+{
+    uint8_t result;
+
+    if (!mission_link_handshake_ready_now())
+    {
+        result = MISSION_LINK_OVERRIDE_ACK_NOT_READY;
+    }
+    else if (msg->team_id >= NUM_TEAMS)
+    {
+        result = MISSION_LINK_OVERRIDE_ACK_BAD_TEAM;
+    }
+    else if (comms_transport_board_id_for_team(msg->team_id) == g_comms_transport_this_board_id)
+    {
+        mission_link_override_apply(msg);
+        result = MISSION_LINK_OVERRIDE_ACK_APPLIED;
+    }
+    else if (mission_link_override_route_or_apply(msg) == 0)
+    {
+        result = MISSION_LINK_OVERRIDE_ACK_RELAYED;
+    }
+    else
+    {
+        result = MISSION_LINK_OVERRIDE_ACK_RELAY_FAILED;
+    }
+
+    mission_link_send_override_ack(msg, result);
+}
+
+/*
  * Tries to parse exactly one frame (any of the three USART1-receivable
  * types) at the front of g_rx_buf. Returns 1 and compacts g_rx_buf if
  * a frame was consumed (successfully applied/relayed, or dropped as
@@ -405,6 +618,10 @@ static int mission_link_rx_try_consume_one(void)
     MissionLinkIncident_t incident;
     MissionLinkFault_t fault;
     MissionLinkHandshakeReq_t handshake_req;
+    MissionLinkOverride_t override_msg;
+    MissionLinkClock_t clock_msg;
+    MissionLinkMapRow_t map_row;
+    MissionLinkSites_t sites;
     int rc;
     uint32_t consumed;
 
@@ -431,6 +648,7 @@ static int mission_link_rx_try_consume_one(void)
            mission_link_handshake.h — it's a single per-board latch,
            not a table keyed by requester). */
         mission_link_handshake_note_request_received();
+        g_own_reply_resend_pending = 1u;
         consumed = MISSION_LINK_HANDSHAKE_REQ_WIRE_SIZE;
         goto consume;
     }
@@ -475,7 +693,55 @@ static int mission_link_rx_try_consume_one(void)
         return 0;
     }
 
-    /* None of the three types matched at buf[0] (wrong magic bytes
+    rc = mission_link_override_parse(g_rx_buf, g_rx_buf_len, &override_msg);
+    if (rc == 1)
+    {
+        mission_link_route_or_apply_override(&override_msg);
+        consumed = MISSION_LINK_OVERRIDE_WIRE_SIZE;
+        goto consume;
+    }
+    if (rc == 0)
+    {
+        return 0;
+    }
+
+    rc = mission_link_parse_clock(g_rx_buf, g_rx_buf_len, &clock_msg);
+    if (rc == 1)
+    {
+        mission_link_apply_and_relay_clock(&clock_msg);
+        consumed = MISSION_LINK_CLOCK_WIRE_SIZE;
+        goto consume;
+    }
+    if (rc == 0)
+    {
+        return 0;
+    }
+
+    rc = mission_link_parse_map_row(g_rx_buf, g_rx_buf_len, &map_row);
+    if (rc == 1)
+    {
+        mission_link_apply_and_relay_map_row(&map_row);
+        consumed = MISSION_LINK_MAP_ROW_WIRE_SIZE;
+        goto consume;
+    }
+    if (rc == 0)
+    {
+        return 0;
+    }
+
+    rc = mission_link_parse_sites(g_rx_buf, g_rx_buf_len, &sites);
+    if (rc == 1)
+    {
+        mission_link_apply_and_relay_sites(&sites);
+        consumed = MISSION_LINK_SITES_WIRE_SIZE;
+        goto consume;
+    }
+    if (rc == 0)
+    {
+        return 0;
+    }
+
+    /* None of the frame types matched at buf[0] (wrong magic bytes
        for all three, or a checksum mismatch on whichever one's magic
        did match) - a magic-byte collision inside free-running debug
        text, or a torn frame. Expected failure mode, not an error:
@@ -497,10 +763,39 @@ consume:
     return 1;
 }
 
-static void mission_link_usart1_rx_step(void)
+/*
+ * Moves waiting USART1 bytes into g_rx_buf without parsing them. Also
+ * called from long waits outside this task's step (main_board.c's
+ * cbba_wait_poll(), during CBBA's reply wait): the UART holds only a few
+ * bytes, and a laptop frame arriving while the board sits in that wait
+ * was otherwise overrun and lost. Parsing stays in
+ * mission_link_task_step(), so nothing is applied mid-CBBA.
+ */
+void mission_link_task_usart1_pump(void)
 {
     int byte;
 
+    if (g_comms_transport_this_board_id != 0u)
+    {
+        return;
+    }
+
+    while (g_rx_buf_len < MISSION_LINK_RX_BUF_CAPACITY)
+    {
+        byte = board_usart1_read_byte();
+
+        if (byte < 0)
+        {
+            break;
+        }
+
+        g_rx_buf[g_rx_buf_len] = (uint8_t)byte;
+        g_rx_buf_len++;
+    }
+}
+
+static void mission_link_usart1_rx_step(void)
+{
     if (g_comms_transport_this_board_id != 0u)
     {
         /* Only the board holding id 0 has a laptop-facing USART1 —
@@ -529,18 +824,7 @@ static void mission_link_usart1_rx_step(void)
      * handshake included, regardless of readiness.
      */
 
-    while (g_rx_buf_len < MISSION_LINK_RX_BUF_CAPACITY)
-    {
-        byte = board_usart1_read_byte();
-
-        if (byte < 0)
-        {
-            break;
-        }
-
-        g_rx_buf[g_rx_buf_len] = (uint8_t)byte;
-        g_rx_buf_len++;
-    }
+    mission_link_task_usart1_pump();
 
     /* Consume as many complete frames (or resync bytes) as are
        available right now; stop once a partial frame is all that's
@@ -565,7 +849,6 @@ static void mission_link_comms_transport_rx_step(void)
         uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
         uint8_t payload_len;
         uint8_t sub_type;
-        uint8_t peeked_type;
 
         /* Bug fix: this used to be `while (comms_transport_poll_received(
          * ...))`, an unconditional, destructive poll on the shared per-
@@ -581,28 +864,19 @@ static void mission_link_comms_transport_rx_step(void)
          * two functions already use: only poll (destructively) once the
          * peeked type is confirmed to be one this task actually owns,
          * otherwise leave it in the inbox for the next consumer. */
-        if (!comms_transport_peek_frame_type(&peeked_type))
+        /* Takes this task's frame types from anywhere in the inbox, so a
+           CBBA/fault frame at the head (whose consumer may not be running
+           yet - e.g. in main_board.c's boot wait loops) can no longer
+           hide a Req or roster queued behind it. See
+           comms_transport_poll_received_types(). */
+        if (!comms_transport_poll_received_types(COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_HANDSHAKE) |
+                                                  COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_MISSION_LINK) |
+                                                  COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_OVERRIDE) |
+                                                  COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_OVERRIDE_ACK),
+                                                  &sender_team_id, &frame_type,
+                                                  payload, &payload_len))
         {
-            break; /* inbox empty */
-        }
-
-        if (peeked_type != LORA_FRAME_TYPE_HANDSHAKE &&
-            peeked_type != LORA_FRAME_TYPE_MISSION_LINK)
-        {
-            /* Not ours - leave it for cbba's or fault_comms's own
-               receivers. */
-            break;
-        }
-
-        if (!comms_transport_poll_received(&sender_team_id, &frame_type,
-                                            payload, &payload_len))
-        {
-            break; /* inbox empty - shouldn't happen right after a
-                       successful peek in this single-task, no-real-ISR
-                       build (see comms_transport_inbox_push()'s own
-                       concurrency-invariant comment in core/comms_
-                       transport.c), but stay defensive rather than
-                       assume it can't. */
+            break; /* none of this task's frames waiting */
         }
 
         (void)sender_team_id;
@@ -642,6 +916,7 @@ static void mission_link_comms_transport_rx_step(void)
                    below) — board 0 sending its OWN Req doesn't loop
                    back to itself over the radio. */
                 mission_link_handshake_note_request_received();
+                g_own_reply_resend_pending = 1u;
             }
             else if (sub_type == MISSION_LINK_HANDSHAKE_MSG_REPLY &&
                      payload_len >= MISSION_LINK_HANDSHAKE_REPLY_RELAY_SIZE &&
@@ -658,6 +933,60 @@ static void mission_link_comms_transport_rx_step(void)
                 mission_link_handshake_note_remote_reply(&remote_reply);
             }
 
+            continue;
+        }
+
+        if (frame_type == LORA_FRAME_TYPE_OVERRIDE)
+        {
+            MissionLinkOverride_t override_msg;
+
+            /* Exact length, like fault_comms.c's receiver: anything else
+               is protocol drift, not a truncated override to guess at. */
+            if (payload_len != (uint8_t)MISSION_LINK_OVERRIDE_PAYLOAD_SIZE)
+            {
+                continue;
+            }
+
+            mission_link_override_parse_payload(payload, &override_msg);
+
+            /* Only the board hosting the team handles (and acknowledges)
+               it, and never relays again - board 0 is the only relayer.
+               The team_id range check comes first so the board lookup
+               stays meaningful. */
+            if (override_msg.team_id >= NUM_TEAMS ||
+                comms_transport_board_id_for_team(override_msg.team_id) !=
+                    g_comms_transport_this_board_id)
+            {
+                continue;
+            }
+
+            /* Same readiness gate as the mission-link data types below. */
+            if (!mission_link_handshake_ready_now())
+            {
+                mission_link_send_override_ack(&override_msg, MISSION_LINK_OVERRIDE_ACK_NOT_READY);
+                continue;
+            }
+
+            mission_link_override_apply(&override_msg);
+            mission_link_send_override_ack(&override_msg, MISSION_LINK_OVERRIDE_ACK_APPLIED);
+            continue;
+        }
+
+        if (frame_type == LORA_FRAME_TYPE_OVERRIDE_ACK)
+        {
+            /* A hosting board's ack, on its way to the laptop. Only board
+               0 has USART1; forwarded as-is, no readiness gate - it
+               reports on the other board's state, not this one's. */
+            if (g_comms_transport_this_board_id == 0u &&
+                payload_len == (uint8_t)MISSION_LINK_OVERRIDE_ACK_PAYLOAD_SIZE)
+            {
+                MissionLinkOverrideAck_t ack;
+                uint8_t wire_buf[MISSION_LINK_OVERRIDE_ACK_WIRE_SIZE];
+
+                mission_link_override_parse_ack_payload(payload, &ack);
+                (void)mission_link_override_pack_ack(&ack, wire_buf);
+                mission_link_usart1_write(wire_buf, MISSION_LINK_OVERRIDE_ACK_WIRE_SIZE);
+            }
             continue;
         }
 
@@ -699,8 +1028,7 @@ static void mission_link_comms_transport_rx_step(void)
                 {
                     MissionLinkRoster_t roster;
                     mission_link_parse_roster_payload(&payload[1], &roster);
-                    mission_link_apply_roster(&roster);
-                    g_roster_applied_count++;
+                    mission_link_apply_roster_once(&roster);
                 }
                 break;
 
@@ -724,6 +1052,34 @@ static void mission_link_comms_transport_rx_step(void)
                     MissionLinkFault_t fault;
                     mission_link_parse_fault_payload(&payload[1], &fault);
                     mission_link_apply_fault(&fault);
+                }
+                break;
+
+            case MISSION_LINK_MSG_CLOCK:
+                if (payload_len >= MISSION_LINK_CLOCK_RELAY_SIZE)
+                {
+                    MissionLinkClock_t clock_msg;
+                    mission_link_parse_clock_payload(&payload[1], &clock_msg);
+                    /* Apply only - board 0 is the one relayer. */
+                    mission_link_apply_clock(&clock_msg);
+                }
+                break;
+
+            case MISSION_LINK_MSG_MAP_ROW:
+                if (payload_len >= MISSION_LINK_MAP_ROW_RELAY_SIZE)
+                {
+                    MissionLinkMapRow_t map_row;
+                    mission_link_parse_map_row_payload(&payload[1], &map_row);
+                    (void)mission_link_apply_map_row(&map_row);
+                }
+                break;
+
+            case MISSION_LINK_MSG_SITES:
+                if (payload_len >= MISSION_LINK_SITES_RELAY_SIZE)
+                {
+                    MissionLinkSites_t sites;
+                    mission_link_parse_sites_payload(&payload[1], &sites);
+                    (void)mission_link_apply_sites(&sites);
                 }
                 break;
 
@@ -773,9 +1129,10 @@ static void mission_link_comms_transport_rx_step(void)
  * signal.
  *
  * last_sent_ms is a cbba_now_ms() wall-clock timestamp, NOT a sim-tick
- * count: BOARD_TICK_DELAY_MS is 0 by default (main_board.c runs the
- * sim flat-out), so ticks don't correspond to real elapsed time on
- * hardware - see mission_link.h section 5a and cbba.h's own
+ * count: ticks follow the laptop's mission clock, whose pace is a laptop
+ * setting (36 s in a real-time mission, much faster in a rehearsal), so
+ * ticks don't have a fixed real duration - see mission_link.h section
+ * 5a and cbba.h's own
  * CBBA_ROUND_TIMEOUT_MS comment for the identical reasoning.
  */
 
@@ -785,6 +1142,8 @@ typedef struct
     uint8_t  equipment_level;
     uint8_t  work_rate;
     uint8_t  known; /* 0 until the first status has been sent for this team */
+    int16_t  loc_x;
+    int16_t  loc_y;
     uint32_t last_sent_ms;
 } MissionLinkLastSentStatus_t;
 
@@ -881,6 +1240,13 @@ static void mission_link_status_tx_step(void)
                status/equipment_level didn't move). */
             should_send = 1;
         }
+        else if (last->loc_x != status.loc_x || last->loc_y != status.loc_y)
+        {
+            /* Schema v3: the team moved. The laptop mirrors positions
+               from these reports (laptop/mission_mirror.h), and a team
+               changes cell at most once per clock tick. */
+            should_send = 1;
+        }
         else if ((now_ms - last->last_sent_ms) >= MISSION_LINK_HEARTBEAT_INTERVAL_MS)
         {
             /* New trigger: periodic heartbeat. Re-anchors work_
@@ -907,6 +1273,8 @@ static void mission_link_status_tx_step(void)
         last->status = status.status;
         last->equipment_level = status.equipment_level;
         last->work_rate = status.work_rate;
+        last->loc_x = status.loc_x;
+        last->loc_y = status.loc_y;
         last->last_sent_ms = now_ms;
     }
 }
@@ -943,6 +1311,18 @@ static MissionLinkHandshakeReply_t g_own_reply_last_sent;
 static uint8_t g_relay_reply_sent[HANDSHAKE_MAX_BOARDS];
 static MissionLinkHandshakeReply_t g_relay_reply_last_sent[HANDSHAKE_MAX_BOARDS];
 
+/* Last lora_crypto_peer_session_count() seen per peer, and how many peer
+   reboots this board has acted on (mission_link_task_peer_reboot_count()).
+   A count that rises past a nonzero value means the peer started a new
+   LoRa session - it rebooted while this board stayed up. */
+static uint32_t g_peer_session_count_seen[HANDSHAKE_MAX_BOARDS];
+static uint32_t g_peer_reboot_count;
+
+uint32_t mission_link_task_peer_reboot_count(void)
+{
+    return g_peer_reboot_count;
+}
+
 static void mission_link_handshake_tx_step(void)
 {
     uint32_t now_ms = cbba_now_ms();
@@ -955,12 +1335,16 @@ static void mission_link_handshake_tx_step(void)
        ready+requested both latch true (both are one-way latches -
        see mark_local_ready()/note_request_received()'s own docs),
        so the change-check below is defensive, not expected to ever
-       re-fire after the first send. */
+       re-fire after the first send. The one deliberate exception is
+       g_own_reply_resend_pending: a Req received after the Reply went
+       out means that Reply was lost, so answer it again (see that
+       flag's own doc near the top of this file). */
     {
         MissionLinkHandshakeReply_t reply;
 
         if (mission_link_handshake_build_local_reply(&reply) &&
             (!g_own_reply_sent ||
+             g_own_reply_resend_pending ||
              reply.board_id != g_own_reply_last_sent.board_id ||
              reply.protocol_version != g_own_reply_last_sent.protocol_version ||
              reply.ready != g_own_reply_last_sent.ready))
@@ -988,6 +1372,7 @@ static void mission_link_handshake_tx_step(void)
             }
 
             g_own_reply_sent = 1u;
+            g_own_reply_resend_pending = 0u;
             g_own_reply_last_sent = reply;
         }
     }
@@ -1035,6 +1420,38 @@ static void mission_link_handshake_tx_step(void)
 
         for (peer = 1u; peer < board_count; peer++)
         {
+            /* Peer reboot: its old handshake state here is meaningless
+               (it has forgotten having replied), so re-open the leg -
+               Reqs resume - and tell the laptop right away that this
+               peer is NOT ready until it answers again. Without this,
+               board 0 never sent a rebooted peer another Req and the
+               peer waited at its handshake gate forever. */
+            {
+                uint32_t sessions = lora_crypto_peer_session_count(peer);
+
+                if (sessions != g_peer_session_count_seen[peer])
+                {
+                    if (g_peer_session_count_seen[peer] != 0u)
+                    {
+                        MissionLinkHandshakeReply_t not_ready;
+                        uint8_t wire_buf[MISSION_LINK_HANDSHAKE_REPLY_WIRE_SIZE];
+
+                        mission_link_handshake_reset_relay_leg(peer);
+
+                        not_ready.board_id = peer;
+                        not_ready.protocol_version = MISSION_LINK_PROTOCOL_VERSION;
+                        not_ready.ready = 0u;
+                        (void)mission_link_handshake_pack_reply(&not_ready, wire_buf);
+                        mission_link_usart1_write(wire_buf, MISSION_LINK_HANDSHAKE_REPLY_WIRE_SIZE);
+                        g_relay_reply_sent[peer] = 1u;
+                        g_relay_reply_last_sent[peer] = not_ready;
+
+                        g_peer_reboot_count++;
+                    }
+                    g_peer_session_count_seen[peer] = sessions;
+                }
+            }
+
             if (mission_link_handshake_should_send_relay_req(peer, now_ms))
             {
                 MissionLinkHandshakeReq_t req;
@@ -1094,23 +1511,32 @@ void mission_link_task_init(void)
     uint8_t i;
 
     g_rx_buf_len = 0u;
+    g_roster_applied_count = 0u;
+    mission_link_clock_reset();
+    mission_link_map_reset();
 
     for (i = 0u; i < NUM_TEAMS; i++)
     {
+        g_roster_applied_for_team[i] = 0u;
         g_last_sent_status[i].known = 0u;
         g_last_sent_status[i].status = 0u;
         g_last_sent_status[i].equipment_level = 0u;
         g_last_sent_status[i].work_rate = 0u;
+        g_last_sent_status[i].loc_x = 0;
+        g_last_sent_status[i].loc_y = 0;
         g_last_sent_status[i].last_sent_ms = 0u;
     }
 
     g_own_reply_sent = 0u;
+    g_own_reply_resend_pending = 0u;
     {
         uint8_t i;
         for (i = 0u; i < HANDSHAKE_MAX_BOARDS; i++)
         {
             g_relay_reply_sent[i] = 0u;
+            g_peer_session_count_seen[i] = 0u;
         }
+        g_peer_reboot_count = 0u;
     }
 }
 

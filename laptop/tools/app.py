@@ -19,33 +19,20 @@ This unified Flask application combines:
 import csv
 import json
 import os
-import queue
 import re
 import struct
 import subprocess
 import sys
-import threading
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
-try:
-    import serial
-except ImportError:
-    # pyserial is only actually needed by the real hardware path
-    # (TelemetryBridge.connect() below). Importing it unconditionally
-    # would make app.py fail to even start in an environment that
-    # deliberately doesn't have pyserial installed - exactly the
-    # "no pyserial port required at all" bar the headless/SIM_ONLY
-    # mode is supposed to meet (see SIM_ONLY below and
-    # sim_board_source.py's own top comment). TelemetryBridge.connect()
-    # checks for this and fails clearly, rather than at import time,
-    # if hardware mode is actually attempted without it installed.
-    serial = None
-
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
-from telemetry_bridge import HandshakeCoordinator, TelemetryFrameParser, pack_handshake_req
+# TelemetryBridge is the real-hardware bridge (serial port, handshake,
+# override acks, team status reports, telemetry frames). app.py used to keep
+# its own copy of the class; there is now only the one in telemetry_bridge.py.
+from telemetry_bridge import TelemetryBridge
 from sim_board_source import SimBoardSource
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -114,10 +101,9 @@ def _override_checksum(payload: bytes) -> int:
 def pack_override(team_id: int, incident_id: int) -> bytes:
     """Builds the laptop -> DK MissionLinkOverride_t wire frame -
     mirrors core/mission_link_override.c's mission_link_override_pack().
-    The laptop only ever sends this shape (there is no reply - see that
-    header's own top comment: "this is a one-shot directive, not
-    something that expects a reply"), so this module has no need for a
-    parser, only this packer."""
+    The board answers with MissionLinkOverrideAck_t frames, parsed by
+    telemetry_bridge.OverrideAckParser and tracked per team in
+    bridge.overrides (see /api/board/override/status)."""
     payload = _OVERRIDE_STRUCT.pack(team_id, incident_id)
     return OVERRIDE_MAGIC + payload + bytes((_override_checksum(payload),))
 
@@ -154,172 +140,6 @@ DIAG_WORK_RE = re.compile(
 DIAG_THROUGHPUT_RE = re.compile(
     r"\[DIAG THROUGHPUT\] team=(\d+) incidents_resolved=(\d+) stage_completions=(\d+) resting=(\d+) working=(\d+) available=(\d+)"
 )
-
-
-class TelemetryBridge:
-    """Manages serial communication, packet parsing, and command transmission
-
-    between the Flask backend and the target STM32N6 board.
-
-    Board telemetry (platform/board/snapshot.c's ring drain) arrives as
-    binary, magic-byte-framed wire frames per core/telemetry_frame.h -
-    see telemetry_bridge.TelemetryFrameParser for the byte-stream
-    scanning/resync logic, shared with the standalone bridge. The
-    mission-link liveness handshake (core/mission_link_handshake.h)
-    arrives the same way, via telemetry_bridge.HandshakeCoordinator -
-    see that class's docstring for the full request/reply sequence and
-    retry/timeout policy this delegates to (this class does not
-    reimplement it - see this file's history for why a duplicate
-    implementation here would have been the wrong move: it existed
-    only because `nodes_ready`/`all_ready` predate that class, not
-    because this app's needs are actually different from the
-    standalone bridge's). Plain tm_printf debug text shares the same
-    UART and is handled via the existing line-based READY/log path.
-    """
-
-    def __init__(self):
-        self.port = "/dev/ttyACM0"
-        self.baudrate = 115200
-        self.serial_conn = None
-        self.running = False
-        self.nodes_ready = set()
-        self.telemetry_queue = queue.Queue()
-        self.thread = None
-        self.mission_started = False
-        self._parser = TelemetryFrameParser()
-        self._text_buf = bytearray()
-        self.handshake = HandshakeCoordinator()
-
-    def connect(self, port: str, baudrate: int) -> bool:
-        """Opens the USB serial port connected to the STM32N6 board."""
-        if serial is None:
-            print("Failed to connect: pyserial is not installed "
-                  "(pip install pyserial, or run app.py in sim-only "
-                  "mode instead - see SIM_ONLY/--no-hardware)")
-            return False
-        try:
-            self.port = port
-            self.baudrate = int(baudrate)
-            self.serial_conn = serial.Serial(self.port, self.baudrate, timeout=0.1)
-            self.running = True
-            self.nodes_ready.clear()
-            self.mission_started = False
-            self.handshake.start()
-            self.thread = threading.Thread(target=self._read_loop, daemon=True)
-            self.thread.start()
-            return True
-        except Exception as exc:  # noqa: BLE001
-            print(f"Failed to connect to serial port {self.port}: {exc}")
-            return False
-
-    def _handle_text_line(self, line: str):
-        if not line:
-            return
-
-        # Legacy plain-text READY notifications. Superseded by the
-        # binary mission-link handshake (self.handshake) for actually
-        # gating readiness/launch decisions - see this class's
-        # docstring - but still recorded here too for the debug-log
-        # view, since a board's tm_printf output isn't going away.
-        if "READY" in line:
-            parts = line.split(":")
-            node_id = parts[0].strip() if len(parts) > 1 else "STM32N6_Board"
-            self.nodes_ready.add(node_id)
-        else:
-            print(f"[Board Log] {line}")
-
-    def _consume_text_bytes(self, data: bytes):
-        """Dispatch raw text bytes (anything not part of a valid binary
-        telemetry frame) through the existing newline-delimited READY/log
-        handling."""
-        self._text_buf.extend(data)
-        while b"\n" in self._text_buf:
-            line_bytes, _, rest = self._text_buf.partition(b"\n")
-            self._text_buf = bytearray(rest)
-            self._handle_text_line(line_bytes.decode("utf-8", errors="ignore").strip())
-
-    def _read_loop(self):
-        """Background thread listening for incoming byte streams and parsing packets.
-
-        Reads raw bytes (binary wire format, not line-delimited text)
-        and scans for magic-byte-framed frames of both kinds this wire
-        carries: handshake replies first (self.handshake.feed(), see
-        telemetry_bridge.HandshakeCoordinator), then telemetry frames
-        per core/telemetry_frame.h on whatever's left
-        (self._parser.feed()) - same chaining
-        telemetry_bridge.TelemetryBridge._read_loop uses, and for the
-        same reason (see that method's docstring). Decoded telemetry
-        frames go on telemetry_queue as structured dicts; decoded
-        handshake replies update self.handshake directly, read
-        synchronously by /api/status; everything else (READY
-        handshakes, general tm_printf debug output) flows through the
-        same line-based log path as before.
-
-        Also drives the handshake's retry timer the same way
-        telemetry_bridge.TelemetryBridge._read_loop does, piggybacked
-        on this loop's existing ~10Hz (0.1s read timeout) cadence.
-        """
-        while self.running and self.serial_conn and self.serial_conn.is_open:
-            try:
-                if self.handshake.due_for_req():
-                    self.serial_conn.write(pack_handshake_req(0))
-                    self.handshake.note_req_sent()
-
-                waiting = self.serial_conn.in_waiting
-                chunk = self.serial_conn.read(waiting if waiting else 1)
-                if not chunk:
-                    continue
-
-                leftover = self.handshake.feed(chunk)
-
-                for kind, payload in self._parser.feed(leftover):
-                    if kind == "frame":
-                        self.telemetry_queue.put(payload)
-                    else:
-                        self._consume_text_bytes(payload)
-
-            except Exception as e:
-                print(f"Serial read error: {e}")
-                break
-
-    def send_start(self) -> bool:
-        """Transmit the explicit text/binary START command packet down the USB line.
-
-        Gated on self.handshake.can_proceed - see
-        telemetry_bridge.TelemetryBridge.send_start()'s docstring for
-        why (both boards ready, or board 0 ready plus an explicit
-        continue-without-NUCLEO override - see
-        /api/board/continue-without-nucleo below) and for what this
-        gate does and does not fix (the board-side START protocol
-        itself remains a stub; this only stops the command from being
-        sent before it's safe to).
-        """
-        if not self.handshake.can_proceed:
-            print("Refusing to send START: handshake not complete "
-                  f"({self.handshake.status_dict()})")
-            return False
-
-        if self.serial_conn and self.serial_conn.is_open:
-            try:
-                self.serial_conn.write(b"START\n")
-                self.mission_started = True
-                print("Sent START command packet to board.")
-                return True
-            except Exception as e:
-                print(f"Failed to send START command: {e}")
-        return False
-
-    def disconnect(self):
-        """Safely close serial connection and stop background threads."""
-        self.running = False
-        if self.thread:
-            self.thread.join(timeout=1.0)
-        if self.serial_conn and self.serial_conn.is_open:
-            self.serial_conn.close()
-        self.serial_conn = None
-        self.nodes_ready.clear()
-        self.mission_started = False
-        self.handshake = HandshakeCoordinator()
 
 
 # Global data-source singleton every route below reads as `bridge`.
@@ -569,6 +389,15 @@ def api_status():
             # policy behind peer_timed_out / dk_only_override /
             # can_proceed below.
             "handshake": bridge.handshake.status_dict(),
+            # Latest MissionLinkStatus_t per team (board 0's own teams plus
+            # the ones it forwards), with age_sec/stale - see
+            # telemetry_bridge.TeamStatusTracker. Empty in sim-only mode.
+            "team_status": (bridge.team_status.all()
+                            if hasattr(bridge, "team_status") else []),
+            # Mission feed progress (frames sent/pending, open incidents) -
+            # None until /api/board/launch starts one.
+            "mission": (bridge.mission_status()
+                        if hasattr(bridge, "mission_status") else None),
             # Kept for any existing caller still reading this top-level
             # key directly: now derived from the real handshake
             # (can_proceed) instead of the old single-node text check,
@@ -637,14 +466,96 @@ def api_board_disconnect():
 
 @app.route("/api/board/launch", methods=["POST"])
 def api_board_launch():
+    """Starts the mission on the boards: START, then the board mission (see
+    telemetry_bridge.MissionFeed) - the laptop runs the world and the clock,
+    the boards run the teams, and the dashboard shows what the boards report
+    (GET /api/board/mission/stream). Optional JSON body: seed, ticks,
+    fault_profile, and the pace - time_scale (1 = real time, one tick per
+    36 s; the default) or an explicit tick_delay_ms."""
+    data = request.get_json(silent=True) or {}
+    try:
+        seed = int(data.get("seed", 1))
+        ticks = int(data.get("ticks", 10000))
+        tick_delay_ms = data.get("tick_delay_ms")
+        tick_delay_ms = None if tick_delay_ms is None else int(tick_delay_ms)
+        time_scale = float(data.get("time_scale", 1.0))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error",
+                        "message": "seed, ticks, tick_delay_ms and time_scale must be numbers"}), 400
+    if not time_scale > 0 or (tick_delay_ms is not None and tick_delay_ms < 0):
+        return jsonify({"status": "error",
+                        "message": "time_scale must be positive and tick_delay_ms not negative"}), 400
+    fault_profile = str(data.get("fault_profile", "none"))
+
     success = bridge.send_start()
-    if success:
-        return jsonify({"status": "success"})
-    return jsonify({
-        "status": "error",
-        "message": "Failed to send START command",
-        "handshake": bridge.handshake.status_dict(),
-    }), 400
+    if not success:
+        return jsonify({
+            "status": "error",
+            "message": "Failed to send START command",
+            "handshake": bridge.handshake.status_dict(),
+        }), 400
+
+    if not hasattr(bridge, "start_mission"):
+        return jsonify({"status": "success"})  # sim-only source has no boards to feed
+
+    build_ok, build_log = build_binary()
+    if not build_ok:
+        return jsonify({"status": "error", "message": "build failed", "build_log": build_log}), 500
+
+    ok, message = bridge.start_mission(BINARY, seed=seed, ticks=ticks,
+                                       tick_delay_ms=tick_delay_ms, fault_profile=fault_profile,
+                                       time_scale=time_scale)
+    if not ok:
+        return jsonify({"status": "error", "message": f"Mission feed not started: {message}"}), 400
+    return jsonify({"status": "success", "mission": bridge.mission_status()})
+
+
+@app.route("/api/board/mission/stream")
+def api_board_mission_stream():
+    """Server-sent events for the running board mission, in the same shape
+    /api/run-live streams (static_env, then frame messages), so the Live Ops
+    view renders it unchanged. Each frame is the laptop's world with every
+    team as its board last reported it. Ends when the mission stops."""
+    mission = getattr(bridge, "mission", None)
+
+    def generate():
+        if mission is None:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'no board mission running'})}\n\n"
+            return
+        sent_env = None
+        last_seq = 0
+        idle_since = time.time()
+        while getattr(bridge, "mission", None) is mission:
+            done = mission.finished  # read first: nothing new can follow it
+            env, frames = mission.live_events(last_seq)
+            if env is not None and env is not sent_env:
+                sent_env = env
+                yield f"data: {json.dumps({'type': 'static_env', 'env': env})}\n\n"
+            for seq, frame in frames:
+                last_seq = seq
+                yield f"data: {json.dumps({'type': 'frame', 'frame': frame})}\n\n"
+            if frames:
+                idle_since = time.time()
+            elif time.time() - idle_since > 15:
+                # Keeps the connection from being closed as idle between
+                # real-time ticks (36 s apart).
+                yield ": keepalive\n\n"
+                idle_since = time.time()
+            if done and not frames:
+                break
+            time.sleep(0.25)
+        yield f"data: {json.dumps({'type': 'mission_end', 'mission': mission.status_dict()})}\n\n"
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.route("/api/board/mission/stop", methods=["POST"])
+def api_board_mission_stop():
+    """Stops sending mission frames (the boards keep what they have)."""
+    if hasattr(bridge, "stop_mission"):
+        bridge.stop_mission()
+    return jsonify({"status": "success"})
 
 
 @app.route("/api/board/continue-without-nucleo", methods=["POST"])
@@ -725,11 +636,44 @@ def api_board_override():
         return jsonify({"status": "error", "message": "Board not connected"}), 400
 
     try:
-        bridge.serial_conn.write(pack_override(team_id, incident_id))
+        frame = pack_override(team_id, incident_id)
+        if hasattr(bridge, "write_bytes"):
+            bridge.write_bytes(frame)  # shares the serial write lock
+        else:
+            bridge.serial_conn.write(frame)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"status": "error", "message": f"Failed to write to serial port: {exc}"}), 500
 
-    return jsonify({"status": "success", "team_id": team_id, "incident_id": incident_id})
+    # "success" here only means the bytes left the laptop. Whether a board
+    # applied it comes back as acks - poll /api/board/override/status.
+    bridge.overrides.note_sent(team_id, incident_id)
+    return jsonify({"status": "success", "team_id": team_id, "incident_id": incident_id,
+                    "override": bridge.overrides.get(team_id)})
+
+
+@app.route("/api/board/override/status")
+def api_board_override_status():
+    """What the boards have acknowledged for each team's latest override:
+    sent, relayed, then applied / rejected_not_ready / rejected_bad_team /
+    relay_failed, or unconfirmed if no final ack arrived in time (see
+    telemetry_bridge.OverrideTracker). ?team_id=N returns just that team."""
+    tracker = getattr(bridge, "overrides", None)
+    if tracker is None:
+        return jsonify({"status": "error", "message": "No board override tracking in this mode"}), 400
+
+    team_arg = request.args.get("team_id")
+    if team_arg is None:
+        return jsonify({"status": "success", "overrides": tracker.all()})
+
+    try:
+        team_id = int(team_arg)
+    except ValueError:
+        return jsonify({"status": "error", "message": "team_id must be an integer"}), 400
+
+    entry = tracker.get(team_id)
+    if entry is None:
+        return jsonify({"status": "error", "message": f"No override sent for team {team_id}"}), 404
+    return jsonify({"status": "success", "override": entry})
 
 
 @app.route("/api/run", methods=["POST"])

@@ -1,5 +1,0 @@
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_i2c_ex.c:95:19:HAL_I2CEx_ConfigAnalogFilter	3
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_i2c_ex.c:139:19:HAL_I2CEx_ConfigDigitalFilter	3
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_i2c_ex.c:207:19:HAL_I2CEx_EnableWakeUp	3
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_i2c_ex.c:246:19:HAL_I2CEx_DisableWakeUp	3
-/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron_merged-board-2/tron_board/Drivers/STM32N6xx_HAL_Driver/Src/stm32n6xx_hal_i2c_ex.c:303:19:HAL_I2CEx_ConfigFastModePlus	4

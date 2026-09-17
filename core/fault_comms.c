@@ -318,18 +318,13 @@ void fault_comms_ingest_remote_frames(void)
         uint8_t frame_type;
         uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
         uint8_t payload_len;
-        uint8_t peeked_type;
-        if(!comms_transport_peek_frame_type(&peeked_type))
-            break; /* inbox empty */
-
-        if(peeked_type != LORA_FRAME_TYPE_FAULT_BROADCAST &&
-           peeked_type != LORA_FRAME_TYPE_FAULT_VOTE)
-        {
-            /* Not ours — leave it for cbba or mission_link */
-            break;
-        }
-        if(!comms_transport_poll_received(&sender_team_id, &frame_type, payload, &payload_len))
-            break; /* inbox empty - done for this tick */
+        /* Takes only fault frames, from anywhere in the inbox - other
+           consumers' frames stay put (see comms_transport_poll_received_
+           types() on why stopping at a foreign head frame hung boot). */
+        if(!comms_transport_poll_received_types(COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_FAULT_BROADCAST) |
+                                                 COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_FAULT_VOTE),
+                                                 &sender_team_id, &frame_type, payload, &payload_len))
+            break; /* no fault frames waiting - done for this tick */
 
         (void)sender_team_id; /* the payload's own team_id/voter_team_id
             fields are authoritative, same reasoning cbba_ingest_

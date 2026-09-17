@@ -180,6 +180,9 @@ void snapshot_close_dataset(void)
  * execution time inside any single tick maintenance cycle. Called
  * periodically by sim_task in main_board.c.
  */
+/* Raw USART1 write - main_board.c (see mission_link_task.c's weak default). */
+extern void board_usart1_write(const uint8_t *bytes, uint32_t len);
+
 uint32_t board_snapshot_ring_drain(void)
 {
     uint32_t drained_count = 0u;
@@ -191,6 +194,7 @@ uint32_t board_snapshot_ring_drain(void)
         const uint8_t *payload_bytes = (const uint8_t *)&frame;
         uint8_t checksum;
         uint32_t i;
+        uint8_t wire[TELEMETRY_FRAME_WIRE_SIZE];
 
         frame.run_id = entry->run_id;
         frame.cycle = entry->cycle;
@@ -199,13 +203,17 @@ uint32_t board_snapshot_ring_drain(void)
 
         checksum = TELEMETRY_FRAME_CHECKSUM(payload_bytes);
 
-        (void)tm_putchar((INT)TELEMETRY_FRAME_MAGIC0);
-        (void)tm_putchar((INT)TELEMETRY_FRAME_MAGIC1);
+        /* One raw write, not tm_putchar() per byte: the BSP's tm_putchar()
+           inserts a CR before every 0x0A byte, which corrupted any frame
+           whose run_id/cycle/team_id/checksum contained one. */
+        wire[0] = TELEMETRY_FRAME_MAGIC0;
+        wire[1] = TELEMETRY_FRAME_MAGIC1;
         for(i = 0u; i < TELEMETRY_FRAME_PAYLOAD_SIZE; i++)
         {
-            (void)tm_putchar((INT)payload_bytes[i]);
+            wire[2u + i] = payload_bytes[i];
         }
-        (void)tm_putchar((INT)checksum);
+        wire[2u + TELEMETRY_FRAME_PAYLOAD_SIZE] = checksum;
+        board_usart1_write(wire, (uint32_t)sizeof(wire));
 
         g_ring_tail = (g_ring_tail + 1u) % BOARD_SNAPSHOT_RING_CAPACITY;
         g_ring_count--;

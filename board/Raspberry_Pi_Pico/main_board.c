@@ -54,6 +54,9 @@
 
 #include "sim_runner.h"
 #include "fault_config.h"
+#include "mission_state.h"       /* g_current_tick - clock-driven tick loop */
+#include "mission_link_codec.h" /* mission_link_roster_reject_count() -
+                                    roster-wait loop's reject diagnostic */
 #include "comms_transport.h" /* g_comms_transport_this_board_id,
                                  comms_transport_init() - see
                                  THIS_BOARD_ID below */
@@ -97,25 +100,29 @@
 #ifndef BOARD_SEED_COUNT
 #define BOARD_SEED_COUNT 1u
 #endif
+/* Upper bound only: ticks follow the laptop's mission clock (see the
+ * tick loop in sim_task()), so the laptop decides how long a mission
+ * runs. */
 #ifndef BOARD_TICKS_PER_SEED
-#define BOARD_TICKS_PER_SEED 2000u
+#define BOARD_TICKS_PER_SEED 0xFFFFFFFFu
 #endif
 #ifndef BOARD_FAULT_PROFILE
 #define BOARD_FAULT_PROFILE FAULT_PROFILE_NONE
 #endif
 
-/* Tick pacing via tk_dly_tsk, the µT-Kernel equivalent of the
- * laptop's nanosleep-based --tick-delay-ms. 0 = run flat out, which
- * is almost certainly what you want for real bring-up (the sim
- * itself is not real-time-paced; only the laptop's --live dashboard
- * mode paces ticks, for human-watchable playback). */
-#ifndef BOARD_TICK_DELAY_MS
-#define BOARD_TICK_DELAY_MS 0u
+/* Tick pacing: none of the board's own. The laptop is the clock
+ * master (core/mission_link.h section 5b) - a board runs a sim tick only
+ * once the laptop's MissionLinkClock_t allows it, so a 36 s real-time
+ * demo and a faster rehearsal are the same firmware. Between allowed
+ * ticks the board keeps the link serviced and sleeps this long per
+ * pass (board_sleep_ms(), which polls the radio). */
+#ifndef BOARD_CLOCK_IDLE_POLL_MS
+#define BOARD_CLOCK_IDLE_POLL_MS 5u
 #endif
 
 /* Cadence for draining the snapshot ring (board/Raspberry_Pi_Pico/snapshot.c)
- * out over USART1. Every tick is too eager: at BOARD_TICK_DELAY_MS=0
- * (flat-out, the expected bring-up setting) that would call into
+ * out over USART1. Every tick is too eager: in a fast (non-real-time)
+ * mission ticks come quickly, and that would call into
  * tm_putchar-based UART writes far more often than the ring can
  * possibly need it, for no benefit -- there's no live consumer this
  * needs to be near-real-time for yet, and it would just add UART
@@ -166,32 +173,19 @@
                                  entirely) - override at build time
                                  (-D) if so. */
 #endif
-#ifndef BOARD_LED_HEARTBEAT_TICK_INTERVAL
-#define BOARD_LED_HEARTBEAT_TICK_INTERVAL 200u  /* how often (in main
-                                                    loop ticks, NOT
-                                                    milliseconds - see
-                                                    BOARD_TICK_DELAY_MS
-                                                    just above, which
-                                                    defaults to 0/
-                                                    unthrottled) the
-                                                    tick loop below
-                                                    fires one short
-                                                    pulse. Real-world
-                                                    period is
-                                                    therefore
-                                                    approximate, not a
-                                                    precise timer -
-                                                    "still looping,
-                                                    roughly this
-                                                    often" is all this
-                                                    is meant to prove. */
+#ifndef BOARD_LED_HEARTBEAT_MS
+#define BOARD_LED_HEARTBEAT_MS 2000u  /* wall-clock period of the mission
+                                         loop's short "still alive" pulse.
+                                         Milliseconds, not ticks: a tick
+                                         can take 36 s in a real-time
+                                         mission. */
 #endif
 
 /*
  * Wait-loop heartbeat cadence/pattern - separate from
- * BOARD_LED_HEARTBEAT_TICK_INTERVAL above on purpose. The handshake
- * and roster wait loops (see sim_task() below) have NO
- * BOARD_TICK_DELAY_MS-style pacing at all - they spin as fast as
+ * BOARD_LED_HEARTBEAT_MS above on purpose. The handshake
+ * and roster wait loops (see sim_task() below) have no pacing
+ * at all - they spin as fast as
  * sx1262_rx_poll()/mission_link_task_step()/comms_transport_
  * dispatch_pending() themselves take, unthrottled - so a much larger
  * iteration count is needed here than in the tick loop just to get a
@@ -351,6 +345,266 @@ static int mission_link_handshake_round_trip_complete(void)
     return mission_link_handshake_build_local_reply(&scratch) != 0;
 }
 
+#include "lora_frame.h" /* lora_frame_auth_fail_count(),
+                           lora_frame_accept_count() */
+
+/*
+ * Link diagnostics. A board rebooting while its peer stays up used to
+ * wedge boot silently in two ways (both reproduced at runtime): the
+ * peer's replay floor locked out the rebooted board's restarted frame
+ * counter, and board 0 never re-sent a rebooted peer its handshake Req.
+ * Both are fixed now - per-boot LoRa session epochs with a challenge
+ * (core/lora_crypto.h) and board 0 re-opening a rebooted peer's
+ * handshake leg (mission_link_task.c) - and these lines show that
+ * recovery happening, or show where it stalls if it doesn't. Most of
+ * it is visible on the board that STAYED UP, which is why this is also
+ * called from the tick loop, not only from the boot wait loops.
+ *
+ * Each line prints once per change, since the wait loops spin
+ * unthrottled. Report only - nothing here aborts a wait, retries, or
+ * relaxes replay rejection.
+ */
+extern uint32_t mission_link_task_peer_reboot_count(void);
+extern int sx1262_hal_get_random_u32(uint32_t *out);
+
+static uint32_t g_reported_auth_fails;
+static uint32_t g_reported_session_holds;
+static uint32_t g_reported_peer_reboots;
+static uint8_t g_reported_first_frame;
+static uint8_t g_reported_peer_timed_out[HANDSHAKE_MAX_BOARDS];
+
+static void board_report_link_diagnostics(void)
+{
+    uint32_t auth_fails = lora_frame_auth_fail_count();
+
+    if(auth_fails != g_reported_auth_fails)
+    {
+        tm_printf((UB*)"tron: LoRa AUTH FAIL (%lu so far) - frames arriving but failing authentication (RF corruption, a peer built with a different key, or a replay)\n",
+                  (unsigned long)auth_fails);
+        g_reported_auth_fails = auth_fails;
+    }
+
+    {
+        uint32_t holds = lora_frame_session_hold_count();
+
+        if(holds != g_reported_session_holds)
+        {
+            tm_printf((UB*)"tron: LoRa session HOLD (%lu so far) - a peer started a new session (reboot?); its frames wait until it answers this board's challenge\n",
+                      (unsigned long)holds);
+            g_reported_session_holds = holds;
+        }
+    }
+
+    {
+        uint32_t reboots = mission_link_task_peer_reboot_count();
+
+        if(reboots != g_reported_peer_reboots)
+        {
+            tm_printf((UB*)"tron: peer reboot detected (%lu so far) - re-running that board's handshake\n",
+                      (unsigned long)reboots);
+            g_reported_peer_reboots = reboots;
+        }
+    }
+
+    if(!g_reported_first_frame && lora_frame_accept_count() > 0u)
+    {
+        tm_putstring((UB*)"tron: LoRa link alive - first authenticated frame received\n");
+        g_reported_first_frame = 1u;
+    }
+
+    if(g_comms_transport_this_board_id == 0u)
+    {
+        uint8_t board_count = comms_transport_board_count();
+        uint8_t peer;
+
+        if(board_count > HANDSHAKE_MAX_BOARDS)
+        {
+            board_count = HANDSHAKE_MAX_BOARDS;
+        }
+
+        for(peer = 1u; peer < board_count; peer++)
+        {
+            if(!g_reported_peer_timed_out[peer] &&
+               !mission_link_handshake_relay_reply_seen(peer) &&
+               mission_link_handshake_relay_timed_out_seen(peer))
+            {
+                tm_printf((UB*)"tron: peer board %lu never answered the handshake (timed out) - the laptop will not send mission data until it does; check that board is powered, flashed with this build, and on the same radio params\n",
+                          (unsigned long)peer);
+                g_reported_peer_timed_out[peer] = 1u;
+            }
+        }
+    }
+}
+
+/*
+ * Boot wait loops only: nothing reads CBBA or fault traffic until the
+ * simulation starts, so a peer that is already mid-mission would fill the
+ * 16-slot inbox with it and the Req/roster these loops are waiting for
+ * would be refused on arrival. Those frames describe rounds this board is
+ * not part of yet, so dropping them loses nothing. Override frames and
+ * their acks are kept: mission_link_task_step() answers an override that
+ * arrives before this board is ready with a NOT_READY ack, and board 0
+ * forwards acks to the laptop, so the operator isn't left guessing.
+ */
+static void board_boot_wait_discard_stale_frames(void)
+{
+    (void)comms_transport_discard_received_except(
+        COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_HANDSHAKE) |
+        COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_MISSION_LINK) |
+        COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_OVERRIDE) |
+        COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_OVERRIDE_ACK));
+}
+
+/*
+ * Per-boot LoRa session epoch (core/lora_crypto.h lora_crypto_set_tx_
+ * epoch()): MUST differ from every previous boot's, or a reboot brings
+ * back AEAD nonce reuse and the peer-side lockout. Primary source is the
+ * SX1262's own RNG. Every draw is mixed with µT-Kernel operating time as
+ * well, and a failure or a zero result is reported loudly - operating
+ * time alone at this point of boot is close to constant across reboots,
+ * so a board that prints the warning below should not be trusted to
+ * recover from a reboot until its radio RNG works.
+ */
+static void board_seed_lora_session_epoch(void)
+{
+    uint32_t epoch = 0u;
+    uint32_t extra = 0u;
+    SYSTIM otm;
+    int rng_ok = 0;
+    UINT attempt;
+
+    /* Retried: a single SPI glitch at bring-up shouldn't cost reboot
+       safety. The RNG and the LoRa link are the same chip on the same
+       bus, so if every attempt fails the radio can't carry traffic
+       either - the weak fallback below only matters for a radio that
+       comes good later, and the warning says so. */
+    for(attempt = 0u; attempt < 5u && !rng_ok; attempt++)
+    {
+        rng_ok = (sx1262_hal_get_random_u32(&epoch) == 0) &&
+                 (sx1262_hal_get_random_u32(&extra) == 0);
+        if(!rng_ok)
+        {
+            tk_dly_tsk(20u);
+        }
+    }
+
+    if(tk_get_otm(&otm) == E_OK)
+    {
+        extra ^= otm.lo;
+    }
+    epoch ^= (extra << 13) | (extra >> 19);
+
+    if(!rng_ok || epoch == 0u)
+    {
+        tm_putstring((UB*)"tron: WARNING - SX1262 RNG unavailable; LoRa session epoch is weak, reboot recovery may fail\n");
+        if(epoch == 0u)
+        {
+            epoch = 0x5EED0001u ^ (uint32_t)THIS_BOARD_ID;
+        }
+    }
+
+    lora_crypto_set_tx_epoch(epoch);
+    tm_printf((UB*)"tron: LoRa session epoch %08lx\n", (unsigned long)epoch);
+}
+
+/* ---------------------------------------------------------------
+ * USART1 byte I/O, CBBA timing hooks, radio-servicing sleep
+ * --------------------------------------------------------------- */
+extern void mission_link_task_usart1_pump(void);
+
+/* The BSP's raw console send (lib/libtm/libtm.h). */
+IMPORT void tm_snd_dat(const UB *buf, INT size);
+
+/* Raw write via tm_snd_dat(): the BSP's tm_putchar() sends a CR before
+   every LF byte, which corrupted binary frames containing 0x0A (found by
+   review). Interrupts masked per byte, as tm_putchar() does. */
+void board_usart1_write(const uint8_t *bytes, uint32_t len)
+{
+    uint32_t i;
+    UINT imask;
+
+    for (i = 0u; i < len; i++)
+    {
+        DI(imask);
+        tm_snd_dat((const UB *)&bytes[i], 1);
+        EI(imask);
+    }
+}
+
+/* Non-blocking read of the console UART (UART0, the same registers the
+   BSP's pico_rp2040 tm_com.c drives; its 32-byte FIFO is enabled there).
+   The BSP only offers a blocking tm_getchar(), and nothing defined this
+   function, so a Pico built as board 0 could not receive from the laptop.
+   Error bits in the data register are ignored: a damaged byte fails the
+   frame checksum and mission_link_task.c's parser resyncs. */
+#define BOARD_UART0_DR   (*(_UW *)0x40034000u)
+#define BOARD_UART0_FR   (*(_UW *)0x40034018u)
+#define BOARD_UART0_FR_RXFE (1u << 4)
+
+int board_usart1_read_byte(void)
+{
+    if ((BOARD_UART0_FR & BOARD_UART0_FR_RXFE) != 0u)
+    {
+        return -1;
+    }
+    return (int)(BOARD_UART0_DR & 0xFFu);
+}
+
+/* Real milliseconds for CBBA's reply timeout and the status heartbeat
+   (cbba.h requires this on hardware). Neither board used to define it, so
+   both ran on cbba.c's simulated clock - 10 ms per call - and a "530 ms"
+   CBBA wait took microseconds (found by review). If the kernel call ever
+   fails, time still advances so no wait can spin forever. */
+uint32_t cbba_now_ms(void)
+{
+    SYSTIM now;
+    static uint32_t s_fallback_ms;
+
+    if (tk_get_otm(&now) == E_OK)
+    {
+        return (uint32_t)now.lo;
+    }
+
+    s_fallback_ms += 10u;
+    return s_fallback_ms;
+}
+
+/* Services the radio and USART1 through CBBA's reply wait (see cbba.h):
+   this board's queued bids go out and the peer's replies come in. */
+void cbba_wait_poll(void)
+{
+    sx1262_rx_poll();
+    comms_transport_dispatch_pending();
+    mission_link_task_usart1_pump();
+}
+
+/* Set once the radio and comms_transport are up. */
+static UB g_board_radio_serviced;
+
+/* tk_dly_tsk() that keeps the radio serviced once it is up, in 5 ms
+   slices. The LED patterns in both boot wait loops used to block for
+   480-680 ms with nothing polling the radio; the SX1262 keeps only the
+   last received packet, so frames arriving in that window were lost - and
+   a lost roster is only recovered by the laptop's next resend (found by
+   review). Before the radio is up this is a plain delay. */
+LOCAL void board_sleep_ms(UINT ms)
+{
+    while (ms > 0u)
+    {
+        UINT slice = (ms > 5u) ? 5u : ms;
+
+        tk_dly_tsk(slice);
+        ms -= slice;
+
+        if (g_board_radio_serviced)
+        {
+            sx1262_rx_poll();
+            comms_transport_dispatch_pending();
+            mission_link_task_usart1_pump();
+        }
+    }
+}
+
 /*
  * Onboard LED heartbeat helpers - see BOARD_LED_PIN's own doc above
  * for why this exists. gpio_set_pin()/gpio_set_val() are the exact
@@ -363,21 +617,15 @@ LOCAL void board_led_init(void)
     gpio_set_val(BOARD_LED_PIN, 0);   /* start off, not left floating/undefined */
 }
 
-/* One on/off pulse, blocking for on_ms+off_ms via tk_dly_tsk (safe
+/* One on/off pulse, blocking for on_ms+off_ms via board_sleep_ms() (safe
    here - always called from within sim_task(), a real µT-Kernel
    task, never from an interrupt context). */
 LOCAL void board_led_pulse(UINT on_ms, UINT off_ms)
 {
     gpio_set_val(BOARD_LED_PIN, 1);
-    if(on_ms > 0u)
-    {
-        tk_dly_tsk(on_ms);
-    }
+    board_sleep_ms(on_ms);
     gpio_set_val(BOARD_LED_PIN, 0);
-    if(off_ms > 0u)
-    {
-        tk_dly_tsk(off_ms);
-    }
+    board_sleep_ms(off_ms);
 }
 
 LOCAL void board_led_blink_n(UINT count, UINT on_ms, UINT off_ms)
@@ -399,13 +647,14 @@ LOCAL void board_led_blink_n(UINT count, UINT on_ms, UINT off_ms)
    never in doubt, and the on/off shapes of this pattern vs. the
    roster-wait pattern below read as different at a glance rather
    than needing a stopwatch. "Long pause" here is a real blocking
-   tk_dly_tsk() delay (via board_led_pulse()'s off_ms), not just a
-   larger iteration-count gate - unlike the tick loop's heartbeat,
-   this is fine to let block: these wait loops have no other pacing
-   at all today (no BOARD_TICK_DELAY_MS equivalent), and even the
-   widened ~2.4s full cycle here is still far faster than any
-   realistic LoRa RX turnaround, so it doesn't meaningfully delay
-   noticing an incoming frame either. */
+   delay (via board_led_pulse()'s off_ms, which keeps polling the
+   radio - see board_sleep_ms()), not just a larger iteration-count
+   gate - unlike the tick loop's heartbeat, this is fine to let
+   block: these wait loops have no other pacing at all today (no
+   BOARD_TICK_DELAY_MS equivalent), and even the widened ~2.4s full
+   cycle here is still far faster than any realistic LoRa RX
+   turnaround, so it doesn't meaningfully delay noticing an incoming
+   frame either. */
 LOCAL void board_led_wait_pulse_handshake(void)
 {
     board_led_pulse(600u, 1800u);
@@ -422,7 +671,40 @@ LOCAL void board_led_wait_pulse_handshake(void)
 LOCAL void board_led_wait_pulse_roster(void)
 {
     board_led_blink_n(3u, 150u, 150u);
-    tk_dly_tsk(1500u);
+    board_sleep_ms(1500u);   /* radio-polling delay, not a plain blocking
+                           tk_dly_tsk() - see board_led_wait_pulse_handshake()'s
+                           own doc just above for why this must not
+                           starve sx1262_rx_poll() for 1.5s at a time. */
+}
+
+/* Roster-REJECTED pattern: FOUR quick blinks. Distinct from the plain
+   roster wait's two, because the two states need very different
+   responses and look identical without this: two blinks means nothing
+   has arrived (peer not flashed yet, radio params mismatched), four
+   means roster frames ARE arriving and being thrown away by
+   mission_link_apply_roster()'s validation, so the wire is fine and the
+   DATA is wrong. Without the split, a malformed roster field looks
+   exactly like a dead link forever - and this board has no UART adapter
+   or SWD debugger attached in the bring-up case this LED exists for
+   (see BOARD_LED_PIN's own doc), so the LED is the only channel that
+   difference can arrive on. */
+LOCAL void board_led_wait_pulse_roster_rejected(void)
+{
+    board_led_blink_n(4u, 80u, 120u);
+    board_sleep_ms(120u);
+}
+
+/* Auth-FAILED pattern: THREE quick blinks, used by both wait loops once
+   lora_frame_auth_fail_count() is nonzero. Means LoRa frames ARE
+   arriving but failing authentication - e.g. a peer that rebooted while
+   this board stayed up, locked out by this board's replay floor (see
+   board_report_link_diagnostics()) - as opposed to one blink / two
+   blinks (nothing usable arrived) or four (roster authenticated but
+   invalid). */
+LOCAL void board_led_wait_pulse_auth_failed(void)
+{
+    board_led_blink_n(3u, 80u, 120u);
+    board_sleep_ms(200u);
 }
 
 LOCAL void sim_task(INT stacd, void *exinf);
@@ -514,6 +796,8 @@ LOCAL void sim_task(INT stacd, void *exinf)
      */
     g_comms_transport_this_board_id = THIS_BOARD_ID;
     comms_transport_init();
+    board_seed_lora_session_epoch();
+    g_board_radio_serviced = 1u;
 
     /* Once, before the seed loop - see mission_link_task.c's own
        handoff note 1. Must follow whatever sets
@@ -595,10 +879,19 @@ LOCAL void sim_task(INT stacd, void *exinf)
         sx1262_rx_poll();
         mission_link_task_step();
         comms_transport_dispatch_pending();
+        board_report_link_diagnostics();
+        board_boot_wait_discard_stale_frames();
 
         if((wait_pulse_counter % BOARD_LED_WAIT_PULSE_TICK_INTERVAL) == 0u)
         {
-            board_led_wait_pulse_handshake();
+            if(lora_frame_auth_fail_count() > 0u)
+            {
+                board_led_wait_pulse_auth_failed();
+            }
+            else
+            {
+                board_led_wait_pulse_handshake();
+            }
         }
         wait_pulse_counter++;
     }
@@ -619,29 +912,65 @@ LOCAL void sim_task(INT stacd, void *exinf)
      * exists, the way it would have with sx1262_rx_poll() missing
      * from this loop.
      */
-    tm_putstring((UB*)"tron: waiting on mission roster arrival\n");
+    /* Also waits for the whole route map and the safe zone/gateway sites
+       (core/mission_link.h sections 5c/5d): the laptop sends them right
+       after the rosters, and a tick run without them routes teams through
+       blocked cells and leaves nowhere to rest. */
+    tm_putstring((UB*)"tron: waiting on mission roster, map and sites\n");
 
     {
     UINT wait_pulse_counter = 0u;   /* fresh counter for this loop - see
                                         the handshake wait loop's own
                                         copy of this variable above for
                                         why it exists. */
+    uint32_t reported_rejects = 0u; /* last reject count already printed,
+                                        so a steady stream of rejects
+                                        doesn't reprint on every pulse. */
 
-    while (mission_link_task_any_roster_applied() == 0u)
+    while (mission_link_task_any_roster_applied() == 0u ||
+           mission_link_map_rows_received() < MISSION_LINK_MAP_HEIGHT ||
+           !mission_link_sites_received())
     {
+        uint32_t rejects;
+
         sx1262_rx_poll();
         mission_link_task_step();
         comms_transport_dispatch_pending();
+        board_report_link_diagnostics();
+        board_boot_wait_discard_stale_frames();
+
+        rejects = mission_link_roster_reject_count();
 
         if((wait_pulse_counter % BOARD_LED_WAIT_PULSE_TICK_INTERVAL) == 0u)
         {
-            board_led_wait_pulse_roster();
+            if(rejects > 0u)
+            {
+                /* Deliberately keeps waiting rather than aborting: one
+                   corrupted frame shouldn't end the mission, and a later
+                   good roster still resolves this loop normally. The
+                   point is only to stop the failure being invisible. */
+                if(rejects != reported_rejects)
+                {
+                    tm_printf((UB*)"tron: roster REJECTED (%lu so far) - arriving but failing validation\n",
+                              (unsigned long)rejects);
+                    reported_rejects = rejects;
+                }
+                board_led_wait_pulse_roster_rejected();
+            }
+            else if(lora_frame_auth_fail_count() > 0u)
+            {
+                board_led_wait_pulse_auth_failed();
+            }
+            else
+            {
+                board_led_wait_pulse_roster();
+            }
         }
         wait_pulse_counter++;
     }
     }
 
-    tm_putstring((UB*)"tron: roster received, starting seed loop\n");
+    tm_putstring((UB*)"tron: roster, map and sites received, starting seed loop\n");
 
     for(uint32_t seed = BOARD_SEED; seed < BOARD_SEED + BOARD_SEED_COUNT; ++seed)
     {
@@ -653,9 +982,50 @@ LOCAL void sim_task(INT stacd, void *exinf)
          * looks like a typo; it is not one. */
         sim_start_seed_board(seed, BOARD_FAULT_PROFILE);
 
-        for(uint32_t tick = 0; tick < BOARD_TICKS_PER_SEED; ++tick)
+        uint32_t last_heartbeat_ms = cbba_now_ms();
+
+        while(g_current_tick < BOARD_TICKS_PER_SEED)
         {
+            uint32_t start_tick;
+            uint32_t tick;
+
+            /* Heartbeat stage 3/3: one short pulse every
+               BOARD_LED_HEARTBEAT_MS, for as long as the mission loop
+               keeps running, whether or not a tick is due - proves the
+               board is still alive and looping, not just that it got
+               here once. If the board hangs somewhere later in this
+               loop (radio stuck waiting on BUSY, a fault path spinning,
+               etc.), this simply stops - the LED going dark and staying
+               dark after stage 1/2 already showed is itself the
+               signal. */
+            if((cbba_now_ms() - last_heartbeat_ms) >= BOARD_LED_HEARTBEAT_MS)
+            {
+                board_led_pulse(30u, 0u);
+                last_heartbeat_ms = cbba_now_ms();
+            }
+
+            if(!mission_link_clock_step_plan(g_current_tick, mission_link_authorized_tick(),
+                                             &start_tick))
+            {
+                /* Waiting for the laptop's next tick: keep receiving,
+                   relaying and heartbeating meanwhile. */
+                mission_link_task_step();
+                comms_transport_dispatch_pending();
+                board_sleep_ms(BOARD_CLOCK_IDLE_POLL_MS);
+                continue;
+            }
+
+            if(start_tick != g_current_tick)
+            {
+                tm_printf((UB*)"tron: tick %lu is too far behind the laptop's %lu, joining at %lu\n",
+                          (unsigned long)g_current_tick,
+                          (unsigned long)mission_link_authorized_tick(),
+                          (unsigned long)(start_tick + 1u));
+                g_current_tick = start_tick;
+            }
+
             sim_tick();
+            tick = g_current_tick;
 
             /* Heartbeat trigger hook (this prompt's addition - see the
                extern declarations above for scope). Every tick, not
@@ -685,25 +1055,11 @@ LOCAL void sim_task(INT stacd, void *exinf)
             if((tick % BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL) == 0u)
             {
                 (void)board_snapshot_ring_drain();
+                /* Throttled to the drain interval: during a post-reboot
+                   lockout the auth-fail count can climb every tick. */
+                board_report_link_diagnostics();
             }
 
-            /* Heartbeat stage 3/3: one short pulse every
-               BOARD_LED_HEARTBEAT_TICK_INTERVAL ticks, for as long as
-               the seed loop keeps running - proves the board is
-               still alive and looping, not just that it got here
-               once. If the board hangs somewhere later in this loop
-               (radio stuck waiting on BUSY, a fault path spinning,
-               etc.), this simply stops - the LED going dark and
-               staying dark after stage 1/2 already showed is itself
-               the signal. */
-            if((tick % BOARD_LED_HEARTBEAT_TICK_INTERVAL) == 0u)
-            {
-                board_led_pulse(30u, 0u);
-            }
-
-#if BOARD_TICK_DELAY_MS > 0
-            tk_dly_tsk(BOARD_TICK_DELAY_MS);
-#endif
         }
 
         /* Final drain: flush whatever the last partial interval left

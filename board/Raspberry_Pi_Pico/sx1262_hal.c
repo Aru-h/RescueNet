@@ -724,6 +724,8 @@ void sx1262_rx_poll(void)
 {
     sx126x_irq_mask_t irq = SX126X_IRQ_NONE;
     sx126x_rx_buffer_status_t rx_status;
+    uint32_t events = 0u;
+    CommsRadioPollAction_t action;
 
     /* Watchdog advance has to happen BEFORE the DIO1 early-return
        below, not after it - the exact fault this guards against (a
@@ -745,6 +747,12 @@ void sx1262_rx_poll(void)
                policy. */
             g_lora_tx_busy = 0;
             g_lora_tx_busy_poll_count = 0u;
+            /* The chip may still be in standby from the stuck TX; without
+               this the radio stayed deaf as well. */
+            if (sx1262_enter_rx() != 0)
+            {
+                g_sx1262_rx_rearm_failures++;
+            }
         }
     }
 
@@ -762,68 +770,44 @@ void sx1262_rx_poll(void)
         return;
     }
 
-    if ((irq & SX126X_IRQ_RX_DONE) != 0u)
+    /* Clear every IRQ bit this poll actually observed (not just
+       RX_DONE) - Timeout and TxDone are both routed to DIO1 too (see
+       sx1262_hal_init()'s dio_irq_params call below), and leaving
+       either uncleared would keep DIO1 asserted forever. */
+    (void)sx126x_clear_irq_status(NULL, irq);
+
+    if ((irq & SX126X_IRQ_RX_DONE) != 0u) events |= COMMS_RADIO_EVENT_RX_DONE;
+    if ((irq & SX126X_IRQ_TX_DONE) != 0u) events |= COMMS_RADIO_EVENT_TX_DONE;
+    if ((irq & SX126X_IRQ_TIMEOUT) != 0u) events |= COMMS_RADIO_EVENT_TIMEOUT;
+
+    /* See comms_transport_radio_poll_action() for why RX_DONE and TX_DONE
+       are not either/or. */
+    action = comms_transport_radio_poll_action(events);
+
+    if (action.read_packet)
     {
         uint8_t raw[LORA_FRAME_MAX_WIRE_SIZE];
-        uint8_t out_type = 0u;
-        uint8_t out_sender_board_id = 0u;
-        uint8_t out_payload[LORA_FRAME_MAX_PAYLOAD];
-        uint8_t out_payload_len = 0u;
 
         if (sx126x_get_rx_buffer_status(NULL, &rx_status) == SX126X_STATUS_OK &&
             rx_status.pld_len_in_bytes <= sizeof(raw) &&
             sx126x_read_buffer(NULL, rx_status.buffer_start_pointer, raw,
                                 rx_status.pld_len_in_bytes) == SX126X_STATUS_OK)
         {
-            if (lora_frame_try_parse(raw, rx_status.pld_len_in_bytes, &out_type,
-                                      &out_sender_board_id, out_payload,
-                                      &out_payload_len) == 1)
-            {
-                /* out_sender_board_id: no further use here - see
-                   comms_transport.h's own "Open question" note on why
-                   LoRaFrame_t carries no sender field the receiving
-                   board can act on; the payload's own embedded
-                   board_id/team_id (if any) is what dispatch sites
-                   actually use. */
-                (void)out_sender_board_id;
-                (void)comms_transport_deliver_received(out_type, out_payload,
-                                                         out_payload_len);
-            }
-            /* parse_rc 0 (incomplete) or -1 (checksum/tag/length
-               reject): drop, matching lora_frame_try_parse()'s own
-               documented "drop and resync" policy. */
+            /* A corrupted, unauthenticated, replayed or self-sent packet
+               is dropped inside - an expected RF outcome. */
+            (void)comms_transport_receive_radio_packet(raw, rx_status.pld_len_in_bytes);
         }
-        /* get_rx_buffer_status/read_buffer failure, or an
-           implausible pld_len_in_bytes: drop for the same reason -
-           nothing safe to hand upward. RX_DONE branch deliberately
-           does NOT re-enter RX below - see this function's own doc
-           on why (continuous mode, chip is still listening). */
+        /* get_rx_buffer_status/read_buffer failure, or an implausible
+           pld_len_in_bytes: drop - nothing safe to hand upward. */
     }
 
-    /* Clear every IRQ bit this poll actually observed (not just
-       RX_DONE) every time this function runs past the DIO1 check
-       above - Timeout and TxDone are both routed to DIO1 too (see
-       sx1262_hal_init()'s dio_irq_params call below), and leaving
-       either uncleared would keep DIO1 asserted forever, making
-       every future poll look like a fresh RxDone. */
-    (void)sx126x_clear_irq_status(NULL, irq);
-
-    if ((irq & SX126X_IRQ_RX_DONE) == 0u)
+    if (action.tx_finished)
     {
-        /* TxDone and/or Timeout, no RxDone. Per the datasheet, the
-           chip auto-returns to standby RC once a TX completes or
-           times out - re-arm RX so the radio goes back to listening
-           instead of sitting deaf in standby until the next transmit.
-           (RxDone can't reach this branch - handled above instead,
-           and does NOT need this same re-arm: RX is configured
-           continuous, see sx1262_enter_rx()'s own doc, so the chip is
-           still listening on its own after a reception.)
-
-           Given the configured IRQ mask (TxDone|RxDone|Timeout only -
-           see sx1262_hal_init()), "not RxDone" here means whatever
-           lora_spi_transmit() last keyed is no longer in flight
-           either way - clears the busy flag comms_transport.c's
-           dispatcher gates on. See g_lora_tx_busy's own doc above. */
+        /* The chip returns to standby RC once a TX completes or times
+           out: clear the busy flag comms_transport.c's dispatcher gates
+           on and re-arm RX so the radio goes back to listening. (A plain
+           RxDone needs no re-arm: RX is continuous, see
+           sx1262_enter_rx().) */
         g_lora_tx_busy = 0;
         g_lora_tx_busy_poll_count = 0u;
         if (sx1262_enter_rx() != 0)
@@ -923,6 +907,28 @@ int sx1262_hal_init(void)
 
     if (sx1262_enter_rx() != 0) return 1;
 
+    return 0;
+}
+
+/* Reads a 32-bit true random value from the SX1262's own RNG (RSSI noise
+   sampling, core/vendor/sx126x_driver's sx126x_get_random_numbers()),
+   for main_board.c's per-boot LoRa session epoch (core/lora_crypto.h
+   lora_crypto_set_tx_epoch()). That driver call leaves the radio in
+   standby, so RX is re-armed before returning. Returns 0 on success,
+   1 on any radio failure (*out untouched on failure). */
+int sx1262_hal_get_random_u32(uint32_t *out)
+{
+    uint32_t value;
+
+    if (sx126x_get_random_numbers(NULL, &value, 1u) != SX126X_STATUS_OK)
+    {
+        return 1;
+    }
+    if (sx1262_enter_rx() != 0)
+    {
+        return 1;
+    }
+    *out = value;
     return 0;
 }
 
