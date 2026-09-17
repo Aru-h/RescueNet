@@ -151,6 +151,24 @@ df["_row_seq"] = np.arange(len(df), dtype=np.int32)
 df = df.sort_values(["run_id", "team_id", "cycle", "_row_seq"])
 df = df.drop_duplicates(subset=["run_id", "team_id", "cycle"], keep="last")
 
+# Dataset precondition, checked before the slow reconstruction/training
+# below: group_split() needs at least 3 distinct runs to form non-empty
+# train/val/test groups, and the analysis needs real environment-fault
+# rows. A plain `make smoke` dataset (1 run, no faults) used to surface
+# here only as an opaque sklearn ValueError from GroupShuffleSplit.
+_missing_labels = [c for c in FAULT_LABEL_COLUMNS if c not in df.columns]
+_n_runs = df["run_id"].nunique()
+_n_env_fault_rows = 0 if _missing_labels else int(df["fault_active_environment"].sum())
+if _missing_labels or _n_runs < 3 or _n_env_fault_rows == 0:
+    sys.stdout.flush()
+    print(f"ERROR: {CSV_PATH} does not meet this analysis's precondition "
+          f"(runs={_n_runs}, need >= 3; environment-fault rows={_n_env_fault_rows}, need > 0"
+          + (f"; missing columns {_missing_labels}" if _missing_labels else "") + ").\n"
+          "Regenerate it with fault injection, e.g.\n"
+          "  ./tron 1 30 400 --fault-profile=combined",
+          file=sys.stderr)
+    sys.exit(1)
+
 y_multi_full = df[FAULT_LABEL_COLUMNS].astype(np.uint8)
 y_multi_full.columns = FAULT_CLASS_NAMES
 
