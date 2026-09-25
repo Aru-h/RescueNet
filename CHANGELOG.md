@@ -1,5 +1,36 @@
 # Changelog
 
+## Diagonal (8-direction) movement
+
+- `core/path.c`: A* now expands 8 neighbours. It runs in tenths of a
+  cost unit: a straight step costs 10x the entered cell's travel cost,
+  a diagonal 14x, and costs returned to callers are rounded back to
+  whole units. The heuristic is octile distance, admissible because a
+  navigable cell costs at least 1. A diagonal step is refused when
+  either cell it squeezes between is non-navigable (no corner cutting
+  past walls, blocked roads or collapsed buildings). `g_cost` is now
+  `uint32_t`, so the old uint16 overflow note is gone.
+- New `find_next_path_step_remaining()`: `move_team()` and the twin's
+  expected-position advance take the remaining cost after a step from
+  the pathfinder instead of subtracting the cell's travel cost, which
+  no longer equals the step cost on a diagonal.
+- A team still moves exactly one cell per tick. Reachability floods
+  (search sweep, world generation) stay 4-connected; without corner
+  cutting, a diagonal step is only possible where both orthogonal
+  detours exist, so 8-connected reachability is the same set.
+
+Measured on `./tron 1 5 3000`, before -> after:
+- combined faults: incidents resolved 169 -> 175, 33% of moves
+  diagonal; recovery-reason onsets PROGRESS_DEVIATION 888 -> 1263,
+  MOBILITY 369 -> 371, COMM 738 -> 733, EQUIPMENT 209 -> 249,
+  TEAM_DEGRADED 280 -> 282.
+- no faults: resolved 234 -> 243; PROGRESS_DEVIATION 1205 -> 1923.
+  Most of these come from search sweeps: a sweep moves its task's
+  destination to the next frontier cell when the team arrives, but the
+  twin only resets on a task change, so every retarget reads as a
+  deviation. That was already the case before (1033 of the 1205), and
+  faster diagonal sweeps retarget more often.
+
 ## Re-add env_raw_travel_cost (CSV + on-board predictor input)
 
 - `laptop/snapshot.c`: trailing CSV column `env_raw_travel_cost` =
