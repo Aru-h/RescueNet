@@ -54,6 +54,7 @@
 
 #include "sim_runner.h"
 #include "fault_config.h"
+#include "mission_state.h"       /* g_current_tick - clock-driven tick loop */
 #include "mission_link_codec.h" /* mission_link_roster_reject_count() -
                                     roster-wait loop's reject diagnostic */
 #include "comms_transport.h" /* g_comms_transport_this_board_id,
@@ -99,25 +100,29 @@
 #ifndef BOARD_SEED_COUNT
 #define BOARD_SEED_COUNT 1u
 #endif
+/* Upper bound only: ticks follow the laptop's mission clock (see the
+ * tick loop in sim_task()), so the laptop decides how long a mission
+ * runs. */
 #ifndef BOARD_TICKS_PER_SEED
-#define BOARD_TICKS_PER_SEED 2000u
+#define BOARD_TICKS_PER_SEED 0xFFFFFFFFu
 #endif
 #ifndef BOARD_FAULT_PROFILE
 #define BOARD_FAULT_PROFILE FAULT_PROFILE_NONE
 #endif
 
-/* Tick pacing via tk_dly_tsk, the µT-Kernel equivalent of the
- * laptop's nanosleep-based --tick-delay-ms. 0 = run flat out, which
- * is almost certainly what you want for real bring-up (the sim
- * itself is not real-time-paced; only the laptop's --live dashboard
- * mode paces ticks, for human-watchable playback). */
-#ifndef BOARD_TICK_DELAY_MS
-#define BOARD_TICK_DELAY_MS 0u
+/* Tick pacing: none of the board's own. The laptop is the clock
+ * master (core/mission_link.h section 5b) - a board runs a sim tick only
+ * once the laptop's MissionLinkClock_t allows it, so a 36 s real-time
+ * demo and a faster rehearsal are the same firmware. Between allowed
+ * ticks the board keeps the link serviced and sleeps this long per
+ * pass (board_sleep_ms(), which polls the radio). */
+#ifndef BOARD_CLOCK_IDLE_POLL_MS
+#define BOARD_CLOCK_IDLE_POLL_MS 5u
 #endif
 
 /* Cadence for draining the snapshot ring (board/Raspberry_Pi_Pico/snapshot.c)
- * out over USART1. Every tick is too eager: at BOARD_TICK_DELAY_MS=0
- * (flat-out, the expected bring-up setting) that would call into
+ * out over USART1. Every tick is too eager: in a fast (non-real-time)
+ * mission ticks come quickly, and that would call into
  * tm_putchar-based UART writes far more often than the ring can
  * possibly need it, for no benefit -- there's no live consumer this
  * needs to be near-real-time for yet, and it would just add UART
@@ -168,32 +173,19 @@
                                  entirely) - override at build time
                                  (-D) if so. */
 #endif
-#ifndef BOARD_LED_HEARTBEAT_TICK_INTERVAL
-#define BOARD_LED_HEARTBEAT_TICK_INTERVAL 200u  /* how often (in main
-                                                    loop ticks, NOT
-                                                    milliseconds - see
-                                                    BOARD_TICK_DELAY_MS
-                                                    just above, which
-                                                    defaults to 0/
-                                                    unthrottled) the
-                                                    tick loop below
-                                                    fires one short
-                                                    pulse. Real-world
-                                                    period is
-                                                    therefore
-                                                    approximate, not a
-                                                    precise timer -
-                                                    "still looping,
-                                                    roughly this
-                                                    often" is all this
-                                                    is meant to prove. */
+#ifndef BOARD_LED_HEARTBEAT_MS
+#define BOARD_LED_HEARTBEAT_MS 2000u  /* wall-clock period of the mission
+                                         loop's short "still alive" pulse.
+                                         Milliseconds, not ticks: a tick
+                                         can take 36 s in a real-time
+                                         mission. */
 #endif
 
 /*
  * Wait-loop heartbeat cadence/pattern - separate from
- * BOARD_LED_HEARTBEAT_TICK_INTERVAL above on purpose. The handshake
- * and roster wait loops (see sim_task() below) have NO
- * BOARD_TICK_DELAY_MS-style pacing at all - they spin as fast as
+ * BOARD_LED_HEARTBEAT_MS above on purpose. The handshake
+ * and roster wait loops (see sim_task() below) have no pacing
+ * at all - they spin as fast as
  * sx1262_rx_poll()/mission_link_task_step()/comms_transport_
  * dispatch_pending() themselves take, unthrottled - so a much larger
  * iteration count is needed here than in the tick loop just to get a
@@ -515,6 +507,104 @@ static void board_seed_lora_session_epoch(void)
     tm_printf((UB*)"tron: LoRa session epoch %08lx\n", (unsigned long)epoch);
 }
 
+/* ---------------------------------------------------------------
+ * USART1 byte I/O, CBBA timing hooks, radio-servicing sleep
+ * --------------------------------------------------------------- */
+extern void mission_link_task_usart1_pump(void);
+
+/* The BSP's raw console send (lib/libtm/libtm.h). */
+IMPORT void tm_snd_dat(const UB *buf, INT size);
+
+/* Raw write via tm_snd_dat(): the BSP's tm_putchar() sends a CR before
+   every LF byte, which corrupted binary frames containing 0x0A (found by
+   review). Interrupts masked per byte, as tm_putchar() does. */
+void board_usart1_write(const uint8_t *bytes, uint32_t len)
+{
+    uint32_t i;
+    UINT imask;
+
+    for (i = 0u; i < len; i++)
+    {
+        DI(imask);
+        tm_snd_dat((const UB *)&bytes[i], 1);
+        EI(imask);
+    }
+}
+
+/* Non-blocking read of the console UART (UART0, the same registers the
+   BSP's pico_rp2040 tm_com.c drives; its 32-byte FIFO is enabled there).
+   The BSP only offers a blocking tm_getchar(), and nothing defined this
+   function, so a Pico built as board 0 could not receive from the laptop.
+   Error bits in the data register are ignored: a damaged byte fails the
+   frame checksum and mission_link_task.c's parser resyncs. */
+#define BOARD_UART0_DR   (*(_UW *)0x40034000u)
+#define BOARD_UART0_FR   (*(_UW *)0x40034018u)
+#define BOARD_UART0_FR_RXFE (1u << 4)
+
+int board_usart1_read_byte(void)
+{
+    if ((BOARD_UART0_FR & BOARD_UART0_FR_RXFE) != 0u)
+    {
+        return -1;
+    }
+    return (int)(BOARD_UART0_DR & 0xFFu);
+}
+
+/* Real milliseconds for CBBA's reply timeout and the status heartbeat
+   (cbba.h requires this on hardware). Neither board used to define it, so
+   both ran on cbba.c's simulated clock - 10 ms per call - and a "530 ms"
+   CBBA wait took microseconds (found by review). If the kernel call ever
+   fails, time still advances so no wait can spin forever. */
+uint32_t cbba_now_ms(void)
+{
+    SYSTIM now;
+    static uint32_t s_fallback_ms;
+
+    if (tk_get_otm(&now) == E_OK)
+    {
+        return (uint32_t)now.lo;
+    }
+
+    s_fallback_ms += 10u;
+    return s_fallback_ms;
+}
+
+/* Services the radio and USART1 through CBBA's reply wait (see cbba.h):
+   this board's queued bids go out and the peer's replies come in. */
+void cbba_wait_poll(void)
+{
+    sx1262_rx_poll();
+    comms_transport_dispatch_pending();
+    mission_link_task_usart1_pump();
+}
+
+/* Set once the radio and comms_transport are up. */
+static UB g_board_radio_serviced;
+
+/* tk_dly_tsk() that keeps the radio serviced once it is up, in 5 ms
+   slices. The LED patterns in both boot wait loops used to block for
+   480-680 ms with nothing polling the radio; the SX1262 keeps only the
+   last received packet, so frames arriving in that window were lost - and
+   a lost roster is only recovered by the laptop's next resend (found by
+   review). Before the radio is up this is a plain delay. */
+LOCAL void board_sleep_ms(UINT ms)
+{
+    while (ms > 0u)
+    {
+        UINT slice = (ms > 5u) ? 5u : ms;
+
+        tk_dly_tsk(slice);
+        ms -= slice;
+
+        if (g_board_radio_serviced)
+        {
+            sx1262_rx_poll();
+            comms_transport_dispatch_pending();
+            mission_link_task_usart1_pump();
+        }
+    }
+}
+
 /*
  * Onboard LED heartbeat helpers - see BOARD_LED_PIN's own doc above
  * for why this exists. gpio_set_pin()/gpio_set_val() are the exact
@@ -527,21 +617,15 @@ LOCAL void board_led_init(void)
     gpio_set_val(BOARD_LED_PIN, 0);   /* start off, not left floating/undefined */
 }
 
-/* One on/off pulse, blocking for on_ms+off_ms via tk_dly_tsk (safe
+/* One on/off pulse, blocking for on_ms+off_ms via board_sleep_ms() (safe
    here - always called from within sim_task(), a real µT-Kernel
    task, never from an interrupt context). */
 LOCAL void board_led_pulse(UINT on_ms, UINT off_ms)
 {
     gpio_set_val(BOARD_LED_PIN, 1);
-    if(on_ms > 0u)
-    {
-        tk_dly_tsk(on_ms);
-    }
+    board_sleep_ms(on_ms);
     gpio_set_val(BOARD_LED_PIN, 0);
-    if(off_ms > 0u)
-    {
-        tk_dly_tsk(off_ms);
-    }
+    board_sleep_ms(off_ms);
 }
 
 LOCAL void board_led_blink_n(UINT count, UINT on_ms, UINT off_ms)
@@ -556,11 +640,12 @@ LOCAL void board_led_blink_n(UINT count, UINT on_ms, UINT off_ms)
 /* Handshake-wait pattern: ONE blink, then a long pause - visually
    distinct from board_led_wait_pulse_roster()'s double blink just
    below, and from the tick loop's own much-more-frequent single
-   pulse (BOARD_LED_HEARTBEAT_TICK_INTERVAL). "Long pause" here is a
-   real blocking tk_dly_tsk() delay (via board_led_pulse()'s off_ms),
+   pulse (BOARD_LED_HEARTBEAT_MS). "Long pause" here is a
+   real blocking delay (via board_led_pulse()'s off_ms, which keeps
+   polling the radio - see board_sleep_ms()),
    not just a larger iteration-count gate - unlike the tick loop's
    heartbeat, this is fine to let block briefly: these wait loops
-   have no other pacing at all today (no BOARD_TICK_DELAY_MS
+   have no other pacing at all today (no clock-driven
    equivalent), so a short deliberate pause here doesn't compete with
    anything, and 400ms is still far faster than any realistic LoRa
    RX turnaround, so it doesn't meaningfully delay noticing an
@@ -576,7 +661,7 @@ LOCAL void board_led_wait_pulse_handshake(void)
 LOCAL void board_led_wait_pulse_roster(void)
 {
     board_led_blink_n(2u, 80u, 120u);
-    tk_dly_tsk(280u);   /* top up to the same ~400ms tail pause the
+    board_sleep_ms(280u);   /* top up to the same ~400ms tail pause the
                            handshake pattern uses, so both patterns
                            repeat at roughly the same overall rate -
                            only the blink shape differs, not the
@@ -597,7 +682,7 @@ LOCAL void board_led_wait_pulse_roster(void)
 LOCAL void board_led_wait_pulse_roster_rejected(void)
 {
     board_led_blink_n(4u, 80u, 120u);
-    tk_dly_tsk(120u);
+    board_sleep_ms(120u);
 }
 
 /* Auth-FAILED pattern: THREE quick blinks, used by both wait loops once
@@ -610,7 +695,7 @@ LOCAL void board_led_wait_pulse_roster_rejected(void)
 LOCAL void board_led_wait_pulse_auth_failed(void)
 {
     board_led_blink_n(3u, 80u, 120u);
-    tk_dly_tsk(200u);
+    board_sleep_ms(200u);
 }
 
 LOCAL void sim_task(INT stacd, void *exinf);
@@ -703,6 +788,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
     g_comms_transport_this_board_id = THIS_BOARD_ID;
     comms_transport_init();
     board_seed_lora_session_epoch();
+    g_board_radio_serviced = 1u;
 
     /* Once, before the seed loop - see mission_link_task.c's own
        handoff note 1. Must follow whatever sets
@@ -817,7 +903,11 @@ LOCAL void sim_task(INT stacd, void *exinf)
      * exists, the way it would have with sx1262_rx_poll() missing
      * from this loop.
      */
-    tm_putstring((UB*)"tron: waiting on mission roster arrival\n");
+    /* Also waits for the whole route map and the safe zone/gateway sites
+       (core/mission_link.h sections 5c/5d): the laptop sends them right
+       after the rosters, and a tick run without them routes teams through
+       blocked cells and leaves nowhere to rest. */
+    tm_putstring((UB*)"tron: waiting on mission roster, map and sites\n");
 
     {
     UINT wait_pulse_counter = 0u;   /* fresh counter for this loop - see
@@ -828,7 +918,9 @@ LOCAL void sim_task(INT stacd, void *exinf)
                                         so a steady stream of rejects
                                         doesn't reprint on every pulse. */
 
-    while (mission_link_task_any_roster_applied() == 0u)
+    while (mission_link_task_any_roster_applied() == 0u ||
+           mission_link_map_rows_received() < MISSION_LINK_MAP_HEIGHT ||
+           !mission_link_sites_received())
     {
         uint32_t rejects;
 
@@ -869,7 +961,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
     }
     }
 
-    tm_putstring((UB*)"tron: roster received, starting seed loop\n");
+    tm_putstring((UB*)"tron: roster, map and sites received, starting seed loop\n");
 
     for(uint32_t seed = BOARD_SEED; seed < BOARD_SEED + BOARD_SEED_COUNT; ++seed)
     {
@@ -881,9 +973,50 @@ LOCAL void sim_task(INT stacd, void *exinf)
          * looks like a typo; it is not one. */
         sim_start_seed_board(seed, BOARD_FAULT_PROFILE);
 
-        for(uint32_t tick = 0; tick < BOARD_TICKS_PER_SEED; ++tick)
+        uint32_t last_heartbeat_ms = cbba_now_ms();
+
+        while(g_current_tick < BOARD_TICKS_PER_SEED)
         {
+            uint32_t start_tick;
+            uint32_t tick;
+
+            /* Heartbeat stage 3/3: one short pulse every
+               BOARD_LED_HEARTBEAT_MS, for as long as the mission loop
+               keeps running, whether or not a tick is due - proves the
+               board is still alive and looping, not just that it got
+               here once. If the board hangs somewhere later in this
+               loop (radio stuck waiting on BUSY, a fault path spinning,
+               etc.), this simply stops - the LED going dark and staying
+               dark after stage 1/2 already showed is itself the
+               signal. */
+            if((cbba_now_ms() - last_heartbeat_ms) >= BOARD_LED_HEARTBEAT_MS)
+            {
+                board_led_pulse(30u, 0u);
+                last_heartbeat_ms = cbba_now_ms();
+            }
+
+            if(!mission_link_clock_step_plan(g_current_tick, mission_link_authorized_tick(),
+                                             &start_tick))
+            {
+                /* Waiting for the laptop's next tick: keep receiving,
+                   relaying and heartbeating meanwhile. */
+                mission_link_task_step();
+                comms_transport_dispatch_pending();
+                board_sleep_ms(BOARD_CLOCK_IDLE_POLL_MS);
+                continue;
+            }
+
+            if(start_tick != g_current_tick)
+            {
+                tm_printf((UB*)"tron: tick %lu is too far behind the laptop's %lu, joining at %lu\n",
+                          (unsigned long)g_current_tick,
+                          (unsigned long)mission_link_authorized_tick(),
+                          (unsigned long)(start_tick + 1u));
+                g_current_tick = start_tick;
+            }
+
             sim_tick();
+            tick = g_current_tick;
 
             /* Heartbeat trigger hook (this prompt's addition - see the
                extern declarations above for scope). Every tick, not
@@ -918,23 +1051,6 @@ LOCAL void sim_task(INT stacd, void *exinf)
                 board_report_link_diagnostics();
             }
 
-            /* Heartbeat stage 3/3: one short pulse every
-               BOARD_LED_HEARTBEAT_TICK_INTERVAL ticks, for as long as
-               the seed loop keeps running - proves the board is
-               still alive and looping, not just that it got here
-               once. If the board hangs somewhere later in this loop
-               (radio stuck waiting on BUSY, a fault path spinning,
-               etc.), this simply stops - the LED going dark and
-               staying dark after stage 1/2 already showed is itself
-               the signal. */
-            if((tick % BOARD_LED_HEARTBEAT_TICK_INTERVAL) == 0u)
-            {
-                board_led_pulse(30u, 0u);
-            }
-
-#if BOARD_TICK_DELAY_MS > 0
-            tk_dly_tsk(BOARD_TICK_DELAY_MS);
-#endif
         }
 
         /* Final drain: flush whatever the last partial interval left
