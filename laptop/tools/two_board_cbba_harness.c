@@ -523,6 +523,8 @@ static void build_world(void)
         memset(team, 0, sizeof(*team));
         team->team_id = i;
         team->specialization = (uint8_t)(i % NUM_TEAM_SPECIALIZATIONS);
+        team->equipment_flags = EQ_ROPE | EQ_SPREADER | EQ_MEDICAL_KIT | EQ_K9 |
+                                EQ_HAZMAT_SUIT | EQ_STRUCTURAL | EQ_GENERATOR;
         team->status = STATUS_AVAILABLE;
         team->assigned_task_pool = TASK_POOL_NONE;
         team->assigned_task_slot = NO_ASSIGNMENT;
@@ -729,21 +731,378 @@ static int run_board(uint8_t board_id, uint8_t local_team_lo, uint8_t local_team
     return 0;
 }
 
-int main(void)
+/* ---------------------------------------------------------------
+ * Scenario B: the two boards hold the SAME incidents in DIFFERENT
+ * g_incidents[] slots (review finding H2)
+ * ---------------------------------------------------------------
+ * A real board fills g_incidents[] itself (mission_link_apply_
+ * incident() takes the first free slot), and the two boards' layouts
+ * drift apart as soon as one relayed incident frame is lost, one board
+ * frees a resolved slot first, or frames arrive in a different order.
+ * The CBBA wire message used to be indexed by the SENDER's slot, so
+ * the receiver merged winners/bids for one incident into whatever
+ * different incident happened to sit in that slot locally. This
+ * scenario reproduces exactly that: board 1 stores every incident in
+ * the mirror-image slot (19 - j) of board 0's slot j, and board 0 also
+ * holds one incident board 1 has never heard of (its claims must be
+ * skipped, not merged into an unrelated slot).
+ *
+ * Every incident must have one clear winner, or "the boards disagree"
+ * could just be two equally good bids that each board resolves toward
+ * its own team (seen while writing this: identical teams at different
+ * distances produced bit-identical bids). So all ten teams start on the
+ * same cell with full equipment, incident j requires specialization
+ * j % 5, and team t has specialization t % 5; each board has exactly
+ * one specialist per incident, and the two twins are separated by
+ * stamina (fresh vs tired, alternating which board is fresh). Which
+ * team scores best is scoring.c's business - this harness does not
+ * hardcode it - but the scores are far apart, so with correct
+ * incident mapping both boards reach the same answer. 15 incidents
+ * gives 15-16 assigned entries per snapshot, close to the 20-entry
+ * worst case the wire format is sized for (core/cbba.c's
+ * CBBA_WIRE_MAX_FRAME_SIZE).
+ *
+ * The consensus claim checked: after the mesh exchange, for EVERY
+ * incident_id both boards hold, board 0's view of the winner equals
+ * board 1's (compared over a pipe, by incident_id, not by slot), every
+ * such incident has a winner, and each board's view contains winners
+ * hosted on BOTH boards (proving the remote claims were actually
+ * merged, not just that each side kept its own). */
+#define HARNESS_B_COMMON 15u
+#define HARNESS_B_EXTRA_SLOT 15u     /* board 0 only */
+#define HARNESS_B_TEAM_X 18
+#define HARNESS_B_TEAM_Y 18
+#define HARNESS_B_TICKS 6
+#define HARNESS_B_EXTRA_INGEST_ROUNDS 8
+
+typedef struct
+{
+    uint32_t incident_id;
+    uint8_t winner;
+} HarnessBView_t;
+
+static uint32_t g_harness_b_ids[HARNESS_B_COMMON];
+static uint32_t g_harness_b_extra_id;
+
+/* The fresh twin of each specialization pair - see above. */
+static uint8_t harness_b_fresh_team(uint8_t spec)
+{
+    return (spec % 2u == 0u) ? spec : (uint8_t)(spec + 5u);
+}
+
+static void harness_b_place_incident(uint8_t slot, uint32_t id, uint8_t j)
+{
+    IncidentState_t *inc = &g_incidents[slot];
+
+    memset(inc, 0, sizeof(*inc));
+    inc->incident_id = id;
+    inc->slot_occupied = 1u;
+    inc->status = INC_OPEN;
+    inc->priority = PRIORITY_HIGH;
+    inc->incident_type = INCIDENT_SURVIVOR_SIGNAL;
+    inc->req_capability = (TeamSpecialization_t)(j % NUM_TEAM_SPECIALIZATIONS);
+    inc->victim_count = 1u;
+    inc->loc_x = (int16_t)(4 + (j % 5u) * 7);
+    inc->loc_y = (int16_t)(6 + (j / 5u) * 10);
+    inc->discovered = 1u;
+    inc->assigned_team = NO_ASSIGNMENT;
+    inc->support_team = NO_ASSIGNMENT;
+}
+
+static void build_world_b(void)
+{
+    random_seed_all(5151u);
+    initialize_grid();
+    g_current_tick = 0u;
+
+    memset(g_incidents, 0, sizeof(g_incidents));
+
+    for (uint8_t i = 0; i < NUM_TEAMS; i++)
+    {
+        TeamState_t *team = &g_teams[i];
+
+        memset(team, 0, sizeof(*team));
+        team->team_id = i;
+        team->specialization = (uint8_t)(i % NUM_TEAM_SPECIALIZATIONS);
+        team->equipment_flags = EQ_ROPE | EQ_SPREADER | EQ_MEDICAL_KIT | EQ_K9 |
+                                EQ_HAZMAT_SUIT | EQ_STRUCTURAL | EQ_GENERATOR;
+        team->status = STATUS_AVAILABLE;
+        team->assigned_task_pool = TASK_POOL_NONE;
+        team->assigned_task_slot = NO_ASSIGNMENT;
+        for (uint8_t q = 0; q < CBBA_MAX_BUNDLE_SIZE; q++)
+        {
+            team->incident_queue_slot[q] = NO_ASSIGNMENT;
+            team->incident_queue_id[q] = 0u;
+        }
+        team->stamina = (harness_b_fresh_team(team->specialization) == i) ? 100.0f : 70.0f;
+        team->equipment_level = EQ_MAX_LEVEL;
+        team->resting_zone_id = 0xFFu;
+        team->loc_x = HARNESS_B_TEAM_X;
+        team->loc_y = HARNESS_B_TEAM_Y;
+    }
+
+    for (uint8_t j = 0; j < HARNESS_B_COMMON; j++)
+    {
+        g_harness_b_ids[j] = allocate_incident_id();
+        harness_b_place_incident(j, g_harness_b_ids[j], j);
+    }
+
+    g_harness_b_extra_id = allocate_incident_id();
+}
+
+/* Applied per process AFTER fork(): each board lays its own table out
+   differently, the way two real boards' tables diverge. */
+static void harness_b_layout_for_board(uint8_t board_id)
+{
+    memset(g_incidents, 0, sizeof(g_incidents));
+
+    for (uint8_t j = 0; j < HARNESS_B_COMMON; j++)
+    {
+        uint8_t slot = (board_id == 0u) ? j : (uint8_t)(NUM_INCIDENTS - 1u - j);
+        harness_b_place_incident(slot, g_harness_b_ids[j], j);
+    }
+
+    if (board_id == 0u)
+    {
+        /* Board 0 claims it and puts it on the wire; board 1 has no slot
+           for it and must skip the claim, not merge it anywhere. */
+        harness_b_place_incident(HARNESS_B_EXTRA_SLOT, g_harness_b_extra_id, 0u);
+        g_incidents[HARNESS_B_EXTRA_SLOT].loc_y = 30;
+    }
+}
+
+/* This board's view (its first local team's belief - every local team
+   is checked to agree with it) of who won each COMMON incident, in
+   HARNESS_B_COMMON order, looked up by incident_id. */
+static void harness_b_collect_view(uint8_t local_team, HarnessBView_t *out)
+{
+    for (uint8_t j = 0; j < HARNESS_B_COMMON; j++)
+    {
+        out[j].incident_id = g_harness_b_ids[j];
+        out[j].winner = NO_ASSIGNMENT;
+
+        for (uint8_t slot = 0; slot < NUM_INCIDENTS; slot++)
+        {
+            if (g_incidents[slot].slot_occupied &&
+                g_incidents[slot].incident_id == g_harness_b_ids[j])
+            {
+                out[j].winner = g_cbba_agent_state[local_team].winner[slot];
+                break;
+            }
+        }
+    }
+}
+
+static int harness_b_view_complete(uint8_t local_team_lo, uint8_t local_team_hi)
+{
+    HarnessBView_t first[HARNESS_B_COMMON];
+    uint8_t seen_board0 = 0u, seen_board1 = 0u;
+
+    harness_b_collect_view(local_team_lo, first);
+
+    for (uint8_t j = 0; j < HARNESS_B_COMMON; j++)
+    {
+        if (first[j].winner >= NUM_TEAMS)
+            return 0;
+        if (first[j].winner < 5u)
+            seen_board0 = 1u;
+        else
+            seen_board1 = 1u;
+    }
+
+    for (uint8_t t = (uint8_t)(local_team_lo + 1u); t <= local_team_hi; t++)
+    {
+        HarnessBView_t other[HARNESS_B_COMMON];
+
+        harness_b_collect_view(t, other);
+        for (uint8_t j = 0; j < HARNESS_B_COMMON; j++)
+        {
+            if (other[j].winner != first[j].winner)
+                return 0;
+        }
+    }
+
+    return seen_board0 && seen_board1;
+}
+
+static int run_board_b(uint8_t board_id, uint8_t local_team_lo, uint8_t local_team_hi,
+                       HarnessBView_t *view_out)
+{
+    g_comms_transport_this_board_id = board_id;
+    comms_transport_init();
+    harness_b_layout_for_board(board_id);
+
+    for (int tick = 0; tick < HARNESS_B_TICKS; tick++)
+    {
+        g_current_tick = (uint32_t)tick;
+        cbba_run();
+
+        /* See run_board()'s drain comment. */
+        for (int drain = 0; drain < NUM_TEAMS; drain++)
+            comms_transport_dispatch_pending();
+    }
+
+    /* Same end-of-run race as run_board() - see its comment. */
+    for (int extra = 0; extra < HARNESS_B_EXTRA_INGEST_ROUNDS; extra++)
+    {
+        if (harness_b_view_complete(local_team_lo, local_team_hi))
+            break;
+        cbba_ingest_remote_mesh_replies();
+    }
+
+    harness_b_collect_view(local_team_lo, view_out);
+
+    {
+        uint8_t claimed_here = 0u;
+        uint8_t claimed_by_peer = 0u;
+
+        for (uint8_t j = 0; j < HARNESS_B_COMMON; j++)
+        {
+            if (view_out[j].winner >= local_team_lo && view_out[j].winner <= local_team_hi)
+                claimed_here++;
+            else if (view_out[j].winner < NUM_TEAMS)
+                claimed_by_peer++;
+        }
+
+        fprintf(stderr, "[board%u/B] %u common incidents: %u won by this board's teams, "
+                        "%u by the peer's\n",
+                board_id, (unsigned)HARNESS_B_COMMON, claimed_here, claimed_by_peer);
+    }
+
+    if (!harness_b_view_complete(local_team_lo, local_team_hi))
+    {
+        for (uint8_t j = 0; j < HARNESS_B_COMMON; j++)
+        {
+            fprintf(stderr, "[board%u/B]   incident_id %lu: winner=%u\n",
+                    board_id, (unsigned long)view_out[j].incident_id, view_out[j].winner);
+        }
+        fprintf(stderr, "[board%u/B] FAIL: an incident has no winner, local teams "
+                        "disagree, or the peer's claims are missing\n", board_id);
+        return 1;
+    }
+
+    if (board_id == 1u)
+    {
+        /* Board 1 never held the extra incident: none of its slots may
+           have picked up a claim for it. Checked indirectly - every
+           occupied slot on this board is one of the common ids. */
+        for (uint8_t slot = 0; slot < NUM_INCIDENTS; slot++)
+        {
+            if (g_incidents[slot].slot_occupied &&
+                g_incidents[slot].incident_id == g_harness_b_extra_id)
+            {
+                fprintf(stderr, "[board1/B] FAIL: board 1 unexpectedly holds the extra incident\n");
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static int run_scenario_b(void)
+{
+    int sockets[2];
+    int view_pipe[2];
+    pid_t child_pid;
+    int child_status = 1;
+    HarnessBView_t view0[HARNESS_B_COMMON];
+    HarnessBView_t view1[HARNESS_B_COMMON];
+    int board0_rc;
+    int mismatches = 0;
+
+    build_world_b();
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0 || pipe(view_pipe) != 0)
+    {
+        perror("socketpair/pipe");
+        return 1;
+    }
+
+    child_pid = fork();
+    if (child_pid < 0)
+    {
+        perror("fork");
+        return 1;
+    }
+
+    if (child_pid == 0)
+    {
+        int rc;
+
+        close(sockets[0]);
+        close(view_pipe[0]);
+        g_harness_socket_fd = sockets[1];
+        make_socket_nonblocking(g_harness_socket_fd);
+        rc = run_board_b(1u, 5u, 9u, view1);
+        if (write(view_pipe[1], view1, sizeof(view1)) != (ssize_t)sizeof(view1))
+            rc = 1;
+        close(view_pipe[1]);
+        _exit(rc);
+    }
+
+    close(sockets[1]);
+    close(view_pipe[1]);
+    g_harness_socket_fd = sockets[0];
+    make_socket_nonblocking(g_harness_socket_fd);
+    board0_rc = run_board_b(0u, 0u, 4u, view0);
+
+    {
+        size_t got = 0u;
+
+        while (got < sizeof(view1))
+        {
+            ssize_t n = read(view_pipe[0], (uint8_t *)view1 + got, sizeof(view1) - got);
+            if (n <= 0)
+                break;
+            got += (size_t)n;
+        }
+        close(view_pipe[0]);
+
+        if (waitpid(child_pid, &child_status, 0) < 0)
+        {
+            perror("waitpid");
+            return 1;
+        }
+
+        if (got != sizeof(view1))
+        {
+            fprintf(stderr, "[harness/B] FAIL: board 1 did not report its view\n");
+            return 1;
+        }
+    }
+
+    for (uint8_t j = 0; j < HARNESS_B_COMMON; j++)
+    {
+        if (view0[j].incident_id != view1[j].incident_id ||
+            view0[j].winner != view1[j].winner)
+        {
+            fprintf(stderr, "[harness/B] FAIL: incident_id %lu: board0 winner=%u, "
+                            "board1 winner=%u\n",
+                    (unsigned long)view0[j].incident_id, view0[j].winner, view1[j].winner);
+            mismatches++;
+        }
+    }
+
+    if (board0_rc != 0 || !WIFEXITED(child_status) || WEXITSTATUS(child_status) != 0 ||
+        mismatches != 0)
+    {
+        fprintf(stderr, "[harness/B] FAIL: boards with divergent incident slot layouts "
+                        "did not converge on the same winner per incident_id\n");
+        return 1;
+    }
+
+    fprintf(stderr, "[harness/B] PASS: divergent slot layouts, %u incidents, same winner "
+                    "per incident_id on both boards\n", (unsigned)HARNESS_B_COMMON);
+    return 0;
+}
+
+static int run_scenario_a(void)
 {
     int sockets[2];
     pid_t child_pid;
     int child_status = 1;
     int board0_rc;
-
-    /* Same reasoning as two_board_harness.c: a real radio has no
-       "broken pipe" concept, and the two forked processes' own loop
-       iterations have no real-time lockstep with each other, so one
-       side finishing first and the other's next write() landing on a
-       closed pipe is an expected timing outcome, not a bug. */
-    signal(SIGPIPE, SIG_IGN);
-
-    g_simulation_trace_enabled = 0;
 
     build_world();
 
@@ -774,6 +1133,7 @@ int main(void)
     g_harness_socket_fd = sockets[0];
     make_socket_nonblocking(g_harness_socket_fd);
     board0_rc = run_board(0u, 0u, 4u);
+    close(sockets[0]);
 
     if (waitpid(child_pid, &child_status, 0) < 0)
     {
@@ -795,11 +1155,36 @@ int main(void)
         return 1;
     }
 
+    return 0;
+}
+
+int main(void)
+{
+    /* Same reasoning as two_board_harness.c: a real radio has no
+       "broken pipe" concept, and the two forked processes' own loop
+       iterations have no real-time lockstep with each other, so one
+       side finishing first and the other's next write() landing on a
+       closed pipe is an expected timing outcome, not a bug. */
+    signal(SIGPIPE, SIG_IGN);
+
+    g_simulation_trace_enabled = 0;
+
+    if (run_scenario_a() != 0)
+        return 1;
+
     fprintf(stderr, "[harness] ALL CHECKS PASSED: a real CBBA bid round, run "
                      "with unmodified core/cbba.c across two separate OS "
                      "processes connected by a real socket, converges to the "
                      "SAME winning team on both boards' own independent "
                      "view of the world.\n");
+
+    /* Scenario B starts from a fresh harness_rx_pump() buffer state
+       only in the sense that scenario A's socket is closed; any bytes
+       left in its static buffer can't parse as a frame on the new
+       socket's stream past lora_frame_try_parse()'s resync. */
+    if (run_scenario_b() != 0)
+        return 1;
+
     return 0;
 }
 
