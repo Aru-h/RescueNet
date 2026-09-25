@@ -213,7 +213,8 @@ void snapshot_begin_run(uint32_t seed)
         "fault_ticks_remaining_mobility,fault_ticks_remaining_communication,"
         "fault_ticks_remaining_resource,fault_ticks_remaining_environment,"
         "fault_ticks_remaining_mission,"
-        "env_raw_travel_cost\n");
+        "env_raw_travel_cost,"
+        "team_task_pool,team_task_slot,heading_to_rest,resting_zone_id\n");
 }
 
 /*
@@ -281,7 +282,7 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
     env_raw_travel_cost = environment_cell_travel_cost(team->loc_x, team->loc_y);
 
     fprintf(g_snapshot_file,
-        "%u,%u,%u,%u,%d,%d,%.2f,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%d,%d,%u,%.4f,%u,%u,%u,%u,%u,%.4f,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+        "%u,%u,%u,%u,%d,%d,%.2f,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%d,%d,%u,%.4f,%u,%u,%u,%u,%u,%.4f,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
         g_run_id,
         g_dataset_seed,
         cycle,
@@ -366,7 +367,14 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
         (team->fault_state.active[FAULT_CLASS_MISSION] &&
          team->fault_state.recovery_tick[FAULT_CLASS_MISSION] > cycle
             ? team->fault_state.recovery_tick[FAULT_CLASS_MISSION] - cycle : 0u),
-        env_raw_travel_cost);
+        env_raw_travel_cost,
+        /* The team's own tasking, as watchdog.c's update_movement_stalls()
+         * sees it (its leg-change reset) - evidence_channels.py mirrors
+         * that from these. Observable tasking, not fault_state. */
+        (unsigned)team->assigned_task_pool,
+        (unsigned)team->assigned_task_slot,
+        (unsigned)team->heading_to_rest,
+        (unsigned)team->resting_zone_id);
 }
 
 void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)

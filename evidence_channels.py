@@ -71,6 +71,7 @@ RAW_COLUMNS = [
     "twin_mission_stage", "twin_assigned_task_pool", "twin_assigned_task_slot",
     "twin_remaining_path_cost", "twin_actual_progress", "twin_expected_progress",
     "twin_expected_arrival_tick", "loc_x", "loc_y",
+    "team_task_pool", "team_task_slot", "heading_to_rest", "resting_zone_id",
 ]
 
 DEFAULTS = {
@@ -89,6 +90,10 @@ DEFAULTS = {
     "twin_expected_arrival_tick": 0,
     "loc_x": 0,
     "loc_y": 0,
+    "team_task_pool": TASK_POOL_NONE,
+    "team_task_slot": NO_ASSIGNMENT_SLOT,
+    "heading_to_rest": 0,
+    "resting_zone_id": 0,
 }
 
 FLAG_BITS = {
@@ -131,6 +136,11 @@ def reconstruct_full_timeline(team_rows, run_max_cycle):
     n_gap_ticks = int((~was_logged).sum())
 
     reindexed = team_rows.reindex(full_index)
+    # Datasets written before the tasking columns existed: the leg never
+    # changes, i.e. the pre-N2 stall behaviour.
+    for col in RAW_COLUMNS:
+        if col not in reindexed.columns:
+            reindexed[col] = DEFAULTS[col]
     reindexed[RAW_COLUMNS] = reindexed[RAW_COLUMNS].ffill()
 
     for col, default in DEFAULTS.items():
@@ -177,6 +187,8 @@ def recompute_team_timeline(full_timeline):
     stall_history = 0
     stall_samples = 0
     last_loc = None
+    # The travel leg seen last tick (watchdog_init() zeroes these).
+    last_leg = (0, 0, 0, 0)
 
     path_stagnation_streak = 0
     last_remaining_cost = None
@@ -205,7 +217,15 @@ def recompute_team_timeline(full_timeline):
         # update_movement_stalls() - runs before the mobility confirmation
         # below, which is what advances prev_status.
         loc = (row["loc_x"], row["loc_y"])
-        if now_en_route and prev_status == STATUS_EN_ROUTE and has_last_sample:
+        leg = (row["team_task_pool"], row["team_task_slot"],
+               row["heading_to_rest"], row["resting_zone_id"])
+        # A re-task, or a heading-to-rest team retargeting to another safe
+        # zone, restarts the window and that tick is not sampled.
+        leg_changed = (leg[0] != last_leg[0] or leg[1] != last_leg[1] or
+                       leg[2] != last_leg[2] or
+                       (leg[2] and leg[3] != last_leg[3]))
+        if (now_en_route and prev_status == STATUS_EN_ROUTE and has_last_sample
+                and not leg_changed):
             stalled = 1 if loc == last_loc else 0
             stall_history = ((stall_history << 1) | stalled) & stall_mask
             if stall_samples < STALL_WINDOW_TICKS:
@@ -215,10 +235,11 @@ def recompute_team_timeline(full_timeline):
                 travel_degradation_seen = True
             elif stall_samples >= STALL_WINDOW_TICKS and stall_history == 0:
                 confirmed_mobility_impairment = False
-        elif not now_en_route:
+        elif not now_en_route or leg_changed:
             stall_history = 0
             stall_samples = 0
         last_loc = loc
+        last_leg = leg
 
         # update_mobility_confirmation()
         now_on_scene = row["status"] == STATUS_ON_SCENE
