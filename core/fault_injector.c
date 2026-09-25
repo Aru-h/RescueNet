@@ -147,6 +147,20 @@ static void inject_resource_fault(uint8_t team_id)
  * (environment.h, ENVIRONMENT_HAS_WORLD_STORAGE); fault_injector_step()
  * never runs on a board anyway. */
 #if ENVIRONMENT_HAS_WORLD_STORAGE
+/* M2: cell-level pre-fault baselines for road_blocked/navigable, the
+ * same role env_fault_base_cost plays for travel_cost. They used to
+ * live only in each team's fault_state, and a second fault landing on
+ * an already-faulted cell (env_fault_ref_count > 0) snapshotted the
+ * FAULTED values (road_blocked = 1). If that second fault was the last
+ * to recover, it "restored" road_blocked = 1 and the cell stayed
+ * blocked for the rest of the run. Written only on the 0 -> 1
+ * ref_count transition and read only on the 1 -> 0 one, so no per-seed
+ * reset is needed. Kept here rather than as EnvironmentCell_t fields
+ * because environment.h is shared with the board build and every
+ * mission-link/snapshot consumer of that struct. */
+static uint8_t s_env_fault_base_road_blocked[GRID_WIDTH][GRID_HEIGHT];
+static uint8_t s_env_fault_base_navigable[GRID_WIDTH][GRID_HEIGHT];
+
 static void inject_environment_fault(uint8_t team_id)
 {
     TeamState_t *team = &g_teams[team_id];
@@ -204,20 +218,17 @@ static void inject_environment_fault(uint8_t team_id)
     if(cell->env_fault_ref_count == 0)
     {
         cell->env_fault_base_cost = cell->travel_cost;
-        fault_state->original_travel_cost[FAULT_CLASS_ENVIRONMENT]  = cell->travel_cost;
-        fault_state->original_road_blocked[FAULT_CLASS_ENVIRONMENT] = cell->road_blocked;
-        fault_state->original_navigable[FAULT_CLASS_ENVIRONMENT]    = cell->navigable;
+        s_env_fault_base_road_blocked[next_x][next_y] = cell->road_blocked;
+        s_env_fault_base_navigable[next_x][next_y]    = cell->navigable;
     }
-    else
-    {
-        /* Not the first owner: snapshot the cell-level base (pre-all-faults
-         * ground truth) so the last recoverer can restore correctly, and
-         * record the current elevated cost so our recovery peels back only
-         * our own severity contribution. */
-        fault_state->original_travel_cost[FAULT_CLASS_ENVIRONMENT]  = cell->env_fault_base_cost;
-        fault_state->original_road_blocked[FAULT_CLASS_ENVIRONMENT] = cell->road_blocked;
-        fault_state->original_navigable[FAULT_CLASS_ENVIRONMENT]    = cell->navigable;
-    }
+
+    /* First owner or not, record the cell-level (pre-all-faults) baseline:
+     * reading cell->road_blocked/navigable here on a stacked fault would
+     * capture the already-faulted state (M2). Recovery restores from the
+     * cell-level baseline; these per-team copies are for telemetry. */
+    fault_state->original_travel_cost[FAULT_CLASS_ENVIRONMENT]  = cell->env_fault_base_cost;
+    fault_state->original_road_blocked[FAULT_CLASS_ENVIRONMENT] = s_env_fault_base_road_blocked[next_x][next_y];
+    fault_state->original_navigable[FAULT_CLASS_ENVIRONMENT]    = s_env_fault_base_navigable[next_x][next_y];
     cell->env_fault_ref_count++;
 
     /* Fix 1 (cost-only): bump travel_cost but preserve navigable.
@@ -331,11 +342,14 @@ static void recover_environment_fault(uint8_t team_id)
          * env_fault_base_cost is immune to subsequent injectors' snapshots,
          * so this always recovers to the correct pre-fault value regardless
          * of how many teams stacked faults here. */
+        /* M2: road_blocked/navigable come from the same cell-level
+         * baseline, not this team's own snapshot, which is the faulted
+         * state whenever this team's fault was stacked on another. */
         environment_set_cell_operational_state(
             x, y,
             cell->env_fault_base_cost,
-            fault_state->original_navigable[fault_class],
-            fault_state->original_road_blocked[fault_class]);
+            s_env_fault_base_navigable[x][y],
+            s_env_fault_base_road_blocked[x][y]);
     }
     else
     {
