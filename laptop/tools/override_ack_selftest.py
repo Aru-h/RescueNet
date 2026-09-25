@@ -177,6 +177,9 @@ def test_app_routes():
         def feed(self, data):
             return data
 
+        def consume_newly_ready(self):
+            return []
+
     bridge = app_module.bridge
     bridge.serial_conn = FakeSerial()
     bridge.handshake = ReadyHandshake()

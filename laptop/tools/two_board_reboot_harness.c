@@ -28,8 +28,8 @@
  *   board0  Board 0 (DK role) reboots after first raising board 1's
  *           replay floor for sender 0 well above the handful of Reqs a
  *           rebooted board 0 sends. Passes when board 0 sees board 1's
- *           Reply again and a second, different roster sent after the
- *           reboot lands on board 1 (which stayed up).
+ *           Reply again and a roster for another board-1 team, sent
+ *           after the reboot, lands on board 1 (which stayed up).
  *
  *   cbba    Once "simulating", board 0 also sends CBBA frames at PRIORITY
  *           every step, which board 1 (in a boot wait loop) never consumes
@@ -295,6 +295,11 @@ static void board_step(void)
 /* ---- laptop-side frames ---- */
 
 #define ROSTER_TEAM 5u /* hosted on board 1 (5 teams per board) */
+/* The roster sent after board 0's reboot is for another board-1 team:
+   a board applies one roster per team per boot and ignores repeats (the
+   laptop re-sends rosters), so a second roster for ROSTER_TEAM would
+   never land on a board 1 that stayed up. */
+#define ROSTER2_TEAM 6u
 
 static void laptop_send_req(void)
 {
@@ -306,23 +311,23 @@ static void laptop_send_req(void)
     usart1_inject(bytes, mission_link_handshake_pack_req(&req, bytes));
 }
 
-static void laptop_send_roster(int16_t loc_x, int16_t loc_y)
+static void laptop_send_roster(uint8_t team_id, int16_t loc_x, int16_t loc_y)
 {
     MissionLinkRoster_t roster;
     uint8_t bytes[MISSION_LINK_ROSTER_WIRE_SIZE];
 
     memset(&roster, 0, sizeof(roster));
-    roster.team_id = ROSTER_TEAM;
+    roster.team_id = team_id;
     roster.loc_x = loc_x;
     roster.loc_y = loc_y;
     roster.stamina = 80u;
     usart1_inject(bytes, mission_link_pack_roster(&roster, bytes));
 }
 
-static int roster_landed(int16_t loc_x, int16_t loc_y)
+static int roster_landed(uint8_t team_id, int16_t loc_x, int16_t loc_y)
 {
-    return g_teams[ROSTER_TEAM].team_id == ROSTER_TEAM &&
-           g_teams[ROSTER_TEAM].loc_x == loc_x && g_teams[ROSTER_TEAM].loc_y == loc_y;
+    return g_teams[team_id].team_id == team_id &&
+           g_teams[team_id].loc_x == loc_x && g_teams[team_id].loc_y == loc_y;
 }
 
 /* Two distinct in-grid locations, so the second roster can't be mistaken
@@ -342,7 +347,7 @@ static int run_board1(void)
     board_power_on(1u);
 
     clock_gettime(CLOCK_MONOTONIC, &t);
-    while (!roster_landed(ROSTER1_X, ROSTER1_Y))
+    while (!roster_landed(ROSTER_TEAM, ROSTER1_X, ROSTER1_Y))
     {
         board_step();
         if (elapsed_ms(&t) > PHASE_BUDGET_MS)
@@ -356,7 +361,7 @@ static int run_board1(void)
     {
         /* Board 1 stays up; board 0 reboots and must reach it again. */
         clock_gettime(CLOCK_MONOTONIC, &t);
-        while (!roster_landed(ROSTER2_X, ROSTER2_Y))
+        while (!roster_landed(ROSTER2_TEAM, ROSTER2_X, ROSTER2_Y))
         {
             board_step();
             if (elapsed_ms(&t) > 2u * PHASE_BUDGET_MS)
@@ -397,7 +402,7 @@ static int run_board1(void)
     board_power_on(1u);
 
     clock_gettime(CLOCK_MONOTONIC, &t);
-    while (!(mission_link_handshake_build_local_reply(&reply) && roster_landed(ROSTER1_X, ROSTER1_Y)))
+    while (!(mission_link_handshake_build_local_reply(&reply) && roster_landed(ROSTER_TEAM, ROSTER1_X, ROSTER1_Y)))
     {
         board_step();
         if (elapsed_ms(&t) > PHASE_BUDGET_MS)
@@ -405,7 +410,7 @@ static int run_board1(void)
             fprintf(stderr, "[board1] FAIL: after reboot, handshake/roster never recovered "
                              "(handshake_done=%d roster=%d auth_fail=%u hold=%u)\n",
                     mission_link_handshake_build_local_reply(&reply),
-                    roster_landed(ROSTER1_X, ROSTER1_Y),
+                    roster_landed(ROSTER_TEAM, ROSTER1_X, ROSTER1_Y),
                     lora_frame_auth_fail_count(), lora_frame_session_hold_count());
             return 1;
         }
@@ -418,7 +423,8 @@ static int run_board1(void)
 /* ---- board 0 (parent) ---- */
 
 /* Steps until board 0 has board 1's Reply, then sends the roster. */
-static int board0_deliver_roster(int16_t loc_x, int16_t loc_y, const char *phase)
+static int board0_deliver_roster(uint8_t team_id, int16_t loc_x, int16_t loc_y,
+                                 const char *phase)
 {
     struct timespec t;
 
@@ -435,7 +441,7 @@ static int board0_deliver_roster(int16_t loc_x, int16_t loc_y, const char *phase
             return 1;
         }
     }
-    laptop_send_roster(loc_x, loc_y);
+    laptop_send_roster(team_id, loc_x, loc_y);
     return 0;
 }
 
@@ -457,7 +463,7 @@ static int run_board0(void)
     board_power_on(0u);
     laptop_send_req();
 
-    if (board0_deliver_roster(ROSTER1_X, ROSTER1_Y, "first boot"))
+    if (board0_deliver_roster(ROSTER_TEAM, ROSTER1_X, ROSTER1_Y, "first boot"))
     {
         return 1;
     }
@@ -497,7 +503,7 @@ static int run_board0(void)
                 return 1;
             }
         }
-        if (board0_deliver_roster(ROSTER1_X, ROSTER1_Y, "after board 1's reboot"))
+        if (board0_deliver_roster(ROSTER_TEAM, ROSTER1_X, ROSTER1_Y, "after board 1's reboot"))
         {
             return 1;
         }
@@ -551,7 +557,7 @@ static int run_board0(void)
     board_power_on(0u);
     laptop_send_req(); /* the laptop's keepalive Req reaches the rebooted board */
 
-    if (board0_deliver_roster(ROSTER2_X, ROSTER2_Y, "after own reboot"))
+    if (board0_deliver_roster(ROSTER2_TEAM, ROSTER2_X, ROSTER2_Y, "after own reboot"))
     {
         return 1;
     }

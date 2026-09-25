@@ -37,16 +37,19 @@ def check(cond, what):
 
 # Produced by core/mission_link.c's mission_link_pack_status() for
 # {team 3, ON_SCENE, equipment 77, incident 0x12F99F34, work 0x9FF9, rate 5,
-#  stamina 42, tick 0x00ABCDEF}. work_remaining encodes as F9 9F - the status
-# magic pair itself - on purpose.
-C_GOLDEN_STATUS = bytes.fromhex("f99f03024d349ff912f99f052aefcdab005e")
+#  stamina 42, tick 0x00ABCDEF, loc (17, -2)} (schema v3). work_remaining
+# encodes as F9 9F - the status magic pair itself - on purpose, and loc_y is
+# negative to pin the signed field.
+C_GOLDEN_STATUS = bytes.fromhex("f99f03024d349ff912f99f052aefcdab001100feff6c")
 C_GOLDEN_STATUS_FIELDS = {
     "team_id": 3, "status": 2, "equipment_level": 77,
     "assigned_incident_id": 0x12F99F34, "work_remaining_at_report": 0x9FF9,
     "work_rate": 5, "stamina_at_report": 42, "report_tick": 0x00ABCDEF,
+    "loc_x": 17, "loc_y": -2,
 }
-# {team 1, AVAILABLE, equipment 100, MISSION_LINK_NO_INCIDENT, 0, 0, 100, tick 7}
-C_GOLDEN_IDLE = bytes.fromhex("f99f010064ffffffff0000006407000000cc")
+# {team 1, AVAILABLE, equipment 100, MISSION_LINK_NO_INCIDENT, 0, 0, 100, tick 7,
+#  loc (0, 35)}
+C_GOLDEN_IDLE = bytes.fromhex("f99f010064ffffffff000000640700000000002300ef")
 
 
 def statuses_from(events):
@@ -58,9 +61,9 @@ def passthrough_from(events):
 
 
 def test_wire_format_matches_c():
-    check(pack_mission_link_status(3, 2, 77, 0x12F99F34, 0x9FF9, 5, 42, 0x00ABCDEF)
+    check(pack_mission_link_status(3, 2, 77, 0x12F99F34, 0x9FF9, 5, 42, 0x00ABCDEF, 17, -2)
           == C_GOLDEN_STATUS, "Python packer matches the C packer byte for byte")
-    check(pack_mission_link_status(1, 0, 100, MISSION_LINK_NO_INCIDENT, 0, 0, 100, 7)
+    check(pack_mission_link_status(1, 0, 100, MISSION_LINK_NO_INCIDENT, 0, 0, 100, 7, 0, 35)
           == C_GOLDEN_IDLE, "Python packer matches C for an idle team")
     events = MissionLinkStatusParser().feed(C_GOLDEN_STATUS + C_GOLDEN_IDLE)
     got = statuses_from(events)
