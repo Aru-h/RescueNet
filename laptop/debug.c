@@ -751,7 +751,7 @@ int debug_run_priority1_sweep(uint32_t first_seed, uint32_t seed_count, uint32_t
            INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD,
            g_diag_incidents_quarantined - quarantined_before_sweep,
            g_diag_incidents_quarantined);
-    printf("[SWEEP P1] passive-sweep cells straddling a district boundary (M37 misattribution, fix shelved) this sweep: %u (cumulative process total: %u)\n",
+    printf("[SWEEP P1] passive-sweep cells straddling a district boundary (credited to the cell's own district since the M37 fix) this sweep: %u (cumulative process total: %u)\n",
            g_diag_sweep_cross_district_cells - cross_district_before_sweep,
            g_diag_sweep_cross_district_cells);
     printf("[SWEEP P1] worlds with non-distinct evacuation gateways this sweep: %lu (expected 0; cumulative process total: %lu)\n",
