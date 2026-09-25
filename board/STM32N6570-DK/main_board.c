@@ -86,6 +86,14 @@
 #ifndef BOARD_SEED_COUNT
 #define BOARD_SEED_COUNT 1u
 #endif
+/* Exactly one seed per boot. g_current_tick follows the laptop's mission
+ * clock and nothing resets it between seeds (sim_start_seed_board() must
+ * not - see core/sim_runner.h), so a second seed would find its tick loop
+ * (g_current_tick < BOARD_TICKS_PER_SEED) already finished and never run.
+ * Running several seeds would need the laptop to restart its clock and
+ * resend the world for each one first. */
+_Static_assert(BOARD_SEED_COUNT == 1u,
+               "BOARD_SEED_COUNT must be 1: g_current_tick is never reset between board seeds");
 /* Upper bound only: ticks follow the laptop's mission clock (see the
  * tick loop in sim_task()), so the laptop decides how long a mission
  * runs. */

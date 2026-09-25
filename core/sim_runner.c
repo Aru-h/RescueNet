@@ -7,6 +7,12 @@
 #include "allocator.h"
 #include "snapshot.h"
 #include "mission_state.h"
+#include "watchdog.h"
+#include "mission_execution_twin.h"
+#include "cbba.h"
+#include "recovery_manager.h"
+#include "fault_comms.h"
+#include "search_zones.h"
 
 int sim_runner_init(void)
 {
@@ -37,8 +43,9 @@ void sim_start_seed(uint32_t seed, FaultProfile_t fault_profile)
  * sim_runner.h's doc comment on this function (read it before
  * editing this one, or sim_start_seed() above) for why the split
  * exists and the maintenance warning about keeping the two in sync
- * on everything except the generate_world() call. Only caller:
- * board/STM32N6570-DK/main_board.c. */
+ * on everything except world generation. Only callers:
+ * board/STM32N6570-DK/main_board.c and board/Raspberry_Pi_Pico/
+ * main_board.c. */
 void sim_start_seed_board(uint32_t seed, FaultProfile_t fault_profile)
 {
     fault_config_apply_profile(fault_profile);
@@ -57,6 +64,53 @@ void sim_start_seed_board(uint32_t seed, FaultProfile_t fault_profile)
     /* Same rule for the tick itself: a board executes its teams but
      * runs no world events - see SimRole_t (simulation.h). */
     g_sim_role = SIM_ROLE_BOARD;
+
+    /* The per-run module resets generate_world() does on the laptop,
+     * minus everything that builds or wipes world state. Without them
+     * a board ran on zero-initialised statics that are NOT the
+     * intended defaults (watchdog last_remaining_cost 0 instead of
+     * UINT16_MAX and last_assigned_task_slot 0 instead of
+     * NO_ASSIGNMENT, fault_buffer's per-board last-heard tick 0
+     * instead of FAULT_BUFFER_BOARD_NEVER_HEARD, ...).
+     *
+     * By the time this runs the board has already been handed its
+     * incidents, roster, route map, sites and clock over the mission
+     * link (main_board.c waits for roster/map/sites before the seed
+     * loop, and applies incidents during that wait), so every call
+     * here was checked to touch only its own module's state:
+     *   watchdog_init()                  g_watchdog_state[] only
+     *   mission_execution_twin_reset()   g_mission_execution_twin[] and
+     *                                    its comm-gap window; READS
+     *                                    g_teams[] loc/stamina/status
+     *                                    (which is why it must run
+     *                                    after the roster arrives)
+     *   cbba_reset_improvement_counters() two diagnostic counters
+     *   recovery_manager_init()          recovery state/metrics; READS
+     *                                    g_teams[] assignment/status
+     *   fault_comms_init()               fault_buffer histories and
+     *                                    last-heard ticks; fault traffic
+     *                                    that arrived during the boot
+     *                                    wait was already discarded
+     *                                    (board_boot_wait_discard_
+     *                                    stale_frames()), and
+     *                                    comms_transport_init() has run
+     *   search_zones_init()              sweep bookkeeping, which is
+     *                                    laptop-side only on a board
+     * Deliberately NOT called: initialize_incidents(), generate_teams(),
+     * initialize_grid(), environment/safe-zone/gateway generation,
+     * random_seed_all() and fault_injector_init() (a board injects no
+     * faults), and anything else that clears g_incidents[], g_teams[]
+     * roster/location fields, the map or the sites.
+     *
+     * Same order as generate_world(). g_current_tick is NOT reset
+     * here (it follows the laptop's clock), which is why main_board.c
+     * requires BOARD_SEED_COUNT == 1. */
+    search_zones_init();
+    watchdog_init();
+    mission_execution_twin_reset();
+    cbba_reset_improvement_counters();
+    recovery_manager_init();
+    fault_comms_init();
 
     snapshot_begin_run(seed);
 }
