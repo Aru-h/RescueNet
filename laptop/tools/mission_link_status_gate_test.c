@@ -1,21 +1,41 @@
 /*
- * Confirms board/STM32N6570-DK/mission_link_task.c's mission_link_
- * status_tx_step() new RECOVERY_ACTION_ABORT_MISSION gate: an aborted
- * team stops sending MissionLinkStatus_t frames, while a still-active
- * team's reporting is unaffected - with REAL frame sequencing, not an
- * isolated stub. This links the REAL board/STM32N6570-DK/mission_
- * link_task.c (the file with the actual fix) and calls its REAL
- * public mission_link_task_step() entry point, exactly as board/
- * STM32N6570-DK/main_board.c's own tick loop does.
+ * Regression check for board/STM32N6570-DK/mission_link_task.c's
+ * mission_link_status_tx_step(): a team whose recovery recommendation is
+ * RECOVERY_ACTION_ABORT_MISSION must KEEP sending MissionLinkStatus_t
+ * frames. That function used to skip aborted teams entirely, on the
+ * theory that "an aborted team has nothing new worth reporting" - but
+ * ABORT is exactly what pulls a team off its incident and sends it to
+ * rest (recovery_dispatch() -> abandon_task_for_recovery(), core/
+ * recovery_manager.c), and the recommendation stays sticky under
+ * hysteresis. With the skip in place the laptop never learned the team
+ * had left: laptop/mission_mirror.c's mission_mirror_team_left_task()
+ * never reopened the incident, and the team's position/stamina froze on
+ * the dashboard.
  *
- * "Real frame sequencing" here means: the actual wire bytes mission_
- * link_send_status() writes via tm_putchar() (board 0's USART1-to-
- * laptop path - g_comms_transport_this_board_id defaults to 0) are
- * captured by this test's own stub tm/tmonitor.h (laptop/tools/
+ * The very first mission_link_task_step() sends every local team
+ * unconditionally (nothing has been sent yet, so there's no anchor to
+ * compare against), so a single step can't tell the old and new
+ * behaviour apart. The sequence here is therefore:
+ *   1. step once with every team healthy, so each team's last-sent
+ *      anchor is known;
+ *   2. drive team 0 to a REAL ABORT_MISSION recommendation (team 1 stays
+ *      healthy);
+ *   3. change what team 0 reports the way the abort-to-rest path does
+ *      (status -> STATUS_RESTING, new location), and move team 1 so it
+ *      has something new to report too;
+ *   4. step again and require BOTH teams' new frames on the wire, with
+ *      team 0's frame carrying the post-abort status/location. Under
+ *      the old suppression team 0's frame would be missing.
+ *
+ * This links the REAL board/STM32N6570-DK/mission_link_task.c and calls
+ * its REAL public mission_link_task_step() entry point, exactly as
+ * board/STM32N6570-DK/main_board.c's own tick loop does. The actual wire
+ * bytes mission_link_send_status() writes via tm_putchar() (board 0's
+ * USART1-to-laptop path - g_comms_transport_this_board_id defaults to 0)
+ * are captured by this test's own stub tm/tmonitor.h (laptop/tools/
  * mission_link_gate_test_stubs/) and decoded with the REAL core/
- * mission_link_codec.h mission_link_parse_status() - this test reads
- * back genuine, wire-format-correct MissionLinkStatus_t frames, not a
- * hand-rolled approximation of what the wire protocol looks like.
+ * mission_link_codec.h mission_link_parse_status() - genuine,
+ * wire-format-correct frames, not a hand-rolled approximation.
  *
  * Uses a SEPARATE stub tm/tmonitor.h from laptop/tools/harness_stubs/
  * (two_board_harness.c's own, already-hardened stub) - this test does
@@ -24,8 +44,7 @@
  * Overrides fault_predictor_run()/watchdog_get_status()/watchdog_get_
  * evidence_vector() (core/fault_predictor.c and core/watchdog.c
  * excluded from the link) so a real ABORT_MISSION recommendation can
- * be driven with a synthetic confidence sequence - same technique as
- * laptop/tools/fault_comms_abort_gate_test.c.
+ * be driven with a synthetic confidence sequence.
  *
  * Build: see Makefile's check-mission-link-status-gate target.
  */
@@ -110,11 +129,14 @@ static const char *action_name(RecoveryAction_t a)
 
 /* Scans the captured byte stream for every valid MISSION_LINK_STATUS_
    WIRE_SIZE-aligned frame that mission_link_parse_status() accepts,
-   and records which team_ids actually appeared - a real decode of the
-   real wire bytes, not a byte-count guess. */
-static void decode_captured_status_frames(uint8_t seen_team[NUM_TEAMS])
+   and records which team_ids actually appeared (plus the last decoded
+   frame per team) - a real decode of the real wire bytes, not a
+   byte-count guess. */
+static void decode_captured_status_frames(uint8_t seen_team[NUM_TEAMS],
+    MissionLinkStatus_t last_frame[NUM_TEAMS])
 {
     memset(seen_team, 0, NUM_TEAMS);
+    memset(last_frame, 0, NUM_TEAMS * sizeof(last_frame[0]));
     for (int offset = 0; offset + (int)MISSION_LINK_STATUS_WIRE_SIZE <= g_mission_link_gate_test_captured_len; offset++)
     {
         MissionLinkStatus_t status;
@@ -122,10 +144,21 @@ static void decode_captured_status_frames(uint8_t seen_team[NUM_TEAMS])
                 MISSION_LINK_STATUS_WIRE_SIZE, &status) == 1) /* 1 = parsed OK; 0 = short buffer; -1 = bad magic/checksum */
         {
             if (status.team_id < NUM_TEAMS)
+            {
                 seen_team[status.team_id] = 1u;
+                last_frame[status.team_id] = status;
+            }
             offset += (int)MISSION_LINK_STATUS_WIRE_SIZE - 1; /* skip past this frame */
         }
     }
+}
+
+static void print_seen(const uint8_t seen_team[NUM_TEAMS])
+{
+    printf("  Decoded real MissionLinkStatus_t frames - team_ids seen: ");
+    for (uint8_t t = 0; t < NUM_TEAMS; t++)
+        if (seen_team[t]) printf("%u ", t);
+    printf("\n");
 }
 
 int main(void)
@@ -154,7 +187,19 @@ int main(void)
     comms_transport_init();
     g_current_tick = 0u;
 
-    printf("=== Driving team 0 to a REAL ABORT_MISSION recommendation; team 1 stays healthy ===\n");
+    uint8_t seen_team[NUM_TEAMS];
+    MissionLinkStatus_t last_frame[NUM_TEAMS];
+
+    printf("=== Step 1: first REAL mission_link_task_step(), every team healthy (anchors every team) ===\n");
+    g_mission_link_gate_test_captured_len = 0;
+    mission_link_task_step();
+    printf("  Captured %d raw wire bytes\n", g_mission_link_gate_test_captured_len);
+    decode_captured_status_frames(seen_team, last_frame);
+    print_seen(seen_team);
+    CHECK(seen_team[0] == 1u); /* first send is unconditional - anchor is now known */
+    CHECK(seen_team[1] == 1u);
+
+    printf("\n=== Step 2: driving team 0 to a REAL ABORT_MISSION recommendation; team 1 stays healthy ===\n");
     RecoveryAction_t team0_reached = RECOVERY_ACTION_CONTINUE_MONITORING;
     for (int tick = 1; tick <= 30; tick++)
     {
@@ -178,22 +223,27 @@ int main(void)
     CHECK(team0_reached == RECOVERY_ACTION_ABORT_MISSION);
     CHECK(recovery_manager_get_recommendation(1) == RECOVERY_ACTION_CONTINUE_MONITORING);
 
-    printf("\n=== Calling the REAL mission_link_task_step() once, capturing real USART1 wire bytes ===\n");
+    printf("\n=== Step 3: team 0 leaves for rest (status + location change); team 1 moves ===\n");
+    g_teams[0].status = (uint8_t)STATUS_RESTING;
+    g_teams[0].loc_x = 3;
+    g_teams[0].loc_y = 4;
+    g_teams[1].loc_x = 1;
+    g_teams[1].loc_y = 2;
+
+    printf("\n=== Step 4: second REAL mission_link_task_step(), capturing real USART1 wire bytes ===\n");
     g_mission_link_gate_test_captured_len = 0;
     mission_link_task_step();
 
     printf("  Captured %d raw wire bytes\n", g_mission_link_gate_test_captured_len);
     CHECK(g_mission_link_gate_test_captured_len > 0); /* something real was sent - proves this isn't a no-op run */
 
-    uint8_t seen_team[NUM_TEAMS];
-    decode_captured_status_frames(seen_team);
+    decode_captured_status_frames(seen_team, last_frame);
+    print_seen(seen_team);
 
-    printf("  Decoded real MissionLinkStatus_t frames - team_ids seen: ");
-    for (uint8_t t = 0; t < NUM_TEAMS; t++)
-        if (seen_team[t]) printf("%u ", t);
-    printf("\n");
-
-    CHECK(seen_team[0] == 0u); /* team 0 (ABORT_MISSION) must NOT appear */
+    CHECK(recovery_manager_get_recommendation(0) == RECOVERY_ACTION_ABORT_MISSION); /* still sticky while reporting */
+    CHECK(seen_team[0] == 1u); /* team 0 (ABORT_MISSION) MUST still report its change */
+    CHECK(seen_team[0] == 0u || last_frame[0].status == (uint8_t)STATUS_RESTING);
+    CHECK(seen_team[0] == 0u || (last_frame[0].loc_x == 3 && last_frame[0].loc_y == 4));
     CHECK(seen_team[1] == 1u); /* team 1 (healthy) must appear - real reporting still works */
 
     printf("\n%s: %d check(s) failed\n", g_failures == 0 ? "PASS" : "FAIL", g_failures);
