@@ -33,11 +33,14 @@
 #include "mtkernel/lib/libtm/libtm.h"   /* tm_com_init() */
 #include "sim_runner.h"
 #include "fault_config.h"
+#include "mission_state.h"       /* g_current_tick - clock-driven tick loop */
 #include "mission_link_codec.h" /* mission_link_roster_reject_count() -
                                     roster-wait loop's reject diagnostic */
 #include "comms_transport.h" /* g_comms_transport_this_board_id,
                                  comms_transport_init() - see
                                  THIS_BOARD_ID below */
+#include "stm32n657xx.h"     /* USART1 registers - board_usart1_read_byte();
+                                same CMSIS header sx1262_hal.c uses */
 
 /*
  * THIS_BOARD_ID: closes a gap comms_transport.h's own "Handoff notes"
@@ -83,25 +86,29 @@
 #ifndef BOARD_SEED_COUNT
 #define BOARD_SEED_COUNT 1u
 #endif
+/* Upper bound only: ticks follow the laptop's mission clock (see the
+ * tick loop in sim_task()), so the laptop decides how long a mission
+ * runs. */
 #ifndef BOARD_TICKS_PER_SEED
-#define BOARD_TICKS_PER_SEED 2000u
+#define BOARD_TICKS_PER_SEED 0xFFFFFFFFu
 #endif
 #ifndef BOARD_FAULT_PROFILE
 #define BOARD_FAULT_PROFILE FAULT_PROFILE_NONE
 #endif
 
-/* Tick pacing via tk_dly_tsk, the µT-Kernel equivalent of the
- * laptop's nanosleep-based --tick-delay-ms. 0 = run flat out, which
- * is almost certainly what you want for real bring-up (the sim
- * itself is not real-time-paced; only the laptop's --live dashboard
- * mode paces ticks, for human-watchable playback). */
-#ifndef BOARD_TICK_DELAY_MS
-#define BOARD_TICK_DELAY_MS 0u
+/* Tick pacing: none of the board's own. The laptop is the clock
+ * master (core/mission_link.h section 5b) - a board runs a sim tick only
+ * once the laptop's MissionLinkClock_t allows it, so a 36 s real-time
+ * demo and a faster rehearsal are the same firmware. Between allowed
+ * ticks the board keeps the link serviced and sleeps this long per
+ * pass, which bounds how late it notices a new clock frame. */
+#ifndef BOARD_CLOCK_IDLE_POLL_MS
+#define BOARD_CLOCK_IDLE_POLL_MS 5u
 #endif
 
 /* Cadence for draining the snapshot ring (board/STM32N6570-DK/snapshot.c)
- * out over USART1. Every tick is too eager: at BOARD_TICK_DELAY_MS=0
- * (flat-out, the expected bring-up setting) that would call into
+ * out over USART1. Every tick is too eager: in a fast (non-real-time)
+ * mission ticks come quickly, and that would call into
  * tm_putchar-based UART writes far more often than the ring can
  * possibly need it, for no benefit -- there's no live consumer this
  * needs to be near-real-time for yet, and it would just add UART
@@ -290,6 +297,9 @@ static int mission_link_handshake_round_trip_complete(void)
 extern uint32_t mission_link_task_peer_reboot_count(void);
 extern int sx1262_hal_get_random_u32(uint32_t *out);
 
+/* USART1 receive errors - see board_usart1_read_byte() below. */
+static uint32_t g_usart1_rx_error_count;
+static uint32_t g_reported_usart1_rx_errors;
 static uint32_t g_reported_auth_fails;
 static uint32_t g_reported_session_holds;
 static uint32_t g_reported_peer_reboots;
@@ -327,6 +337,13 @@ static void board_report_link_diagnostics(void)
                       (unsigned long)reboots);
             g_reported_peer_reboots = reboots;
         }
+    }
+
+    if(g_usart1_rx_error_count != g_reported_usart1_rx_errors)
+    {
+        tm_printf((UB*)"tron: USART1 RX errors (%lu so far) - laptop bytes lost (overrun/framing)\n",
+                  (unsigned long)g_usart1_rx_error_count);
+        g_reported_usart1_rx_errors = g_usart1_rx_error_count;
     }
 
     if(!g_reported_first_frame && lora_frame_accept_count() > 0u)
@@ -430,6 +447,107 @@ static void board_seed_lora_session_epoch(void)
     tm_printf((UB*)"tron: LoRa session epoch %08lx\n", (unsigned long)epoch);
 }
 
+/* ---------------------------------------------------------------
+ * USART1 (laptop link) byte I/O and CBBA timing hooks
+ * ---------------------------------------------------------------
+ * The BSP's console driver only offers a blocking read (tm_getchar()
+ * "polling not supported") and a tm_putchar() that sends CR before every
+ * LF. Nothing provided board_usart1_read_byte(), so its weak -1 stub was
+ * all mission_link_task.c ever saw: board 0 could not receive a single
+ * laptop byte - not the handshake Req, not an override, not a roster
+ * (found by review). Both are done here on the same USART1 the BSP's
+ * tm_com.c drives. */
+extern void mission_link_task_usart1_pump(void);
+
+/* Raw write via the BSP's own tm_snd_dat() (declared in libtm.h), with
+   interrupts masked per byte the way tm_putchar() does it. */
+void board_usart1_write(const uint8_t *bytes, uint32_t len)
+{
+    uint32_t i;
+    UINT imask;
+
+    for (i = 0u; i < len; i++)
+    {
+        DI(imask);
+        tm_snd_dat((const UB *)&bytes[i], 1);
+        EI(imask);
+    }
+}
+
+/* Non-blocking: the next received byte, or -1 if none. Overrun, framing
+   and noise errors are cleared (a set ORE stops reception on this
+   peripheral) and counted - a lost byte shows up as a checksum reject in
+   mission_link_task.c's parser, which resyncs. */
+int board_usart1_read_byte(void)
+{
+    uint32_t isr = USART1->ISR;
+
+    if ((isr & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE)) != 0u)
+    {
+        USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF;
+        g_usart1_rx_error_count++;
+    }
+
+    if ((isr & USART_ISR_RXNE_RXFNE) == 0u)
+    {
+        return -1;
+    }
+
+    return (int)(USART1->RDR & 0xFFu);
+}
+
+/* tm_com_init() leaves USART1 with a one-byte receive register, so any
+   byte not read before the next one arrives is lost - and this board is
+   often busy for longer than one byte time (86 us at 115200). The
+   16-byte hardware FIFO holds a whole laptop frame; it can only be
+   switched on while the peripheral is disabled, so wait for any
+   transmission in progress to finish first. */
+static void board_usart1_enable_rx_fifo(void)
+{
+    UINT imask;
+    uint32_t spins = 1000000u;
+
+    DI(imask);
+    while ((USART1->ISR & USART_ISR_TC) == 0u && spins > 0u)
+    {
+        spins--;
+    }
+    USART1->CR1 &= ~USART_CR1_UE;
+    USART1->CR1 |= USART_CR1_FIFOEN;
+    USART1->CR1 |= USART_CR1_UE;
+    EI(imask);
+}
+
+/* Real milliseconds for CBBA's reply timeout and the status heartbeat
+   (cbba.h requires this on hardware). Neither board used to define it, so
+   both ran on cbba.c's simulated clock - 10 ms per call - and a "530 ms"
+   CBBA wait took microseconds (found by review). If the kernel call ever
+   fails, time still advances so no wait can spin forever. */
+uint32_t cbba_now_ms(void)
+{
+    SYSTIM now;
+    static uint32_t s_fallback_ms;
+
+    if (tk_get_otm(&now) == E_OK)
+    {
+        return (uint32_t)now.lo;
+    }
+
+    s_fallback_ms += 10u;
+    return s_fallback_ms;
+}
+
+/* Services the radio and USART1 through CBBA's reply wait (see cbba.h):
+   this board's queued bids go out and the peer's replies come in. Laptop
+   bytes are only buffered here - mission_link_task_step() parses them
+   after sim_tick() returns. */
+void cbba_wait_poll(void)
+{
+    sx1262_poll_rx();
+    comms_transport_dispatch_pending();
+    mission_link_task_usart1_pump();
+}
+
 LOCAL void sim_task(INT stacd, void *exinf);
 LOCAL ID sim_tskid;
 LOCAL T_CTSK sim_ctsk = {
@@ -490,6 +608,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
     g_comms_transport_this_board_id = THIS_BOARD_ID;
     comms_transport_init();
     board_seed_lora_session_epoch();
+    board_usart1_enable_rx_fifo();
 
 #ifdef LORA_RAW_RX_CHECK
     /*
@@ -646,12 +765,18 @@ LOCAL void sim_task(INT stacd, void *exinf)
      * type wired to a real TX/RX path yet) - once that lands, roster
      * frames follow the handshake frames through the same pipe.
      */
-    tm_putstring((UB*)"tron: waiting on mission roster arrival\n");
+    /* Also waits for the whole route map and the safe zone/gateway sites
+       (core/mission_link.h sections 5c/5d): the laptop sends them right
+       after the rosters, and a tick run without them routes teams through
+       blocked cells and leaves nowhere to rest. */
+    tm_putstring((UB*)"tron: waiting on mission roster, map and sites\n");
 
     {
     uint32_t reported_rejects = 0u;
 
-    while (mission_link_task_any_roster_applied() == 0u)
+    while (mission_link_task_any_roster_applied() == 0u ||
+           mission_link_map_rows_received() < MISSION_LINK_MAP_HEIGHT ||
+           !mission_link_sites_received())
     {
         uint32_t rejects;
 
@@ -678,7 +803,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
     }
     }
 
-    tm_putstring((UB*)"tron: roster received, starting seed loop\n");
+    tm_putstring((UB*)"tron: roster, map and sites received, starting seed loop\n");
 
     for(uint32_t seed = BOARD_SEED; seed < BOARD_SEED + BOARD_SEED_COUNT; ++seed)
     {
@@ -690,9 +815,34 @@ LOCAL void sim_task(INT stacd, void *exinf)
          * looks like a typo; it is not one. */
         sim_start_seed_board(seed, BOARD_FAULT_PROFILE);
 
-        for(uint32_t tick = 0; tick < BOARD_TICKS_PER_SEED; ++tick)
+        while(g_current_tick < BOARD_TICKS_PER_SEED)
         {
+            uint32_t start_tick;
+            uint32_t tick;
+
+            if(!mission_link_clock_step_plan(g_current_tick, mission_link_authorized_tick(),
+                                             &start_tick))
+            {
+                /* Waiting for the laptop's next tick: keep receiving,
+                   relaying and heartbeating meanwhile. */
+                sx1262_poll_rx();
+                mission_link_task_step();
+                comms_transport_dispatch_pending();
+                tk_dly_tsk(BOARD_CLOCK_IDLE_POLL_MS);
+                continue;
+            }
+
+            if(start_tick != g_current_tick)
+            {
+                tm_printf((UB*)"tron: tick %lu is too far behind the laptop's %lu, joining at %lu\n",
+                          (unsigned long)g_current_tick,
+                          (unsigned long)mission_link_authorized_tick(),
+                          (unsigned long)(start_tick + 1u));
+                g_current_tick = start_tick;
+            }
+
             sim_tick();
+            tick = g_current_tick;
 
             /* Heartbeat trigger hook (this prompt's addition - see the
                extern declarations above for scope). Every tick, not
@@ -715,9 +865,6 @@ LOCAL void sim_task(INT stacd, void *exinf)
                 board_report_link_diagnostics();
             }
 
-#if BOARD_TICK_DELAY_MS > 0
-            tk_dly_tsk(BOARD_TICK_DELAY_MS);
-#endif
         }
 
         /* Final drain: flush whatever the last partial interval left
