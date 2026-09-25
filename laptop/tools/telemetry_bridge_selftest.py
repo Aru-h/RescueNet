@@ -17,9 +17,13 @@ Run directly: `python3 telemetry_bridge_selftest.py`
 import struct
 
 from telemetry_bridge import (
+    INCIDENT_STATUS_RESOLVED,
+    MISSION_LINK_INCIDENT_MAGIC,
+    MissionFeed,
     TelemetryFrameParser,
     TELEMETRY_FRAME_MAGIC0,
     TELEMETRY_FRAME_MAGIC1,
+    mission_frame_key,
     telemetry_frame_checksum,
 )
 
@@ -106,5 +110,115 @@ def main():
           "chunk size tested (whole stream, 7B, 3B, 1B-at-a-time).")
 
 
+# ---------------------------------------------------------------------------
+# MissionFeed: lost RESOLVED frames are re-sent (review finding M4)
+# ---------------------------------------------------------------------------
+
+class _Clock:
+    """Injectable clock - MissionFeed(clock=...) plus pump(now=...)."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def _incident_frame(incident_id, status=0):
+    payload = struct.pack("<IhhHBBBBBB", incident_id, 5, 6, 40, 1, 2, 1, status, 3, 1)
+    return MISSION_LINK_INCIDENT_MAGIC + payload + bytes((sum(payload) & 0xFF,))
+
+
+def _run(feed, clock, seconds, frames, step=0.05):
+    end = clock.now + seconds
+    while clock.now < end:
+        feed.pump(now=clock.now)
+        clock.now += step
+
+
+def _sends_of(frames, incident_id):
+    return [f for f in frames if mission_frame_key(f) == ("incident", incident_id)]
+
+
+def test_resolved_resent_then_forgotten():
+    frames = []
+    clock = _Clock()
+    feed = MissionFeed(frames.append, clock=clock)
+    resolved = _incident_frame(21, status=INCIDENT_STATUS_RESOLVED)
+
+    feed.feed_line(f"MLFRAME 1 {_incident_frame(21).hex()}\n")
+    feed.feed_line(f"MLFRAME 2 {_incident_frame(22).hex()}\n")
+    _run(feed, clock, 1.0, frames)
+    feed.feed_line(f"MLFRAME 3 {resolved.hex()}\n")
+    frames.clear()
+
+    # Long enough for the whole budget, well inside the window.
+    _run(feed, clock, (MissionFeed.RESOLVED_RESEND_COUNT + 3) * MissionFeed.INCIDENT_REFRESH_SEC, frames)
+    sends = _sends_of(frames, 21)
+    assert all(f == resolved for f in sends), "a resolved incident is only ever re-sent as RESOLVED"
+    assert len(sends) == 1 + MissionFeed.RESOLVED_RESEND_COUNT, \
+        f"initial RESOLVED + {MissionFeed.RESOLVED_RESEND_COUNT} re-sends, got {len(sends)}"
+    assert _sends_of(frames, 22), "open incidents keep being refreshed alongside"
+    assert feed.status_dict()["resolved_resending"] == 0, "forgotten once the budget is spent"
+
+    frames.clear()
+    _run(feed, clock, 10 * MissionFeed.INCIDENT_REFRESH_SEC, frames)
+    assert not _sends_of(frames, 21), "never re-sent after being forgotten"
+
+
+def test_resolved_window_expires():
+    frames = []
+    clock = _Clock()
+    feed = MissionFeed(frames.append, clock=clock)
+    # Budget far larger than the window allows, so the window is what ends it.
+    feed.RESOLVED_RESEND_COUNT = 1000
+    resolved = _incident_frame(31, status=INCIDENT_STATUS_RESOLVED)
+    feed.feed_line(f"MLFRAME 1 {resolved.hex()}\n")
+
+    _run(feed, clock, MissionFeed.RESOLVED_RESEND_WINDOW_SEC + 4 * MissionFeed.INCIDENT_REFRESH_SEC,
+         frames, step=0.1)
+    sends = len(_sends_of(frames, 31))
+    expected_max = 2 + int(MissionFeed.RESOLVED_RESEND_WINDOW_SEC / MissionFeed.INCIDENT_REFRESH_SEC)
+    assert 3 <= sends <= expected_max, f"re-sent only within the window ({sends})"
+    assert feed.status_dict()["resolved_resending"] == 0
+
+
+def test_resolved_bounded_and_rate_limited():
+    frames = []
+    clock = _Clock()
+    feed = MissionFeed(frames.append, clock=clock)
+    for i in range(MissionFeed.RESOLVED_KEPT + 25):
+        feed.feed_line(f"MLFRAME 1 {_incident_frame(1000 + i, status=INCIDENT_STATUS_RESOLVED).hex()}\n")
+    assert feed.status_dict()["resolved_resending"] == MissionFeed.RESOLVED_KEPT, "bounded"
+
+    sent_at = []
+    end = 30.0
+    while clock.now < end:
+        if feed.pump(now=clock.now):
+            sent_at.append(clock.now)
+        clock.now += 0.01
+    gaps = [b - a for a, b in zip(sent_at, sent_at[1:])]
+    assert gaps and min(gaps) >= 1.0 / MissionFeed.MAX_FRAMES_PER_SEC - 1e-9, "MAX_FRAMES_PER_SEC respected"
+    # Oldest were dropped: the first 25 ids never come back after their initial send.
+    resent_ids = {mission_frame_key(f)[1] for f in frames[len(frames) - 5:]}
+    assert all(i >= 1025 for i in resent_ids), f"oldest forgotten first ({sorted(resent_ids)})"
+
+
+def test_reopened_incident_leaves_resolved_set():
+    frames = []
+    clock = _Clock()
+    feed = MissionFeed(frames.append, clock=clock)
+    feed.feed_line(f"MLFRAME 1 {_incident_frame(41, status=INCIDENT_STATUS_RESOLVED).hex()}\n")
+    feed.feed_line(f"MLFRAME 2 {_incident_frame(41).hex()}\n")
+    assert feed.status_dict()["resolved_resending"] == 0
+    assert feed.status_dict()["open_incidents"] == 1
+
+
 if __name__ == "__main__":
     main()
+    test_resolved_resent_then_forgotten()
+    test_resolved_window_expires()
+    test_resolved_bounded_and_rate_limited()
+    test_reopened_incident_leaves_resolved_set()
+    print("ALL CHECKS PASSED: MissionFeed re-sends lost RESOLVED frames within "
+          "budget/window/rate limits.")

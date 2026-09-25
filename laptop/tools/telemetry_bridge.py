@@ -720,6 +720,15 @@ class MissionFeed:
     - one still-open incident every INCIDENT_REFRESH_SEC, round-robin (boards
       keep their own execution state over a re-send - see
       mission_link_apply_incident());
+    - alongside it, one recently RESOLVED incident every INCIDENT_REFRESH_SEC,
+      round-robin, each at most RESOLVED_RESEND_COUNT more times and for at
+      most RESOLVED_RESEND_WINDOW_SEC after its first re-send, keeping at
+      most RESOLVED_KEPT of them (oldest forgotten first). A RESOLVED frame
+      lost on the LoRa relay used to be gone for good: the incident left
+      _open_incidents, so nothing ever re-sent it, and board 1 kept a stale
+      incident - and the slot it occupies - forever (review finding M4).
+      Re-sending it is harmless: a board that already closed it has no slot
+      for it and ignores the frame (mission_link_apply_incident()).
     - the current clock tick every CLOCK_RESEND_SEC, so a lost clock frame
       delays a board by seconds rather than a whole tick.
 
@@ -752,6 +761,9 @@ class MissionFeed:
     INCIDENT_REFRESH_SEC = 2.0
     CLOCK_RESEND_SEC = 3.0
     MAP_RESEND_SEC = 120.0
+    RESOLVED_RESEND_COUNT = 5
+    RESOLVED_RESEND_WINDOW_SEC = 60.0
+    RESOLVED_KEPT = 40              # 2 x NUM_INCIDENTS
     LIVE_FRAMES_KEPT = 50
 
     def __init__(self, write_fn, clock=time.monotonic):
@@ -761,6 +773,8 @@ class MissionFeed:
         self._pending = OrderedDict()   # key -> frame bytes
         self._rosters = OrderedDict()   # team -> frame bytes
         self._open_incidents = OrderedDict()  # incident_id -> latest frame
+        # incident_id -> [RESOLVED frame, re-sends left, deadline or None]
+        self._resolved_incidents = OrderedDict()
         self._clock_frame = None
         self._sites_frame = None
         self._map_rows = OrderedDict()  # row -> latest frame
@@ -815,7 +829,14 @@ class MissionFeed:
             elif kind == "incident":
                 if frame[_INCIDENT_STATUS_WIRE_OFFSET] == INCIDENT_STATUS_RESOLVED:
                     self._open_incidents.pop(ident, None)
+                    # Deadline starts at its first re-send - feed_line() has
+                    # no clock of its own (see pump()).
+                    self._resolved_incidents.pop(ident, None)
+                    self._resolved_incidents[ident] = [frame, self.RESOLVED_RESEND_COUNT, None]
+                    while len(self._resolved_incidents) > self.RESOLVED_KEPT:
+                        self._resolved_incidents.popitem(last=False)
                 else:
+                    self._resolved_incidents.pop(ident, None)
                     self._open_incidents[ident] = frame
             elif kind == "clock":
                 self._clock_frame = frame
@@ -867,6 +888,7 @@ class MissionFeed:
                     ident, frame = next(iter(self._open_incidents.items()))
                     self._open_incidents.move_to_end(ident)
                     self._pending.setdefault(("incident", ident), frame)
+                self._resend_one_resolved(now)
                 self._next_incident_refresh = now + self.INCIDENT_REFRESH_SEC
             if now >= self._next_map_resend:
                 for row, frame in self._map_rows.items():
@@ -888,6 +910,26 @@ class MissionFeed:
         with self._lock:
             self.frames_sent += 1
         return 1
+
+    def _resend_one_resolved(self, now):
+        """Queues the next recently RESOLVED incident for a re-send, and
+        forgets any whose budget or window ran out. Caller holds _lock."""
+        while self._resolved_incidents:
+            ident, entry = next(iter(self._resolved_incidents.items()))
+            frame, left, deadline = entry
+            if deadline is None:
+                deadline = entry[2] = now + self.RESOLVED_RESEND_WINDOW_SEC
+            if left <= 0 or now > deadline:
+                del self._resolved_incidents[ident]
+                continue
+            entry[1] = left - 1
+            if entry[1] <= 0:
+                del self._resolved_incidents[ident]
+            else:
+                self._resolved_incidents.move_to_end(ident)
+            # A pending frame for this id is at least as new - keep it.
+            self._pending.setdefault(("incident", ident), frame)
+            return
 
     def force_full_resend(self):
         """Queues every roster, the sites frame, and every map row right
@@ -1032,6 +1074,7 @@ class MissionFeed:
                 "rosters": len(self._rosters),
                 "map_rows": len(self._map_rows),
                 "open_incidents": len(self._open_incidents),
+                "resolved_resending": len(self._resolved_incidents),
                 "error": self.error,
             }
 
