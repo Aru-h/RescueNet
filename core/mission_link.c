@@ -916,6 +916,18 @@ void mission_link_apply_roster(const MissionLinkRoster_t *msg)
         return;
     }
 
+    if (msg->specialization >= NUM_TEAM_SPECIALIZATIONS ||
+        msg->fitness_tier > (uint8_t)LIGHT)
+    {
+        /* Same whole-message reject (review finding H4): specialization
+           indexes CAPABILITY_MATRIX (core/scoring.c) and the per-
+           specialization diagnostics, and fitness_tier selects the
+           FITNESS_* speed/stamina multipliers - only ARDUOUS/MODERATE/
+           LIGHT exist. */
+        g_roster_reject_count++;
+        return;
+    }
+
     if (msg->equipment_level > EQ_MAX_LEVEL)
     {
         /* Same whole-message reject: a level above the gauge's maximum
@@ -1109,9 +1121,54 @@ static void mission_link_retarget_on_scene_teams(IncidentState_t *incident)
     }
 }
 
+/* Counts incident frames mission_link_apply_incident() rejected whole as
+   out of range - see mission_link_incident_is_valid(). Same "make a
+   silent reject visible" purpose as g_roster_reject_count. */
+static uint32_t g_incident_reject_count;
+
+uint32_t mission_link_incident_reject_count(void)
+{
+    return g_incident_reject_count;
+}
+
+/* Every field of an incident frame that is later used as an array index
+   or a grid coordinate, checked against its real range (review finding
+   H4). USART1 frames carry only an 8-bit additive checksum - roughly one
+   corrupted frame in 256 still passes it - and the LoRa relay is only as
+   trustworthy as its public default PSK, so these are not "can't
+   happen" values:
+     loc_x/loc_y     grid, path and hazard lookups
+     incident_type   g_diag_*_by_type[NUM_INCIDENT_TYPES], archetypes
+     req_capability  CAPABILITY_MATRIX and the *_by_spec diagnostics
+     priority        Priority_t is 1..4; 0 or >4 breaks every
+                     urgency comparison (and H3's eviction choice)
+     status          IncidentStatus_t is 0..INC_RESOLVED */
+static uint8_t mission_link_incident_is_valid(const MissionLinkIncident_t *msg)
+{
+    return msg->loc_x >= 0 && msg->loc_x < GRID_WIDTH &&
+           msg->loc_y >= 0 && msg->loc_y < GRID_HEIGHT &&
+           msg->incident_type < (uint8_t)NUM_INCIDENT_TYPES &&
+           msg->req_capability < (uint8_t)NUM_TEAM_SPECIALIZATIONS &&
+           msg->priority >= (uint8_t)PRIORITY_CRITICAL &&
+           msg->priority <= (uint8_t)PRIORITY_LOW &&
+           msg->status <= (uint8_t)INC_RESOLVED;
+}
+
 void mission_link_apply_incident(const MissionLinkIncident_t *msg)
 {
-    IncidentState_t *incident = mission_link_find_incident_slot(msg->incident_id);
+    IncidentState_t *incident;
+
+    if (!mission_link_incident_is_valid(msg))
+    {
+        /* Whole-message reject: a frame with one impossible field can't
+           be trusted for the rest either. The laptop re-sends open
+           incidents periodically, so a real update lost to corruption
+           arrives again. */
+        g_incident_reject_count++;
+        return;
+    }
+
+    incident = mission_link_find_incident_slot(msg->incident_id);
 
     if (incident != NULL)
     {
@@ -1272,10 +1329,25 @@ void mission_link_apply_fault(const MissionLinkFault_t *msg)
 
     fault_state = &g_teams[msg->team_id].fault_state;
 
+    /* Normalized rather than rejected (review finding H4): active[] is a
+       flag every reader tests for non-zero, so any non-zero byte means
+       "active"; severity feeds arithmetic (work-rate cuts, stamina and
+       equipment drain, movement skipping, the CBBA communication
+       cadence) rather than indexing anything, so a corrupted value is
+       clamped to MISSION_LINK_FAULT_SEVERITY_MAX instead of dropping the
+       whole fault update - losing a real fault onset would be worse than
+       applying one at bounded strength. */
     for (i = 0; i < NUM_OPERATIONAL_FAULT_CLASSES; i++)
     {
-        fault_state->active[i] = msg->active[i];
-        fault_state->severity[i] = msg->severity[i];
+        uint8_t severity = msg->severity[i];
+
+        if (severity > MISSION_LINK_FAULT_SEVERITY_MAX)
+        {
+            severity = MISSION_LINK_FAULT_SEVERITY_MAX;
+        }
+
+        fault_state->active[i] = (msg->active[i] != 0u) ? 1u : 0u;
+        fault_state->severity[i] = severity;
     }
 }
 

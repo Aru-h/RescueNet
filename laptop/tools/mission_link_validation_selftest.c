@@ -216,6 +216,138 @@ static void test_resolved_never_takes_slot(void)
     CHECK(mission_link_incident_drop_count() == drops_before);
 }
 
+/* H4: every out-of-range incident field rejects the whole frame, counts
+   it, and leaves the table untouched - nothing is created, and an
+   existing incident is not overwritten with the bad values. */
+static void test_rejects_malformed_incidents(void)
+{
+    MissionLinkIncident_t good = make_incident(800u, (uint8_t)PRIORITY_HIGH);
+    MissionLinkIncident_t bad[10];
+    const IncidentState_t *held;
+    uint32_t rejects_before;
+    int n = 0;
+
+    reset_world();
+    mission_link_apply_incident(&good);
+    held = find_incident(800u);
+    CHECK(held != NULL);
+
+    bad[n] = good; bad[n].loc_x = -1; n++;
+    bad[n] = good; bad[n].loc_x = GRID_WIDTH; n++;
+    bad[n] = good; bad[n].loc_y = -300; n++;
+    bad[n] = good; bad[n].loc_y = GRID_HEIGHT; n++;
+    bad[n] = good; bad[n].incident_type = (uint8_t)NUM_INCIDENT_TYPES; n++;
+    bad[n] = good; bad[n].req_capability = (uint8_t)NUM_TEAM_SPECIALIZATIONS; n++;
+    bad[n] = good; bad[n].priority = 0u; n++;
+    bad[n] = good; bad[n].priority = 5u; n++;
+    bad[n] = good; bad[n].status = (uint8_t)(INC_RESOLVED + 1); n++;
+    bad[n] = good; bad[n].incident_type = 0xFFu; bad[n].req_capability = 0xFFu; n++;
+
+    rejects_before = mission_link_incident_reject_count();
+    for (int i = 0; i < n; i++)
+    {
+        MissionLinkIncident_t fresh = bad[i];
+
+        /* as an update to the held incident */
+        mission_link_apply_incident(&bad[i]);
+        /* and as a brand-new incident */
+        fresh.incident_id = 900u + (uint32_t)i;
+        mission_link_apply_incident(&fresh);
+        CHECK(find_incident(fresh.incident_id) == NULL);
+    }
+    CHECK(mission_link_incident_reject_count() == rejects_before + 2u * (uint32_t)n);
+
+    held = find_incident(800u);
+    CHECK(held != NULL);
+    if (held != NULL)
+    {
+        CHECK(held->loc_x == good.loc_x && held->loc_y == good.loc_y);
+        CHECK((uint8_t)held->priority == good.priority);
+        CHECK((uint8_t)held->incident_type == good.incident_type);
+        CHECK((uint8_t)held->req_capability == good.req_capability);
+        CHECK(held->status == INC_OPEN);
+    }
+    CHECK(occupied_count() == 1);
+
+    /* Boundary values are still accepted. */
+    good.incident_id = 801u;
+    good.loc_x = GRID_WIDTH - 1;
+    good.loc_y = GRID_HEIGHT - 1;
+    good.priority = (uint8_t)PRIORITY_LOW;
+    good.incident_type = (uint8_t)(NUM_INCIDENT_TYPES - 1);
+    good.req_capability = (uint8_t)(NUM_TEAM_SPECIALIZATIONS - 1);
+    mission_link_apply_incident(&good);
+    CHECK(find_incident(801u) != NULL);
+    CHECK(mission_link_incident_reject_count() == rejects_before + 2u * (uint32_t)n);
+}
+
+/* H4: roster specialization/fitness_tier out of range reject the whole
+   roster (counted), and the team keeps its previous identity. */
+static void test_rejects_malformed_roster(void)
+{
+    MissionLinkRoster_t roster;
+    uint32_t rejects_before;
+
+    reset_world();
+    memset(&roster, 0, sizeof(roster));
+    roster.team_id = 3u;
+    roster.specialization = (uint8_t)SPEC_MEDICAL;
+    roster.fitness_tier = (uint8_t)MODERATE;
+    roster.loc_x = 5;
+    roster.loc_y = 6;
+    roster.stamina = 90u;
+    roster.equipment_level = 80u;
+    mission_link_apply_roster(&roster);
+    CHECK(g_teams[3].specialization == SPEC_MEDICAL);
+
+    rejects_before = mission_link_roster_reject_count();
+
+    roster.specialization = (uint8_t)NUM_TEAM_SPECIALIZATIONS;
+    roster.loc_x = 9;
+    mission_link_apply_roster(&roster);
+    roster.specialization = (uint8_t)SPEC_SEARCH;
+    roster.fitness_tier = (uint8_t)(LIGHT + 1);
+    mission_link_apply_roster(&roster);
+    roster.fitness_tier = 0xFFu;
+    mission_link_apply_roster(&roster);
+
+    CHECK(mission_link_roster_reject_count() == rejects_before + 3u);
+    CHECK(g_teams[3].specialization == SPEC_MEDICAL);
+    CHECK(g_teams[3].fitness_tier == (uint8_t)MODERATE);
+    CHECK(g_teams[3].loc_x == 5);
+
+    roster.fitness_tier = (uint8_t)LIGHT;
+    roster.specialization = (uint8_t)SPEC_SUPPORT;
+    mission_link_apply_roster(&roster);
+    CHECK(mission_link_roster_reject_count() == rejects_before + 3u);
+    CHECK(g_teams[3].specialization == SPEC_SUPPORT);
+}
+
+/* H4: fault active flags are normalized to 0/1 and severity is clamped;
+   an out-of-range team_id is ignored. */
+static void test_fault_normalized(void)
+{
+    MissionLinkFault_t fault;
+
+    reset_world();
+    memset(&fault, 0, sizeof(fault));
+    fault.team_id = 4u;
+    fault.active[FAULT_CLASS_MOBILITY] = 0x80u;
+    fault.severity[FAULT_CLASS_MOBILITY] = 0xFFu;
+    fault.active[FAULT_CLASS_RESOURCE] = 1u;
+    fault.severity[FAULT_CLASS_RESOURCE] = 2u;
+    mission_link_apply_fault(&fault);
+
+    CHECK(g_teams[4].fault_state.active[FAULT_CLASS_MOBILITY] == 1u);
+    CHECK(g_teams[4].fault_state.severity[FAULT_CLASS_MOBILITY] == MISSION_LINK_FAULT_SEVERITY_MAX);
+    CHECK(g_teams[4].fault_state.active[FAULT_CLASS_RESOURCE] == 1u);
+    CHECK(g_teams[4].fault_state.severity[FAULT_CLASS_RESOURCE] == 2u);
+    CHECK(g_teams[4].fault_state.active[FAULT_CLASS_COMMUNICATION] == 0u);
+
+    fault.team_id = NUM_TEAMS;
+    mission_link_apply_fault(&fault); /* must not touch g_teams[NUM_TEAMS] (ASan) */
+}
+
 int main(void)
 {
     g_simulation_trace_enabled = 0;
@@ -223,6 +355,9 @@ int main(void)
     test_full_table_eviction();
     test_full_table_drops();
     test_resolved_never_takes_slot();
+    test_rejects_malformed_incidents();
+    test_rejects_malformed_roster();
+    test_fault_normalized();
 
     if (g_failures == 0)
     {
