@@ -123,6 +123,11 @@ _Static_assert(LORA_CRYPTO_MAX_SENDERS <= 256u,
    speculatively. */
 uint32_t lora_crypto_next_tx_counter(void);
 
+/* Nonzero once the TX counter has reached UINT32_MAX: the counter
+   saturates there instead of wrapping (which would reuse an AEAD
+   nonce), so no further frame may be sealed until lora_crypto_reset(). */
+uint8_t lora_crypto_tx_counter_exhausted(void);
+
 /* Test/reset hook: resets the TX counter to 0 and clears all RX
    per-sender state (see below). Exists for the same reason
    core/mission_link_handshake.h's board_init() does - a fresh state

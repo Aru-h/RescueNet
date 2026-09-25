@@ -60,7 +60,6 @@ static void release_main_task_team(TaskPool_t pool, IncidentState_t *task);
 static void release_all_task_teams(TaskPool_t pool, IncidentState_t *task);
 static void complete_task(TaskPool_t pool, IncidentState_t *task);
 static void clear_stale_equipment_cache_requests(void);
-void reopen_future_queued_incidents(void);
 uint8_t find_nearest_safe_zone(const TeamState_t *team);
 static IncidentState_t *find_free_incident_slot(void);
 static void apply_incident_archetype(IncidentState_t *incident, IncidentType_t type);
@@ -82,9 +81,9 @@ typedef struct
     uint8_t en_route_teams;
     uint8_t on_scene_teams;
     uint8_t resting_teams;
-    uint8_t available_by_spec[NUM_TEAMS];
-    uint8_t active_by_spec[NUM_TEAMS];
-    uint8_t waiting_by_spec[NUM_TEAMS];
+    uint8_t available_by_spec[NUM_TEAM_SPECIALIZATIONS];
+    uint8_t active_by_spec[NUM_TEAM_SPECIALIZATIONS];
+    uint8_t waiting_by_spec[NUM_TEAM_SPECIALIZATIONS];
     uint8_t open_incidents;
     uint8_t assigned_incidents;
     uint8_t in_progress_incidents;
@@ -97,7 +96,7 @@ typedef struct
 {
     IncidentType_t type;
     uint8_t base_weight;
-    uint8_t demand[NUM_TEAMS];
+    uint8_t demand[NUM_TEAM_SPECIALIZATIONS];
 } IncidentGenerationProfile_t;
 
 static void build_generation_context(GenerationContext_t *ctx);
@@ -1887,7 +1886,7 @@ static void build_generation_context(GenerationContext_t *ctx)
         if(incident->status == INC_OPEN)
         {
             ctx->open_incidents++;
-            if(incident->req_capability < NUM_TEAMS)
+            if(incident->req_capability < NUM_TEAM_SPECIALIZATIONS)
                 ctx->waiting_by_spec[incident->req_capability]++;
             if(!incident->discovered)
                 ctx->hidden_incidents++;
@@ -1935,7 +1934,7 @@ static GenerationLoad_t calculate_generation_load(const GenerationContext_t *ctx
     load_score += ctx->resting_teams * 5;
     load_score += ctx->active_system_tasks * 3;
 
-    for(uint8_t spec = 0; spec < NUM_TEAMS; spec++)
+    for(uint8_t spec = 0; spec < NUM_TEAM_SPECIALIZATIONS; spec++)
     {
         if(ctx->waiting_by_spec[spec] > 0 &&
            ctx->available_by_spec[spec] == 0)
@@ -2016,7 +2015,7 @@ static IncidentType_t select_weighted_incident_type(const GenerationContext_t *c
     {
         int32_t weight = g_generation_profiles[i].base_weight;
 
-        for(uint8_t spec = 0; spec < NUM_TEAMS; spec++)
+        for(uint8_t spec = 0; spec < NUM_TEAM_SPECIALIZATIONS; spec++)
         {
             uint8_t demand = g_generation_profiles[i].demand[spec];
 
@@ -2134,51 +2133,6 @@ static int generate_incident(IncidentType_t type)
     return generate_incident_at(type, loc_x, loc_y);
 }
 
-/* Maps district trust directly onto the 4 existing priority levels
- * instead of a tick-modulo decrement clock. Idempotent by design - it
- * recomputes the "correct" priority for the incident's district's
- * current trust every time it's called, rather than stepping a
- * counter, so there's no interval/cooldown concept needed at all.
- *
- * NOT CURRENTLY CALLED from the live tick loop. last_swept_tick only
- * ever gets reset by sweep-cycle completion, which isn't built yet -
- * every district currently starts at last_swept_tick=0 and nothing
- * ever refreshes it, so trust would decay to 0% for every district
- * within ZONE_TRUST_DECAY_CAP_TICKS of simulation start and stay
- * there permanently. Combined with `discovered` currently defaulting
- * true for every incident (its own reveal-writer isn't built yet
- * either), calling this now would push every open incident in the
- * game to permanent CRITICAL priority after ~3 hours simulated time -
- * an active regression, not a harmless no-op. Wire this in only once
- * sweep-cycle completion is writing real last_swept_tick values. */
-void escalate_incidents_by_zone_trust(uint32_t current_tick)
-{
-    for(uint16_t i = 0; i < NUM_INCIDENTS; i++)
-    {
-        IncidentState_t *incident = &g_incidents[i];
-
-        if(!incident->slot_occupied || incident->status == INC_RESOLVED)
-            continue;
-        if(!incident->discovered)
-            continue;
-
-        uint8_t zone_id = zone_id_for_location(incident->loc_x, incident->loc_y);
-        uint8_t trust = search_zone_trust(zone_id, current_tick);
-
-        Priority_t target_priority;
-        if(trust > 75)
-            target_priority = PRIORITY_LOW;
-        else if(trust > 50)
-            target_priority = PRIORITY_MEDIUM;
-        else if(trust > 25)
-            target_priority = PRIORITY_HIGH;
-        else
-            target_priority = PRIORITY_CRITICAL;
-
-        incident->priority = target_priority;
-    }
-}
-
 /*
  * Anti-starvation for OPEN (unassigned) incidents. Deliberately
  * separate from priority_score()'s own per-bid scoring (core/
@@ -2203,14 +2157,14 @@ void escalate_incidents_by_zone_trust(uint32_t current_tick)
  * failed to get picked up, not ones just aging normally within their
  * tier - its priority is promoted a full tier, same "decrement the
  * Priority_t enum value" pattern core/fault_injector.c's
- * inject_mission_fault() already uses for a different trigger. Unlike
- * escalate_incidents_by_zone_trust() above, this can only ever
- * escalate (never silently reassign to a LOWER priority based on an
- * unrelated signal), only touches incidents nobody has picked up yet
+ * inject_mission_fault() already uses for a different trigger. This
+ * can only ever escalate (never silently reassign to a LOWER priority
+ * based on an unrelated signal), only touches incidents nobody has picked up yet
  * (INC_OPEN - once a team is working it, it's not neglected, whatever
  * tier it's at), and its trigger (this incident's own open-ticks) has
  * no dependency on the currently-broken search-zone-trust decay
- * machinery that keeps the zone-trust version disabled.
+ * machinery (the reason a zone-trust-driven escalation was never wired
+ * in).
  *
  * reported_at_tick is reset on escalation, not left alone: priority_
  * score()'s in-band aging bonus should restart for the NEW tier
@@ -2322,75 +2276,6 @@ static void clear_stale_equipment_cache_requests(void)
            returning_to_safe_zone)
         {
             complete_task(TASK_POOL_SYSTEM, task);
-        }
-    }
-}
-
-void reopen_future_queued_incidents(void)
-{
-    for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
-    {
-        TeamState_t *team = &g_teams[team_id];
-
-        if(team->incident_queue_size == 0)
-            continue;
-
-        for(uint8_t q = team->incident_queue_index + 1;
-            q < team->incident_queue_size;
-            q++)
-        {
-            uint8_t slot = team->incident_queue_slot[q];
-            uint32_t incident_id = team->incident_queue_id[q];
-
-            if(slot >= NUM_INCIDENTS)
-                continue;
-
-            IncidentState_t *incident = &g_incidents[slot];
-
-            if(!incident->slot_occupied)
-                continue;
-
-            if(incident->incident_id != incident_id)
-                continue;
-
-            if(incident->status != INC_ASSIGNED)
-                continue;
-
-            if(incident->assigned_team != team_id)
-                continue;
-
-            incident->status = INC_OPEN;
-            incident->assigned_team = NO_ASSIGNMENT;
-        }
-
-        uint8_t current_index = team->incident_queue_index;
-        uint8_t current_slot = team->incident_queue_slot[current_index];
-        uint32_t current_id = team->incident_queue_id[current_index];
-
-        team->incident_queue_size = 0;
-        team->incident_queue_index = 0;
-
-        for(uint8_t q = 0; q < CBBA_MAX_BUNDLE_SIZE; q++)
-        {
-            team->incident_queue_slot[q] = NO_ASSIGNMENT;
-            team->incident_queue_id[q] = 0;
-        }
-
-        if(team->assigned_task_pool == TASK_POOL_INCIDENT &&
-           current_slot < NUM_INCIDENTS)
-        {
-            IncidentState_t *current = &g_incidents[current_slot];
-
-            if(current->slot_occupied &&
-               current->incident_id == current_id &&
-               current->assigned_team == team_id &&
-               (current->status == INC_ASSIGNED ||
-                current->status == INC_IN_PROGRESS))
-            {
-                team->incident_queue_slot[0] = current_slot;
-                team->incident_queue_id[0] = current_id;
-                team->incident_queue_size = 1;
-            }
         }
     }
 }

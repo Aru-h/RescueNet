@@ -60,8 +60,21 @@ static uint8_t g_response_nonce[LORA_CRYPTO_MAX_SENDERS][LORA_CRYPTO_SESSION_NON
 uint32_t lora_crypto_next_tx_counter(void)
 {
     uint32_t value = g_tx_counter;
-    g_tx_counter++;
+
+    /* Saturate rather than wrap: wrapping back to 0 within the same
+       epoch would repeat a (key, nonce) pair. UINT32_MAX itself is
+       never handed out for a real frame - lora_frame_pack() checks
+       lora_crypto_tx_counter_exhausted() first and refuses to send. */
+    if (g_tx_counter != UINT32_MAX)
+    {
+        g_tx_counter++;
+    }
     return value;
+}
+
+uint8_t lora_crypto_tx_counter_exhausted(void)
+{
+    return (uint8_t)(g_tx_counter == UINT32_MAX);
 }
 
 void lora_crypto_reset(void)

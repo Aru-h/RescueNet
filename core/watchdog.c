@@ -66,6 +66,13 @@ typedef struct
     int16_t last_loc_y;
     uint8_t stall_history;
     uint8_t stall_samples;
+
+    /* The travel leg seen last tick, from the team's own observable
+     * tasking (never fault_state): a change restarts the stall window. */
+    uint8_t stall_leg_task_pool;
+    uint8_t stall_leg_task_slot;
+    uint8_t stall_leg_heading_to_rest;
+    uint8_t stall_leg_resting_zone_id;
 } WatchdogTeamState_t;
 
 static WatchdogTeamState_t g_watchdog_state[NUM_TEAMS];
@@ -182,6 +189,12 @@ static uint8_t stall_count(uint8_t history)
  * into an on-scene or idle period; a confirmed impairment is instead
  * handed to update_mobility_confirmation()'s on-scene watch through
  * travel_degradation_seen.
+ *
+ * It also restarts (and that tick is not sampled) when the leg itself
+ * changes while the team stays EN_ROUTE: a direct re-task to a new
+ * task, or a heading-to-rest team retargeting to an alternate safe
+ * zone because its route was cut - move_team() deliberately skips the
+ * move on that tick, which must not read as a stall.
  */
 static void update_movement_stalls(
     const TeamState_t *team,
@@ -190,8 +203,14 @@ static void update_movement_stalls(
     uint8_t travelling = team->status == STATUS_EN_ROUTE &&
         watchdog->prev_actual_status == STATUS_EN_ROUTE &&
         watchdog->has_last_sample;
+    uint8_t leg_changed =
+        team->assigned_task_pool != watchdog->stall_leg_task_pool ||
+        team->assigned_task_slot != watchdog->stall_leg_task_slot ||
+        team->heading_to_rest != watchdog->stall_leg_heading_to_rest ||
+        (team->heading_to_rest &&
+         team->resting_zone_id != watchdog->stall_leg_resting_zone_id);
 
-    if(travelling)
+    if(travelling && !leg_changed)
     {
         uint8_t stalled = team->loc_x == watchdog->last_loc_x &&
             team->loc_y == watchdog->last_loc_y;
@@ -214,7 +233,7 @@ static void update_movement_stalls(
             watchdog->confirmed_mobility_impairment = 0;
         }
     }
-    else if(team->status != STATUS_EN_ROUTE)
+    else if(team->status != STATUS_EN_ROUTE || leg_changed)
     {
         watchdog->stall_history = 0;
         watchdog->stall_samples = 0;
@@ -222,6 +241,10 @@ static void update_movement_stalls(
 
     watchdog->last_loc_x = team->loc_x;
     watchdog->last_loc_y = team->loc_y;
+    watchdog->stall_leg_task_pool = team->assigned_task_pool;
+    watchdog->stall_leg_task_slot = team->assigned_task_slot;
+    watchdog->stall_leg_heading_to_rest = team->heading_to_rest;
+    watchdog->stall_leg_resting_zone_id = team->resting_zone_id;
 }
 
 float watchdog_get_mobility_stall_fraction(uint8_t team_id)

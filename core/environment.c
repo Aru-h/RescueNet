@@ -1301,12 +1301,10 @@ static void stage_generate_buildings(void)
                 cell->district == DISTRICT_RESIDENTIAL ? 2 :
                 cell->district == DISTRICT_MEDICAL ? 4 :
                 cell->district == DISTRICT_EDUCATION ? 4 : 3;
+            /* Commercial, medical, education and everything else: 3. */
             max_h =
                 cell->district == DISTRICT_INDUSTRIAL ? 4 :
-                cell->district == DISTRICT_COMMERCIAL ? 3 :
-                cell->district == DISTRICT_RESIDENTIAL ? 2 :
-                cell->district == DISTRICT_MEDICAL ? 3 :
-                cell->district == DISTRICT_EDUCATION ? 3 : 3;
+                cell->district == DISTRICT_RESIDENTIAL ? 2 : 3;
 
             for(int w = max_w; w >= 1; w--)
             {
@@ -1462,7 +1460,7 @@ static void stage_generate_infrastructure(void)
         {
             uint8_t already_connected =
                 (has_road(gateway->x, gateway->y) && gw_reachable[gateway->x][gateway->y]) ||
-                lot_reachable(gw_reachable, gateway->x, gateway->y);
+                lot_reachable((const uint8_t (*)[GRID_HEIGHT])gw_reachable, gateway->x, gateway->y);
 
             if(!already_connected)
             {
@@ -1604,10 +1602,11 @@ static uint8_t road_reachable_map(uint8_t reachable[GRID_WIDTH][GRID_HEIGHT])
  * wording ("before C2X") confirms this exact conversion was simply
  * missing from ISO C's implicit-conversion rules prior to C23, which
  * added it - see C23's changes to 6.5.16.1/6.3.2.3 for qualified
- * array-pointer conversions. Left as-is rather than dropping the
- * `const` here (which would silence the warning but lose the
- * documentation that this function only reads the reachability map)
- * or duplicating a non-const overload just for this.
+ * array-pointer conversions. Silenced with an explicit
+ * (const uint8_t (*)[GRID_HEIGHT]) cast at each call site rather than
+ * dropping the `const` here (which would lose the documentation that
+ * this function only reads the reachability map) or duplicating a
+ * non-const overload just for this.
  */
 static uint8_t lot_reachable(const uint8_t reachable[GRID_WIDTH][GRID_HEIGHT], int x, int y)
 {
@@ -1700,7 +1699,7 @@ static void stage_validate_and_build_navigation(void)
     for(uint16_t i = 0; i < g_environment_summary.building_count; i++)
     {
         EnvironmentBuilding_t *building = &g_environment_buildings[i];
-        if(!lot_reachable(reachable, building->loc_x, building->loc_y))
+        if(!lot_reachable((const uint8_t (*)[GRID_HEIGHT])reachable, building->loc_x, building->loc_y))
         {
             carve_repair_to_nearest_road(building->loc_x, building->loc_y);
             road_reachable_map(reachable);
@@ -1709,7 +1708,7 @@ static void stage_validate_and_build_navigation(void)
 
     for(uint16_t i = 0; i < g_environment_summary.district_total; i++)
     {
-        if(!lot_reachable(reachable, g_districts[i].center_x, g_districts[i].center_y))
+        if(!lot_reachable((const uint8_t (*)[GRID_HEIGHT])reachable, g_districts[i].center_x, g_districts[i].center_y))
         {
             carve_repair_to_nearest_road(g_districts[i].center_x, g_districts[i].center_y);
             road_reachable_map(reachable);
@@ -2029,7 +2028,7 @@ void environment_validate_hazard_reachability(void)
     for(int i = 0; i < g_num_safe_zones; i++)
     {
         SafeZone_t *zone = &g_safezones[i];
-        if(!lot_reachable(reachable, zone->loc_x, zone->loc_y))
+        if(!lot_reachable((const uint8_t (*)[GRID_HEIGHT])reachable, zone->loc_x, zone->loc_y))
         {
             carve_repair_to_nearest_road(zone->loc_x, zone->loc_y);
             road_reachable_map(reachable);
@@ -2041,7 +2040,7 @@ void environment_validate_hazard_reachability(void)
         IncidentState_t *incident = &g_incidents[i];
         if(!incident->slot_occupied || incident->status == INC_RESOLVED)
             continue;
-        if(!lot_reachable(reachable, incident->loc_x, incident->loc_y))
+        if(!lot_reachable((const uint8_t (*)[GRID_HEIGHT])reachable, incident->loc_x, incident->loc_y))
         {
             carve_repair_to_nearest_road(incident->loc_x, incident->loc_y);
             road_reachable_map(reachable);
