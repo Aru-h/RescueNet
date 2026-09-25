@@ -1,4 +1,5 @@
 #include "mission_state.h"
+#include "simulation.h" /* SimRole_t */
 
 TeamState_t g_teams[NUM_TEAMS];
 IncidentState_t g_incidents[NUM_INCIDENTS];
@@ -9,6 +10,10 @@ GridCell_t g_grid[GRID_WIDTH][GRID_HEIGHT];
 EvacuationGateway_t g_evacuation_gateways[NUM_EVACUATION_GATEWAYS];
 uint8_t g_safezone_evacuation_active[MAX_SAFE_ZONES];
 uint32_t g_current_tick = 0;
+/* Defined with the other shared globals rather than in simulation.c:
+   allocator.c and incident.c read it, and several selftests link those
+   without simulation.c. */
+SimRole_t g_sim_role = SIM_ROLE_STANDALONE;
 /* Tick number of the step currently being processed. Equals g_current_tick
  * once simulation_step() has incremented it, but is ALSO correct during the
  * pre-increment fault_injector_step() / allocate_all_incidents() phase of

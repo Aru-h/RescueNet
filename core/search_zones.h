@@ -49,6 +49,23 @@
  * delays a real sweep. */
 #define ZONE_SWEEP_RECLAIM_COOLDOWN_TICKS 30
 
+/* Board missions only (SIM_ROLE_WORLD_MIRROR, see simulation.h): a
+ * district gets a sweep task only once its trust (search_zone_trust())
+ * falls below this, or if it has never been swept at all. Every sweep
+ * task becomes an incident frame on the radio link, and a sweep task
+ * moves to a new frontier cell each time the team finishes a spot, so
+ * sending one for a district that was searched an hour ago spends
+ * airtime and a Search team on ground that is still trusted. 50% is
+ * 1.5 hours untouched (ZONE_TRUST_DECAY_CAP_TICKS is 3 hours), or less
+ * after aftershock hits. Standalone data-collection runs keep sweeping
+ * the stalest district whenever a Search team is free, so their
+ * datasets stay comparable with earlier runs. */
+#define ZONE_SWEEP_DISPATCH_TRUST_PERCENT 50
+
+/* 1 if a board mission should send a sweep for this district now - see
+ * ZONE_SWEEP_DISPATCH_TRUST_PERCENT. */
+uint8_t search_zone_needs_sweep(uint8_t district_id, uint32_t current_tick);
+
 /* Search's continuous full-radius sweep. Other teams use a smaller
  * radius, only while ON_SCENE - see the reveal-writer functions. */
 #define SEARCH_SWEEP_RADIUS 3

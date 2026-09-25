@@ -198,8 +198,30 @@ typedef struct {
     uint16_t damaged_building_count;
 } EnvironmentSummary_t;
 
+/*
+ * World storage - the per-cell grid, buildings, road network and the
+ * generation scratch arrays (about 105 KB) - exists only where the world
+ * is built: the laptop. A board is never a world authority
+ * (sim_start_seed_board() never calls generate_world()); it routes on
+ * the laptop's map instead (mission_link.h section 5c), so on the board
+ * targets this storage is compiled out and every function that would
+ * read it answers exactly what the never-generated, all-zero grid used
+ * to. Keyed on the µT-Kernel target macros because every real firmware
+ * build must define one of them for the kernel's sys/machine.h. Any new
+ * board-side use of g_environment is a compile error, not a silent read.
+ */
+#ifndef ENVIRONMENT_HAS_WORLD_STORAGE
+#if defined(_PICO_RP2040_) || defined(_STM32CUBE_DISCOVERY_N657_)
+#define ENVIRONMENT_HAS_WORLD_STORAGE 0
+#else
+#define ENVIRONMENT_HAS_WORLD_STORAGE 1
+#endif
+#endif
+
+#if ENVIRONMENT_HAS_WORLD_STORAGE
 extern EnvironmentCell_t g_environment[GRID_WIDTH][GRID_HEIGHT];
 extern EnvironmentBuilding_t g_environment_buildings[MAX_ENV_BUILDINGS];
+#endif
 extern EnvironmentSummary_t g_environment_summary;
 extern HazardPropagationConfig_t g_hazard_config;
 

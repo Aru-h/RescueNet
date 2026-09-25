@@ -366,6 +366,17 @@ void search_generate_sweep_tasks(uint32_t current_tick)
         }
     }
 
+    /* Board missions: trusted districts are not candidates at all - see
+     * ZONE_SWEEP_DISPATCH_TRUST_PERCENT. */
+    if(g_sim_role == SIM_ROLE_WORLD_MIRROR)
+    {
+        for(uint8_t d = 0; d < NUM_SEARCH_ZONES; d++)
+        {
+            if(!search_zone_needs_sweep(d, current_tick))
+                districts_with_task_in_flight |= (uint16_t)(1u << d);
+        }
+    }
+
     for(uint8_t t = 0; t < NUM_TEAMS; t++)
     {
         TeamState_t *team = &g_teams[t];
@@ -1083,6 +1094,25 @@ static void release_all_task_teams(TaskPool_t pool, IncidentState_t *task)
         release_team(support_id);
 }
 
+/* Board side of a laptop-issued incident (core/mission_link.c's
+ * mission_link_apply_incident()): the laptop decides stages and
+ * resolution, so when it moves an incident on, the teams this board had
+ * on it are released the same way a local stage completion releases
+ * them (next queued incident, rest if needed, else available). */
+void incident_release_teams_for_authority(IncidentState_t *task)
+{
+    release_all_task_teams(TASK_POOL_INCIDENT, task);
+}
+
+/* The laptop reported this incident resolved: release its teams and free
+ * the slot. No resolution counters or snapshot row - the laptop's own
+ * dataset records the resolution; this board only stops working it. */
+void incident_close_for_authority(IncidentState_t *task)
+{
+    release_all_task_teams(TASK_POOL_INCIDENT, task);
+    clear_task_slot(TASK_POOL_INCIDENT, task);
+}
+
 static void complete_task(TaskPool_t pool, IncidentState_t *task)
 {
     if(task == NULL ||
@@ -1133,6 +1163,16 @@ static void complete_task(TaskPool_t pool, IncidentState_t *task)
 
 void complete_incident_stage(IncidentState_t *incident) //incident
 {
+    /* An evacuee run's legs load and unload safe-zone headcounts, which
+     * only the laptop holds. On a board, finishing a leg just frees the
+     * team; the laptop stages the next leg from the team's report
+     * (laptop/mission_mirror.c) and sends it as a new incident frame. */
+    if(g_sim_role == SIM_ROLE_BOARD && incident->incident_type == INCIDENT_EVACUEE_OFFBOARD)
+    {
+        incident_close_for_authority(incident);
+        return;
+    }
+
     switch(incident->req_capability)
     {
         case(SPEC_PERIMETER):
