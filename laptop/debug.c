@@ -409,7 +409,10 @@ void initialize_test_scenario(void)         //debug
     for(int i = 0; i < NUM_TEAMS; i++)
     {
         g_teams[i].team_id = i;
-        g_teams[i].specialization = i;
+        /* Wrap: only NUM_TEAM_SPECIALIZATIONS (5) exist but NUM_TEAMS is
+         * 10. A plain `= i` gave teams 5-9 out-of-range specializations,
+         * so the fitness_tier switch below never matched them either. */
+        g_teams[i].specialization = (TeamSpecialization_t)(i % NUM_TEAM_SPECIALIZATIONS);
         g_teams[i].status = STATUS_RESTING;
         g_teams[i].assigned_task_pool = TASK_POOL_NONE;
         g_teams[i].assigned_task_slot = NO_ASSIGNMENT;
@@ -652,8 +655,13 @@ int debug_run_priority1_sweep(uint32_t first_seed, uint32_t seed_count, uint32_t
     printf("[SWEEP P1] stuck threshold: %u consecutive ticks EN_ROUTE at the same (x,y)\n",
            P1_SWEEP_STUCK_TICKS_THRESHOLD);
 
-    for(uint32_t seed = first_seed; seed < first_seed + seed_count; seed++)
+    /* Counter loop, not `seed < first_seed + seed_count`: that sum can
+     * overflow uint32_t for large inputs and run zero (or wrong) seeds.
+     * Same shape as laptop/main.c's run loop. */
+    for(uint32_t seed_index = 0; seed_index < seed_count; seed_index++)
     {
+        uint32_t seed = first_seed + seed_index;
+
         sim_start_seed(seed, fault_profile);
 
         for(uint8_t t = 0; t < NUM_TEAMS; t++)
@@ -716,11 +724,11 @@ int debug_run_priority1_sweep(uint32_t first_seed, uint32_t seed_count, uint32_t
 
         sim_end_seed();
 
-        if((seed - first_seed + 1) % 10 == 0 || seed == first_seed + seed_count - 1)
+        if((seed_index + 1) % 10 == 0 || seed_index + 1 == seed_count)
         {
             printf("[SWEEP P1] progress: %u/%u seeds done, %u frozen streaks so far, "
                    "max streak so far=%u, cumulative no_path_hits=%lu, safezone_fallback=%u\n",
-                   seed - first_seed + 1, seed_count, flagged_count, max_streak_seen,
+                   seed_index + 1, seed_count, flagged_count, max_streak_seen,
                    g_probe_no_path_hits, g_diag_safezone_fallback_count);
         }
     }
@@ -743,7 +751,7 @@ int debug_run_priority1_sweep(uint32_t first_seed, uint32_t seed_count, uint32_t
            INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD,
            g_diag_incidents_quarantined - quarantined_before_sweep,
            g_diag_incidents_quarantined);
-    printf("[SWEEP P1] passive-sweep cells straddling a district boundary (M37 misattribution, fix shelved) this sweep: %u (cumulative process total: %u)\n",
+    printf("[SWEEP P1] passive-sweep cells straddling a district boundary (credited to the cell's own district since the M37 fix) this sweep: %u (cumulative process total: %u)\n",
            g_diag_sweep_cross_district_cells - cross_district_before_sweep,
            g_diag_sweep_cross_district_cells);
     printf("[SWEEP P1] worlds with non-distinct evacuation gateways this sweep: %lu (expected 0; cumulative process total: %lu)\n",
