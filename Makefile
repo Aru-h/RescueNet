@@ -856,3 +856,11 @@ check-mission-link-validation-selftest:
 		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./mission_link_validation_selftest > /dev/null 2>&1 && \
 		./mission_link_validation_selftest_asan
+
+.PHONY: check-cbba-wire-validation
+check-cbba-wire-validation:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/cbba_board_selftest.c (ASan/UBSan)"
+	@$(CC) $(SELFTEST_CFLAGS) $(AGENT_B_SANITIZE) -o $(SELFTEST_BIN_DIR)/cbba_board_selftest_asan \
+		$(TOOLS_DIR)/cbba_board_selftest.c $(CBBA_BOARD_SELFTEST_CORE_SOURCES) $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./cbba_board_selftest_asan
