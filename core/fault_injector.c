@@ -154,11 +154,25 @@ static void inject_environment_fault(uint8_t team_id)
     int next_x = team->loc_x;
     int next_y = team->loc_y;
 
-    if(team->assigned_task_pool != TASK_POOL_NONE &&
+    /* M3: resolve the task through the pool it actually lives in. This
+     * used to index g_incidents[] for ANY non-NONE pool, so a team on a
+     * TASK_POOL_SYSTEM task (sweep, evacuation, equipment cache) got its
+     * choke point computed toward whatever unrelated incident happened
+     * to share that slot number (or none at all). */
+    IncidentState_t *task = NULL;
+    if(team->assigned_task_pool == TASK_POOL_INCIDENT &&
        team->assigned_task_slot < NUM_INCIDENTS)
     {
-        IncidentState_t *task = &g_incidents[team->assigned_task_slot];
+        task = &g_incidents[team->assigned_task_slot];
+    }
+    else if(team->assigned_task_pool == TASK_POOL_SYSTEM &&
+            team->assigned_task_slot < NUM_SYSTEM_TASKS)
+    {
+        task = &g_system_tasks[team->assigned_task_slot];
+    }
 
+    if(task != NULL)
+    {
         if(task->slot_occupied &&
            find_next_path_step(team->loc_x, team->loc_y,
                                task->loc_x, task->loc_y,
