@@ -425,6 +425,134 @@ static void test_broadcast_force_resend_floor(void)
     CHECK(count_after > count_before);
 }
 
+/* H5: the CBBA wire is untrusted. A frame whose sender_id would index
+   timestamp[] out of bounds, or that claims to come from one of THIS
+   board's own teams, or whose length doesn't match its entry_count, is
+   dropped whole and counted; an entry whose winner isn't a team id is
+   dropped on its own (the rest of the frame still applies). Run under
+   ASan by the check-cbba-wire-validation target, so any out-of-bounds
+   access these frames used to cause fails the build, not just a CHECK. */
+static void test_rejects_malformed_cbba_frames(void)
+{
+    const uint8_t slot_a = 3, slot_b = 9;
+    const uint8_t remote_sender = 6;
+    TestCBBAWireEntry_t entries[2];
+    TestCBBAFrame_t frame;
+    uint32_t frames_before, entries_before;
+
+    g_comms_transport_this_board_id = 0;
+    comms_transport_init();
+    reset_agent_state();
+    make_one_open_incident(slot_a);
+    make_one_open_incident(slot_b);
+
+    entries[0].incident_key = TEST_CBBA_KEY(g_incidents[slot_a].incident_id);
+    entries[0].winner = remote_sender;
+    entries[0].winning_bid_q = CBBA_BID_Q(2.0f);
+
+    /* sender_id out of range (would be timestamp[200] = ... on receipt) */
+    frames_before = cbba_wire_reject_count();
+    encode_cbba_frame(&frame, 200u, entries, 1u);
+    CHECK(send_cbba_frame(&frame, remote_sender) == 0);
+    cbba_ingest_remote_mesh_replies();
+    CHECK(cbba_wire_reject_count() == frames_before + 1u);
+    CHECK(g_cbba_agent_state[0].winner[slot_a] == NO_ASSIGNMENT);
+
+    /* sender_id is a team this board hosts - forged, reject */
+    encode_cbba_frame(&frame, 2u, entries, 1u);
+    CHECK(send_cbba_frame(&frame, remote_sender) == 0);
+    cbba_ingest_remote_mesh_replies();
+    CHECK(cbba_wire_reject_count() == frames_before + 2u);
+    CHECK(g_cbba_agent_state[0].winner[slot_a] == NO_ASSIGNMENT);
+
+    /* entry_count says 2 but only one entry's bytes follow */
+    encode_cbba_frame(&frame, remote_sender, entries, 1u);
+    frame.bytes[1] = 2u;
+    CHECK(send_cbba_frame(&frame, remote_sender) == 0);
+    cbba_ingest_remote_mesh_replies();
+    CHECK(cbba_wire_reject_count() == frames_before + 3u);
+
+    /* entry_count larger than any legal frame */
+    encode_cbba_frame(&frame, remote_sender, entries, 1u);
+    frame.bytes[1] = 0xFFu;
+    CHECK(send_cbba_frame(&frame, remote_sender) == 0);
+    cbba_ingest_remote_mesh_replies();
+    CHECK(cbba_wire_reject_count() == frames_before + 4u);
+
+    /* shorter than a header */
+    frame.len = 5u;
+    CHECK(send_cbba_frame(&frame, remote_sender) == 0);
+    cbba_ingest_remote_mesh_replies();
+    CHECK(cbba_wire_reject_count() == frames_before + 5u);
+    CHECK(g_cbba_agent_state[0].winner[slot_a] == NO_ASSIGNMENT);
+
+    /* one bad entry (winner 42) next to a good one: only the bad one goes */
+    entries_before = cbba_wire_entry_reject_count();
+    entries[1].incident_key = TEST_CBBA_KEY(g_incidents[slot_b].incident_id);
+    entries[1].winner = 42u;
+    entries[1].winning_bid_q = CBBA_BID_Q(9.0f);
+    encode_cbba_frame(&frame, remote_sender, entries, 2u);
+    CHECK(send_cbba_frame(&frame, remote_sender) == 0);
+    cbba_ingest_remote_mesh_replies();
+    CHECK(cbba_wire_reject_count() == frames_before + 5u);
+    CHECK(cbba_wire_entry_reject_count() == entries_before + 1u);
+    CHECK(g_cbba_agent_state[0].winner[slot_a] == remote_sender);
+    CHECK(g_cbba_agent_state[0].winner[slot_b] == NO_ASSIGNMENT);
+}
+
+/* H2: claims are keyed by incident, so the receiver maps each onto ITS
+   OWN slot - the sender's slot index never matters - and a claim for an
+   incident this board doesn't hold is skipped. */
+static void test_claims_map_by_incident_not_slot(void)
+{
+    const uint8_t remote_sender = 7;
+    TestCBBAWireEntry_t entries[2];
+    TestCBBAFrame_t frame;
+
+    g_comms_transport_this_board_id = 0;
+    comms_transport_init();
+    reset_agent_state();
+    make_one_open_incident(11);          /* id 1011, held here in slot 11 */
+    memset(&g_incidents[4], 0, sizeof(g_incidents[4])); /* slot 4 empty here */
+
+    /* The sender holds id 1011 in some other slot and an id (5555) this
+       board has never seen - neither detail is on the wire, only ids. */
+    entries[0].incident_key = TEST_CBBA_KEY(1011u);
+    entries[0].winner = remote_sender;
+    entries[0].winning_bid_q = CBBA_BID_Q(1.25f);
+    entries[1].incident_key = TEST_CBBA_KEY(5555u);
+    entries[1].winner = remote_sender;
+    entries[1].winning_bid_q = CBBA_BID_Q(8.0f);
+    encode_cbba_frame(&frame, remote_sender, entries, 2u);
+    CHECK(send_cbba_frame(&frame, remote_sender) == 0);
+    cbba_ingest_remote_mesh_replies();
+
+    CHECK(g_cbba_agent_state[0].winner[11] == remote_sender);
+    CHECK(g_cbba_agent_state[0].winning_bid[11] > 1.249f &&
+          g_cbba_agent_state[0].winning_bid[11] < 1.251f);
+    for (int j = 0; j < NUM_INCIDENTS; j++)
+    {
+        if (j != 11)
+            CHECK(g_cbba_agent_state[0].winner[j] == NO_ASSIGNMENT);
+    }
+
+    /* Two held incidents sharing a 16-bit key (ids 65536 apart) are
+       ambiguous: the claim must be skipped, not applied to either. */
+    reset_agent_state();
+    make_one_open_incident(0);
+    g_incidents[0].incident_id = 0x00010001u;
+    make_one_open_incident(1);
+    g_incidents[1].incident_id = 0x00020001u;
+    entries[0].incident_key = 0x0001u;
+    encode_cbba_frame(&frame, remote_sender, entries, 1u);
+    CHECK(send_cbba_frame(&frame, remote_sender) == 0);
+    cbba_ingest_remote_mesh_replies();
+    CHECK(g_cbba_agent_state[0].winner[0] == NO_ASSIGNMENT);
+    CHECK(g_cbba_agent_state[0].winner[1] == NO_ASSIGNMENT);
+    memset(&g_incidents[0], 0, sizeof(g_incidents[0]));
+    memset(&g_incidents[1], 0, sizeof(g_incidents[1]));
+}
+
 static void test_round_finalizes_without_hanging(void)
 {
     g_comms_transport_this_board_id = 0;
@@ -449,6 +577,8 @@ int main(void)
     test_wait_polls_past_foreign_frames();
     test_broadcast_send_on_change_gate();
     test_broadcast_force_resend_floor();
+    test_rejects_malformed_cbba_frames();
+    test_claims_map_by_incident_not_slot();
     test_round_finalizes_without_hanging();
 
     if (g_failures == 0)

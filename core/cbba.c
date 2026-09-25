@@ -1296,27 +1296,65 @@ void cbba_broadcast_local_teams(void)
     }
 }
 
+/* Monotonic counts of what cbba_decode_wire_message() threw away - see
+   cbba.h. Not reset by cbba_init(), which cbba_run() calls every tick. */
+static uint32_t s_cbba_wire_reject_count;
+static uint32_t s_cbba_wire_entry_reject_count;
+
+uint32_t cbba_wire_reject_count(void)
+{
+    return s_cbba_wire_reject_count;
+}
+
+uint32_t cbba_wire_entry_reject_count(void)
+{
+    return s_cbba_wire_entry_reject_count;
+}
+
 /* Decodes one CBBA wire frame (see CBBAWireHeader_t) into a
    full-precision CBBAMessage_t indexed by THIS board's own slots - the
    shape cbba_receive_and_update() (shared with cbba_consensus()'s
    in-process gossip) works on. Every slot starts as NO_ASSIGNMENT, so an
    incident the sender didn't claim, or one this board doesn't hold,
    stays a no-op for that function. Returns 0 on success, -1 when the
-   frame is malformed and must be dropped whole. */
+   frame is malformed and must be dropped whole.
+
+   The wire is untrusted (review finding H5): the LoRa PSK is a public
+   default in this repo, and a corrupt frame can in principle survive
+   the transport. Everything a field is later used to INDEX is checked
+   here, before cbba_receive_and_update() sees it:
+     - sender_id indexes receiver->timestamp[] as a WRITE
+       (timestamp[sender_id] = g_current_tick), so a frame whose
+       sender_id is >= NUM_TEAMS is rejected whole. So is one claiming
+       to come from a team hosted on THIS board: a real peer never
+       sends that, and accepting it would let a forged frame speak for
+       our own teams in the consensus table.
+     - winner values index timestamp[] and g_teams[] (through
+       candidate_claim_is_better()), so an entry whose winner is neither
+       a team id nor NO_ASSIGNMENT is dropped; the rest of the frame is
+       still usable. */
 static int cbba_decode_wire_message(const uint8_t *payload, uint8_t payload_len,
                                     CBBAMessage_t *out)
 {
     CBBAWireHeader_t header;
 
     if(payload_len < sizeof(CBBAWireHeader_t))
+    {
+        s_cbba_wire_reject_count++;
         return -1;
+    }
 
     memcpy(&header, payload, sizeof(header));
 
     if(header.entry_count > NUM_INCIDENTS ||
        payload_len != sizeof(CBBAWireHeader_t) +
-                      (size_t)header.entry_count * sizeof(CBBAWireEntry_t))
-        return -1; /* protocol drift or a corrupt frame */
+                      (size_t)header.entry_count * sizeof(CBBAWireEntry_t) ||
+       header.sender_id >= NUM_TEAMS ||
+       cbba_team_is_local(header.sender_id))
+    {
+        s_cbba_wire_reject_count++;
+        return -1; /* protocol drift, a corrupt frame, or a forged sender */
+    }
 
     out->sender_id = header.sender_id;
     for(int j = 0; j < NUM_INCIDENTS; j++)
@@ -1334,6 +1372,12 @@ static int cbba_decode_wire_message(const uint8_t *payload, uint8_t payload_len,
 
         memcpy(&entry, payload + sizeof(CBBAWireHeader_t) + (size_t)e * sizeof(CBBAWireEntry_t),
                sizeof(entry));
+
+        if(entry.winner >= NUM_TEAMS && entry.winner != NO_ASSIGNMENT)
+        {
+            s_cbba_wire_entry_reject_count++;
+            continue;
+        }
 
         /* Map the sender's incident onto THIS board's own slot; an
            incident this board doesn't hold has nothing to merge into. */

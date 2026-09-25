@@ -132,4 +132,15 @@ void cbba_reset_improvement_counters(void);
    lora_frame.h). */
 uint32_t cbba_broadcast_send_count(void);
 
+/* Monotonic count of whole CBBA mesh frames cbba_ingest_remote_mesh_
+   replies() dropped as malformed or untrusted: wrong length, sender_id
+   >= NUM_TEAMS, or a sender_id hosted on this very board (see
+   cbba_decode_wire_message() in cbba.c - review finding H5). Never reset. */
+uint32_t cbba_wire_reject_count(void);
+
+/* Monotonic count of individual claims dropped from otherwise-valid CBBA
+   frames because their winner was neither a team id nor NO_ASSIGNMENT.
+   Never reset. */
+uint32_t cbba_wire_entry_reject_count(void);
+
 #endif
