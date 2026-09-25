@@ -258,10 +258,12 @@ int main(int argc, char **argv)
     uint32_t seed_count = positional_count >= 2 ? positional_args[1] : 1;
     uint32_t ticks_per_seed = positional_count >= 3 ? positional_args[2] : 10000;
 
-    for(uint32_t seed = first_seed;
-        seed < first_seed + seed_count;
-        ++seed)
+    /* Counter loop, not `seed < first_seed + seed_count`: that sum can
+     * overflow uint32_t for large inputs and run zero (or wrong) seeds. */
+    for(uint32_t seed_index = 0; seed_index < seed_count; ++seed_index)
     {
+        uint32_t seed = first_seed + seed_index;
+
         sim_start_seed(seed, fault_profile);
 
         if(mission_feed_mode)

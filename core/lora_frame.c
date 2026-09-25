@@ -74,6 +74,13 @@ uint32_t lora_frame_pack(uint8_t frame_type, uint8_t sender_board_id,
         return 0u;
     }
 
+    if (lora_crypto_tx_counter_exhausted())
+    {
+        /* TX counter saturated: sealing another frame would reuse a
+           nonce. Refuse to send, without consuming a counter value. */
+        return 0u;
+    }
+
     out_buf[0] = frame_type;
     out_buf[1] = payload_len;
     out_buf[2] = sender_board_id;

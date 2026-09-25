@@ -766,6 +766,9 @@ void cbba_build_bundle(uint8_t team_id)
                 agent,
                 incident,
                 &insert_position);
+            /* calculate_marginal_bundle_bid() returns -1.0f as its
+               "infeasible/unreachable" sentinel - never claim on it. */
+            if(bid < 0.0f) continue;
             if(agent->winner[i] != NO_ASSIGNMENT &&
             !candidate_claim_is_better(team_id,bid,agent->winner[i],agent->winning_bid[i],incident))
                     continue;

@@ -80,16 +80,14 @@ void generate_safe_zones(uint32_t seed)
                 y = random_range_stream(STREAM_SAFE_ZONES, 0, GRID_HEIGHT - 1);
             }
 
-            if(!environment_cell_is_navigable(x, y) && attempts < 40)
+            /* Never accept a non-navigable candidate: keep drawing until
+               MAX_ATTEMPTS, where the hard-exit path below scans for a
+               free navigable cell. (This used to swap in (0,0) after 40
+               tries without checking (0,0) was navigable either.) */
+            if(!environment_cell_is_navigable(x, y) && attempts < MAX_ATTEMPTS)
             {
                 attempts++;
                 continue;
-            }
-
-            if(!environment_cell_is_navigable(x, y))
-            {
-                x = 0;
-                y = 0;
             }
 
             /* Hard exit — never loop forever on a degenerate map */
@@ -101,8 +99,8 @@ void generate_safe_zones(uint32_t seed)
                 g_diag_safezone_maxattempts_fallback++;
 
                 /* Bug fix: this used to commit (x,y) directly - which
-                   could be (0,0) from the non-navigable fallback above,
-                   or any other candidate - without re-running the
+                   could be a non-navigable last candidate, or any
+                   other candidate - without re-running the
                    duplicate-location check the normal path below
                    performs, so more than one zone hitting this branch
                    on the same degenerate map could register at the
@@ -127,9 +125,6 @@ void generate_safe_zones(uint32_t seed)
                                                g_safezones[i].loc_y);
                 break;
             }
-
-            if(attempts > 80)
-                flag_distance = 1;
 
             attempts++;
 

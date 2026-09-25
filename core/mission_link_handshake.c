@@ -329,15 +329,14 @@ static uint8_t g_request_seen;
    board-0-only gating is the CALLER's job, not enforced internally
    here). Capped at HANDSHAKE_MAX_BOARDS (see that macro's own doc in
    the header) - a peer_board_id >= this cap is out of range for every
-   function below and is either silently ignored (note_remote_reply)
-   or would read/write out of bounds if a caller passed one anyway
-   (the other three assert-worthy but this file has no assert
-   facility available in a freestanding build - callers are expected
-   to only ever pass values from comms_transport_board_count(), which
-   by construction never exceeds this cap unless someone raises
-   NUM_TEAMS far past what HANDSHAKE_MAX_BOARDS was sized for, in
-   which case raising this cap to match is the fix, not a bounds
-   check here). */
+   function below, and every one of them bounds-checks it up front and
+   returns a safe default (see the "Bug fix:" comment further down).
+   Callers are still expected to only ever pass values from
+   comms_transport_board_count(), which by construction never exceeds
+   this cap unless someone raises NUM_TEAMS far past what
+   HANDSHAKE_MAX_BOARDS was sized for, in which case raising this cap
+   to match is the fix - the bounds checks only keep that mistake
+   from corrupting memory. */
 static uint8_t g_relay_req_sent_once[HANDSHAKE_MAX_BOARDS];
 static uint8_t g_relay_req_last_sent_valid[HANDSHAKE_MAX_BOARDS];
 static uint32_t g_relay_req_last_sent_tick[HANDSHAKE_MAX_BOARDS];

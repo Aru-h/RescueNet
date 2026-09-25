@@ -703,7 +703,8 @@ void comms_transport_dispatch_pending(void)
            already popped; drop it rather than leaving the queue
            machinery in a half-dequeued state. No NACK path at this
            layer (see this function's own doc), same policy as every
-           other drop case here. */
+           other drop case here. Also the path taken once the TX
+           counter is exhausted (lora_crypto_tx_counter_exhausted()). */
         return;
     }
 
