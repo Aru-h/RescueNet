@@ -220,8 +220,42 @@ evidence_features = EVIDENCE_FEATURE_COLUMNS
 feature_columns = numerical_features + one_hot_features + bitmask_features + evidence_features
 
 # Defensive check — ground truth must never leak into the model's inputs.
-leaked = set(feature_columns) & set(FAULT_LABEL_COLUMNS)
-assert not leaked, f"Ground-truth label column(s) leaked into features: {leaked}"
+# By name: the labels themselves plus every other injector-only column the
+# snapshot writer emits alongside them (severity, ticks remaining, mask).
+GROUND_TRUTH_COLUMNS = (
+    FAULT_LABEL_COLUMNS
+    + [f"fault_severity_{name}" for name in FAULT_CLASS_NAMES]
+    + [f"fault_ticks_remaining_{name}" for name in FAULT_CLASS_NAMES]
+    + ["fault_active_mask"]
+)
+leaked = set(feature_columns) & set(GROUND_TRUTH_COLUMNS)
+assert not leaked, f"Ground-truth column(s) leaked into features: {leaked}"
+
+# By value: a name check alone can't catch a feature that is the label
+# under another name. twin_communication_health used to be exactly
+# fault_active_communication * severity on every row and passed the name
+# check above. Flag any feature whose "non-zero" pattern matches a label
+# on (almost) every row, or that correlates with it almost perfectly.
+# An honest observable of a fault tracks it closely but not exactly (it
+# lags onset and trails recovery), so it stays under these limits.
+LEAK_AGREEMENT_LIMIT = 0.995
+LEAK_CORRELATION_LIMIT = 0.99
+value_leaks = []
+for label in FAULT_LABEL_COLUMNS:
+    truth = df[label].astype(bool)
+    if truth.nunique() < 2:
+        continue
+    for col in feature_columns:
+        values = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        if values.nunique() < 2:
+            continue
+        agreement = ((values != 0) == truth).mean()
+        correlation = abs(np.corrcoef(values, truth.astype(float))[0, 1])
+        if agreement >= LEAK_AGREEMENT_LIMIT or correlation >= LEAK_CORRELATION_LIMIT:
+            value_leaks.append(f"{col}~{label} (agree={agreement:.4f}, |r|={correlation:.4f})")
+assert not value_leaks, (
+    "Feature(s) are near-exact copies of a ground-truth label: "
+    + "; ".join(value_leaks))
 
 X = df[feature_columns]
 

@@ -65,12 +65,61 @@ static uint16_t resolve_actual_remaining_path_cost(
     return find_path_cost(start_x, start_y, dest_x, dest_y);
 }
 
+/* Observed communication health: the worst heartbeat gap (ticks since
+ * team->last_heartbeat_tick) seen over the last
+ * TWIN_COMM_HEALTH_WINDOW_TICKS ticks, capped at TWIN_COMM_HEALTH_MAX.
+ *
+ * This used to return team->fault_state.severity[FAULT_CLASS_
+ * COMMUNICATION] directly - the injector's ground truth, which made
+ * this "measurement" identical to the fault label on every row and
+ * leaked the answer into watchdog.c's communication evidence channel,
+ * evaluate_communication() and every ML feature derived from
+ * twin_communication_health. A comm fault's observable symptom is the
+ * missed heartbeats update_team() (core/team.c) produces - a severity-s
+ * fault only lands a heartbeat every s+1 ticks, so the worst gap inside
+ * a window of s+1 ticks is s. Windowing is needed because the gap
+ * itself saw-tooths back to 0 on every heartbeat that does land. The
+ * window (4) covers the largest configured comm severity (3, see
+ * core/fault_config.c), and the cap keeps the value on the same 0..3
+ * scale downstream consumers (watchdog.c's /3.0f, recovery_manager_
+ * config.h's COMMUNICATION_* thresholds, evidence_channels.py) expect.
+ *
+ * Updated once per tick from mission_execution_twin_step();
+ * resolve_communication_health() only reads the current window. */
+#define TWIN_COMM_HEALTH_WINDOW_TICKS 4u
+#define TWIN_COMM_HEALTH_MAX 3u
+
+static uint8_t g_comm_gap_window[NUM_TEAMS][TWIN_COMM_HEALTH_WINDOW_TICKS];
+
+static void update_communication_health_window(const TeamState_t *team)
+{
+    uint32_t gap;
+
+    if(team->team_id >= NUM_TEAMS)
+        return;
+
+    gap = g_current_tick - team->last_heartbeat_tick;
+    if(gap > TWIN_COMM_HEALTH_MAX)
+        gap = TWIN_COMM_HEALTH_MAX;
+
+    g_comm_gap_window[team->team_id][g_current_tick % TWIN_COMM_HEALTH_WINDOW_TICKS] =
+        (uint8_t)gap;
+}
+
 static uint8_t resolve_communication_health(const TeamState_t *team)
 {
-    if(!team->fault_state.active[FAULT_CLASS_COMMUNICATION])
+    uint8_t worst = 0;
+
+    if(team->team_id >= NUM_TEAMS)
         return 0;
 
-    return team->fault_state.severity[FAULT_CLASS_COMMUNICATION];
+    for(uint8_t i = 0; i < TWIN_COMM_HEALTH_WINDOW_TICKS; i++)
+    {
+        if(g_comm_gap_window[team->team_id][i] > worst)
+            worst = g_comm_gap_window[team->team_id][i];
+    }
+
+    return worst;
 }
 
 /* Fault-free baseline work rate: mirrors update_incident_work()'s
@@ -421,6 +470,8 @@ void mission_execution_twin_reset(void)
             ? MISSION_STAGE_RECOVERY
             : MISSION_STAGE_IDLE;
         twin->communication_health = 0;
+        for(uint8_t i = 0; i < TWIN_COMM_HEALTH_WINDOW_TICKS; i++)
+            g_comm_gap_window[team_id][i] = 0;
         twin->expected_operating_state = team->status;
         twin->observed_task_id = 0;
         twin->observed_req_capability = NO_ASSIGNMENT;
@@ -487,6 +538,7 @@ void mission_execution_twin_step(void)
 
         twin->team_id = team_id;
         twin->actual_stamina = team->stamina;
+        update_communication_health_window(team);
         twin->communication_health = resolve_communication_health(team);
         twin->assigned_task_pool = team->assigned_task_pool;
         twin->assigned_task_slot = team->assigned_task_slot;

@@ -184,8 +184,9 @@ void mission_link_apply_incident(const MissionLinkIncident_t *msg);
 
 /* Ongoing: mirrors msg->active[]/severity[] into
    g_teams[msg->team_id].fault_state.active[]/severity[] - the two
-   fields watchdog_step()/recovery_manager_step() actually read (see
-   mission_link.h's MissionLinkFault_t doc). Everything else in
+   fields the board's team physics reads to apply the fault's effect
+   (see mission_link.h's MissionLinkFault_t doc). Detection never reads
+   them. Everything else in
    TeamFaultState_t is laptop-only bookkeeping this board never
    touches, left untouched here. */
 void mission_link_apply_fault(const MissionLinkFault_t *msg);

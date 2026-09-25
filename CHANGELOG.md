@@ -1,5 +1,47 @@
 # Changelog
 
+## Remove ground-truth fault leakage from detection
+
+The watchdog and recovery manager were reading the fault injector's
+ground truth (`team->fault_state`) in several places, so part of their
+"detection" was reading the answer. Measured on 5 seeds x 3000 ticks,
+`--fault-profile=combined`, before the fix: COMM, MOBILITY and
+TEAM_DEGRADED recovery reasons had precision 1.000 (zero false
+positives) and were often raised on the exact tick of injection, and
+`twin_communication_health` equalled the injected comm severity on 100%
+of rows.
+
+- `core/mission_execution_twin.c`: `twin->communication_health` is now
+  the worst heartbeat gap over the last 4 ticks (capped at 3), not the
+  injected severity. This also fixes the watchdog's communication
+  evidence channel, `evaluate_communication()` and the
+  `twin_communication_health` ML feature, which all read it.
+- `core/recovery_manager.c`: `evaluate_mobility()` no longer reads
+  `fault_state.active/severity[MOBILITY]`; `recovery_team_signature()`
+  no longer includes `fault_state.active_mask`.
+- `core/watchdog.c`: `degraded` now clears on watchdog evidence alone
+  (it used to stay set while any injected fault was active). New
+  observable mobility signal: `update_movement_stalls()` counts ticks a
+  travelling team fails to move a cell (a healthy team always moves one
+  cell per tick), exposed as `watchdog_get_mobility_stall_fraction()`
+  and used by `evaluate_mobility()` and the mobility confirmation.
+- `core/mission_link.h`, `core/mission_link_codec.h`, `core/mission_link.c`:
+  docs now say `MissionLinkFault_t` is for the board's team physics
+  only; detection never reads it.
+- `data_prep-2.py`: the leak guard also rejects features whose values
+  are a near-exact copy of a label (it used to compare names only,
+  which `twin_communication_health` passed).
+- Test stubs (`laptop/tools/*stubs.c`, `mission_link_status_gate_test.c`)
+  gained `watchdog_get_mobility_stall_fraction()`.
+
+After the fix, same seeds: comm episodes detected 43% -> 52% (median
+lag 0 -> 1 tick, precision 0.957); mobility 46% -> 34% (median lag 0 ->
+13 ticks, precision 0.955); no recovery reasons at all on a
+`--fault-profile=none` run. Figures published before this change
+(including the 43.3%/9.5% `WATCHDOG_ANOMALY_THRESHOLD` numbers) were
+measured with the leak and should be re-measured. See
+KNOWN_LIMITATIONS.md section 4 for the dataset impact.
+
 ## Real SX1262 RX wired up on both boards (DK + Pico) - integration pass
 
 One logical milestone landed as two separate, independently-written

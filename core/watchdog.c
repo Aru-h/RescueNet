@@ -23,6 +23,10 @@
 #define WATCHDOG_TIMEOUT_STREAK_MAX 6u
 #define WATCHDOG_MOBILITY_CONFIRM_TICKS 3u
 #define WATCHDOG_MOBILITY_PROGRESS_MARGIN 0.02f
+/* Stall-based mobility detection - see update_movement_stalls(). */
+#define WATCHDOG_STALL_WINDOW_TICKS 4u
+#define WATCHDOG_STALL_MIN_SAMPLES 2u
+#define WATCHDOG_STALL_CONFIRM_COUNT 2u
 
 
 
@@ -40,10 +44,9 @@ typedef struct
     uint8_t path_stagnation_streak;
     uint8_t timeout_streak;
 
-    /* Board-observable substitute for reading team->fault_state.active[
-     * FAULT_CLASS_MOBILITY] directly (that flag is only ever written by
-     * fault_injector.c - a board with no injector running would never
-     * see it flip, see the comment on update_mobility_confirmation()).
+    /* Observable substitute for reading team->fault_state.active[
+     * FAULT_CLASS_MOBILITY] directly (that flag is the fault injector's
+     * ground truth - see the comment on update_mobility_confirmation()).
      * These fields track the real, physically-derived signal instead:
      * whether degraded progress survives the travel->on-scene
      * transition, which is the one thing an environment obstacle
@@ -55,6 +58,14 @@ typedef struct
     uint8_t mobility_watch_ticks;
     float mobility_watch_baseline_error;
     uint8_t confirmed_mobility_impairment;
+
+    /* Movement-stall tracking (update_movement_stalls()): one bit per
+     * EN_ROUTE tick in the current travel leg, newest in bit 0, over the
+     * last WATCHDOG_STALL_WINDOW_TICKS such ticks. */
+    int16_t last_loc_x;
+    int16_t last_loc_y;
+    uint8_t stall_history;
+    uint8_t stall_samples;
 } WatchdogTeamState_t;
 
 static WatchdogTeamState_t g_watchdog_state[NUM_TEAMS];
@@ -120,14 +131,13 @@ static float operating_state_evidence(
 }
 
 /*
- * Board-observable substitute for team->fault_state.active[
- * FAULT_CLASS_MOBILITY]. That flag is only ever written by
- * fault_injector.c - nothing in board/STM32N6570-DK/ independently detects
- * or sets it, so on real hardware with no injector running it reads
- * false forever, and any evidence/classification logic keyed off it
- * would silently degrade (evidence builds at half speed, and
- * classify_failure_mode() could never report MOBILITY_DEGRADATION at
- * all).
+ * Observable substitute for team->fault_state.active[
+ * FAULT_CLASS_MOBILITY]. That flag is the fault injector's ground truth:
+ * written by fault_injector.c on the laptop and mirrored to the boards
+ * by mission_link_apply_fault() only so their team physics (move_team(),
+ * team_effective_work_rate()) can apply the fault's effect. Detection
+ * must never read it - that would be reading the answer - so the
+ * watchdog has to infer an impairment from what it can observe.
  *
  * The physically real distinction we actually have available on the
  * board: a genuine mobility impairment degrades the team both during
@@ -143,6 +153,92 @@ static float operating_state_evidence(
  * real evidence of a standing impairment; if progress catches up once
  * on scene, whatever slowed the team down stayed behind on the path.
  */
+static uint8_t stall_count(uint8_t history)
+{
+    uint8_t count = 0;
+
+    for(uint8_t i = 0; i < WATCHDOG_STALL_WINDOW_TICKS; i++)
+        count = (uint8_t)(count + ((history >> i) & 1u));
+
+    return count;
+}
+
+/*
+ * Direct, observable mobility signal: movement stalls while travelling.
+ *
+ * move_team() (core/simulation.c) advances a healthy EN_ROUTE team
+ * exactly one cell every tick - terrain and hazards change the route and
+ * its cost, never the one-cell-per-tick step rate, and a route that
+ * becomes unreachable makes the team give the task up rather than sit
+ * still. A mobility impairment is what makes a travelling team skip
+ * steps (a severity-3 fault loses every other move). So "was EN_ROUTE
+ * last tick, is still EN_ROUTE now, and has not changed cell" is a
+ * stall, observable from position alone - the same kind of symptom a
+ * missed heartbeat is for a comm fault.
+ *
+ * Only ticks spent EN_ROUTE on both sides are sampled, so arriving,
+ * departing and re-tasking never count. The window restarts whenever
+ * the team stops travelling, so a stall seen on one leg can't linger
+ * into an on-scene or idle period; a confirmed impairment is instead
+ * handed to update_mobility_confirmation()'s on-scene watch through
+ * travel_degradation_seen.
+ */
+static void update_movement_stalls(
+    const TeamState_t *team,
+    WatchdogTeamState_t *watchdog)
+{
+    uint8_t travelling = team->status == STATUS_EN_ROUTE &&
+        watchdog->prev_actual_status == STATUS_EN_ROUTE &&
+        watchdog->has_last_sample;
+
+    if(travelling)
+    {
+        uint8_t stalled = team->loc_x == watchdog->last_loc_x &&
+            team->loc_y == watchdog->last_loc_y;
+        uint8_t mask = (uint8_t)((1u << WATCHDOG_STALL_WINDOW_TICKS) - 1u);
+
+        watchdog->stall_history = (uint8_t)(((watchdog->stall_history << 1) | stalled) & mask);
+        if(watchdog->stall_samples < WATCHDOG_STALL_WINDOW_TICKS)
+            watchdog->stall_samples++;
+
+        if(stall_count(watchdog->stall_history) >= WATCHDOG_STALL_CONFIRM_COUNT)
+        {
+            watchdog->confirmed_mobility_impairment = 1;
+            watchdog->travel_degradation_seen = 1;
+        }
+        else if(watchdog->stall_samples >= WATCHDOG_STALL_WINDOW_TICKS &&
+                watchdog->stall_history == 0u)
+        {
+            /* A full window of clean moves: the team is travelling at
+             * full speed again. */
+            watchdog->confirmed_mobility_impairment = 0;
+        }
+    }
+    else if(team->status != STATUS_EN_ROUTE)
+    {
+        watchdog->stall_history = 0;
+        watchdog->stall_samples = 0;
+    }
+
+    watchdog->last_loc_x = team->loc_x;
+    watchdog->last_loc_y = team->loc_y;
+}
+
+float watchdog_get_mobility_stall_fraction(uint8_t team_id)
+{
+    const WatchdogTeamState_t *watchdog;
+
+    if(team_id >= NUM_TEAMS)
+        return 0.0f;
+
+    watchdog = &g_watchdog_state[team_id];
+    if(watchdog->stall_samples < WATCHDOG_STALL_MIN_SAMPLES)
+        return 0.0f;
+
+    return (float)stall_count(watchdog->stall_history) /
+        (float)watchdog->stall_samples;
+}
+
 static void update_mobility_confirmation(
     const TeamState_t *team,
     const MissionExecutionTwin_t *twin,
@@ -531,6 +627,9 @@ void watchdog_step(void)
         instantaneous[WATCHDOG_EVIDENCE_SLOT_OPERATING_STATE] =
             operating_state_evidence(team, twin);
 
+        /* Before update_mobility_confirmation(): that function
+         * overwrites prev_actual_status, which this one still needs. */
+        update_movement_stalls(team, watchdog);
         update_mobility_confirmation(team, twin, watchdog);
 
         instantaneous[WATCHDOG_EVIDENCE_SLOT_PATH] =
@@ -580,26 +679,17 @@ void watchdog_step(void)
         }
         else
         {
-            /* Confidence has decayed back to normal. Only actually clear
-             * the flag if there's no confirmed-but-unrepaired fault still
-             * hanging over this team - a real fault keeps the team flagged
-             * for its entire lifecycle (through the two-stage repair
-             * confirmation delay in fault_injector.c), regardless of
-             * whether the watchdog's own noisy evidence has settled down
-             * in the meantime. Pure watchdog noise (no fault ever actually
-             * confirmed) clears on its own once confidence decays. */
-            uint8_t any_fault_active = 0;
-            for(uint8_t c = 0; c < NUM_OPERATIONAL_FAULT_CLASSES; c++)
-            {
-                if(g_teams[team_id].fault_state.active[c])
-                {
-                    any_fault_active = 1;
-                    break;
-                }
-            }
-
-            if(!any_fault_active)
-                g_teams[team_id].degraded = 0;
+            /* Confidence has decayed back to normal, so clear the flag.
+             *
+             * This used to stay set while any fault_state.active[] class
+             * was on, so a real fault "kept the team flagged for its
+             * entire lifecycle". fault_state is the injector's ground
+             * truth, so that turned degraded into a leaked fault label -
+             * and evaluate_stamina()/evaluate_mobility()/evaluate_
+             * equipment()/evaluate_fault_predictor() all escalate to
+             * ABORT_MISSION on it. The flag now reflects only what this
+             * watchdog can actually see. */
+            g_teams[team_id].degraded = 0;
         }
     }
 }

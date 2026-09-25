@@ -1,6 +1,6 @@
 # Known Limitations — `tron_snapshot_dataset.csv`
 
-For anyone training on the CSV export. Three known imperfections in the current data, plus one thing that's *not* in the CSV at all.
+For anyone training on the CSV export. Four known imperfections in the current data, plus one thing that's *not* in the CSV at all.
 
 ## 1. M37 — cross-district coverage misattribution (still unfixed)
 
@@ -21,6 +21,14 @@ Evacuation gateway positions were fixed twice today: first a connectivity fix (t
 `EVENT_TICK` was added this session to give unconditional per-team, per-tick visibility — previously the CSV only logged a row when one of 11 discrete event types fired (`EVENT_NEW_INCIDENT`, `EVENT_TEAM_ASSIGNED`, `EVENT_TEAM_ON_SCENE`, `EVENT_STAGE_COMPLETE`, `EVENT_TEAM_REST`, `EVENT_TEAM_AVAILABLE`, `EVENT_INCIDENT_RESOLVED`, `EVENT_FAULT_INJECTED`, `EVENT_FAULT_RECOVERED`, `EVENT_WATCHDOG_ANOMALY_CHANGED`, `EVENT_RECOVERY_ACTION_CHANGED`). `EVENT_TICK` fires every tick for every team regardless, so it now dominates the row count (~97% of rows in a measured 50-seed/3000-tick run).
 
 It's meant for coverage/presence checks — e.g. "was this team logged every tick, with no gaps." **Filter `event_type == EVENT_TICK` (12) out before any analysis that looks at event sequences or transitions between meaningful events** — leaving it in will drown out the signal in anything sequence-based.
+
+## 4. `twin_communication_health` was the comm fault label before the leak fix
+
+Before the ground-truth leakage fix (see CHANGELOG.md), `twin_communication_health` was set straight from the injected comm fault severity, so it equalled `fault_active_communication * fault_severity_communication` on every row. The watchdog's communication evidence channel (and the `evidence_communication` feature derived from it) was built on it too.
+
+**CSV data generated before the fix leaks the comm label through these features.** Don't train on it: any comm-fault accuracy it produces is overstated. Regenerate from a build with the fix. `data_prep-2.py` now refuses a dataset where a feature is a near-exact copy of a label, so pre-fix data fails that check.
+
+Mobility detection is now based on observed movement stalls, so a mobility fault that starts and ends while the team isn't travelling can't be seen at all. That is an honest limit, not a bug.
 
 ---
 

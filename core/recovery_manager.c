@@ -84,22 +84,6 @@ static float recovery_positive(float value)
     return value > 0.0f ? value : 0.0f;
 }
 
-/* active_mask below is shifted into the top 12 bits (52-63) of this
- * packed uint64_t signature - only NUM_OPERATIONAL_FAULT_CLASSES (5)
- * bits of it are ever actually set today, so 12 bits of headroom is
- * generous, but every bit above bit 63 (i.e. every active_mask bit at
- * position >= 12) silently falls off the top and stops contributing to
- * the signature at all. This assert turns "silently stops detecting a
- * change" into a build break the moment fault classes grow enough to
- * matter, rather than a bug someone has to rediscover by hand - fixing
- * the packing itself would mean re-deriving disjoint bit ranges for
- * every field above, not a one-line change. */
-_Static_assert(NUM_OPERATIONAL_FAULT_CLASSES <= 12,
-    "recovery_team_signature()'s active_mask field only has 12 bits of "
-    "room (bits 52-63) - widen this packing before adding more fault "
-    "classes, or recovery_dispatch()'s change-detection will silently "
-    "stop noticing changes confined to the truncated high bits");
-
 static uint64_t recovery_team_signature(const TeamState_t *team)
 {
     uint64_t signature = 0;
@@ -111,7 +95,11 @@ static uint64_t recovery_team_signature(const TeamState_t *team)
     signature ^= (uint64_t)team->loc_y << 24;
     signature ^= (uint64_t)((uint32_t)(team->stamina * 100.0f)) << 32;
     signature ^= (uint64_t)team->equipment_level << 48;
-    signature ^= (uint64_t)team->fault_state.active_mask << 52;
+    /* No fault_state.active_mask term: that is the injector's ground
+     * truth, not something the recovery pipeline can observe. Letting it
+     * into the signature meant a fault switching on or off counted as a
+     * state change for recovery_dispatch()'s change detection even when
+     * nothing observable about the team had changed. */
 
     return signature;
 }
@@ -788,13 +776,23 @@ static RecoverySignal_t evaluate_mobility(
     if(watchdog->dominant_failure_mode == WATCHDOG_FAILURE_MOBILITY_DEGRADATION)
         severity = watchdog->anomaly_confidence;
 
-    if(team->fault_state.active[FAULT_CLASS_MOBILITY])
+    /* Direct observable signal: how often the team failed to move while
+     * travelling (watchdog_get_mobility_stall_fraction(), core/
+     * watchdog.c). RECOVERY_MANAGER_MOBILITY_STALL_FULL_SCALE of stalls
+     * (every other tick - what a severity-3 fault produces) counts as
+     * full severity.
+     *
+     * This replaces a read of team->fault_state.active/severity[
+     * FAULT_CLASS_MOBILITY] - the injector's ground truth - which let
+     * this evaluator see the answer (zero false positives, flagged on
+     * the exact tick of injection). */
     {
-        float fault_severity = (float)team->fault_state.severity[FAULT_CLASS_MOBILITY] /
-            RECOVERY_MANAGER_MOBILITY_SEVERITY_SCALE;
+        float stall_severity = recovery_clamp01(
+            watchdog_get_mobility_stall_fraction(team->team_id) /
+            RECOVERY_MANAGER_MOBILITY_STALL_FULL_SCALE);
 
-        if(fault_severity > severity)
-            severity = fault_severity;
+        if(stall_severity > severity)
+            severity = stall_severity;
     }
 
     confidence = recovery_clamp01(severity * recovery_stage_multiplier_mobility(stage));
@@ -1343,7 +1341,12 @@ static RecoverySignal_t evaluate_fault_predictor(
      * WATCHDOG_ANOMALY_THRESHOLD's false-positive rate starts actually
      * gating escalation past LOCAL_RECOVERY (below) - re-evaluate the
      * threshold's FPR/TPR tradeoff at that point, don't assume today's
-     * "good enough" verdict still holds. */
+     * "good enough" verdict still holds.
+     *
+     * The 43.3%/9.5% figures above were measured while the watchdog's
+     * communication channel and the degraded flag were still reading
+     * the injector's fault_state (since removed), so they are not
+     * trustworthy either - re-measure before relying on them. */
     if(confidence <= 0.0f)
         return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
             RECOVERY_REASON_NONE,

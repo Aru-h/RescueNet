@@ -38,6 +38,12 @@ void watchdog_get_evidence_vector(uint8_t team_id, float out_evidence[7],
     *out_confirmed_mobility_impairment = 0u;
 }
 
+float watchdog_get_mobility_stall_fraction(uint8_t team_id)
+{
+    (void)team_id;
+    return 0.0f;
+}
+
 /* ---- test-controlled fault_predictor stub ---- */
 FaultPredictorScores_t g_test_predictor_scores[NUM_TEAMS];
 

@@ -1309,15 +1309,13 @@ CommsPrecedence_t mission_link_fault_precedence(const MissionLinkFault_t *msg)
         return COMMS_PRECEDENCE_IMMEDIATE;
     }
 
-    /* RECOVERY_MANAGER_MOBILITY_SEVERITY_SCALE is a divisor in
-       recovery_manager.c's own evaluate_mobility() (fault_severity =
-       severity / SCALE, compared against a stage-dependent confidence
-       floor there) - used here as a direct comparison instead, since
-       the stage/confidence machinery isn't available at this call
-       site. Treats "raw severity at or past the scale value" as the
-       escalation point, which is the same order of magnitude that
-       function's own division implies, not an independently invented
-       number. */
+    /* RECOVERY_MANAGER_MOBILITY_SEVERITY_SCALE used to be the divisor
+       evaluate_mobility() applied to the injected severity; that read
+       was removed (it leaked ground truth into detection), so it now
+       only sets this radio-precedence cut-off. This decides how
+       urgently the fault frame itself is relayed, not whether the
+       recovery pipeline reacts - see MissionLinkFault_t's doc in
+       mission_link.h. */
     if (msg->active[FAULT_CLASS_MOBILITY] &&
         (float)msg->severity[FAULT_CLASS_MOBILITY] >= RECOVERY_MANAGER_MOBILITY_SEVERITY_SCALE)
     {

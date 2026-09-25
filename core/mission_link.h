@@ -44,10 +44,12 @@
  *   MissionLinkFault_t    laptop -> board, ONGOING, sent on any change
  *                          to that team's fault_state. fault_injector_
  *                          step() stays laptop-side (see ARCHITECTURE.md);
- *                          this is what makes that team's active[]/
- *                          severity[] visible to the board's own
- *                          watchdog_step()/recovery_manager_step(),
- *                          which do stay board-side.
+ *                          this is what lets the board's team physics
+ *                          (move_team(), update_team(), team_effective_
+ *                          work_rate()) apply the fault's effect. The
+ *                          board's watchdog_step()/recovery_manager_step()
+ *                          must NOT read it - they detect faults only
+ *                          from those observable effects.
  *
  *   MissionLinkStatus_t   board -> laptop, ONGOING, sent on team
  *                          status/equipment_level/work_rate change AND
@@ -184,7 +186,11 @@ CommsPrecedence_t mission_link_incident_precedence(const MissionLinkIncident_t *
  * 3. MissionLinkFault_t - laptop -> board, ongoing, per fault-state change
  * ---------------------------------------------------------------
  * Only active[]/severity[] per OperationalFaultClass_t - the two
- * fields watchdog_step()/recovery_manager_step() actually branch on.
+ * fields the board's team physics (move_team(), update_team()'s
+ * heartbeat/resource handling, team_effective_work_rate()) branch on.
+ * This is ground truth for simulating the fault's effect only: the
+ * watchdog and recovery manager never read it and detect faults from
+ * the resulting observable behaviour instead.
  * NOT a mirror of TeamFaultState_t (which is 40+ bytes of laptop-only
  * bookkeeping: start_tick[], duration_ticks[], recovery_tick[],
  * target_x/y[], the original_* pre-fault backup fields, pending_

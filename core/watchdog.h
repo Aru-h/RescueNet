@@ -67,4 +67,12 @@ void watchdog_get_evidence_vector(uint8_t team_id,
     float out_evidence[NUM_WATCHDOG_EVIDENCE_SLOTS],
     uint8_t *out_confirmed_mobility_impairment);
 
+/* Fraction of team_id's recent EN_ROUTE ticks (current travel leg, up
+   to the last 4) on which it failed to move a cell - see
+   update_movement_stalls() in watchdog.c. 0.0 until at least 2 such
+   ticks have been observed, and whenever the team isn't travelling. A
+   healthy team never stalls; a severity-3 mobility fault stalls about
+   every other tick (0.5). */
+float watchdog_get_mobility_stall_fraction(uint8_t team_id);
+
 #endif
