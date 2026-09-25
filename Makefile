@@ -145,7 +145,7 @@ ifneq ($(wildcard $(BSP_DIR)/include),)
   BSP_MODE = real BSP2 headers ($(BSP_DIR))
 else
   ARM_CFLAGS = $(ARM_CFLAGS_BASE)
-  # board/STM32N6570-DK/debug.c and main_board.c call real BSP APIs
+  # board/STM32N6570-DK/dk_debug.c and main_board.c call real BSP APIs
   # (tm_printf, tk_cre_tsk, ...) now, so they genuinely can't compile
   # without board/STM32N6570-DK/vendor/mtk3_bsp2 -- that's correct,
   # not a check-board bug. Fallback mode checks core/ only: still a
