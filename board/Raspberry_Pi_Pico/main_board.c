@@ -637,44 +637,35 @@ LOCAL void board_led_blink_n(UINT count, UINT on_ms, UINT off_ms)
     }
 }
 
-/* Handshake-wait pattern: ONE long, slow blink, then a long dark pause
-   - visually distinct from board_led_wait_pulse_roster()'s three
-   short blinks just below, and from the tick loop's own much-more-
-   frequent single pulse (BOARD_LED_HEARTBEAT_TICK_INTERVAL). Widened
-   from the original 80ms-on/400ms-off (too fast to read as "one
-   blink" vs. "flickering") to a slow, unambiguous 600ms-on/1800ms-off
-   - long enough on and off that the two states ("lit" vs. "dark") are
-   never in doubt, and the on/off shapes of this pattern vs. the
-   roster-wait pattern below read as different at a glance rather
-   than needing a stopwatch. "Long pause" here is a real blocking
-   delay (via board_led_pulse()'s off_ms, which keeps polling the
-   radio - see board_sleep_ms()), not just a larger iteration-count
-   gate - unlike the tick loop's heartbeat, this is fine to let
-   block: these wait loops have no other pacing at all today (no
-   BOARD_TICK_DELAY_MS equivalent), and even the widened ~2.4s full
-   cycle here is still far faster than any realistic LoRa RX
-   turnaround, so it doesn't meaningfully delay noticing an incoming
-   frame either. */
+/* Handshake-wait pattern: ONE blink, then a long pause - visually
+   distinct from board_led_wait_pulse_roster()'s double blink just
+   below, and from the tick loop's own much-more-frequent single
+   pulse (BOARD_LED_HEARTBEAT_MS). "Long pause" here is a
+   real blocking delay (via board_led_pulse()'s off_ms, which keeps
+   polling the radio - see board_sleep_ms()),
+   not just a larger iteration-count gate - unlike the tick loop's
+   heartbeat, this is fine to let block briefly: these wait loops
+   have no other pacing at all today (no clock-driven
+   equivalent), so a short deliberate pause here doesn't compete with
+   anything, and 400ms is still far faster than any realistic LoRa
+   RX turnaround, so it doesn't meaningfully delay noticing an
+   incoming frame either. */
 LOCAL void board_led_wait_pulse_handshake(void)
 {
-    board_led_pulse(600u, 1800u);
+    board_led_pulse(80u, 400u);
 }
 
-/* Roster-wait pattern: THREE short, sharp blinks back to back, then a
-   long dark pause - see board_led_wait_pulse_handshake()'s own doc
-   just above for the widened-timing reasoning; the shape (staccato
-   triple vs. one slow pulse) is what's meant to be unmistakable here,
-   not just the count. Total per-cycle time deliberately similar to
-   the handshake pattern's ~2.4s (3*(150+150) + 1500 = 2400ms) so
-   both patterns repeat at roughly the same rate - only the on/off
-   shape differs. */
+/* Roster-wait pattern: TWO quick blinks back to back, then the same
+   long pause - see board_led_wait_pulse_handshake()'s own doc just
+   above for the reasoning; only the blink count differs. */
 LOCAL void board_led_wait_pulse_roster(void)
 {
-    board_led_blink_n(3u, 150u, 150u);
-    board_sleep_ms(1500u);   /* radio-polling delay, not a plain blocking
-                           tk_dly_tsk() - see board_led_wait_pulse_handshake()'s
-                           own doc just above for why this must not
-                           starve sx1262_rx_poll() for 1.5s at a time. */
+    board_led_blink_n(2u, 80u, 120u);
+    board_sleep_ms(280u);   /* top up to the same ~400ms tail pause the
+                           handshake pattern uses, so both patterns
+                           repeat at roughly the same overall rate -
+                           only the blink shape differs, not the
+                           cadence. */
 }
 
 /* Roster-REJECTED pattern: FOUR quick blinks. Distinct from the plain
