@@ -15,6 +15,8 @@ user's own browser. Checks that:
   - a POST whose Origin/Referer names another site is refused with 403,
     even with a JSON body;
   - a JSON body that isn't an object is a 400, not a 500;
+  - a non-numeric seed/ticks/... on /api/run, /api/run-live or
+    /api/board/connect-sim is a 400, not a 500 (and starts nothing);
   - GET routes are unaffected.
 
 The real bridge is replaced by a recorder, so "no side effect" means no
@@ -117,6 +119,20 @@ def main():
     check(resp.status_code == 400, "JSON array body is a 400")
     resp = client.post("/api/board/connect-sim", data="{not json", headers=json_ct)
     check(resp.status_code == 400, "malformed JSON body is a 400")
+
+    # --- Non-numeric parameters are a 400, not a 500 ----------------------
+    def no_build():
+        FAILURES.append("build_binary() called for a request that should have been refused")
+        return (False, "")
+    app_module.build_binary = no_build
+    calls_before = len(bridge.calls)
+    for route, body in (("/api/run", {"seed": "x"}),
+                        ("/api/run", {"ticks": None}),
+                        ("/api/run-live", {"tick_delay_ms": "fast"}),
+                        ("/api/board/connect-sim", {"ticks": [1]})):
+        resp = client.post(route, json=body)
+        check(resp.status_code == 400, f"{route} with {body} is a 400")
+    check(len(bridge.calls) == calls_before, "bad parameters started nothing")
 
     # --- Reads unaffected ------------------------------------------------
     resp = client.get("/api/history", headers={"Origin": "http://evil.example"})

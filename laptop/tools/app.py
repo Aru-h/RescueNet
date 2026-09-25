@@ -536,10 +536,14 @@ def api_board_connect_sim():
     data = _json_object_body()
     if data is None:
         return _bad_json_body()
-    seed = int(data.get("seed", 1))
-    ticks = int(data.get("ticks", 2000))
+    try:
+        seed = int(data.get("seed", 1))
+        ticks = int(data.get("ticks", 2000))
+        tick_delay_ms = int(data.get("tick_delay_ms", 0))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error",
+                        "message": "seed, ticks and tick_delay_ms must be integers"}), 400
     fault_profile = data.get("fault_profile", "none")
-    tick_delay_ms = int(data.get("tick_delay_ms", 0))
 
     success = bridge.connect(
         seed=seed, ticks=ticks, fault_profile=fault_profile,
@@ -781,9 +785,12 @@ def api_run():
     payload = _json_object_body()
     if payload is None:
         return _bad_json_body()
-    seed = int(payload.get("seed", 1))
-    seed_count = int(payload.get("seed_count", 1))
-    ticks = int(payload.get("ticks", 2000))
+    try:
+        seed = int(payload.get("seed", 1))
+        seed_count = int(payload.get("seed_count", 1))
+        ticks = int(payload.get("ticks", 2000))
+    except (TypeError, ValueError):
+        return jsonify({"error": "seed, seed_count and ticks must be integers"}), 400
     fault_profile = payload.get("fault_profile", "none")
 
     build_ok, build_log = build_binary()
@@ -842,10 +849,13 @@ def api_run_live():
     payload = _json_object_body()
     if payload is None:
         return _bad_json_body()
-    seed = int(payload.get("seed", 1))
-    ticks = int(payload.get("ticks", 500))
+    try:
+        seed = int(payload.get("seed", 1))
+        ticks = int(payload.get("ticks", 500))
+        tick_delay_ms = int(payload.get("tick_delay_ms", 150))
+    except (TypeError, ValueError):
+        return jsonify({"error": "seed, ticks and tick_delay_ms must be integers"}), 400
     fault_profile = payload.get("fault_profile", "none")
-    tick_delay_ms = int(payload.get("tick_delay_ms", 150))
 
     build_ok, build_log = build_binary()
     if not build_ok:
