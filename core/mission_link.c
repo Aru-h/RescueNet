@@ -978,6 +978,79 @@ static IncidentState_t *mission_link_find_free_incident_slot(void)
     return NULL;
 }
 
+/* Counts incidents that could not be held because the local table was
+   full: an incoming incident dropped for want of a slot, plus every
+   incident evicted to make room for a more urgent one. Silent by design
+   in portable core/ (no logging), same reasoning as g_roster_reject_
+   count above - this is what makes the loss visible. */
+static uint32_t g_incident_drop_count;
+
+uint32_t mission_link_incident_drop_count(void)
+{
+    return g_incident_drop_count;
+}
+
+/* When the table is full, the slot of the incident it is safe to give up
+   for msg, or NULL. Only an incident nobody is working is a candidate:
+   OPEN, no assigned or support team, and no team on this board heading
+   for it. Among those, the least urgent (numerically highest Priority_t,
+   PRIORITY_CRITICAL == 1 is the most urgent) goes, and only if msg is
+   STRICTLY more urgent - so a steady stream of equal-priority re-sends
+   can never churn the table. Ties are broken by incident_id (the
+   newest, highest id goes), never by slot position: both boards see the
+   same incident frames but lay their tables out differently, and the
+   choice must depend only on what they both hold, so they evict the
+   same incident for the same input (review finding H3). */
+static IncidentState_t *mission_link_find_eviction_victim(const MissionLinkIncident_t *msg)
+{
+    IncidentState_t *victim = NULL;
+    int i;
+
+    for (i = 0; i < NUM_INCIDENTS; i++)
+    {
+        IncidentState_t *candidate = &g_incidents[i];
+        uint8_t t;
+        uint8_t in_use = 0u;
+
+        if (!candidate->slot_occupied ||
+            candidate->status != INC_OPEN ||
+            candidate->assigned_team != NO_ASSIGNMENT ||
+            candidate->support_team != NO_ASSIGNMENT)
+        {
+            continue;
+        }
+
+        for (t = 0u; t < NUM_TEAMS; t++)
+        {
+            if (g_teams[t].assigned_task_pool == TASK_POOL_INCIDENT &&
+                g_teams[t].assigned_task_slot == (uint8_t)i)
+            {
+                in_use = 1u;
+                break;
+            }
+        }
+        if (in_use)
+        {
+            continue;
+        }
+
+        if (victim == NULL ||
+            (uint8_t)candidate->priority > (uint8_t)victim->priority ||
+            ((uint8_t)candidate->priority == (uint8_t)victim->priority &&
+             candidate->incident_id > victim->incident_id))
+        {
+            victim = candidate;
+        }
+    }
+
+    if (victim == NULL || msg->priority >= (uint8_t)victim->priority)
+    {
+        return NULL;
+    }
+
+    return victim;
+}
+
 /*
  * Who owns which incident field once the laptop mirrors board reports
  * (see mission_link.h's MissionLinkStatus_t doc):
@@ -1108,14 +1181,34 @@ void mission_link_apply_incident(const MissionLinkIncident_t *msg)
 
         incident = mission_link_find_free_incident_slot();
 
+        if (incident == NULL && msg->discovered)
+        {
+            /* Local incident table is full. Make room if this one is
+               more urgent than something nobody here is working - see
+               mission_link_find_eviction_victim(). An undiscovered
+               incident never evicts anything: no team can accept it
+               (team_can_accept_incident()), so it isn't worth a slot
+               someone could use. */
+            IncidentState_t *victim = mission_link_find_eviction_victim(msg);
+
+            if (victim != NULL)
+            {
+                board_incident_cache_remove(victim->incident_id);
+                incident_close_for_authority(victim);
+                g_incident_drop_count++;
+                incident = victim;
+            }
+        }
+
         if (incident == NULL)
         {
-            /* Local incident table is full - this board's partial
-               view just can't hold this one right now. Not fatal:
-               the laptop remains the authoritative source and will
-               keep resending on subsequent field changes, same as
-               any other dropped/torn frame under this link's
-               documented resync policy. */
+            /* Still no room - this board's partial view just can't hold
+               this one right now. Not fatal: the laptop remains the
+               authoritative source and keeps re-sending open incidents
+               (telemetry_bridge.py's refresh), so it lands once a slot
+               frees up, same as any other dropped/torn frame under this
+               link's documented resync policy. Counted, not silent. */
+            g_incident_drop_count++;
             return;
         }
 

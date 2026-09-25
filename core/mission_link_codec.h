@@ -182,6 +182,12 @@ uint32_t mission_link_roster_reject_count(void);
    see the ownership comment above this function in mission_link.c. */
 void mission_link_apply_incident(const MissionLinkIncident_t *msg);
 
+/* Monotonic count of incidents mission_link_apply_incident() could not
+   keep because the local table was full: a new incident dropped for want
+   of a slot, plus each unworked, less urgent incident evicted to make
+   room for a strictly more urgent one (review finding H3). */
+uint32_t mission_link_incident_drop_count(void);
+
 /* Ongoing: mirrors msg->active[]/severity[] into
    g_teams[msg->team_id].fault_state.active[]/severity[] - the two
    fields the board's team physics reads to apply the fault's effect

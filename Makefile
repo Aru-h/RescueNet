@@ -834,3 +834,25 @@ check-two-board-mission-harness:
 	done
 	@echo "check-two-board-mission-harness: clock, map, sites and positions crossed both boards"
 
+
+# ---------------------------------------------------------------------
+# Board-to-board protocol review fixes (H2 H3 H4 H5) - selftests.
+# Each is built twice, plainly and under ASan/UBSan: several of these
+# tests feed deliberately malformed frames whose only failure mode on
+# the old code was an out-of-bounds access, which a CHECK() alone can
+# miss.
+# ---------------------------------------------------------------------
+AGENT_B_SANITIZE = -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined
+
+.PHONY: check-mission-link-validation-selftest
+check-mission-link-validation-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/mission_link_validation_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/mission_link_validation_selftest \
+		$(TOOLS_DIR)/mission_link_validation_selftest.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@$(CC) $(SELFTEST_CFLAGS) $(AGENT_B_SANITIZE) -o $(SELFTEST_BIN_DIR)/mission_link_validation_selftest_asan \
+		$(TOOLS_DIR)/mission_link_validation_selftest.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./mission_link_validation_selftest > /dev/null 2>&1 && \
+		./mission_link_validation_selftest_asan
