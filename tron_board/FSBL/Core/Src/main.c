@@ -18,6 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "extmem_manager.h"
+#include <stdio.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -81,7 +83,7 @@ static void MX_USB2_OTG_HS_HCD_Init(void);
 static void MX_XSPI1_Init(void);
 static void MX_XSPI2_Init(void);
 /* USER CODE BEGIN PFP */
-
+static int32_t OTP_Config(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -97,7 +99,15 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  /* Reopen debug access (secure + nonsecure) since the boot ROM only does
+     this automatically in Dev_boot mode, not Flash Boot. */
+  *(volatile uint32_t *)0x56009E90 = 0xB4;
+  *(volatile uint32_t *)0x56009E8C = 0xB451B400;
 
+  /* Enable the CPU caches, as ST's own FSBL XIP reference template does,
+     before touching the memory-mapped external flash. */
+  SCB_EnableICache();
+  SCB_EnableDCache();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -119,22 +129,38 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_ADC1_Init();
-  MX_I2C1_Init();
-  MX_I2C2_Init();
-  MX_MDF1_Init();
-  MX_SAI1_Init();
-  MX_SDMMC2_SD_Init();
-  MX_UCPD1_Init();
   MX_USART1_UART_Init();
-  MX_USB1_OTG_HS_HCD_Init();
-  MX_USB2_OTG_HS_HCD_Init();
+  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: UART alive\r\n", 19, HAL_MAX_DELAY);
+#if 0 /* Permanent OTP fuse. ST's own DK FSBL template runs fine WITHOUT it (50 MHz XSPI2 clock),
+         so it is only needed for the 200 MHz mode. Re-enable deliberately, never by accident. */
+  {
+    int32_t otp_res = OTP_Config();
+    char otp_buf[48];
+    int otp_len = snprintf(otp_buf, sizeof(otp_buf), "FSBL: OTP_Config returned %ld\r\n", (long)otp_res);
+    HAL_UART_Transmit(&huart1, (uint8_t *)otp_buf, (uint16_t)otp_len, HAL_MAX_DELAY);
+    if (otp_res != 0)
+    {
+      Error_Handler();
+    }
+  }
+#endif
   MX_XSPI1_Init();
+  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: XSPI1 init done\r\n", 24, HAL_MAX_DELAY);
   MX_XSPI2_Init();
+  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: XSPI2 init done\r\n", 24, HAL_MAX_DELAY);
+  MX_EXTMEM_MANAGER_Init();
+  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: EXTMEM_MANAGER init done\r\n", 33, HAL_MAX_DELAY);
   /* USER CODE BEGIN 2 */
-
+  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: init done, calling BOOT_Application\r\n", 44, HAL_MAX_DELAY);
   /* USER CODE END 2 */
 
+  /* Launch the application */
+  if (BOOT_OK != BOOT_Application())
+  {
+    HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: BOOT_Application FAILED\r\n", 32, HAL_MAX_DELAY);
+    Error_Handler();
+  }
+  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: BOOT_Application returned OK (should not happen)\r\n", 58, HAL_MAX_DELAY);
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -793,13 +819,13 @@ static void MX_XSPI2_Init(void)
   hxspi2.Init.MemoryMode = HAL_XSPI_SINGLE_MEM;
   hxspi2.Init.MemoryType = HAL_XSPI_MEMTYPE_MACRONIX;
   hxspi2.Init.MemorySize = HAL_XSPI_SIZE_1GB;
-  hxspi2.Init.ChipSelectHighTimeCycle = 1;
+  hxspi2.Init.ChipSelectHighTimeCycle = 2;   /* matches ST's DK Template_FSBL_XIP (was 1) */
   hxspi2.Init.FreeRunningClock = HAL_XSPI_FREERUNCLK_DISABLE;
   hxspi2.Init.ClockMode = HAL_XSPI_CLOCK_MODE_0;
   hxspi2.Init.WrapSize = HAL_XSPI_WRAP_NOT_SUPPORTED;
   hxspi2.Init.ClockPrescaler = 0;
   hxspi2.Init.SampleShifting = HAL_XSPI_SAMPLE_SHIFT_NONE;
-  hxspi2.Init.DelayHoldQuarterCycle = HAL_XSPI_DHQC_DISABLE;
+  hxspi2.Init.DelayHoldQuarterCycle = HAL_XSPI_DHQC_ENABLE;
   hxspi2.Init.ChipSelectBoundary = HAL_XSPI_BONDARYOF_NONE;
   hxspi2.Init.MaxTran = 0;
   hxspi2.Init.Refresh = 0;
@@ -914,7 +940,72 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/**
+  * @brief  User OTP fuse Configuration
+  *         The User Option Bytes are configured as follows :
+  *            VDDIO_HSLV = 1 (enable the configuration of pads below 2.5V,
+  *                            I/O speed optimization at low-voltage allowed)
+  *            XSPI1_HSLV = 1 (enable I/O XSPIM Port 1 high-speed option)
+  *            XSPI2_HSLV = 1 (enable I/O XSPIM Port 2 high-speed option)
+  *            Other User Option Bytes remain unchanged
+  *         Copied verbatim from ST's official Template_FSBL_XIP reference project.
+  * @retval None
+  */
+static int32_t OTP_Config(void)
+{
+  #define BSEC_HW_CONFIG_ID        124U
+  #define BSEC_HWS_HSLV_VDDIO3     (1U<<15)
 
+  uint32_t fuse_id, bit_mask, data;
+  BSEC_HandleTypeDef sBsecHandler;
+  int32_t retr = 0;
+
+  __HAL_RCC_SYSCFG_CLK_ENABLE();
+  __HAL_RCC_BSEC_CLK_ENABLE();
+
+  sBsecHandler.Instance = BSEC;
+
+  /* Read current value of fuse */
+  fuse_id = BSEC_HW_CONFIG_ID;
+  if (HAL_BSEC_OTP_Read(&sBsecHandler, fuse_id, &data) == HAL_OK)
+  {
+    /* Check if bit has already been set */
+    bit_mask = BSEC_HWS_HSLV_VDDIO3 ;
+    if ((data & bit_mask) != bit_mask)
+    {
+      data |= bit_mask;
+      /* Bitwise programming of lower bits */
+      if (HAL_BSEC_OTP_Program(&sBsecHandler, fuse_id, data, HAL_BSEC_NORMAL_PROG) == HAL_OK)
+      {
+        /* Read lower bits to verify the correct programming */
+        if (HAL_BSEC_OTP_Read(&sBsecHandler, fuse_id, &data) == HAL_OK)
+        {
+          if ((data & bit_mask) != bit_mask)
+          {
+            /* Error : Fuse programming not taken in account */
+            retr = -1;
+          }
+        }
+        else
+        {
+          /* Error : Fuse read unsuccessful */
+          retr = -2;
+        }
+      }
+      else
+      {
+        /* Error : Fuse programming unsuccessful */
+        retr = -3;
+      }
+    }
+  }
+  else
+  {
+    /* Error  : Fuse read unsuccessful */
+    retr = -4;
+  }
+  return retr;
+}
 /* USER CODE END 4 */
 
 /**
@@ -926,6 +1017,7 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: Error_Handler HIT\r\n", 26, HAL_MAX_DELAY);
   __disable_irq();
   while (1)
   {

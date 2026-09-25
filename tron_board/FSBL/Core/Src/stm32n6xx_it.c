@@ -20,6 +20,19 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32n6xx_it.h"
+#include <stdio.h>
+
+extern UART_HandleTypeDef huart1;
+static void FAULT_Print(const char *name)
+{
+  char buf[160];
+  int len = snprintf(buf, sizeof(buf),
+    "\r\n*** %s *** CFSR=0x%08lX HFSR=0x%08lX MMFAR=0x%08lX BFAR=0x%08lX SFSR=0x%08lX SFAR=0x%08lX\r\n",
+    name, (unsigned long)SCB->CFSR, (unsigned long)SCB->HFSR,
+    (unsigned long)SCB->MMFAR, (unsigned long)SCB->BFAR,
+    (unsigned long)SAU->SFSR, (unsigned long)SAU->SFAR);
+  HAL_UART_Transmit(&huart1, (uint8_t *)buf, (uint16_t)len, HAL_MAX_DELAY);
+}
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 /* USER CODE END Includes */
@@ -84,7 +97,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  FAULT_Print("HardFault");
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
@@ -99,7 +112,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
+  FAULT_Print("MemManage");
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
   {
@@ -114,7 +127,7 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-
+  FAULT_Print("BusFault");
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
   {
@@ -129,7 +142,7 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-
+  FAULT_Print("UsageFault");
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)
   {
@@ -144,7 +157,7 @@ void UsageFault_Handler(void)
 void SecureFault_Handler(void)
 {
   /* USER CODE BEGIN SecureFault_IRQn 0 */
-
+  FAULT_Print("SecureFault");
   /* USER CODE END SecureFault_IRQn 0 */
   while (1)
   {

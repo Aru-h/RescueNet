@@ -112,6 +112,11 @@
 #include "lora_frame.h"          /* lora_frame_try_parse(), LORA_FRAME_MAX_WIRE_SIZE */
 #include "comms_transport.h"     /* comms_transport_deliver_received() */
 #include "lora_radio_params.h"   /* LOCKED PHY params shared with the Pico HAL - see that header's top comment */
+#include "sx1262_setup.h"        /* TCXO probe / image calibration / PA config, shared with the Pico HAL */
+
+#ifdef SX1262_SOFT_SPI
+#include "soft_spi.h"            /* bit-banged SPI, used instead of SPI5 - see spi5_init() below */
+#endif
 
 /*
  * -----------------------------------------------------------------------
@@ -221,6 +226,7 @@ static void gpio_set_input(GPIO_TypeDef *port, uint32_t pin, uint32_t pull /* 0=
     port->PUPDR = (port->PUPDR & ~(3u << (pin * 2u))) | (pull << (pin * 2u));
 }
 
+#ifndef SX1262_SOFT_SPI   /* only the hardware-SPI5 path needs alternate-function pins */
 static void gpio_set_af(GPIO_TypeDef *port, uint32_t pin, uint32_t af)
 {
     uint32_t idx = pin >> 3u;             /* AFR[0] = pins 0-7, AFR[1] = pins 8-15 */
@@ -231,6 +237,7 @@ static void gpio_set_af(GPIO_TypeDef *port, uint32_t pin, uint32_t af)
     port->PUPDR &= ~(3u << (pin * 2u));
     port->AFR[idx] = (port->AFR[idx] & ~(0xFu << shift)) | (af << shift);
 }
+#endif
 
 static inline void gpio_write(GPIO_TypeDef *port, uint32_t pin, int level)
 {
@@ -254,6 +261,61 @@ static inline int gpio_read(GPIO_TypeDef *port, uint32_t pin)
  */
 
 static void crude_delay_cycles(uint32_t n);
+
+#ifdef SX1262_SOFT_SPI
+/*
+ * Bit-banged SPI, selected with -DSX1262_SOFT_SPI. The SPI5 peripheral's
+ * CFG2.MASTER bit intermittently fails to latch on this board (see the
+ * long history in the hardware-path spi5_init() below), so this variant
+ * never touches SPI5 at all: SCK/MOSI are plain GPIO outputs, MISO a
+ * plain GPIO input, on the same four pins and the same Arduino-header
+ * wiring as before, and NSS is already software-driven either way. The
+ * SX1262 only needs a slow, byte-at-a-time bus, so this costs nothing
+ * that matters. The function keeps its spi5_* names so every caller
+ * below is unchanged.
+ *
+ * SX1262_SOFT_SPI_HALF_PERIOD_ITERS is an uncalibrated spin count (same
+ * approach as crude_delay_cycles() - no timer exists at this call
+ * depth). The default is deliberately conservative: it only has to keep
+ * SCK under the module's ceiling at the fastest plausible core clock,
+ * and a slower bus at a lower clock is harmless. Lower it only after
+ * measuring SCK on a scope.
+ */
+#ifndef SX1262_SOFT_SPI_HALF_PERIOD_ITERS
+#define SX1262_SOFT_SPI_HALF_PERIOD_ITERS 24u
+#endif
+
+static void soft_spi_set_sck(int level)  { gpio_write(SX1262_SCK_PORT, SX1262_SCK_PIN, level); }
+static void soft_spi_set_mosi(int level) { gpio_write(SX1262_MOSI_PORT, SX1262_MOSI_PIN, level); }
+static int  soft_spi_get_miso(void)      { return gpio_read(SX1262_MISO_PORT, SX1262_MISO_PIN); }
+
+static void soft_spi_half_period_delay(void)
+{
+    volatile uint32_t i;
+    for (i = 0u; i < SX1262_SOFT_SPI_HALF_PERIOD_ITERS; i++)
+    {
+    }
+}
+
+static const soft_spi_ops_t g_soft_spi_ops = {
+    soft_spi_set_sck,
+    soft_spi_set_mosi,
+    soft_spi_get_miso,
+    soft_spi_half_period_delay,
+};
+
+static void spi5_init(void)
+{
+    /* SPI mode 0: SCK idles low. MOSI idle level is irrelevant to the
+       chip while NSS is high; low is fine. MISO floats from the module,
+       so no pull. */
+    gpio_set_output(SX1262_SCK_PORT, SX1262_SCK_PIN);
+    gpio_set_output(SX1262_MOSI_PORT, SX1262_MOSI_PIN);
+    gpio_write(SX1262_SCK_PORT, SX1262_SCK_PIN, 0);
+    gpio_write(SX1262_MOSI_PORT, SX1262_MOSI_PIN, 0);
+    gpio_set_input(SX1262_MISO_PORT, SX1262_MISO_PIN, 0u);
+}
+#else  /* hardware SPI5 path (default) */
 
 static void spi5_init(void)
 {
@@ -287,7 +349,16 @@ static void spi5_init(void)
     gpio_set_af(SX1262_MISO_PORT, SX1262_MISO_PIN, SX1262_SPI_AF);
     gpio_set_af(SX1262_SCK_PORT, SX1262_SCK_PIN, SX1262_SPI_AF);
 
-    SX1262_SPI->CR1 = 0u;   /* disable while configuring */
+    /* Disable (SPE=0) while configuring, but with SSI already 1. Per ST's
+       community write-up of this exact symptom on the SPIv3 block: if
+       SSM=1, SSI=0, SSIOP=0 and MASTER=1 ever hold at the same time, the
+       peripheral takes it as a mode fault and forces MASTER back to 0.
+       This function used to clear CR1 to 0 here and only set SSI at the
+       very end, leaving that combination true for the whole window in
+       between - including right after the CFG2 masking write below, which
+       clears SSIOP. SSI must be 1 BEFORE MASTER is set. (Not yet
+       confirmed on the bench; the soft-SPI build avoids all of this.) */
+    SX1262_SPI->CR1 = SPI_CR1_SSI;
 
     /* CFG2: master mode, SPI motorola mode (COMM already 0 = full
        duplex by reset default), CPOL=0/CPHA=0 (SPI mode 0, per
@@ -386,6 +457,7 @@ static void spi5_init(void)
     SX1262_SPI->CR1 = 0xFFFFFFFFu;
     SX1262_SPI->CR1 &= (SPI_CR1_SSI | SPI_CR1_SPE);
 }
+#endif /* SX1262_SOFT_SPI */
 
 /*
  * Iteration-count bounds (not wall-clock: no calibrated timer exists at
@@ -427,6 +499,16 @@ static void spi5_init(void)
    NSS) on a timeout, same as they already do on the success path -
    this leaf function only ever reports failure, never guesses at
    recovery. */
+#ifdef SX1262_SOFT_SPI
+/* Bit-banged: nothing here can time out (no flags to wait on), so this
+   always reports success - a dead radio shows up as BUSY never clearing
+   or garbage read back, both already handled by the callers. */
+static int spi5_xfer_byte(uint8_t out, uint8_t *in)
+{
+    *in = soft_spi_xfer_byte(&g_soft_spi_ops, out);
+    return 0;
+}
+#else
 static int spi5_xfer_byte(uint8_t out, uint8_t *in)
 {
     uint32_t timeout;
@@ -455,6 +537,7 @@ static int spi5_xfer_byte(uint8_t out, uint8_t *in)
     *in = *(volatile uint8_t *)&SX1262_SPI->RXDR;
     return 0;
 }
+#endif /* SX1262_SOFT_SPI */
 
 /*
  * -----------------------------------------------------------------------
@@ -532,6 +615,9 @@ void sx1262_hal_init(void)
 
     spi5_init();
 
+#ifdef SX1262_SOFT_SPI
+    tm_printf((UB*)"sx1262: bit-banged SPI active (SX1262_SOFT_SPI), SPI5 peripheral not used\n");
+#else
     /* TEMPORARY diagnostic: dump the SPI5 registers as the CPU itself
        sees them (not via an external debug-probe memory read, which
        this session found to be unreliable/rejected for this secure
@@ -567,65 +653,7 @@ void sx1262_hal_init(void)
         tm_printf((UB*)"DBG RIF spi5: SECCFGR.SEC4=%lu PRIVCFGR.PRIV4=%lu IAC.ISR4(illegal access, now cleared)=%lu\n",
                    (unsigned long)sec, (unsigned long)priv, (unsigned long)illegal);
     }
-}
-
-/*
- * -----------------------------------------------------------------------
- * --- TEMPORARY diagnostic: raw SPI5 loopback self-test -------------------
- * -----------------------------------------------------------------------
- * Not part of normal bring-up - call this once, manually, from
- * main_board.c while a wire physically bridges MOSI (Arduino D11) to
- * MISO (Arduino D12) on the DK's own header, with the SX1262 module
- * disconnected. Isolates SPI5 + the Arduino-header wiring from the
- * module entirely: if this passes, the DK's SPI bus is fine and the
- * fault is downstream (module's own pins/wiring); if it fails, the
- * fault is in SPI5 or the header wiring itself. DELETE once Goal 2's
- * hardware fault is found.
- */
-void sx1262_hal_spi_loopback_test(void)
-{
-    static const uint8_t patterns[] = { 0x00u, 0xFFu, 0xA5u, 0x5Au, 0x3Cu };
-    uint32_t i;
-    int all_ok = 1;
-
-    tm_printf((UB*)"DBG loopback: starting (MOSI/D11 must be jumpered to MISO/D12, module unplugged)\n");
-
-    for (i = 0u; i < sizeof(patterns); i++)
-    {
-        uint8_t rx = 0xFFu ^ patterns[i]; /* deliberately wrong, so a no-op xfer can't look like a pass */
-        int rc;
-
-        gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 0);
-        rc = spi5_xfer_byte(patterns[i], &rx);
-        gpio_write(SX1262_NSS_PORT, SX1262_NSS_PIN, 1);
-
-        if (rc != 0)
-        {
-            tm_printf((UB*)"DBG loopback: xfer TIMEOUT on pattern index %d\n", (int)i);
-            all_ok = 0;
-            continue;
-        }
-
-        if (rx != patterns[i])
-        {
-            tm_printf((UB*)"DBG loopback: MISMATCH idx=%d sent=0x%02X got=0x%02X\n",
-                       (int)i, (unsigned)patterns[i], (unsigned)rx);
-            all_ok = 0;
-        }
-        else
-        {
-            tm_printf((UB*)"DBG loopback: OK idx=%d val=0x%02X\n", (int)i, (unsigned)patterns[i]);
-        }
-    }
-
-    if (all_ok)
-    {
-        tm_printf((UB*)"DBG loopback: ALL PATTERNS PASSED - SPI5 + header wiring is electrically sound\n");
-    }
-    else
-    {
-        tm_printf((UB*)"DBG loopback: FAILED - SPI5 peripheral or Arduino-header wiring itself is bad\n");
-    }
+#endif /* SX1262_SOFT_SPI */
 }
 
 /*
@@ -968,9 +996,24 @@ static int ensure_radio_configured(void)
     }
 
     if (sx126x_hal_reset(NULL) != SX126X_HAL_STATUS_OK) { tm_printf((UB*)"DBG erc: hal_reset FAILED\n"); return 1; }
-    if (sx126x_set_standby(NULL, SX126X_STANDBY_CFG_RC) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_standby FAILED\n"); return 1; }
+    {
+        /* Was a bare set_standby(RC). Now also probes/starts the module's TCXO
+           (only if its oscillator won't start without), calibrates the 863-870
+           MHz image band, and reports the chip's own error flags - see
+           core/sx1262_setup.h for why, and for the datasheet references. */
+        sx1262_setup_report_t setup;
+        if (sx1262_setup_clock_and_calibration(&setup) != 0)
+        {
+            tm_printf((UB*)"DBG erc: clock/cal setup FAILED at [%s], device_errors=0x%04lX\n",
+                      (UB*)sx1262_setup_result_name(setup.result), (unsigned long)setup.device_errors);
+            return 1;
+        }
+        tm_printf((UB*)"DBG erc: radio clock OK, tcxo_switched_on=%d, device_errors=0x%04lX\n",
+                  setup.tcxo_enabled, (unsigned long)setup.device_errors);
+    }
     if (sx126x_set_pkt_type(NULL, SX126X_PKT_TYPE_LORA) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_pkt_type FAILED\n"); return 1; }
     if (sx126x_set_rf_freq(NULL, LORA_RF_FREQ_HZ) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_rf_freq FAILED\n"); return 1; }
+    if (sx1262_setup_pa_config() != 0) { tm_printf((UB*)"DBG erc: set_pa_config FAILED\n"); return 1; }
     if (sx126x_set_buffer_base_address(NULL, 0u, 0u) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_buffer_base_address FAILED\n"); return 1; }
     if (sx126x_set_dio_irq_params(NULL, 0x0203u /* TxDone|RxDone|Timeout */,
                                    0x0203u /* -> DIO1 */, 0x0000u, 0x0000u) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_dio_irq_params FAILED\n"); return 1; }

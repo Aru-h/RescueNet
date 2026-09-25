@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests
 
 all: $(TARGET) $(LABELER)
 
@@ -117,7 +117,10 @@ N ?= 5
 # -D_STM32CUBE_DISCOVERY_N657_).
 ARM_CC ?= arm-none-eabi-gcc
 BSP_DIR ?= board/STM32N6570-DK/vendor/mtk3_bsp2
-ARM_CFLAGS_BASE = -std=gnu11 -Wall -Wextra -mcpu=cortex-m55 -mthumb \
+# -mcmse: the real Appli build passes it, and it is what makes the CMSIS
+# header define CPU_IN_SECURE_STATE, without which the secure-alias
+# peripheral macros (GPIOA_S, SPI5_S, ...) sx1262_hal.c uses don't exist.
+ARM_CFLAGS_BASE = -std=gnu11 -Wall -Wextra -mcpu=cortex-m55 -mthumb -mcmse \
 	-mfloat-abi=hard -mfpu=auto -ffreestanding -fno-builtin \
 	-I$(CORE_DIR) -I$(BOARD_DIR)
 BOARD_OBJ_DIR = build/board-check
@@ -138,7 +141,7 @@ ifneq ($(wildcard $(BSP_DIR)/include),)
   # implementing sx126x_hal_write/_read/_reset/_wakeup) now fold into
   # the real per-board build, so check-board-link genuinely link-checks
   # the HAL instead of leaving those four symbols undefined.
-  BOARD_SOURCES = $(CORE_SOURCES) $(BOARD_DIR)/dk_debug.c $(BOARD_DIR)/snapshot.c $(BOARD_DIR)/main_board.c $(BOARD_DIR)/mission_link_task.c $(SX126X_DIR)/sx126x.c $(BOARD_DIR)/sx1262_hal.c
+  BOARD_SOURCES = $(CORE_SOURCES) $(BOARD_DIR)/dk_debug.c $(BOARD_DIR)/snapshot.c $(BOARD_DIR)/main_board.c $(BOARD_DIR)/mission_link_task.c $(SX126X_DIR)/sx126x.c $(BOARD_DIR)/sx1262_hal.c $(BOARD_DIR)/usart1_driver.c
   BSP_MODE = real BSP2 headers ($(BSP_DIR))
 else
   ARM_CFLAGS = $(ARM_CFLAGS_BASE)
@@ -150,6 +153,14 @@ else
   # portable simulator), just weaker than the real-BSP mode above.
   BOARD_SOURCES = $(CORE_SOURCES)
   BSP_MODE = plain freestanding, core/ only (board/STM32N6570-DK/vendor/mtk3_bsp2 not found -- see that folder's README.md; board/STM32N6570-DK/*.c needs real BSP headers so it's skipped in this mode)
+endif
+
+# SX1262_SOFT_SPI=1 builds the DK radio HAL with bit-banged SPI instead
+# of the SPI5 peripheral (see board/STM32N6570-DK/sx1262_hal.c and
+# core/soft_spi.h). Off by default. The real STM32CubeIDE Appli project
+# needs -DSX1262_SOFT_SPI added to its own C symbols to match.
+ifeq ($(SX1262_SOFT_SPI),1)
+  ARM_CFLAGS += -DSX1262_SOFT_SPI
 endif
 
 check-board: check-board-ids-distinct check-board-compile check-board-link
@@ -660,8 +671,9 @@ check-selftests: check-handshake-selftest check-lora-frame-selftest \
 	check-mission-link-selftest check-override-selftest \
 	check-cbba-board-selftest check-sx1262-rx-selftest-dk \
 	check-sx126x-rx-selftest-pico check-comms-transport-selftest \
-	check-mission-link-roster-selftest check-mission-mirror-selftest
-	@echo "check-selftests: all ten laptop/tools selftests passed"
+	check-mission-link-roster-selftest check-mission-mirror-selftest \
+	check-soft-spi-selftest check-sx1262-setup-selftest
+	@echo "check-selftests: all twelve laptop/tools selftests passed"
 
 check-handshake-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)
@@ -706,6 +718,20 @@ check-sx1262-rx-selftest-dk:
 		$(TOOLS_DIR)/sx1262_rx_selftest_dk.c $(CORE_SOURCES) \
 		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(SX126X_DIR)/sx126x.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./sx1262_rx_selftest_dk
+
+check-sx1262-setup-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/sx1262_setup_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -I$(SX126X_DIR) -o $(SELFTEST_BIN_DIR)/sx1262_setup_selftest \
+		$(TOOLS_DIR)/sx1262_setup_selftest.c $(SX126X_DIR)/sx126x.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./sx1262_setup_selftest
+
+check-soft-spi-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/soft_spi_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/soft_spi_selftest \
+		$(TOOLS_DIR)/soft_spi_selftest.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./soft_spi_selftest
 
 check-sx126x-rx-selftest-pico:
 	@mkdir -p $(SELFTEST_BIN_DIR)

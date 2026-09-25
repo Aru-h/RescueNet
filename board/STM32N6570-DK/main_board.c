@@ -180,10 +180,6 @@ extern uint32_t mission_link_task_any_roster_applied(void);
 
 extern void sx1262_hal_init(void);
 
-/* TEMPORARY diagnostic - see sx1262_hal.c's own comment above this
-   function. DELETE once Goal 2's hardware fault is found. */
-extern void sx1262_hal_spi_loopback_test(void);
-
 /* board/STM32N6570-DK/usart1_driver.c - enables the USART1 RXNE
    interrupt and NVIC line; see that file's own top comment for why
    this has to be interrupt-driven rather than polled. */
@@ -584,12 +580,6 @@ LOCAL void sim_task(INT stacd, void *exinf)
        wiring this assumes. */
     tm_putstring((UB*)"tron: sim_task entered\n");
     sx1262_hal_init();
-
-    /* TEMPORARY diagnostic - see sx1262_hal.c's own comment on this
-       function. Requires MOSI(D11)-MISO(D12) physically jumpered and
-       the SX1262 module disconnected. DELETE once Goal 2's hardware
-       fault is found. */
-    sx1262_hal_spi_loopback_test();
 
     /* Real (interrupt-driven) USART1 RX - see usart1_driver.c's own
        top-of-file note for why this has to be a real NVIC interrupt

@@ -703,13 +703,23 @@ void HAL_XSPI_MspInit(XSPI_HandleTypeDef* hxspi)
   else if(hxspi->Instance==XSPI2)
   {
     /* USER CODE BEGIN XSPI2_MspInit 0 */
-
+    /* Aligned with ST's STM32N6570-DK Template_FSBL_XIP (its "high-speed IO
+       optimization disabled" path, i.e. WITHOUT the HSLV OTP fuse). XSPI2's
+       supply on this board is 1.8 V (VDDIO3 = VDDA1V8), and ST's own answer for
+       XIP failures on the N6 is that this range must be selected or the pads
+       run in a degraded mode - it was missing here. */
+    __HAL_RCC_PWR_CLK_ENABLE();
+    HAL_PWREx_EnableVddIO3();
+    HAL_PWREx_ConfigVddIORange(PWR_VDDIO3, PWR_VDDIO_RANGE_1V8);
     /* USER CODE END XSPI2_MspInit 0 */
 
   /** Initializes the peripherals clock
+  *  (edited from CubeMX's HCLK: IC3 from PLL1 / 24 = 50 MHz, as in ST's template)
   */
     PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_XSPI2;
-    PeriphClkInitStruct.Xspi2ClockSelection = RCC_XSPI2CLKSOURCE_HCLK;
+    PeriphClkInitStruct.Xspi2ClockSelection = RCC_XSPI2CLKSOURCE_IC3;
+    PeriphClkInitStruct.ICSelection[RCC_IC3].ClockSelection = RCC_ICCLKSOURCE_PLL1;
+    PeriphClkInitStruct.ICSelection[RCC_IC3].ClockDivider = 24;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
     {
       Error_Handler();

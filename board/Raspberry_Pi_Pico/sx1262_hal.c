@@ -64,7 +64,10 @@
 
 #include <tk/tkernel.h>
 #include <bsp/libbsp.h>
+#include <tm/tmonitor.h>       /* tm_printf() - radio bring-up report below */
 
+#include "sx1262_setup.h"      /* TCXO probe / image calibration / PA config,
+                                  shared with the DK HAL */
 #include "sx126x.h"
 #include "sx126x_hal.h"
 #include "lora_frame.h"        /* lora_frame_try_parse(), LORA_FRAME_MAX_*
@@ -858,6 +861,21 @@ int sx1262_hal_init(void)
     sx1262_spi_init();
     if (sx126x_hal_reset(NULL) != SX126X_HAL_STATUS_OK) return 1;
 
+    {
+        /* Probes/starts the module's TCXO (only if its oscillator won't
+           start without), calibrates the 863-870 MHz image band, and
+           reports the chip's own error flags - see core/sx1262_setup.h. */
+        sx1262_setup_report_t setup;
+        if (sx1262_setup_clock_and_calibration(&setup) != 0)
+        {
+            tm_printf((UB*)"tron: radio clock/cal setup FAILED at [%s], device_errors=0x%04lX\n",
+                      (UB*)sx1262_setup_result_name(setup.result), (unsigned long)setup.device_errors);
+            return 1;
+        }
+        tm_printf((UB*)"tron: radio clock OK, tcxo_switched_on=%d, device_errors=0x%04lX\n",
+                  setup.tcxo_enabled, (unsigned long)setup.device_errors);
+    }
+
     /* TxDone | RxDone | Timeout -> DIO1. Same mask as board/
        STM32N6570-DK/sx1262_hal.c's own sx126x_set_dio_irq_params()
        call, for consistency between the two boards' IRQ behavior -
@@ -876,6 +894,7 @@ int sx1262_hal_init(void)
        params, then sync word, then TX power/ramp. */
     if (sx126x_set_pkt_type(NULL, SX126X_PKT_TYPE_LORA) != SX126X_STATUS_OK) return 1;
     if (sx126x_set_rf_freq(NULL, LORA_RF_FREQ_HZ) != SX126X_STATUS_OK) return 1;
+    if (sx1262_setup_pa_config() != 0) return 1;
     if (sx126x_set_buffer_base_address(NULL, 0u, 0u) != SX126X_STATUS_OK) return 1;
 
     {

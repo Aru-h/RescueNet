@@ -24,7 +24,7 @@
 							<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.floatabi.355128891" name="Floating-point ABI" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.floatabi" value="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.floatabi.value.hard" valueType="enumerated"/>
 							<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.target_board.67434360" name="Board" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.target_board" value="STM32N6570-DK" valueType="string"/>
 							<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.convertbinary.1401263" name="Convert to binary file (-O binary)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.convertbinary" value="true" valueType="boolean"/>
-							<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.defaults.924763713" name="Defaults" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.defaults" value="com.st.stm32cube.ide.common.services.build.inputs.revA.1.0.6 || Debug || true || Executable || com.st.stm32cube.ide.mcu.gnu.managedbuild.option.toolchain.value.workspace || STM32N6570-DK || 0 || 0 || arm-none-eabi- || ${gnu_tools_for_stm32_compiler_path} || ../Core/Inc | ../../Drivers/STM32N6xx_HAL_Driver/Inc | ../../Drivers/CMSIS/Device/ST/STM32N6xx/Include | ../../Drivers/STM32N6xx_HAL_Driver/Inc/Legacy | ../../Drivers/STM32N6xx_HAL_Driver/Src | ../../Drivers/CMSIS/Include ||  ||  || USE_HAL_DRIVER | STM32N657xx | USE_FULL_LL_DRIVER ||  || Drivers | Core/Src | Core/Startup ||  ||  || ${workspace_loc:/${ProjName}/STM32N657X0HXQ_AXISRAM2_fsbl.ld} || true || Secure ||  || secure_nsclib.o ||  || None ||  ||  || .bin || ::" valueType="string"/>
+							<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.defaults.924763713" name="Defaults" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.defaults" value="com.st.stm32cube.ide.common.services.build.inputs.revA.1.0.6 || Debug || true || Executable || com.st.stm32cube.ide.mcu.gnu.managedbuild.option.toolchain.value.workspace || STM32N6570-DK || 0 || 0 || arm-none-eabi- || ${gnu_tools_for_stm32_compiler_path} || ../Core/Inc | ../../Drivers/STM32N6xx_HAL_Driver/Inc | ../../Drivers/CMSIS/Device/ST/STM32N6xx/Include | ../../Drivers/STM32N6xx_HAL_Driver/Inc/Legacy | ../../Drivers/STM32N6xx_HAL_Driver/Src | ../../Drivers/CMSIS/Include | ../../Middlewares/ST/STM32_ExtMem_Manager | ../../Middlewares/ST/STM32_ExtMem_Manager/boot | ../../Middlewares/ST/STM32_ExtMem_Manager/sal | ../../Middlewares/ST/STM32_ExtMem_Manager/nor_sfdp | ../../Middlewares/ST/STM32_ExtMem_Manager/psram | ../../Middlewares/ST/STM32_ExtMem_Manager/sdcard | ../../Middlewares/ST/STM32_ExtMem_Manager/user ||  ||  || USE_HAL_DRIVER | STM32N657xx | USE_FULL_LL_DRIVER ||  || Drivers | Core/Src | Core/Startup | Middlewares ||  ||  || ${workspace_loc:/${ProjName}/STM32N657X0HXQ_AXISRAM2_fsbl.ld} || true || Secure ||  || secure_nsclib.o ||  || None ||  ||  || .bin || ::" valueType="string"/>
 							<option id="com.st.stm32cube.ide.mcu.debug.option.cpuclock.834562170" superClass="com.st.stm32cube.ide.mcu.debug.option.cpuclock" value="75" valueType="string"/>
 							<targetPlatform archList="all" binaryParser="org.eclipse.cdt.core.ELF" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.targetplatform.1604581801" isAbstract="false" osList="all" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.targetplatform"/>
 							<builder buildPath="${workspace_loc:/tron_board_FSBL}/Debug" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.builder.2043430379" keepEnvironmentInBuildfile="false" managedBuildOn="true" name="Gnu Make Builder" parallelBuildOn="true" parallelizationNumber="optimal" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.builder"/>
@@ -52,6 +52,13 @@
 									<listOptionValue builtIn="false" value="../../Drivers/STM32N6xx_HAL_Driver/Inc/Legacy"/>
 									<listOptionValue builtIn="false" value="../../Drivers/STM32N6xx_HAL_Driver/Src"/>
 									<listOptionValue builtIn="false" value="../../Drivers/CMSIS/Include"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager/boot"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager/sal"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager/nor_sfdp"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager/psram"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager/sdcard"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager/user"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1381367618" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
@@ -79,6 +86,7 @@
 					</folderInfo>
 					<sourceEntries>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 					</sourceEntries>
 				</configuration>
@@ -108,7 +116,7 @@
 							<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.floatabi.943096810" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.floatabi" value="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.floatabi.value.hard" valueType="enumerated"/>
 							<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.target_board.1398268823" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.target_board" value="STM32N6570-DK" valueType="string"/>
 							<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.convertbinary.324330622" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.convertbinary" value="true" valueType="boolean"/>
-							<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.defaults.2088912098" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.defaults" value="com.st.stm32cube.ide.common.services.build.inputs.revA.1.0.6 || Release || false || Executable || com.st.stm32cube.ide.mcu.gnu.managedbuild.option.toolchain.value.workspace || STM32N6570-DK || 0 || 0 || arm-none-eabi- || ${gnu_tools_for_stm32_compiler_path} || ../Core/Inc | ../../Drivers/STM32N6xx_HAL_Driver/Inc | ../../Drivers/CMSIS/Device/ST/STM32N6xx/Include | ../../Drivers/STM32N6xx_HAL_Driver/Inc/Legacy | ../../Drivers/STM32N6xx_HAL_Driver/Src | ../../Drivers/CMSIS/Include ||  ||  || USE_HAL_DRIVER | STM32N657xx | USE_FULL_LL_DRIVER ||  || Drivers | Core/Src | Core/Startup ||  ||  || ${workspace_loc:/${ProjName}/STM32N657X0HXQ_AXISRAM2_fsbl.ld} || true || Secure ||  || secure_nsclib.o ||  || None ||  ||  || .bin || ::" valueType="string"/>
+							<option id="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.defaults.2088912098" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.option.defaults" value="com.st.stm32cube.ide.common.services.build.inputs.revA.1.0.6 || Release || false || Executable || com.st.stm32cube.ide.mcu.gnu.managedbuild.option.toolchain.value.workspace || STM32N6570-DK || 0 || 0 || arm-none-eabi- || ${gnu_tools_for_stm32_compiler_path} || ../Core/Inc | ../../Drivers/STM32N6xx_HAL_Driver/Inc | ../../Drivers/CMSIS/Device/ST/STM32N6xx/Include | ../../Drivers/STM32N6xx_HAL_Driver/Inc/Legacy | ../../Drivers/STM32N6xx_HAL_Driver/Src | ../../Drivers/CMSIS/Include | ../../Middlewares/ST/STM32_ExtMem_Manager | ../../Middlewares/ST/STM32_ExtMem_Manager/boot | ../../Middlewares/ST/STM32_ExtMem_Manager/sal | ../../Middlewares/ST/STM32_ExtMem_Manager/nor_sfdp | ../../Middlewares/ST/STM32_ExtMem_Manager/psram | ../../Middlewares/ST/STM32_ExtMem_Manager/sdcard | ../../Middlewares/ST/STM32_ExtMem_Manager/user ||  ||  || USE_HAL_DRIVER | STM32N657xx | USE_FULL_LL_DRIVER ||  || Drivers | Core/Src | Core/Startup | Middlewares ||  ||  || ${workspace_loc:/${ProjName}/STM32N657X0HXQ_AXISRAM2_fsbl.ld} || true || Secure ||  || secure_nsclib.o ||  || None ||  ||  || .bin || ::" valueType="string"/>
 							<option id="com.st.stm32cube.ide.mcu.debug.option.cpuclock.2014302271" superClass="com.st.stm32cube.ide.mcu.debug.option.cpuclock" value="75" valueType="string"/>
 							<targetPlatform archList="all" binaryParser="org.eclipse.cdt.core.ELF" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.targetplatform.936414746" isAbstract="false" osList="all" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.targetplatform"/>
 							<builder buildPath="${workspace_loc:/tron_board_FSBL}/Release" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.builder.863291126" managedBuildOn="true" name="Gnu Make Builder.Release" parallelBuildOn="true" parallelizationNumber="optimal" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.builder"/>
@@ -132,6 +140,13 @@
 									<listOptionValue builtIn="false" value="../../Drivers/STM32N6xx_HAL_Driver/Inc/Legacy"/>
 									<listOptionValue builtIn="false" value="../../Drivers/STM32N6xx_HAL_Driver/Src"/>
 									<listOptionValue builtIn="false" value="../../Drivers/CMSIS/Include"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager/boot"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager/sal"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager/nor_sfdp"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager/psram"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager/sdcard"/>
+									<listOptionValue builtIn="false" value="../../Middlewares/ST/STM32_ExtMem_Manager/user"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1191639306" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
@@ -159,6 +174,7 @@
 					</folderInfo>
 					<sourceEntries>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 					</sourceEntries>
 				</configuration>
