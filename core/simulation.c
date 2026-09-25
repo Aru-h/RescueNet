@@ -78,17 +78,45 @@ void simulation_step(void) //simulation
 {
     g_current_tick++;
     g_sim_step_tick = g_current_tick;   /* keep in sync now that the step's tick is live */
-    environment_update_hazard_propagation(g_current_tick);
-    generate_incidents_if_needed();
-    update_all_teams();
-    move_all_teams();
-    search_sweep_step(g_current_tick);
-    escalate_starved_incidents(g_current_tick);
-    update_all_incident_work();
-    update_all_passive_effects();
-    mission_execution_twin_step();
-    watchdog_step();
-    recovery_manager_step();
+    /* See SimRole_t (simulation.h): world events run everywhere except
+     * on a board; team execution runs everywhere except on the laptop
+     * mirroring a board mission, where board reports supply it. */
+    uint8_t runs_world = (g_sim_role != SIM_ROLE_BOARD);
+    uint8_t runs_teams = (g_sim_role != SIM_ROLE_WORLD_MIRROR);
+
+    if(runs_world)
+    {
+        environment_update_hazard_propagation(g_current_tick);
+        generate_incidents_if_needed();
+    }
+    if(runs_teams)
+    {
+        update_all_teams();
+        move_all_teams();
+    }
+    if(runs_world)
+    {
+        /* On the mirror this runs against reported positions: coverage,
+         * fog-of-war reveals, cycle completion and the next frontier
+         * cell all stay laptop-side, and reach the boards as incident
+         * frames. */
+        search_sweep_step(g_current_tick);
+        escalate_starved_incidents(g_current_tick);
+    }
+    if(runs_teams)
+    {
+        update_all_incident_work();
+    }
+    if(runs_world)
+    {
+        update_all_passive_effects();
+    }
+    if(runs_teams)
+    {
+        mission_execution_twin_step();
+        watchdog_step();
+        recovery_manager_step();
+    }
 
     /* Two passes, deliberately. Pass 1 records every team's snapshot rows
      * for this tick BEFORE any recovery_dispatch() runs, so a team's logged
@@ -122,7 +150,8 @@ void simulation_step(void) //simulation
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
-        recovery_dispatch(team_id, action_now[team_id]);
+        if(runs_teams)
+            recovery_dispatch(team_id, action_now[team_id]);
 
         /* Rest-cycle and status-transition tracing for the dashboard's
          * Recovery/Rest tab (app.py's DIAG_STATUS_RE / DIAG_RESTED_RE).

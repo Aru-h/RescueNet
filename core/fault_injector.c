@@ -143,6 +143,10 @@ static void inject_resource_fault(uint8_t team_id)
     snapshot_record(g_sim_step_tick, EVENT_FAULT_INJECTED, team_id);
 }
 
+/* Environment faults edit the world grid, which only the laptop has
+ * (environment.h, ENVIRONMENT_HAS_WORLD_STORAGE); fault_injector_step()
+ * never runs on a board anyway. */
+#if ENVIRONMENT_HAS_WORLD_STORAGE
 static void inject_environment_fault(uint8_t team_id)
 {
     TeamState_t *team = &g_teams[team_id];
@@ -224,6 +228,7 @@ static void inject_environment_fault(uint8_t team_id)
     mark_last_fault(fault_state, FAULT_CLASS_ENVIRONMENT);
     snapshot_record(g_sim_step_tick, EVENT_FAULT_INJECTED, team_id);
 }
+#endif /* ENVIRONMENT_HAS_WORLD_STORAGE */
 
 
 static void inject_mission_fault(uint8_t team_id)
@@ -293,6 +298,7 @@ static void inject_mission_fault(uint8_t team_id)
     snapshot_record(g_sim_step_tick, EVENT_FAULT_INJECTED, team_id);
 }
 
+#if ENVIRONMENT_HAS_WORLD_STORAGE
 static void recover_environment_fault(uint8_t team_id)
 {
     TeamFaultState_t *fault_state = &g_teams[team_id].fault_state;
@@ -341,6 +347,7 @@ static void recover_environment_fault(uint8_t team_id)
     snapshot_record(g_sim_step_tick, EVENT_FAULT_RECOVERED, team_id);
     clear_fault_summary(fault_state, fault_class);
 }
+#endif /* ENVIRONMENT_HAS_WORLD_STORAGE */
 
 
 static void recover_mission_fault(uint8_t team_id)
@@ -396,7 +403,9 @@ static void recover_fault(uint8_t team_id, OperationalFaultClass_t fault_class)
             break;
 
         case FAULT_CLASS_ENVIRONMENT:
+#if ENVIRONMENT_HAS_WORLD_STORAGE
             recover_environment_fault(team_id);
+#endif
             break;
 
         case FAULT_CLASS_MISSION:
@@ -425,7 +434,9 @@ static void inject_fault(uint8_t team_id, OperationalFaultClass_t fault_class)
             break;
 
         case FAULT_CLASS_ENVIRONMENT:
+#if ENVIRONMENT_HAS_WORLD_STORAGE
             inject_environment_fault(team_id);
+#endif
             break;
 
         case FAULT_CLASS_MISSION:
