@@ -11,6 +11,7 @@
 #include "watchdog.h"
 #include "search_zones.h"
 #include "mission_link.h"
+#include "environment.h" /* environment_cell_travel_cost() - env_raw_travel_cost column below */
 
 /*
  * core/cbba.c's cbba_team_is_local() - public, but deliberately not
@@ -211,7 +212,8 @@ void snapshot_begin_run(uint32_t seed)
         "fault_severity_environment,fault_severity_mission,"
         "fault_ticks_remaining_mobility,fault_ticks_remaining_communication,"
         "fault_ticks_remaining_resource,fault_ticks_remaining_environment,"
-        "fault_ticks_remaining_mission\n");
+        "fault_ticks_remaining_mission,"
+        "env_raw_travel_cost\n");
 }
 
 /*
@@ -232,6 +234,7 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
     RecoveryStatus_t recovery;
     uint8_t zone_id;
     uint8_t zone_trust;
+    uint8_t env_raw_travel_cost;
     float display_stamina;
 
     if(g_snapshot_file == NULL || team_id >= NUM_TEAMS)
@@ -261,8 +264,24 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
     zone_id = zone_id_for_location(team->loc_x, team->loc_y);
     zone_trust = search_zone_trust(zone_id, cycle);
 
+    /* fault_predictor_architecture_v4.md Section 8 item 4: a raw, non-
+     * twin-relative reading of the team's own live grid cell's travel
+     * cost - environment_cell_travel_cost() reads the SAME shared
+     * g_environment[][] grid inject_environment_fault() (core/
+     * fault_injector.c) writes its cost bump into, at the team's
+     * actual current position, not twin_remaining_path_cost's twin-
+     * relative comparison (which the same doc section identifies as
+     * the reason ENVIRONMENT-class faults are structurally invisible
+     * to every other logged signal - the twin's own expected-cost
+     * recomputation cancels the bump before it ever shows up as
+     * error). This is a plain derived-for-logging value, computed
+     * here the same way zone_id/zone_trust just above it are -
+     * nothing in TeamState_t/MissionExecutionTwin_t changes size or
+     * layout. */
+    env_raw_travel_cost = environment_cell_travel_cost(team->loc_x, team->loc_y);
+
     fprintf(g_snapshot_file,
-        "%u,%u,%u,%u,%d,%d,%.2f,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%d,%d,%u,%.4f,%u,%u,%u,%u,%u,%.4f,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+        "%u,%u,%u,%u,%d,%d,%.2f,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%d,%d,%u,%.4f,%u,%u,%u,%u,%u,%.4f,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
         g_run_id,
         g_dataset_seed,
         cycle,
@@ -346,7 +365,8 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
             ? team->fault_state.recovery_tick[FAULT_CLASS_ENVIRONMENT] - cycle : 0u),
         (team->fault_state.active[FAULT_CLASS_MISSION] &&
          team->fault_state.recovery_tick[FAULT_CLASS_MISSION] > cycle
-            ? team->fault_state.recovery_tick[FAULT_CLASS_MISSION] - cycle : 0u));
+            ? team->fault_state.recovery_tick[FAULT_CLASS_MISSION] - cycle : 0u),
+        env_raw_travel_cost);
 }
 
 void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)

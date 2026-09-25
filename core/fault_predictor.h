@@ -16,9 +16,10 @@
 #define FAULT_MODEL_LOADED 0
 
 /*
- * Input shape: this is FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES (11 floats -
+ * Input shape: this is FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES (12 floats -
  * the 7 accumulated_evidence[] channels + equipment_level/100.0f +
- * confirmed_mobility_impairment + incident_priority + victim_count),
+ * confirmed_mobility_impairment + incident_priority + victim_count +
+ * env_raw_travel_cost),
  * NOT the bigger "raw telemetry + accumulated_evidence[7]" feature set
  * the v4 architecture doc's Section 2/3 describes for the on-device
  * per-team evaluator. That bigger set is explicitly not finalized yet
@@ -26,7 +27,7 @@
  * channel columns "currently being debugged elsewhere and isn't ready
  * to add correctly yet"). This module is scoped to the one feature
  * shape that's actually locked in code today - core/fault_buffer.h's
- * 11-feature vector - which has two things going for it: it's real and
+ * 12-feature vector - which has two things going for it: it's real and
  * stable right now, and it's the exact shape core/fault_comms.c (Prompt
  * 1) already needs to hand a received FAULT_BROADCAST to for
  * vote-casting. When the bigger feature set lands, this signature will
@@ -45,11 +46,11 @@ typedef struct
 } FaultPredictorScores_t;
 
 /*
- * Runs the model (once one exists) against an 11-feature evidence vector -
+ * Runs the model (once one exists) against a 12-feature evidence vector -
  * either this board's own team (core/recovery_manager.c's
  * evaluate_fault_predictor(), built from watchdog_get_evidence_vector()
  * + team->equipment_level/100.0f + confirmed_mobility_impairment +
- * incident_priority + victim_count) or a remote team's received
+ * incident_priority + victim_count + env_raw_travel_cost) or a remote team's received
  * FAULT_BROADCAST payload (core/fault_comms.c). Same function, same
  * input shape, either way.
  *

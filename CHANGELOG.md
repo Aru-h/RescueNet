@@ -1,5 +1,22 @@
 # Changelog
 
+## Re-add env_raw_travel_cost (CSV + on-board predictor input)
+
+- `laptop/snapshot.c`: trailing CSV column `env_raw_travel_cost` =
+  `environment_cell_travel_cost()` at the team's own cell (restored from
+  cd6c7ec).
+- `data_prep-2.py`: added to `numerical_features`; the value-based leak
+  guard does not flag it (|r| <= 0.18 against every label).
+- `FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES` 11 -> 12. The new last slot is
+  filled with the raw cost (same scale as the CSV) in both
+  `recovery_manager_build_predictor_evidence()` and
+  `fault_comms_broadcast_local_teams()`. This makes the FAULT_BROADCAST
+  payload 4 bytes wider (still well within `LORA_FRAME_MAX_PAYLOAD`).
+- `laptop/tools/env_raw_travel_cost_ablation.py` + `make
+  check-env-raw-travel-cost-ablation` restored. Environment-class F1
+  0.124 -> 0.288 on 5 seeds x 3000 ticks, combined profile (the old
+  0.27 -> 0.33 claim was measured on leaky data).
+
 ## Remove ground-truth fault leakage from detection
 
 The watchdog and recovery manager were reading the fault injector's
