@@ -394,6 +394,10 @@ def api_status():
             # telemetry_bridge.TeamStatusTracker. Empty in sim-only mode.
             "team_status": (bridge.team_status.all()
                             if hasattr(bridge, "team_status") else []),
+            # Mission feed progress (frames sent/pending, open incidents) -
+            # None until /api/board/launch starts one.
+            "mission": (bridge.mission_status()
+                        if hasattr(bridge, "mission_status") else None),
             # Kept for any existing caller still reading this top-level
             # key directly: now derived from the real handshake
             # (can_proceed) instead of the old single-node text check,
@@ -462,14 +466,96 @@ def api_board_disconnect():
 
 @app.route("/api/board/launch", methods=["POST"])
 def api_board_launch():
+    """Starts the mission on the boards: START, then the board mission (see
+    telemetry_bridge.MissionFeed) - the laptop runs the world and the clock,
+    the boards run the teams, and the dashboard shows what the boards report
+    (GET /api/board/mission/stream). Optional JSON body: seed, ticks,
+    fault_profile, and the pace - time_scale (1 = real time, one tick per
+    36 s; the default) or an explicit tick_delay_ms."""
+    data = request.get_json(silent=True) or {}
+    try:
+        seed = int(data.get("seed", 1))
+        ticks = int(data.get("ticks", 10000))
+        tick_delay_ms = data.get("tick_delay_ms")
+        tick_delay_ms = None if tick_delay_ms is None else int(tick_delay_ms)
+        time_scale = float(data.get("time_scale", 1.0))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error",
+                        "message": "seed, ticks, tick_delay_ms and time_scale must be numbers"}), 400
+    if not time_scale > 0 or (tick_delay_ms is not None and tick_delay_ms < 0):
+        return jsonify({"status": "error",
+                        "message": "time_scale must be positive and tick_delay_ms not negative"}), 400
+    fault_profile = str(data.get("fault_profile", "none"))
+
     success = bridge.send_start()
-    if success:
-        return jsonify({"status": "success"})
-    return jsonify({
-        "status": "error",
-        "message": "Failed to send START command",
-        "handshake": bridge.handshake.status_dict(),
-    }), 400
+    if not success:
+        return jsonify({
+            "status": "error",
+            "message": "Failed to send START command",
+            "handshake": bridge.handshake.status_dict(),
+        }), 400
+
+    if not hasattr(bridge, "start_mission"):
+        return jsonify({"status": "success"})  # sim-only source has no boards to feed
+
+    build_ok, build_log = build_binary()
+    if not build_ok:
+        return jsonify({"status": "error", "message": "build failed", "build_log": build_log}), 500
+
+    ok, message = bridge.start_mission(BINARY, seed=seed, ticks=ticks,
+                                       tick_delay_ms=tick_delay_ms, fault_profile=fault_profile,
+                                       time_scale=time_scale)
+    if not ok:
+        return jsonify({"status": "error", "message": f"Mission feed not started: {message}"}), 400
+    return jsonify({"status": "success", "mission": bridge.mission_status()})
+
+
+@app.route("/api/board/mission/stream")
+def api_board_mission_stream():
+    """Server-sent events for the running board mission, in the same shape
+    /api/run-live streams (static_env, then frame messages), so the Live Ops
+    view renders it unchanged. Each frame is the laptop's world with every
+    team as its board last reported it. Ends when the mission stops."""
+    mission = getattr(bridge, "mission", None)
+
+    def generate():
+        if mission is None:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'no board mission running'})}\n\n"
+            return
+        sent_env = None
+        last_seq = 0
+        idle_since = time.time()
+        while getattr(bridge, "mission", None) is mission:
+            done = mission.finished  # read first: nothing new can follow it
+            env, frames = mission.live_events(last_seq)
+            if env is not None and env is not sent_env:
+                sent_env = env
+                yield f"data: {json.dumps({'type': 'static_env', 'env': env})}\n\n"
+            for seq, frame in frames:
+                last_seq = seq
+                yield f"data: {json.dumps({'type': 'frame', 'frame': frame})}\n\n"
+            if frames:
+                idle_since = time.time()
+            elif time.time() - idle_since > 15:
+                # Keeps the connection from being closed as idle between
+                # real-time ticks (36 s apart).
+                yield ": keepalive\n\n"
+                idle_since = time.time()
+            if done and not frames:
+                break
+            time.sleep(0.25)
+        yield f"data: {json.dumps({'type': 'mission_end', 'mission': mission.status_dict()})}\n\n"
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.route("/api/board/mission/stop", methods=["POST"])
+def api_board_mission_stop():
+    """Stops sending mission frames (the boards keep what they have)."""
+    if hasattr(bridge, "stop_mission"):
+        bridge.stop_mission()
+    return jsonify({"status": "success"})
 
 
 @app.route("/api/board/continue-without-nucleo", methods=["POST"])
@@ -550,7 +636,11 @@ def api_board_override():
         return jsonify({"status": "error", "message": "Board not connected"}), 400
 
     try:
-        bridge.serial_conn.write(pack_override(team_id, incident_id))
+        frame = pack_override(team_id, incident_id)
+        if hasattr(bridge, "write_bytes"):
+            bridge.write_bytes(frame)  # shares the serial write lock
+        else:
+            bridge.serial_conn.write(frame)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"status": "error", "message": f"Failed to write to serial port: {exc}"}), 500
 
