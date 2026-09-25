@@ -235,13 +235,14 @@ void debug_emit_live_frame(uint32_t tick)
         printf("%s{\"id\":%u,\"x\":%d,\"y\":%d,\"priority\":%u,\"type\":%u,"
                "\"status\":%u,\"assigned_team\":%u,\"support_team\":%u,"
                "\"req_capability\":%u,\"victims\":%u,\"work_remaining\":%u,"
-               "\"discovered\":%u,"
+               "\"discovered\":%u,\"floor\":%u,\"building_id\":%d,"
                "\"pool\":0}",
                first ? "" : ",",
                inc->incident_id, inc->loc_x, inc->loc_y, inc->priority,
                inc->incident_type, inc->status, inc->assigned_team,
                inc->support_team, inc->req_capability, inc->victim_count,
-               inc->work_remaining, inc->discovered);
+               inc->work_remaining, inc->discovered, inc->floor,
+               inc->building_id == INCIDENT_NO_BUILDING ? -1 : (int)inc->building_id);
         first = 0;
     }
     for(uint16_t i = 0; i < NUM_SYSTEM_TASKS; i++)
@@ -252,13 +253,14 @@ void debug_emit_live_frame(uint32_t tick)
         printf("%s{\"id\":%u,\"x\":%d,\"y\":%d,\"priority\":%u,\"type\":%u,"
                "\"status\":%u,\"assigned_team\":%u,\"support_team\":%u,"
                "\"req_capability\":%u,\"victims\":%u,\"work_remaining\":%u,"
-               "\"discovered\":%u,"
+               "\"discovered\":%u,\"floor\":%u,\"building_id\":%d,"
                "\"pool\":1}",
                first ? "" : ",",
                inc->incident_id, inc->loc_x, inc->loc_y, inc->priority,
                inc->incident_type, inc->status, inc->assigned_team,
                inc->support_team, inc->req_capability, inc->victim_count,
-               inc->work_remaining, inc->discovered);
+               inc->work_remaining, inc->discovered, inc->floor,
+               inc->building_id == INCIDENT_NO_BUILDING ? -1 : (int)inc->building_id);
         first = 0;
     }
     printf("],\"safezones\":[");

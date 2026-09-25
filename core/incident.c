@@ -774,6 +774,9 @@ static void clear_task_slot(TaskPool_t pool, IncidentState_t *task)
     task->spawned_by = NO_ASSIGNMENT;
     task->support_team = NO_ASSIGNMENT;
     task->work_remaining = 0;
+    task->building_id = INCIDENT_NO_BUILDING;
+    task->floor = 0;
+    task->stage_work = INCIDENT_BASE_STAGE_WORK;
     task->mission_fault_active_count = 0;
     task->mission_fault_original_priority = 0;
     task->mission_fault_original_victim_count = 0;
@@ -1189,7 +1192,7 @@ void complete_incident_stage(IncidentState_t *incident) //incident
                 snapshot_record(g_current_tick, EVENT_STAGE_COMPLETE, incident->assigned_team);
                 release_main_task_team(TASK_POOL_INCIDENT, incident);
                 incident->status=INC_OPEN;
-                incident->work_remaining = 100;
+                incident->work_remaining = incident_stage_work(incident);
             }
             else if(incident->incident_type==INCIDENT_CONFINED_SPACE)
             {
@@ -1205,7 +1208,7 @@ void complete_incident_stage(IncidentState_t *incident) //incident
                 snapshot_record(g_current_tick, EVENT_STAGE_COMPLETE, incident->assigned_team);
                 release_main_task_team(TASK_POOL_INCIDENT, incident);
                 incident->status=INC_OPEN;
-                incident->work_remaining = 100;
+                incident->work_remaining = incident_stage_work(incident);
             }
             else if(incident->incident_type == INCIDENT_CHEMICAL_EXPOSURE)
             {
@@ -1213,7 +1216,7 @@ void complete_incident_stage(IncidentState_t *incident) //incident
                 snapshot_record(g_current_tick, EVENT_STAGE_COMPLETE, incident->assigned_team);
                 release_main_task_team(TASK_POOL_INCIDENT, incident);
                 incident->status = INC_OPEN;
-                incident->work_remaining = 100;
+                incident->work_remaining = incident_stage_work(incident);
             }
             else if(incident->incident_type == INCIDENT_GAS_LEAK)
             {
@@ -1225,7 +1228,7 @@ void complete_incident_stage(IncidentState_t *incident) //incident
                 snapshot_record(g_current_tick, EVENT_STAGE_COMPLETE, incident->assigned_team);
                 release_main_task_team(TASK_POOL_INCIDENT, incident);
                 incident->status = INC_OPEN;
-                incident->work_remaining = 100;
+                incident->work_remaining = incident_stage_work(incident);
             }
             break;
         case(SPEC_MEDICAL):
@@ -1240,7 +1243,7 @@ void complete_incident_stage(IncidentState_t *incident) //incident
                 snapshot_record(g_current_tick, EVENT_STAGE_COMPLETE, incident->assigned_team);
                 release_main_task_team(TASK_POOL_INCIDENT, incident);
                 incident->status = INC_OPEN;
-                incident->work_remaining = 100;
+                incident->work_remaining = incident_stage_work(incident);
             }
             break;
         case(SPEC_EXTRACTION):
@@ -1287,7 +1290,7 @@ void complete_incident_stage(IncidentState_t *incident) //incident
                     g_teams[incident->assigned_team].status =
                         STATUS_EN_ROUTE;
 
-                    incident->work_remaining = 100;
+                    incident->work_remaining = incident_stage_work(incident);
 
                     return;
                 }
@@ -1348,7 +1351,7 @@ void complete_incident_stage(IncidentState_t *incident) //incident
                 snapshot_record(g_current_tick, EVENT_STAGE_COMPLETE, incident->assigned_team);
                 release_main_task_team(TASK_POOL_INCIDENT, incident);
                 incident->status=INC_OPEN;
-                incident->work_remaining = 100;
+                incident->work_remaining = incident_stage_work(incident);
             }
             else if(incident->incident_type==INCIDENT_SURVIVOR_SIGNAL)
             {
@@ -1356,7 +1359,7 @@ void complete_incident_stage(IncidentState_t *incident) //incident
                 snapshot_record(g_current_tick, EVENT_STAGE_COMPLETE, incident->assigned_team);
                 release_main_task_team(TASK_POOL_INCIDENT, incident);
                 incident->status=INC_OPEN;
-                incident->work_remaining = 100;
+                incident->work_remaining = incident_stage_work(incident);
             }
             break;
 
@@ -1664,7 +1667,10 @@ int create_evacuee_offboard_incident(uint8_t safezone_id)
     task->structure_type = 0;
     task->passive_timer = 0;
     task->spawned_by = NO_ASSIGNMENT;
-    task->work_remaining = 100;
+    task->building_id = INCIDENT_NO_BUILDING;
+    task->floor = 0;
+    task->stage_work = INCIDENT_BASE_STAGE_WORK;
+    task->work_remaining = INCIDENT_BASE_STAGE_WORK;
 
     task->evac_safezone_id = safezone_id;
     task->evac_gateway_id = NO_EVAC_TARGET;
@@ -2097,6 +2103,54 @@ static void schedule_next_generation_evaluation(GenerationLoad_t load)
         g_current_tick + random_range_stream(STREAM_INCIDENT_SCHEDULE,min_interval,max_interval);
 }
 
+uint16_t incident_stage_work_for_floor(uint8_t floor)
+{
+    uint32_t work = (uint32_t)INCIDENT_BASE_STAGE_WORK *
+        (100u + (uint32_t)INCIDENT_FLOOR_WORK_PCT * floor) / 100u;
+
+    return work > INCIDENT_MAX_STAGE_WORK ? (uint16_t)INCIDENT_MAX_STAGE_WORK : (uint16_t)work;
+}
+
+uint16_t incident_stage_work(const IncidentState_t *incident)
+{
+    if(incident == NULL || incident->stage_work == 0u)
+        return (uint16_t)INCIDENT_BASE_STAGE_WORK;
+    return incident->stage_work;
+}
+
+/* Which floor of a `floors`-storey building an incident of this type is
+ * on (0 = ground). Collapse and trapped-person incidents lean toward the
+ * lower floors (the lower of two uniform draws: debris and the people
+ * caught in it end up low, basements and ground floors take the load); a
+ * gas leak is at the ground-level service entry; fire and the rest can be
+ * on any floor. Uses STREAM_INCIDENTS, like the rest of the incident
+ * model, so a seed still replays exactly. */
+static uint8_t pick_incident_floor(IncidentType_t type, uint8_t floors)
+{
+    uint8_t top = floors > 0u ? (uint8_t)(floors - 1u) : 0u;
+
+    if(top == 0u)
+        return 0u;
+
+    switch(type)
+    {
+        case INCIDENT_STRUCTURAL_COLLAPSE:
+        case INCIDENT_CONFINED_SPACE:
+        case INCIDENT_SURVIVOR_SIGNAL:
+        {
+            uint8_t a = (uint8_t)random_range_stream(STREAM_INCIDENTS, 0, top);
+            uint8_t b = (uint8_t)random_range_stream(STREAM_INCIDENTS, 0, top);
+            return a < b ? a : b;
+        }
+
+        case INCIDENT_GAS_LEAK:
+            return 0u;
+
+        default:
+            return (uint8_t)random_range_stream(STREAM_INCIDENTS, 0, top);
+    }
+}
+
 static int generate_incident_at(IncidentType_t type, int16_t loc_x, int16_t loc_y)
 {
     IncidentState_t *incident = find_free_incident_slot();
@@ -2113,9 +2167,26 @@ static int generate_incident_at(IncidentType_t type, int16_t loc_x, int16_t loc_
     incident->loc_y = loc_y;
     incident->reported_at_tick = g_current_tick;
     incident->spawned_by = NO_ASSIGNMENT;
-    incident->work_remaining = 100;
+    incident->work_remaining = INCIDENT_BASE_STAGE_WORK; /* floor-scaled below */
     incident->discovered = 0;  /* fog-of-war: hidden until Search/other teams' radius finds it */
     populate_generated_incident_model(incident);
+    {
+        uint16_t building_id;
+        uint8_t floors;
+
+        if(environment_building_at(loc_x, loc_y, &building_id, &floors))
+        {
+            incident->building_id = building_id;
+            incident->floor = pick_incident_floor(type, floors);
+        }
+        else
+        {
+            incident->building_id = INCIDENT_NO_BUILDING;
+            incident->floor = 0;
+        }
+        incident->stage_work = incident_stage_work_for_floor(incident->floor);
+        incident->work_remaining = incident->stage_work;
+    }
     apply_incident_grid_degradation(incident);
     extern uint32_t g_diag_spawned_by_type[NUM_INCIDENT_TYPES];
     g_diag_spawned_by_type[type]++;

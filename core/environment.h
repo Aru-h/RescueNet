@@ -238,6 +238,10 @@ void environment_set_cell_operational_state(int x, int y, uint8_t travel_cost, u
 uint8_t environment_find_safe_zone_site(uint8_t index, uint8_t total, int16_t *x, int16_t *y);
 uint8_t environment_find_gateway_site(uint8_t index, int16_t *x, int16_t *y);
 uint8_t environment_find_incident_site(IncidentType_t type, int16_t *x, int16_t *y);
+/* The building covering cell (x, y): returns 1 and fills building_id and
+ * floors (>= 1), or 0 if the cell is not part of a building (always 0 on
+ * a board, which has no world of its own). */
+uint8_t environment_building_at(int x, int y, uint16_t *building_id, uint8_t *floors);
 uint8_t environment_get_district_center(uint8_t district_id, int16_t *x, int16_t *y);
 uint8_t environment_find_incident_site_in_zone(IncidentType_t type, uint8_t zone_id, int16_t *x, int16_t *y);
 void environment_update_hazard_propagation(uint32_t tick);

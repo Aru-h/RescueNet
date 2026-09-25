@@ -1,5 +1,32 @@
 # Changelog
 
+## Building floors in incidents
+
+- `IncidentState_t` gains `building_id` (`INCIDENT_NO_BUILDING` when
+  none), `floor` (0 = ground) and `stage_work`. `generate_incident_at()`
+  fills them from the building covering the incident cell (new
+  `environment_building_at()`), which covers both the periodic
+  generator (building anchor cells) and hazard events inside a
+  building's footprint.
+- Floor rules (STREAM_INCIDENTS, deterministic per seed): structural
+  collapse, confined space and survivor signal take the lower of two
+  uniform draws over the building's floors; gas leaks are on the
+  ground floor; fire and everything else can be on any floor.
+- Every stage's `work_remaining` (first stage and each stage reset in
+  `complete_incident_stage()`) is `100 * (1 + 0.15 * floor)`, capped at
+  250. The twin already takes its baseline from `work_remaining`.
+- Mission-link wire format unchanged. A board seeds `stage_work` from
+  the first frame it sees for an incident (`max(work_remaining, 100)`),
+  so its later stages use the same floor-scaled amount; an incident a
+  board first sees part-way through falls back to 100.
+- Dashboard live frame: incidents carry `"floor"` and `"building_id"`
+  (-1 when not in a building); the incident detail panel shows them.
+- CSV: `incident_floor`, `incident_building_id` appended at the end of
+  the row (-1 when the team has no incident).
+
+`./tron 1 5 3000 --fault-profile=combined`: 99% of incidents are in a
+building, floors 0/1/2/3/4/5 = 74/53/36/14/5/2; resolved 175 -> 164.
+
 ## Diagonal (8-direction) movement
 
 - `core/path.c`: A* now expands 8 neighbours. It runs in tenths of a

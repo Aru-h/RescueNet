@@ -1138,6 +1138,18 @@ void mission_link_apply_incident(const MissionLinkIncident_t *msg)
         incident->mission_fault_active_count = 0u;
         incident->mission_fault_original_priority = 0u;
         incident->mission_fault_original_victim_count = 0u;
+
+        /* Building and floor aren't on the wire. The first frame for an
+           incident carries its untouched first-stage work, which already
+           includes the floor scaling, so later stages this board runs
+           reset to that same amount. An incident first seen part-way
+           through falls back to the ground-floor amount. */
+        incident->building_id = INCIDENT_NO_BUILDING;
+        incident->floor = 0u;
+        incident->stage_work =
+            msg->work_remaining > INCIDENT_BASE_STAGE_WORK
+                ? msg->work_remaining
+                : (uint16_t)INCIDENT_BASE_STAGE_WORK;
     }
 
     incident->loc_x = msg->loc_x;
