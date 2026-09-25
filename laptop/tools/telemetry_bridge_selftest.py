@@ -20,6 +20,7 @@ from telemetry_bridge import (
     INCIDENT_STATUS_RESOLVED,
     MISSION_LINK_INCIDENT_MAGIC,
     MissionFeed,
+    TelemetryBridge,
     TelemetryFrameParser,
     TELEMETRY_FRAME_MAGIC0,
     TELEMETRY_FRAME_MAGIC1,
@@ -85,7 +86,7 @@ def main():
         print(f"  decoded frames ({len(frames)}):")
         for f in frames:
             print(f"    {f}")
-        print(f"  reassembled text:")
+        print("  reassembled text:")
         for line in text_joined.splitlines():
             if line.strip():
                 print(f"    {line!r}")
@@ -214,11 +215,61 @@ def test_reopened_incident_leaves_resolved_set():
     assert feed.status_dict()["open_incidents"] == 1
 
 
+# ---------------------------------------------------------------------------
+# TelemetryBridge._read_loop survives transient errors
+# ---------------------------------------------------------------------------
+
+class _FlakyPort:
+    """Serial stand-in: raises once, then delivers bytes, then closes."""
+
+    def __init__(self, bridge, script):
+        self._bridge = bridge
+        self._script = list(script)
+        self.is_open = True
+        self.in_waiting = 0
+
+    def read(self, n):
+        if not self._script:
+            self.is_open = False
+            return b""
+        item = self._script.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+
+def test_read_loop_survives_transient_error():
+    bridge = TelemetryBridge.__new__(TelemetryBridge)
+    seen = []
+
+    class _NoHandshake:
+        def due_for_req(self):
+            return False
+
+    bridge.handshake = _NoHandshake()
+    bridge.running = True
+    bridge.read_errors = 0
+    bridge.ingest_bytes = seen.append
+    bridge.serial_conn = _FlakyPort(bridge, [b"a", ValueError("parser hiccup"), b"b"])
+    bridge._read_loop()
+    assert seen == [b"a", b"b"], f"kept reading after a transient error ({seen})"
+    assert bridge.read_errors == 1
+
+    # An unrecoverable port error ends the loop.
+    seen.clear()
+    bridge.read_errors = 0
+    bridge.serial_conn = _FlakyPort(bridge, [b"a", OSError("device gone"), b"b"])
+    bridge._read_loop()
+    assert seen == [b"a"], f"stopped on an unrecoverable port error ({seen})"
+    assert bridge.read_errors == 1
+
+
 if __name__ == "__main__":
     main()
     test_resolved_resent_then_forgotten()
     test_resolved_window_expires()
     test_resolved_bounded_and_rate_limited()
     test_reopened_incident_leaves_resolved_set()
+    test_read_loop_survives_transient_error()
     print("ALL CHECKS PASSED: MissionFeed re-sends lost RESOLVED frames within "
-          "budget/window/rate limits.")
+          "budget/window/rate limits; the serial read loop survives transient errors.")

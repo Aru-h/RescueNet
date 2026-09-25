@@ -1371,6 +1371,7 @@ class TelemetryBridge:
         self.baudrate = baudrate
         self.serial_conn = None
         self.running = False
+        self.read_errors = 0            # exceptions caught by _read_loop()
         self.nodes_ready = set()
         self.telemetry_queue = queue.Queue()
         self.thread = None
@@ -1452,6 +1453,9 @@ class TelemetryBridge:
     def _read_loop(self):
         """Background daemon thread listening for incoming byte streams.
 
+        Survives transient errors (logged and counted in read_errors); only
+        a closed port or a port-level OSError ends it.
+
         Reads raw bytes (this is a binary wire format, not line-delimited
         text) and scans for magic-byte-framed frames of BOTH kinds that
         can appear on this wire: handshake replies
@@ -1486,9 +1490,21 @@ class TelemetryBridge:
 
                 self.ingest_bytes(chunk)
 
-            except Exception as e:
-                print(f"Serial read error: {e}")
+            except OSError as e:
+                # The port itself failed (pyserial's SerialException is an
+                # OSError: unplugged board, closed or reset device). Retrying
+                # reads on it just spins; reopening is start()'s job.
+                self.read_errors += 1
+                print(f"Serial read error (port lost, stopping reader): {e}")
                 break
+            except Exception as e:  # noqa: BLE001
+                # Anything else (a parser or tracker hiccup on one odd chunk)
+                # used to end this thread for good, silently leaving the
+                # bridge deaf for the rest of the mission. Log, count, keep
+                # reading; the loop condition still stops on a closed port.
+                self.read_errors += 1
+                print(f"Serial read error (continuing): {e}")
+                time.sleep(0.05)
 
     def ingest_bytes(self, chunk: bytes):
         """One pass of raw USART1 bytes through every scanner: handshake
