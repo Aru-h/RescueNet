@@ -86,6 +86,14 @@
 #ifndef BOARD_SEED_COUNT
 #define BOARD_SEED_COUNT 1u
 #endif
+/* Exactly one seed per boot. g_current_tick follows the laptop's mission
+ * clock and nothing resets it between seeds (sim_start_seed_board() must
+ * not - see core/sim_runner.h), so a second seed would find its tick loop
+ * (g_current_tick < BOARD_TICKS_PER_SEED) already finished and never run.
+ * Running several seeds would need the laptop to restart its clock and
+ * resend the world for each one first. */
+_Static_assert(BOARD_SEED_COUNT == 1u,
+               "BOARD_SEED_COUNT must be 1: g_current_tick is never reset between board seeds");
 /* Upper bound only: ticks follow the laptop's mission clock (see the
  * tick loop in sim_task()), so the laptop decides how long a mission
  * runs. */
@@ -302,8 +310,10 @@ static int mission_link_handshake_round_trip_complete(void)
 extern uint32_t mission_link_task_peer_reboot_count(void);
 extern int sx1262_hal_get_random_u32(uint32_t *out);
 
-/* USART1 receive errors - see board_usart1_read_byte() below. */
-static uint32_t g_usart1_rx_error_count;
+/* USART1 receive errors: hardware ORE/FE/NE plus RX-ring-full drops,
+   both counted in usart1_driver.c's USART1_IRQHandler(). */
+extern uint32_t board_usart1_rx_error_count(void);
+extern uint32_t board_usart1_rx_drop_count(void);
 static uint32_t g_reported_usart1_rx_errors;
 static uint32_t g_reported_auth_fails;
 static uint32_t g_reported_session_holds;
@@ -344,11 +354,16 @@ static void board_report_link_diagnostics(void)
         }
     }
 
-    if(g_usart1_rx_error_count != g_reported_usart1_rx_errors)
     {
-        tm_printf((UB*)"tron: USART1 RX errors (%lu so far) - laptop bytes lost (overrun/framing)\n",
-                  (unsigned long)g_usart1_rx_error_count);
-        g_reported_usart1_rx_errors = g_usart1_rx_error_count;
+        uint32_t rx_errors = board_usart1_rx_error_count();
+
+        if(rx_errors != g_reported_usart1_rx_errors)
+        {
+            tm_printf((UB*)"tron: USART1 RX errors (%lu so far, %lu of them RX ring full) - laptop bytes lost or damaged (overrun/framing/noise, or the sim task not reading fast enough)\n",
+                      (unsigned long)rx_errors,
+                      (unsigned long)board_usart1_rx_drop_count());
+            g_reported_usart1_rx_errors = rx_errors;
+        }
     }
 
     if(!g_reported_first_frame && lora_frame_accept_count() > 0u)
@@ -482,11 +497,9 @@ void board_usart1_write(const uint8_t *bytes, uint32_t len)
 /* Real board_usart1_read_byte() lives in usart1_driver.c (interrupt-
    driven ring buffer) - see this file's own sim_task() comment at
    board_usart1_rx_init()'s call site for why the polling version this
-   used to be here was replaced. g_usart1_rx_error_count is currently
-   only ever read (board_report_link_diagnostics() below) - the ISR
-   clears ORE/FE/NE itself but doesn't feed this counter, so that one
-   diagnostic line under-reports until usart1_driver.c exposes a hook
-   for it; not a functional gap, just a stale diagnostic. */
+   used to be here was replaced. Its ISR counts and clears ORE/FE/NE
+   and counts RX-ring-full drops; board_report_link_diagnostics() above
+   reads the total through board_usart1_rx_error_count(). */
 
 /* tm_com_init() leaves USART1 with a one-byte receive register, so any
    byte not read before the next one arrives is lost - and this board is

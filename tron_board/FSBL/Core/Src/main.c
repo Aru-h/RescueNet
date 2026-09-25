@@ -38,7 +38,13 @@
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
+/* Sends a string LITERAL (only - sizeof on a pointer would be wrong) on
+   USART1 without its terminating NUL. USART1 is also the laptop's binary
+   mission link, so a stray NUL is a real byte on that wire; the old
+   hardcoded lengths were hand-counted and all 8 were off (7 sent the NUL,
+   1 read past the end of its literal). */
+#define FSBL_UART_PUTS(lit) \
+  HAL_UART_Transmit(&huart1, (uint8_t *)(lit), (uint16_t)(sizeof(lit) - 1u), HAL_MAX_DELAY)
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -130,7 +136,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART1_UART_Init();
-  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: UART alive\r\n", 19, HAL_MAX_DELAY);
+  FSBL_UART_PUTS("FSBL: UART alive\r\n");
 #if 0 /* Permanent OTP fuse. ST's own DK FSBL template runs fine WITHOUT it (50 MHz XSPI2 clock),
          so it is only needed for the 200 MHz mode. Re-enable deliberately, never by accident. */
   {
@@ -145,22 +151,22 @@ int main(void)
   }
 #endif
   MX_XSPI1_Init();
-  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: XSPI1 init done\r\n", 24, HAL_MAX_DELAY);
+  FSBL_UART_PUTS("FSBL: XSPI1 init done\r\n");
   MX_XSPI2_Init();
-  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: XSPI2 init done\r\n", 24, HAL_MAX_DELAY);
+  FSBL_UART_PUTS("FSBL: XSPI2 init done\r\n");
   MX_EXTMEM_MANAGER_Init();
-  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: EXTMEM_MANAGER init done\r\n", 33, HAL_MAX_DELAY);
+  FSBL_UART_PUTS("FSBL: EXTMEM_MANAGER init done\r\n");
   /* USER CODE BEGIN 2 */
-  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: init done, calling BOOT_Application\r\n", 44, HAL_MAX_DELAY);
+  FSBL_UART_PUTS("FSBL: init done, calling BOOT_Application\r\n");
   /* USER CODE END 2 */
 
   /* Launch the application */
   if (BOOT_OK != BOOT_Application())
   {
-    HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: BOOT_Application FAILED\r\n", 32, HAL_MAX_DELAY);
+    FSBL_UART_PUTS("FSBL: BOOT_Application FAILED\r\n");
     Error_Handler();
   }
-  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: BOOT_Application returned OK (should not happen)\r\n", 58, HAL_MAX_DELAY);
+  FSBL_UART_PUTS("FSBL: BOOT_Application returned OK (should not happen)\r\n");
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
@@ -1017,7 +1023,7 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
-  HAL_UART_Transmit(&huart1, (uint8_t *)"FSBL: Error_Handler HIT\r\n", 26, HAL_MAX_DELAY);
+  FSBL_UART_PUTS("FSBL: Error_Handler HIT\r\n");
   __disable_irq();
   while (1)
   {

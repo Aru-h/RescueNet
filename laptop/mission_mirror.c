@@ -27,11 +27,13 @@ static uint32_t g_reports_applied;
 static uint32_t g_lines_rejected;
 static uint32_t g_stages_completed;
 static uint32_t g_incidents_reopened;
+static uint32_t g_reports_ignored;
 
 void mission_mirror_begin(void)
 {
     memset(g_last_report, 0, sizeof(g_last_report));
     g_reports_applied = 0u;
+    g_reports_ignored = 0u;
     g_lines_rejected = 0u;
     g_stages_completed = 0u;
     g_incidents_reopened = 0u;
@@ -183,8 +185,31 @@ void mission_mirror_apply_status(const MissionLinkStatus_t *status)
         return;
     }
 
+    if (status->status > STATUS_RESTING)
+    {
+        /* Not a TeamStatus_t value. The frame's checksum passed, so this
+           is a board/laptop schema mismatch rather than line noise - but
+           either way there is no sane team state to mirror from it. */
+        g_reports_ignored++;
+        return;
+    }
+
     team = &g_teams[status->team_id];
     prev = &g_last_report[status->team_id];
+
+    if (prev->known && status->report_tick < prev->report_tick)
+    {
+        /* Out-of-order delivery: older than the report already applied
+           for this team (a relayed frame overtaken by a newer one, or a
+           retransmit). Applying it would roll the team back and could
+           run mission_mirror_team_left_task() for a move the newer
+           report already superseded. Same-tick reports are applied - a
+           team can legitimately change twice within one tick. Only
+           compared once a report is known: before that, prev->
+           report_tick is just the zeroed default. */
+        g_reports_ignored++;
+        return;
+    }
 
     if (prev->known && prev->incident_id != MISSION_LINK_NO_INCIDENT &&
         prev->incident_id != status->assigned_incident_id)
@@ -193,7 +218,8 @@ void mission_mirror_apply_status(const MissionLinkStatus_t *status)
     }
 
     team->status = status->status;
-    team->equipment_level = status->equipment_level;
+    team->equipment_level = (status->equipment_level > EQ_MAX_LEVEL)
+        ? (uint8_t)EQ_MAX_LEVEL : status->equipment_level;
     team->stamina = (float)status->stamina_at_report;
     if (status->loc_x >= 0 && status->loc_x < GRID_WIDTH &&
         status->loc_y >= 0 && status->loc_y < GRID_HEIGHT)
@@ -302,3 +328,4 @@ uint32_t mission_mirror_reports_applied(void) { return g_reports_applied; }
 uint32_t mission_mirror_lines_rejected(void) { return g_lines_rejected; }
 uint32_t mission_mirror_stages_completed(void) { return g_stages_completed; }
 uint32_t mission_mirror_incidents_reopened(void) { return g_incidents_reopened; }
+uint32_t mission_mirror_reports_ignored(void) { return g_reports_ignored; }

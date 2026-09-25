@@ -456,7 +456,7 @@ function enterSimulationMode() {
 }
 
 async function exitDashboard() {
-  await fetch('/api/board/disconnect', {method: 'POST'}).catch(()=>console.log("Disconnected locally"));
+  await fetch('/api/board/disconnect', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'}).catch(()=>console.log("Disconnected locally"));
   stopLive();
   stopBoardMissionPolling();
   showScreen('startup-screen');

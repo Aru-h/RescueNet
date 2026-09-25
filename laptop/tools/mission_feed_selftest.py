@@ -585,7 +585,7 @@ def test_app_launch_route():
     joined = "".join(chunks)
     check('"type": "static_env"' in joined and '"type": "frame"' in joined,
           "stream route sends static_env then frames")
-    check(client.post("/api/board/mission/stop").status_code == 200, "stop route")
+    check(client.post("/api/board/mission/stop", json={}).status_code == 200, "stop route")
     check(bridge.mission is None, "feed stopped")
 
     check(client.post("/api/board/launch", json={"seed": "x"}).status_code == 400,

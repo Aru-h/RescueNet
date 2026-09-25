@@ -101,8 +101,6 @@
                                        near the bottom of this file. */
 #include "mission_link_override.h"
 #include "mission_state.h"
-#include "recovery_manager.h" /* RECOVERY_ACTION_ABORT_MISSION gate in
-                                  mission_link_status_tx_step() below */
 #include "comms_transport.h"
 #include "lora_frame.h"
 #include "cbba.h"            /* cbba_now_ms() - reused as this link's
@@ -1195,23 +1193,19 @@ static void mission_link_status_tx_step(void)
             continue;
         }
 
-        if (recovery_manager_get_recommendation(team_id) == RECOVERY_ACTION_ABORT_MISSION)
-        {
-            /* An aborted team has nothing new worth reporting - it's
-               already been pulled off whatever it was doing
-               (recovery_dispatch(), core/recovery_manager.c) - and
-               skipping it here saves the same class of wasted
-               bandwidth/compute this file's fault-broadcast sibling
-               (core/fault_comms.c) already skips for the identical
-               reason. Does not clear g_last_sent_status[team_id] -
-               if the team is later reset off ABORT_MISSION, the next
-               status build naturally differs from that stale anchor
-               (status/equipment_level/work_rate all reflect the
-               team's real post-reset state) and the existing should_
-               send triggers below fire normally on their own; nothing
-               here needs to force that. */
-            continue;
-        }
+        /* No per-recommendation gate here: a team whose recovery
+           recommendation is RECOVERY_ACTION_ABORT_MISSION reports like
+           any other team. ABORT is precisely what pulls the team off its
+           incident and sends it to rest (recovery_dispatch() ->
+           abandon_task_for_recovery(), core/recovery_manager.c), and the
+           recommendation stays sticky under hysteresis - so suppressing
+           it here hid exactly the status/location change the laptop
+           needs to see: laptop/mission_mirror.c's
+           mission_mirror_team_left_task() never reopened the incident
+           (left ASSIGNED to a team that had walked away) and the team's
+           position/stamina froze on the dashboard. The change-detection
+           triggers below plus the heartbeat already bound bandwidth for
+           a team that isn't doing anything new, aborted or not. */
 
         mission_link_build_status(team_id, &status);
         last = &g_last_sent_status[team_id];

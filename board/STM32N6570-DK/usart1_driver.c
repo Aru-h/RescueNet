@@ -70,32 +70,89 @@
 
 #include "stm32n657xx.h"
 
-#define USART1_RX_RING_CAPACITY 64u /* power of 2 - cheap index masking */
+/* Sized for the laptop's real traffic, not a single frame: the bridge
+   sends up to 10 frames/s of <= 40 B at 115200 baud (~11.5 B/ms on the
+   wire), and the sim task can legitimately go hundreds of ms between
+   pumps (a CBBA round, an SX1262 BUSY-pin timeout - see Bug fix #2
+   above). The old 64-byte ring overflowed after ~100-150 ms without a
+   pump; 512 B covers ~45 ms of back-to-back line-rate bytes, or several
+   seconds of the bridge's actual frame rate. Keep it a power of 2: the
+   head/tail math below uses %, which then compiles to a mask. */
+#define USART1_RX_RING_CAPACITY 512u
+_Static_assert((USART1_RX_RING_CAPACITY & (USART1_RX_RING_CAPACITY - 1u)) == 0u,
+               "USART1_RX_RING_CAPACITY must be a power of 2");
 
 static volatile uint8_t g_rx_ring[USART1_RX_RING_CAPACITY];
 static volatile uint32_t g_rx_ring_head; /* next slot the ISR writes */
 static volatile uint32_t g_rx_ring_tail; /* next slot board_usart1_read_byte() reads */
+/* Bytes the ISR received but had to drop because the ring was full.
+   Written only by the ISR; a single aligned 32-bit word, so the
+   getter's plain read is atomic on this core. */
+static volatile uint32_t g_rx_ring_drop_count;
+/* USART1 receive errors the ISR saw and cleared: one count per ORE
+   (overrun - a byte was lost in hardware), FE (framing) or NE (noise)
+   flag occurrence. Same single-writer/atomic-read reasoning as
+   g_rx_ring_drop_count. */
+static volatile uint32_t g_rx_hw_error_count;
 
 void USART1_IRQHandler(void)
 {
-    while ((USART1_S->ISR & USART_ISR_RXNE) != 0u)
+    for (;;)
     {
-        uint8_t byte = (uint8_t)(USART1_S->RDR & 0xFFu);
+        uint32_t isr = USART1_S->ISR;
+        uint32_t clear = 0u;
+        uint8_t byte;
 
-        if ((USART1_S->ISR & USART_ISR_ORE) != 0u)
+        /* Count and clear every receive-error flag on each pass, BEFORE
+           the RXNE check: RXNEIE also enables the ORE interrupt, so an
+           ORE left set with RXNE already clear would re-enter this
+           handler forever. FE/NE don't raise an interrupt here (EIE is
+           off) but still latch, so they're picked up alongside the byte
+           they belong to. That byte is still delivered to the ring -
+           the mission-link frame checksum is what rejects a corrupted
+           frame, as it already does for any other line noise. */
+        if ((isr & USART_ISR_ORE) != 0u)
         {
-            USART1_S->ICR = USART_ICR_ORECF;
+            g_rx_hw_error_count++;
+            clear |= USART_ICR_ORECF;
         }
+        if ((isr & USART_ISR_FE) != 0u)
+        {
+            g_rx_hw_error_count++;
+            clear |= USART_ICR_FECF;
+        }
+        if ((isr & USART_ISR_NE) != 0u)
+        {
+            g_rx_hw_error_count++;
+            clear |= USART_ICR_NECF;
+        }
+        if (clear != 0u)
+        {
+            USART1_S->ICR = clear;
+        }
+
+        if ((isr & USART_ISR_RXNE) == 0u)
+        {
+            break;
+        }
+
+        byte = (uint8_t)(USART1_S->RDR & 0xFFu);
 
         /* Drop the byte if the ring is full rather than overwrite an
            unread one - same "never block, bounded loss under real
            overload" contract this file's read side already accepted
            for the hardware's own single-byte buffer, just moved one
-           level up to a slightly deeper (64-byte) buffer. */
+           level up to a deeper (USART1_RX_RING_CAPACITY) buffer. The
+           drop is counted, not silent: see
+           board_usart1_rx_drop_count(). */
         if ((g_rx_ring_head - g_rx_ring_tail) < USART1_RX_RING_CAPACITY)
         {
             g_rx_ring[g_rx_ring_head % USART1_RX_RING_CAPACITY] = byte;
             g_rx_ring_head++;
+        }
+        else
+        {
+            g_rx_ring_drop_count++;
         }
     }
 }
@@ -124,4 +181,21 @@ int board_usart1_read_byte(void)
     g_rx_ring_tail++;
 
     return (int)byte;
+}
+
+/* Running total of received bytes dropped because the RX ring was full
+   (the sim task went too long without calling board_usart1_read_byte()).
+   Monotonic; wraps at 2^32. */
+uint32_t board_usart1_rx_drop_count(void)
+{
+    return g_rx_ring_drop_count;
+}
+
+/* Running total of laptop bytes lost or damaged on USART1 receive:
+   hardware errors (ORE/FE/NE, counted in USART1_IRQHandler()) plus
+   ring-full drops (board_usart1_rx_drop_count()). Read by main_board.c's
+   board_report_link_diagnostics(). Monotonic; wraps at 2^32. */
+uint32_t board_usart1_rx_error_count(void)
+{
+    return g_rx_hw_error_count + g_rx_ring_drop_count;
 }
