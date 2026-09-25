@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>    /* nanosleep - desktop test tooling only, live-mode pacing */
+#include <sys/select.h> /* mission-feed mode: board reports on stdin between ticks */
+#include <unistd.h>
 
 #include "allocator.h"
 #include "environment.h"
@@ -15,6 +17,84 @@
 #include "fault_config.h"
 #include "fault_injector.h"
 #include "sim_runner.h"
+#include "mission_feed.h"
+#include "mission_mirror.h"
+#include "mission_state.h" /* TICK_TIME_SEC */
+
+static uint64_t monotonic_ms(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000u + (uint64_t)(now.tv_nsec / 1000000L);
+}
+
+/* Board mission (--mission-feed): until deadline_ms, applies each board
+ * report the bridge writes to stdin (laptop/mission_mirror.h). Returns
+ * once the deadline passes - immediately after one non-blocking drain
+ * when the tick delay is 0. A closed stdin (no bridge attached) just
+ * sleeps out the rest of the tick. */
+static int g_mission_stdin_open = 1;
+static char g_mission_line[256];
+static size_t g_mission_line_len;
+
+static void mission_wait_for_reports(uint64_t deadline_ms)
+{
+    for(;;)
+    {
+        uint64_t now = monotonic_ms();
+        uint64_t left = (deadline_ms > now) ? (deadline_ms - now) : 0u;
+
+        if(!g_mission_stdin_open)
+        {
+            if(left > 0u)
+            {
+                struct timespec delay;
+                delay.tv_sec = (time_t)(left / 1000u);
+                delay.tv_nsec = (long)(left % 1000u) * 1000000L;
+                nanosleep(&delay, NULL);
+            }
+            return;
+        }
+
+        fd_set readable;
+        struct timeval timeout;
+        FD_ZERO(&readable);
+        FD_SET(STDIN_FILENO, &readable);
+        timeout.tv_sec = (time_t)(left / 1000u);
+        timeout.tv_usec = (suseconds_t)((left % 1000u) * 1000u);
+
+        int ready = select(STDIN_FILENO + 1, &readable, NULL, NULL, &timeout);
+        if(ready <= 0)
+            return;  /* deadline reached (or interrupted) */
+
+        char chunk[256];
+        ssize_t n = read(STDIN_FILENO, chunk, sizeof(chunk));
+        if(n <= 0)
+        {
+            g_mission_stdin_open = 0;
+            continue;
+        }
+
+        for(ssize_t i = 0; i < n; i++)
+        {
+            if(chunk[i] == '\n')
+            {
+                g_mission_line[g_mission_line_len] = '\0';
+                if(mission_mirror_ingest_line(g_mission_line))
+                    mission_feed_tasks(g_current_tick);
+                g_mission_line_len = 0;
+            }
+            else if(g_mission_line_len + 1u < sizeof(g_mission_line))
+            {
+                g_mission_line[g_mission_line_len++] = chunk[i];
+            }
+            else
+            {
+                g_mission_line_len = 0;  /* over-long line: not a report, drop it */
+            }
+        }
+    }
+}
 
 static int is_fault_profile_flag(const char *arg)
 {
@@ -89,6 +169,7 @@ int main(int argc, char **argv)
 
     FaultProfile_t fault_profile = FAULT_PROFILE_NONE;
     int live_mode = 0;
+    int mission_feed_mode = 0; /* --mission-feed, see laptop/mission_feed.h */
     int diag_mode = 0;  /* off by default - see --diag below */
     uint32_t tick_delay_ms = 0;
     uint32_t positional_args[5] = {0};
@@ -99,6 +180,25 @@ int main(int argc, char **argv)
         if(strcmp(argv[i], "--live") == 0)
         {
             live_mode = 1;
+            continue;
+        }
+
+        /* Board mission: world events only, teams mirrored from board
+         * reports on stdin (laptop/mission_mirror.h), and the frames the
+         * boards need written as MLFRAME lines on stdout
+         * (laptop/mission_feed.h). Paced by --tick-delay-ms like --live. */
+        if(strcmp(argv[i], "--mission-feed") == 0)
+        {
+            mission_feed_mode = 1;
+            continue;
+        }
+
+        /* One tick per TICK_TIME_SEC (36 s) of wall-clock time - the
+         * timing a real deployment runs at. Shorthand for
+         * --tick-delay-ms=36000. */
+        if(strcmp(argv[i], "--realtime") == 0)
+        {
+            tick_delay_ms = (uint32_t)TICK_TIME_SEC * 1000u;
             continue;
         }
 
@@ -164,6 +264,13 @@ int main(int argc, char **argv)
     {
         sim_start_seed(seed, fault_profile);
 
+        if(mission_feed_mode)
+        {
+            g_sim_role = SIM_ROLE_WORLD_MIRROR;
+            mission_mirror_begin();
+            mission_feed_begin();
+        }
+
         if(live_mode)
         {
             /* Static layout - buildings, roads, districts don't move once
@@ -181,10 +288,28 @@ int main(int argc, char **argv)
             debug_emit_static_environment();
         }
 
+        uint64_t next_tick_deadline_ms = monotonic_ms() + tick_delay_ms;
+
         for(uint32_t tick = 0; tick < ticks_per_seed; ++tick)
         {
             uint32_t collapse_count_before = g_environment_summary.aftershock_collapse_count;
+
+            if(mission_feed_mode)
+            {
+                /* The previous tick's boards report in while the laptop
+                 * waits out this tick's wall-clock period. Deadline-based
+                 * rather than a fixed sleep so time spent simulating
+                 * doesn't stretch the tick. */
+                mission_wait_for_reports(next_tick_deadline_ms);
+                next_tick_deadline_ms += tick_delay_ms;
+            }
+
             sim_tick();
+
+            if(mission_feed_mode)
+            {
+                mission_feed_tick(tick + 1u);
+            }
 
             if(live_mode)
             {
@@ -196,13 +321,14 @@ int main(int argc, char **argv)
                      * the new damage_state/hazard_flags instead of going stale. */
                     debug_emit_static_environment();
                 }
-                if(tick_delay_ms > 0)
-                {
-                    struct timespec delay;
-                    delay.tv_sec = tick_delay_ms / 1000u;
-                    delay.tv_nsec = (long)(tick_delay_ms % 1000u) * 1000000L;
-                    nanosleep(&delay, NULL);
-                }
+            }
+
+            if(live_mode && !mission_feed_mode && tick_delay_ms > 0)
+            {
+                struct timespec delay;
+                delay.tv_sec = tick_delay_ms / 1000u;
+                delay.tv_nsec = (long)(tick_delay_ms % 1000u) * 1000000L;
+                nanosleep(&delay, NULL);
             }
         }
 
