@@ -26,6 +26,7 @@ import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
@@ -109,6 +110,97 @@ def pack_override(team_id: int, incident_id: int) -> bytes:
 
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
+
+# Where the dashboard listens (see app.run() at the bottom of this file).
+# Loopback only - but loopback is NOT a trust boundary against the
+# user's own browser: any web page open in it can POST to
+# http://127.0.0.1:5050, and every POST route here does something real
+# (a dispatch override written to the boards, a mission launch, a serial
+# port opened, a 600 s sim run started). See _reject_cross_site_writes().
+DASHBOARD_HOST = "127.0.0.1"
+DASHBOARD_PORT = 5050
+
+# Origins the dashboard's own pages are served from. localhost and
+# 127.0.0.1 are both listed because the user may type either into the
+# address bar; each is a distinct origin to the browser.
+ALLOWED_ORIGINS = frozenset({
+    f"http://{DASHBOARD_HOST}:{DASHBOARD_PORT}",
+    f"http://127.0.0.1:{DASHBOARD_PORT}",
+    f"http://localhost:{DASHBOARD_PORT}",
+})
+
+_STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _origin_of(url):
+    """scheme://host[:port] of a URL (the form an Origin header takes),
+    lower-cased; "" if it can't be parsed."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ""
+    if not parts.scheme or not parts.netloc:
+        return ""
+    return f"{parts.scheme}://{parts.netloc}".lower()
+
+
+@app.before_request
+def _reject_cross_site_writes():
+    """Cross-site request forgery guard for every state-changing route.
+
+    Two independent checks, either of which is enough against a hostile
+    page in the user's browser:
+
+    1. Origin/Referer. A browser always attaches Origin to a cross-origin
+       POST (and usually Referer), so a request that carries one naming a
+       site other than this dashboard is refused outright. Requests with
+       neither header (curl, the selftests, the Python tooling) are not
+       browser cross-site requests and fall through to check 2.
+
+    2. Content-Type: application/json is required. The routes used to
+       parse the body whatever its content type, so a CORS-"simple"
+       text/plain POST - which a browser sends cross-site with no
+       preflight - went straight through. A JSON content type is not
+       CORS-simple: the browser must preflight it first, and this server
+       never answers a preflight with Access-Control-Allow-Origin, so the
+       real request is never sent.
+
+    The dashboard's own JS (templates/, static/) sends JSON with the
+    matching header on every POST, including the bodyless ones.
+    """
+    if request.method not in _STATE_CHANGING_METHODS:
+        return None
+
+    origin = request.headers.get("Origin")
+    if origin is not None:
+        if origin.lower() not in ALLOWED_ORIGINS:
+            return jsonify({"status": "error",
+                            "message": "Cross-origin request refused"}), 403
+    else:
+        referer = request.headers.get("Referer")
+        if referer and _origin_of(referer) not in ALLOWED_ORIGINS:
+            return jsonify({"status": "error",
+                            "message": "Cross-origin request refused"}), 403
+
+    if not request.is_json:
+        return jsonify({"status": "error",
+                        "message": "Content-Type must be application/json"}), 415
+    return None
+
+
+def _json_object_body():
+    """The request's JSON body as a dict: {} for an empty body, None if
+    the body is not a JSON object (caller answers 400). Content-Type was
+    already enforced by _reject_cross_site_writes()."""
+    if not request.get_data(cache=True):
+        return {}
+    data = request.get_json(silent=True)
+    return data if isinstance(data, dict) else None
+
+
+def _bad_json_body():
+    return jsonify({"status": "error",
+                    "message": "Request body must be a JSON object"}), 400
 
 # Index = EventType_t value in core/mission_state.h
 EVENT_NAMES = [
@@ -412,7 +504,9 @@ def api_status():
 
 @app.route("/api/board/connect", methods=["POST"])
 def api_board_connect():
-    data = request.get_json(force=True) or {}
+    data = _json_object_body()
+    if data is None:
+        return _bad_json_body()
     port = data.get("port", "/dev/ttyACM0")
     baudrate = data.get("baudrate", 115200)
     success = bridge.connect(port, baudrate)
@@ -439,7 +533,9 @@ def api_board_connect_sim():
                        "- restart with SIM_ONLY=1 or --no-hardware",
         }), 400
 
-    data = request.get_json(force=True) or {}
+    data = _json_object_body()
+    if data is None:
+        return _bad_json_body()
     seed = int(data.get("seed", 1))
     ticks = int(data.get("ticks", 2000))
     fault_profile = data.get("fault_profile", "none")
@@ -472,7 +568,9 @@ def api_board_launch():
     (GET /api/board/mission/stream). Optional JSON body: seed, ticks,
     fault_profile, and the pace - time_scale (1 = real time, one tick per
     36 s; the default) or an explicit tick_delay_ms."""
-    data = request.get_json(silent=True) or {}
+    data = _json_object_body()
+    if data is None:
+        return _bad_json_body()
     try:
         seed = int(data.get("seed", 1))
         ticks = int(data.get("ticks", 10000))
@@ -609,7 +707,9 @@ def api_board_override():
     nothing listens on" problem core/mission_link_handshake.h's own
     top comment was written to fix in the first place.
     """
-    data = request.get_json(force=True) or {}
+    data = _json_object_body()
+    if data is None:
+        return _bad_json_body()
 
     try:
         team_id = int(data["team_id"])
@@ -678,7 +778,9 @@ def api_board_override_status():
 
 @app.route("/api/run", methods=["POST"])
 def api_run():
-    payload = request.get_json(force=True) or {}
+    payload = _json_object_body()
+    if payload is None:
+        return _bad_json_body()
     seed = int(payload.get("seed", 1))
     seed_count = int(payload.get("seed_count", 1))
     ticks = int(payload.get("ticks", 2000))
@@ -737,7 +839,9 @@ def api_run():
 
 @app.route("/api/run-live", methods=["POST"])
 def api_run_live():
-    payload = request.get_json(force=True) or {}
+    payload = _json_object_body()
+    if payload is None:
+        return _bad_json_body()
     seed = int(payload.get("seed", 1))
     ticks = int(payload.get("ticks", 500))
     fault_profile = payload.get("fault_profile", "none")
@@ -823,5 +927,5 @@ if __name__ == "__main__":
         print("Starting dashboard in hardware mode (default) - "
               "/api/board/connect opens a real serial port. Start with "
               "SIM_ONLY=1 or --no-hardware for headless/hardware-free mode.")
-    print("Starting unified dashboard on http://127.0.0.1:5050")
-    app.run(host="127.0.0.1", port=5050, debug=False)
+    print(f"Starting unified dashboard on http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
+    app.run(host=DASHBOARD_HOST, port=DASHBOARD_PORT, debug=False)

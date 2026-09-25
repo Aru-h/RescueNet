@@ -836,3 +836,16 @@ check-two-board-mission-harness:
 	done
 	@echo "check-two-board-mission-harness: clock, map, sites and positions crossed both boards"
 
+
+# =============================================================================
+# Agent C review-fix tests (board code, dashboard and tooling)
+# =============================================================================
+
+# app.py's cross-site request forgery guard, through Flask's test client:
+# JSON same-origin/tooling POSTs work; text/plain and form POSTs (CORS-
+# "simple", sent cross-site with no preflight) are 415 with no side effect;
+# a foreign Origin/Referer is 403 even as JSON. Skips if Flask is missing.
+# See laptop/tools/dashboard_csrf_selftest.py.
+.PHONY: check-dashboard-csrf-selftest
+check-dashboard-csrf-selftest:
+	@cd $(TOOLS_DIR) && $(PYTHON) dashboard_csrf_selftest.py
