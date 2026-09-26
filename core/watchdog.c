@@ -23,10 +23,9 @@
 #define WATCHDOG_TIMEOUT_STREAK_MAX 6u
 #define WATCHDOG_MOBILITY_CONFIRM_TICKS 3u
 #define WATCHDOG_MOBILITY_PROGRESS_MARGIN 0.02f
-/* Stall-based mobility detection - see update_movement_stalls(). */
-#define WATCHDOG_STALL_WINDOW_TICKS 4u
-#define WATCHDOG_STALL_MIN_SAMPLES 2u
-#define WATCHDOG_STALL_CONFIRM_COUNT 2u
+/* Stall-based mobility detection - see update_movement_stalls(). The
+ * WATCHDOG_STALL_* constants live in watchdog.h (core/consensus.c mirrors
+ * this rule on received beacons and must use the same numbers). */
 
 
 
@@ -246,6 +245,14 @@ static void update_movement_stalls(
     watchdog->stall_leg_heading_to_rest = team->heading_to_rest;
     watchdog->stall_leg_resting_zone_id = team->resting_zone_id;
 }
+
+#if CONSENSUS_TEST_HOOKS
+void watchdog_test_get_stall_state(uint8_t team_id, uint8_t *history, uint8_t *samples)
+{
+    *history = g_watchdog_state[team_id].stall_history;
+    *samples = g_watchdog_state[team_id].stall_samples;
+}
+#endif
 
 float watchdog_get_mobility_stall_fraction(uint8_t team_id)
 {

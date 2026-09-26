@@ -1,5 +1,42 @@
 # Changelog
 
+## Peer consensus on fault state (laptop build)
+
+- New `core/consensus.{c,h}` (design: `CONSENSUS_DESIGN.md`). Every team
+  is a node on `core/vbus.c`; a node that physically transmitted
+  (`team_radio_emitted()`, new in `core/team.c`) broadcasts an 80-byte
+  beacon of raw state plus its verdicts about every other node. Each
+  node judges every peer for mobility (the watchdog's stall rule run on
+  received positions, with plausibility checks and a first-hand
+  reputation) and communication (missed beacons in a 6-tick window,
+  self-deaf rules for a deaf observer). Node t fuses the votes about t
+  in 2-tick rounds: ELEVATED needs 3 agreeing peers, a supermajority
+  (`|F| >= 2|C|+1`) and a fixed fault budget f = 2. A heard-matrix fast
+  path catches communication faults from two consecutive silent ticks; it
+  is off by default (`CONSENSUS_FAST_PATH=0`) because per-source loss makes
+  it raise false ELEVATED at q=0.05.
+- Recovery manager: under `CONSENSUS_ENFORCE` a 7th evaluator,
+  `evaluate_peer_consensus()`, and consensus ELEVATED as corroboration
+  in `evaluate_fault_predictor()`. It only adds signals and never
+  aborts a mission. Capping the local evaluators is behind
+  `CONSENSUS_CAP_LOCAL_EVALUATORS` (default 0). The parked
+  `evaluate_consensus_fault()` and its flag are deleted.
+- Only the laptop `tron` target builds it (`LAPTOP_CONSENSUS_FLAGS` in
+  the `Makefile`: `-DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=1`);
+  board, Pico, the two-board harnesses and every selftest keep the bus
+  off and compile none of it. `--vbus-loss=<p>` (default 0.05) and
+  `--peer-log` (writes `tron_peer_obs.csv`) are new flags.
+- CSV: 21 columns appended (`consensus_*`, `peer_*_votes_*`,
+  `vbus_link_loss_ppm`, `beacon_emitted`, `consensus_capped`), the same
+  header in every build. Live frame: per-team `consensus_tier` and
+  `peer_votes`, top-level `vbus`. `laptop/tools/app.py` already
+  forwards them; the dashboard page is not changed here.
+- `WATCHDOG_STALL_*` constants moved to `core/watchdog.h`.
+- New checks: `check-consensus-selftest`, `check-consensus-scenarios`,
+  `check-consensus-airtime`, `check-consensus-shadow-regression`,
+  `check-consensus-multiboard-untouched`; `laptop/tools/consensus_sweep.py`
+  drives the measurements.
+
 ## Building floors in incidents
 
 - `IncidentState_t` gains `building_id` (`INCIDENT_NO_BUILDING` when

@@ -12,6 +12,27 @@
 
 #define EQ_RESERVE_LEVEL 15
 
+#if TEAM_TEST_RANDOM_EMISSION
+/* Private stream (xorshift32), never core/random.c, so the variant cannot
+ * shift the world. Seeded per run by consensus_init(). */
+static uint32_t g_random_emission_state = 2463534242u;
+
+void team_test_seed_random_emission(uint32_t seed)
+{
+    g_random_emission_state = seed ? seed : 2463534242u;
+}
+
+static uint8_t random_emission_draw(uint8_t severity)
+{
+    uint32_t x = g_random_emission_state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    g_random_emission_state = x;
+    return (x % ((uint32_t)severity + 1u)) == 0u;
+}
+#endif
+
 void generate_teams(uint32_t seed) //team
 {
     random_seed_stream(STREAM_TEAMS, derive_seed(seed, STREAM_TEAMS));
@@ -470,12 +491,22 @@ void update_team(TeamState_t *team) //team
             team->equipment_level = 0;
     }
 
+#if TEAM_TEST_RANDOM_EMISSION
+    if(!team->fault_state.active[FAULT_CLASS_COMMUNICATION] ||
+       random_emission_draw(team->fault_state.severity[FAULT_CLASS_COMMUNICATION]))
+#else
     if(!team->fault_state.active[FAULT_CLASS_COMMUNICATION] ||
        ((g_current_tick - team->fault_state.start_tick[FAULT_CLASS_COMMUNICATION]) %
         (uint32_t)(team->fault_state.severity[FAULT_CLASS_COMMUNICATION] + 1u) == 0))
+#endif
     {
         team->last_heartbeat_tick = g_current_tick;
     }
+}
+
+uint8_t team_radio_emitted(const TeamState_t *team) //team
+{
+    return team->last_heartbeat_tick == g_current_tick;
 }
 
 void update_all_teams(void) //team

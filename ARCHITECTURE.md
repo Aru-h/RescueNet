@@ -584,12 +584,14 @@ before/after verification, not just a description:
   (dormant — see the fault-prediction-subsystem entries in the file
   table above and `KNOWN_LIMITATIONS.md`), so this evaluator is
   registered and callable but not yet meaningfully active.
-- A 7th evaluator, `evaluate_consensus_fault()`, is written but
-  compiled out (`RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT 0u` in
-  `core/recovery_manager_config.h`) — documented reason: the Byzantine
-  fault-tolerance bound it implements assumes independently-failing
-  voters, but 5 teams currently share one physical board, so that
-  assumption isn't trustworthy yet.
+- The parked `evaluate_consensus_fault()` and its
+  `RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT` flag are deleted. Peer
+  consensus (`core/consensus.c`, `CONSENSUS_DESIGN.md`) replaces them:
+  under `CONSENSUS_ENFORCE` a 7th evaluator, `evaluate_peer_consensus()`,
+  joins the recovery manager and consensus ELEVATED counts as
+  corroboration in `evaluate_fault_predictor()`. It runs on the laptop
+  build only (each team is a node on `core/vbus.c`); board and Pico
+  builds compile none of it.
 - `core/recovery_manager.h` adds
   `RECOVERY_REASON_CONSENSUS_FAULT`/`RECOVERY_REASON_PREDICTED_FAULT`
   reason codes for these two evaluators.

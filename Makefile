@@ -67,12 +67,20 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-env-raw-travel-cost-ablation
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario
 
 all: $(TARGET) $(LABELER)
 
+# Peer consensus (CONSENSUS_DESIGN.md): the laptop `tron` build turns on the
+# virtual bus and enforcement (decision D1). Deliberately NOT part of CFLAGS:
+# every board build, Pico build, two-board harness and selftest keeps
+# VIRTUAL_BUS_ENABLED=0 and compiles none of it. Override with
+# LAPTOP_CONSENSUS_FLAGS='' or CONSENSUS_ENFORCE=0 for a shadow-mode build.
+CONSENSUS_ENFORCE ?= 1
+LAPTOP_CONSENSUS_FLAGS ?= -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=$(CONSENSUS_ENFORCE)
+
 $(TARGET): $(LAPTOP_SOURCES)
-	$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) -o $(TARGET) $(LAPTOP_SOURCES) $(LDFLAGS)
+	$(CC) $(CFLAGS) $(LAPTOP_CONSENSUS_FLAGS) $(LAPTOP_INCLUDES) -o $(TARGET) $(LAPTOP_SOURCES) $(LDFLAGS)
 
 $(LABELER): $(LABELER_SOURCES)
 	$(CC) $(CFLAGS) -I$(CORE_DIR) -o $(LABELER) $(LABELER_SOURCES) $(LDFLAGS)
@@ -128,6 +136,7 @@ N ?= 5
 # STM32N6570-DK/Cortex-M55-specific (-mcpu=cortex-m55,
 # -D_STM32CUBE_DISCOVERY_N657_).
 ARM_CC ?= arm-none-eabi-gcc
+ARM_NM ?= arm-none-eabi-nm
 BSP_DIR ?= board/STM32N6570-DK/vendor/mtk3_bsp2
 # -mcmse: the real Appli build passes it, and it is what makes the CMSIS
 # header define CPU_IN_SECURE_STATE, without which the secure-alias
@@ -748,6 +757,110 @@ check-sx1262-setup-selftest:
 	@$(CC) $(SELFTEST_CFLAGS) -I$(SX126X_DIR) -o $(SELFTEST_BIN_DIR)/sx1262_setup_selftest \
 		$(TOOLS_DIR)/sx1262_setup_selftest.c $(SX126X_DIR)/sx126x.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./sx1262_setup_selftest
+
+# core/vbus.c compiles to nothing unless VIRTUAL_BUS_ENABLED is set, so
+# the selftest builds it explicitly. random.c is linked only to prove the
+# bus leaves its streams untouched.
+check-virtual-bus:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/virtual_bus_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -DVIRTUAL_BUS_ENABLED=1 -o $(SELFTEST_BIN_DIR)/virtual_bus_selftest \
+		$(TOOLS_DIR)/virtual_bus_selftest.c $(CORE_DIR)/vbus.c $(CORE_DIR)/random.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./virtual_bus_selftest
+
+# Peer consensus unit tests (CONSENSUS_DESIGN.md 7.9, 7.11): real vbus,
+# synthetic teams, no simulation. Needs the virtual bus and the test hooks.
+CONSENSUS_TEST_DEFS = -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_TEST_HOOKS=1
+
+check-consensus-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/consensus_selftest.c"
+	# The selftest exercises the fast path, which is off by default (decision D7).
+	@$(CC) $(SELFTEST_CFLAGS) $(CONSENSUS_TEST_DEFS) -DCONSENSUS_FAST_PATH=1 -o $(SELFTEST_BIN_DIR)/consensus_selftest \
+		$(TOOLS_DIR)/consensus_selftest.c $(CORE_DIR)/consensus.c $(CORE_DIR)/vbus.c \
+		$(CORE_DIR)/mission_state.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./consensus_selftest
+
+# Whole-simulation scenario tests and the measurement modes (design 7.1-7.5,
+# 7.11). The variant flags are compile-time, so each variant is its own
+# binary: make build-consensus-scenario SCEN_BIN=path SCEN_DEFS='-D...'.
+# The binary links the laptop sim like `tron` does (same
+# COMMS_TRANSPORT_TEAMS_PER_BOARD override), plus the test hooks.
+SCEN_DEFS ?= -DCONSENSUS_ENFORCE=1
+SCEN_BIN ?= $(SELFTEST_BIN_DIR)/consensus_scenario_test
+
+build-consensus-scenario:
+	@mkdir -p $(dir $(SCEN_BIN))
+	@$(CC) $(SELFTEST_CFLAGS) -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS $(CONSENSUS_TEST_DEFS) $(SCEN_DEFS) \
+		-o $(SCEN_BIN) $(TOOLS_DIR)/consensus_scenario_test.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+
+# Asserted scenarios: the shipped configuration (enforcing, cap off, fast
+# path on) and the shadow-mode build, then the random-emission variant, whose
+# detection is reported rather than asserted.
+check-consensus-scenarios:
+	@echo "  consensus scenarios: enforcing, periodic emission"
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1'
+	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test assert
+	@echo "  consensus scenarios: fast path compiled in (measured, off by default)"
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1 -DCONSENSUS_FAST_PATH=1' \
+		SCEN_BIN=$(SELFTEST_BIN_DIR)/consensus_scenario_test_fast
+	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test_fast assert quick
+	@echo "  consensus scenarios: shadow mode (CONSENSUS_ENFORCE=0)"
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=0' \
+		SCEN_BIN=$(SELFTEST_BIN_DIR)/consensus_scenario_test_shadow
+	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test_shadow assert quick
+	@echo "  consensus scenarios: random emission variant"
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1 -DTEAM_TEST_RANDOM_EMISSION=1' \
+		SCEN_BIN=$(SELFTEST_BIN_DIR)/consensus_scenario_test_random
+	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test_random assert quick
+
+check-consensus-airtime:
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1'
+	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test airtime
+
+# Shadow-mode regression (design 7.7): with CONSENSUS_ENFORCE=0 every column
+# the base branch writes must be identical. The base is built from
+# CONSENSUS_BASE_REF in a scratch tree. run_id (start time + seed) is the only
+# column ignored.
+CONSENSUS_BASE_REF ?= origin/submission/single-board-dk
+SHADOW_DIR = build/consensus-shadow
+
+check-consensus-shadow-regression:
+	@rm -rf $(SHADOW_DIR)
+	@mkdir -p $(SHADOW_DIR)/base
+	@git archive $(CONSENSUS_BASE_REF) | tar -x -C $(SHADOW_DIR)/base
+	@$(MAKE) --no-print-directory -C $(SHADOW_DIR)/base tron >/dev/null
+	@$(CC) $(CFLAGS) -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=0 $(LAPTOP_INCLUDES) \
+		-o $(SHADOW_DIR)/tron_shadow $(LAPTOP_SOURCES) $(LDFLAGS)
+	@$(PYTHON) $(TOOLS_DIR)/consensus_shadow_compare.py $(SHADOW_DIR)/base/$(TARGET) $(SHADOW_DIR)/tron_shadow
+
+# Multi-board builds must contain none of the virtual bus or consensus code
+# (design 7.8): the board, Pico and two-board targets build and pass as
+# before, and no consensus_* / vbus_* symbol appears in any board object.
+# Needs arm-none-eabi-gcc; without it the object scan is skipped and the
+# board targets say so themselves.
+# Without the vendor BSPs (board/*/vendor/mtk3_bsp*, not in this repo) the
+# whole-image link checks fail on the base branch too, for unrelated missing
+# snapshot and debug backends; the per-file compile checks still run, and so
+# does the link check whenever the BSP is present.
+CONSENSUS_MULTIBOARD_BOARD_CHECKS = check-board-compile check-pico-compile
+ifneq ($(wildcard $(BSP_DIR)/include),)
+  CONSENSUS_MULTIBOARD_BOARD_CHECKS = check-board check-pico
+endif
+
+check-consensus-multiboard-untouched: $(CONSENSUS_MULTIBOARD_BOARD_CHECKS) check-two-board-harness check-two-board-cbba-harness check-two-board-mission-harness
+	@found=0; \
+	for d in build/board-check build/pico-check; do \
+		[ -d $$d ] || continue; \
+		for o in $$d/*.o; do \
+			if $(ARM_NM) $$o 2>/dev/null | grep -Eq ' [A-Za-z] (consensus_|vbus_|g_diag_consensus|g_consensus|lora_time_on_air_ms_x1000)'; then \
+				echo "check-consensus-multiboard-untouched: consensus/vbus symbol in $$o"; found=1; \
+			fi; \
+		done; \
+	done; \
+	if [ $$found -ne 0 ]; then exit 1; fi; \
+	echo "check-consensus-multiboard-untouched: no consensus or vbus symbols in board or Pico objects"
 
 check-soft-spi-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)
