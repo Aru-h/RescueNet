@@ -135,6 +135,36 @@ static uint8_t resolve_communication_health(const TeamState_t *team)
  * absorbing it into an already-too-low, equipment-blind constant. */
 static uint16_t nominal_work_rate(const IncidentState_t *task, const TeamState_t *team)
 {
+    /* T3: a SUPPORT team's twin models the task's work, and the task's work
+     * is what update_incident_work() does: it only ticks while the PRIMARY
+     * team (task->assigned_team) is on scene, at primary + on-scene-support.
+     * This used to treat whichever team it was modelling as the primary, so
+     * for a support team it counted that team's own rate twice and started
+     * expecting progress the moment the support team arrived - typically
+     * before the primary did - which read as a progress deviation. */
+    if(task != NULL &&
+       team != NULL &&
+       task->assigned_team != team->team_id &&
+       task->support_team == team->team_id)
+    {
+        /* Primary released (the stage just completed and the task
+         * reopened for the next one): nothing is being worked. */
+        if(task->assigned_team >= NUM_TEAMS)
+            return 0;
+
+        const TeamState_t *primary = &g_teams[task->assigned_team];
+
+        /* Same gate update_incident_work() applies: the task must be
+         * IN_PROGRESS (the primary arrived at THIS task - it can be on
+         * scene elsewhere while this one is only queued for it) and the
+         * primary on scene. */
+        if(task->status != INC_IN_PROGRESS || primary->status != STATUS_ON_SCENE)
+            return 0;
+
+        return (uint16_t)(team_base_work_rate(primary->equipment_level) +
+                          team_base_work_rate(team->equipment_level));
+    }
+
     uint16_t rate = team != NULL ? team_base_work_rate(team->equipment_level) : WORK_RATE_MIN;
 
     if(task != NULL &&
@@ -311,6 +341,58 @@ static int twin_current_task_changed(
            twin->observed_req_capability != task->req_capability;
 }
 
+/* T1: the destination of the leg each twin is currently tracking. A
+ * task can move under a team without changing id, pool, slot or
+ * capability - a search sweep's patrol code retargets task->loc_x/loc_y
+ * to the next frontier cell, an evacuation run's complete_incident_stage()
+ * moves it from the safe zone to a gateway - and twin_current_task_changed()
+ * cannot see that. Kept here, not in MissionExecutionTwin_t, because
+ * twin->destination_x/y is overwritten from the task every tick and so
+ * can't be compared against. */
+static int16_t g_twin_leg_dest_x[NUM_TEAMS];
+static int16_t g_twin_leg_dest_y[NUM_TEAMS];
+
+/* Ticks a team needs for the route from its own cell to (dest_x, dest_y):
+ * one cell per tick, exactly how move_team() advances. NOT the route COST
+ * (cells cost 1-25 each), which is what expected_arrival_tick used to be
+ * built from. The twin's model is nominal, so this deliberately ignores
+ * the mobility-fault skip move_team() applies at severity >= 3 - a
+ * team slowed by one is meant to run late against it. UINT16_MAX (no
+ * route) keeps the old "never times out" behaviour. */
+static uint32_t resolve_arrival_tick(const TeamState_t *team, int16_t dest_x, int16_t dest_y)
+{
+    return g_current_tick + (uint32_t)find_path_steps(team->loc_x, team->loc_y, dest_x, dest_y);
+}
+
+/* T1: same task, new destination. Restarts the TRAVEL baseline only - the
+ * leg's path cost, expected position, arrival tick and stage - and keeps
+ * everything that belongs to the task as a whole (expected stamina, which
+ * keeps accumulating, and the task identity), so a team that keeps being
+ * retargeted without making ground still falls behind on each leg's own
+ * baseline instead of being forgiven by a full reset. Work is re-based
+ * to the task's current work_remaining: a sweep has none (0 either way),
+ * and an evacuation leg gets a fresh stage quantum from incident_stage_
+ * work() when it is handed on - the previous leg's work is done by then. */
+static void twin_retarget_leg(
+    MissionExecutionTwin_t *twin,
+    const TeamState_t *team,
+    const IncidentState_t *task,
+    uint16_t fresh_remaining_path_cost)
+{
+    twin->destination_x = task->loc_x;
+    twin->destination_y = task->loc_y;
+    twin->remaining_path_cost = fresh_remaining_path_cost;
+    twin->baseline_path_cost =
+        fresh_remaining_path_cost == UINT16_MAX ? 0 : fresh_remaining_path_cost;
+    twin->expected_remaining_path_cost = twin->baseline_path_cost;
+    twin->expected_loc_x = team->loc_x;
+    twin->expected_loc_y = team->loc_y;
+    twin->expected_arrival_tick = resolve_arrival_tick(team, task->loc_x, task->loc_y);
+    twin->baseline_work_remaining = task->work_remaining;
+    twin->expected_work_remaining = task->work_remaining;
+    twin->mission_stage = resolve_expected_stage(twin);
+}
+
 static void reset_twin_for_current_mission(
     MissionExecutionTwin_t *twin,
     const TeamState_t *team,
@@ -321,7 +403,7 @@ static void reset_twin_for_current_mission(
     twin->assigned_task_slot = team->assigned_task_slot;
     twin->expected_arrival_tick = (task == NULL)
         ? g_current_tick
-        : g_current_tick + current_remaining_path_cost;
+        : resolve_arrival_tick(team, task->loc_x, task->loc_y);
     twin->expected_progress = 0.0f;
     twin->actual_progress = 0.0f;
     twin->progress_error = 0.0f;
@@ -357,7 +439,7 @@ static void reset_twin_for_current_mission(
             twin->baseline_work_remaining = 0;
             twin->expected_work_remaining = 0;
             twin->expected_remaining_path_cost = twin->baseline_path_cost;
-            twin->expected_arrival_tick = g_current_tick + twin->baseline_path_cost;
+            twin->expected_arrival_tick = resolve_arrival_tick(team, safezone->loc_x, safezone->loc_y);
             twin->mission_stage = MISSION_STAGE_TRAVEL;
             return;
         }
@@ -490,6 +572,8 @@ void mission_execution_twin_reset(void)
         twin->expected_remaining_path_cost = 0;
         twin->expected_loc_x = team->loc_x;
         twin->expected_loc_y = team->loc_y;
+        g_twin_leg_dest_x[team_id] = team->loc_x;
+        g_twin_leg_dest_y[team_id] = team->loc_y;
     }
 }
 
@@ -537,12 +621,44 @@ void mission_execution_twin_step(void)
 
         if(twin_current_task_changed(twin, team, actual_task))
         {
+            /* T2: never trust team->cached_remaining_path_cost here. It was
+             * stamped by move_team() for whatever the team was travelling to
+             * when it moved this tick; if the team changed task after that
+             * (e.g. it arrived, finished, and was handed the next one), the
+             * cache describes the PREVIOUS destination - 0 for a team that
+             * just arrived - and the twin would skip travel it still owes. */
+            if(actual_task != NULL)
+                current_remaining_path_cost = resolve_actual_remaining_path_cost(
+                    team->loc_x, team->loc_y, actual_task->loc_x, actual_task->loc_y);
+            else if(team->heading_to_rest)
+                current_remaining_path_cost = resolve_actual_remaining_path_cost(
+                    team->loc_x, team->loc_y,
+                    g_safezones[team->resting_zone_id].loc_x,
+                    g_safezones[team->resting_zone_id].loc_y);
+            else
+                current_remaining_path_cost = 0;
+
             reset_twin_for_current_mission(
                 twin,
                 team,
                 actual_task,
                 current_remaining_path_cost);
             twin_just_reset = 1;
+            g_twin_leg_dest_x[team_id] = twin->destination_x;
+            g_twin_leg_dest_y[team_id] = twin->destination_y;
+        }
+        else if(actual_task != NULL &&
+                (actual_task->loc_x != g_twin_leg_dest_x[team_id] ||
+                 actual_task->loc_y != g_twin_leg_dest_y[team_id]))
+        {
+            /* T1: same task, moved destination. The cached cost is for the
+             * old destination too, so take a fresh one. */
+            current_remaining_path_cost = resolve_actual_remaining_path_cost(
+                team->loc_x, team->loc_y, actual_task->loc_x, actual_task->loc_y);
+            twin_retarget_leg(twin, team, actual_task, current_remaining_path_cost);
+            twin_just_reset = 1;
+            g_twin_leg_dest_x[team_id] = actual_task->loc_x;
+            g_twin_leg_dest_y[team_id] = actual_task->loc_y;
         }
 
         twin->team_id = team_id;
