@@ -199,7 +199,6 @@ Verified in this session by fetch: none re-verified after the session limit was 
 - Kang et al., "Neurosurgeon: Collaborative Intelligence Between the Cloud and Mobile Edge", ASPLOS 2017 — split computing. [unverified this session]
 - Tishby, Pereira, Bialek, "The Information Bottleneck Method", 1999 (arXiv physics/0004057) — information bottleneck. [from memory, unverified]
 - Alemi et al., "Deep Variational Information Bottleneck", ICLR 2017 (arXiv 1612.00410). [from memory, unverified]
-- van Kempen? — N/A; not cited.
 - Semtech AN1200.13, "LoRa Modem Designer's Guide" — time-on-air formula. Used and asserted numerically (80 B wire -> 143.616 ms, matches repo's airtime function).
 - van der Heijden et al., "VeReMi: A Dataset for Comparable Evaluation of Misbehavior Detection in VANETs" (arXiv 1804.06701) — peer-based misbehavior detection. [unverified this session]
 - O'Keeffe et al., PMC7805982 — LoRa telemetry compression. [reused from repo doc, unverified]
