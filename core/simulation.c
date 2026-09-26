@@ -106,6 +106,7 @@ void simulation_step(void) //simulation
          * frames. */
         search_sweep_step(g_current_tick);
         escalate_starved_incidents(g_current_tick);
+        release_quarantined_tasks(g_current_tick);
     }
     if(runs_teams)
     {
@@ -355,7 +356,10 @@ void move_team(TeamState_t *team) //simulation
         /* Track consecutive no-path abandons so abandon_task_for_recovery()
          * can quarantine a structurally-unreachable incident instead of
          * re-opening it for another doomed bid/abandon cycle. */
-        if(task->unreachable_streak < 255)
+        /* L8: only the team that OWNS the task counts as evidence about
+         * the task. A support team (task->support_team) failing to route
+         * says something about that team's position, not the incident. */
+        if(task->assigned_team == team->team_id && task->unreachable_streak < 255)
             task->unreachable_streak++;
         abandon_task_for_recovery(team);
         return;

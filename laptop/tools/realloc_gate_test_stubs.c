@@ -20,6 +20,7 @@
 #include "simulation.h"
 #include "random.h"
 #include "snapshot.h"
+#include "path.h"
 
 #include <string.h>
 
@@ -62,6 +63,15 @@ void abandon_task_for_recovery(TeamState_t *team) { (void)team; }
 /* Real CBBA bidding is out of scope for this test - the SYSTEM-task
    loop in allocate_all_incidents() (the one this test actually
    exercises) never calls cbba_run(), it just needs it to return. */
+/* allocator.c now asks whether a team can route to a task before picking it
+ * (L8). This test places no map, so every pair counts as reachable - the
+ * gate under test is about recovery recommendations, not routing. */
+uint16_t find_path_cost(int start_x, int start_y, int dest_x, int dest_y)
+{
+    (void)start_x; (void)start_y; (void)dest_x; (void)dest_y;
+    return 1u;
+}
+
 void cbba_run(void) { }
 void cbba_sync_mission_execution_twin(void) { }
 

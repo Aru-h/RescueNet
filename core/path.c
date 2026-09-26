@@ -36,10 +36,17 @@ typedef struct
     uint8_t equipment_flags;
     int32_t cost;           /* tenths (PATH_COST_SCALE); -1 = no route */
     int16_t next_x, next_y;
+    uint16_t steps;         /* cells moved along the route (see g_path_last_steps) */
 } PathCacheEntry_t;
 
 static PathCacheEntry_t g_path_cache[PATH_CACHE_SIZE];
 static uint8_t g_path_cache_active = 0;
+
+/* Number of moves (one per tick, diagonal or not) on the route the most
+ * recent path_search() call found - set on a fresh search and restored on
+ * a cache hit, so find_path_steps() is right either way. Like g_path_nodes
+ * this is shared state: same single-task caveat. */
+static uint16_t g_path_last_steps;
 
 void path_cache_begin(void)
 {
@@ -81,6 +88,7 @@ static uint8_t path_cache_lookup(
     *out_cost = e->cost;
     *out_next_x = e->next_x;
     *out_next_y = e->next_y;
+    g_path_last_steps = e->steps;
     return 1;
 }
 
@@ -95,6 +103,7 @@ static void path_cache_store(
     PathCacheEntry_t *e = &g_path_cache[slot];
 
     e->occupied = 1;
+    e->steps = g_path_last_steps;
     e->start_x = (int16_t)sx;
     e->start_y = (int16_t)sy;
     e->dest_x = (int16_t)dx;
@@ -409,6 +418,7 @@ static int32_t path_search(
 
     if(start_x == dest_x && start_y == dest_y)
     {
+        g_path_last_steps = 0;
         if(next_x != NULL)
             *next_x = start_x;
 
@@ -531,6 +541,7 @@ static int32_t path_search(
 
     int path_x = dest_x;
     int path_y = dest_y;
+    uint16_t route_steps = 1;   /* the dest cell itself; +1 per hop back toward start */
 
     while(path_in_bounds(path_x, path_y) &&
           (nodes[path_x][path_y].parent_x != start_x ||
@@ -553,6 +564,7 @@ static int32_t path_search(
 
         path_x = parent_x;
         path_y = parent_y;
+        route_steps++;
     }
 
     if(!path_in_bounds(path_x, path_y))
@@ -567,6 +579,7 @@ static int32_t path_search(
     if(next_y != NULL)
         *next_y = path_y;
 
+    g_path_last_steps = route_steps;
     path_cache_store(start_x, start_y, dest_x, dest_y, equipment_flags,
                       (int32_t)nodes[dest_x][dest_y].g_cost, path_x, path_y);
 
@@ -649,6 +662,16 @@ int find_next_path_step(int start_x, int start_y,int dest_x, int dest_y,int cost
         0u,
         next_x,
         next_y);
+}
+
+uint16_t find_path_steps(int start_x, int start_y, int dest_x, int dest_y)
+{
+    g_path_last_steps = UINT16_MAX;
+
+    if(path_search(start_x, start_y, dest_x, dest_y, 0u, NULL, NULL) < 0)
+        return UINT16_MAX;
+
+    return g_path_last_steps;
 }
 
 uint16_t find_path_cost_with_equipment(

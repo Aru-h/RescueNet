@@ -85,8 +85,20 @@ $(TARGET): $(LAPTOP_SOURCES)
 $(LABELER): $(LABELER_SOURCES)
 	$(CC) $(CFLAGS) -I$(CORE_DIR) -o $(LABELER) $(LABELER_SOURCES) $(LDFLAGS)
 
+# Runs from build/smoke so its 200-tick clean-profile snapshot CSV does not
+# overwrite the repo-root tron_snapshot_dataset.csv the Python dataset
+# checks read (see that file's rule below).
 smoke: $(TARGET)
-	./$(TARGET) 1 1 200
+	@mkdir -p build/smoke
+	cd build/smoke && ../../$(TARGET) 1 1 200
+
+# The dataset the three Python dataset checks read (persistence-bounded-
+# forgiveness, environment-e2e-stress, env-raw-travel-cost-ablation): a
+# combined-fault-profile run, generated here on demand instead of relying on
+# whatever an earlier target (smoke, an override selftest) left behind or
+# `make clean` deleted.
+tron_snapshot_dataset.csv: $(TARGET)
+	./$(TARGET) 1 5 3000 --fault-profile=combined
 
 label_dataset: $(LABELER)
 	./$(LABELER) "$(INPUT)" "$(OUTPUT)" "$(N)"
@@ -533,7 +545,6 @@ check-two-board-harness:
 # target is just the mechanical `make check-two-board-cbba-harness`
 # wiring the script's own top comment already anticipated adding later.
 check-two-board-cbba-harness:
-	@chmod +x $(TOOLS_DIR)/check-two-board-cbba-harness.sh
 	@$(TOOLS_DIR)/check-two-board-cbba-harness.sh
 
 # --- mission_link.c status-reporting under ABORT_MISSION regression test ---
@@ -636,7 +647,7 @@ check-recovery-manager-persistence:
 # combined fault injection, same as check-environment-e2e-stress - not
 # run automatically by this target for the same reason (slow dataset
 # regen, analysis script not a pass/fail gate).
-check-persistence-bounded-forgiveness:
+check-persistence-bounded-forgiveness: tron_snapshot_dataset.csv
 	$(PYTHON) $(TOOLS_DIR)/persistence_bounded_forgiveness_ablation.py
 
 # --- Environment-class end-to-end escalation check ---------------------------
@@ -650,7 +661,7 @@ check-persistence-bounded-forgiveness:
 # 400 --fault-profile=combined`) - not run automatically by this target
 # since regenerating the dataset is slow and this is an analysis script,
 # not a pass/fail gate.
-check-environment-e2e-stress:
+check-environment-e2e-stress: tron_snapshot_dataset.csv
 	$(PYTHON) $(TOOLS_DIR)/environment_class_e2e_stress.py
 
 # --- env_raw_travel_cost before/after ablation --------------------------
@@ -660,7 +671,7 @@ check-environment-e2e-stress:
 # tron_snapshot_dataset.csv generated with --fault-profile=combined
 # (e.g. `./tron 1 5 3000 --fault-profile=combined`) - not run
 # automatically, same reason as check-environment-e2e-stress.
-check-env-raw-travel-cost-ablation:
+check-env-raw-travel-cost-ablation: tron_snapshot_dataset.csv
 	$(PYTHON) $(TOOLS_DIR)/env_raw_travel_cost_ablation.py
 
 # --- Standalone laptop/tools selftests ---------------------------------------

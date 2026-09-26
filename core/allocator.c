@@ -9,6 +9,7 @@
 #include "recovery_manager.h"
 #include "search_zones.h"
 #include "team.h"
+#include "path.h"
 #include <string.h>
 #include "random.h"
 
@@ -16,6 +17,20 @@
 static uint8_t count_available_teams_for_capability(uint8_t capability);
 static uint8_t count_open_incidents_for_capability(uint8_t capability);
 static void allocate_support_team(void);
+
+/* L8: a team may only be handed a task it can route to FROM WHERE IT
+ * STANDS. The world can be split into pockets (a bridgeless river, road
+ * damage), and a team in one pocket used to be picked for a task in
+ * another: the pathfinder then said "no route" on its first move,
+ * abandon_task_for_recovery() counted that against the TASK's
+ * unreachable_streak, and three such teams in a row quarantined a task
+ * that every team on the other side of the river could reach. That is
+ * a property of the (team, task) pair, so it is checked here, where the
+ * pair is chosen. */
+static uint8_t team_has_route_to_task(const TeamState_t *team, const IncidentState_t *task)
+{
+    return find_path_cost(team->loc_x, team->loc_y, task->loc_x, task->loc_y) != UINT16_MAX;
+}
 
 /* Diagnostic: how many times select_best_team() hit an exact score tie
  * between two candidate teams (i.e. the tie-break branch fired). Process-
@@ -31,6 +46,9 @@ uint8_t select_best_team(const IncidentState_t *incident)
     for(int i = 0; i < NUM_TEAMS; i++)
     {
         if(!team_can_accept_incident(&g_teams[i], incident))
+            continue;
+
+        if(!team_has_route_to_task(&g_teams[i], incident))
             continue;
 
         float score = calculate_score(&g_teams[i], incident);
@@ -435,6 +453,11 @@ static void allocate_support_team(void)
         if(incident->support_team != NO_ASSIGNMENT)
             continue;
         if(!incident_needs_support(incident))
+            continue;
+        /* L8: same pair check as select_best_team(). Without it the
+         * support team was re-sent every tick to an incident on the far
+         * side of a barrier, failing each time. */
+        if(!team_has_route_to_task(support, incident))
             continue;
         /* Priority_t runs PRIORITY_CRITICAL = 1 .. PRIORITY_LOW = 4, so
          * "highest-priority" is the numerically SMALLEST value. This was
