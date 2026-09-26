@@ -37,6 +37,9 @@ uint32_t g_diag_sweep_cross_district_cells = 0;
  * candidate pools. Process-cumulative; the P1 sweep captures before/after
  * deltas the same way it does for the carve-repair counter. */
 unsigned long g_diag_incidents_quarantined = 0;
+/* Quarantined tasks the cooldown safety net (release_quarantined_tasks())
+ * put back to INC_OPEN. Process-cumulative, like the counter above. */
+unsigned long g_diag_quarantine_reopens = 0;
 /* Every stage a team hands off, including intermediate multi-stage legs
    (e.g. PERIMETER->MEDICAL on a STRUCTURAL_COLLAPSE). Distinct from
    g_diag_incidents_resolved, which only counts the team that completed
@@ -2264,6 +2267,54 @@ static int generate_incident(IncidentType_t type)
  * core/mission_link.h's own note on why it's excluded from the wire).
  */
 #define INCIDENT_STARVATION_ESCALATION_TICKS 3000u
+
+/* Tick each slot was first seen quarantined, +1 (0 = not quarantined).
+ * Kept here rather than in IncidentState_t so the wire structs and
+ * mission-link payloads don't change. A slot that empties or is reused
+ * stops matching the quarantine test and its entry is cleared. */
+static uint32_t g_quarantine_seen_tick[NUM_INCIDENTS + NUM_SYSTEM_TASKS];
+
+static void release_quarantined_pool(IncidentState_t *pool, uint8_t count,
+                                     uint32_t *seen, uint32_t current_tick)
+{
+    for(uint8_t i = 0; i < count; i++)
+    {
+        IncidentState_t *task = &pool[i];
+
+        /* The exact state abandon_task_for_recovery() leaves a
+         * quarantined task in. */
+        if(!task->slot_occupied ||
+           task->unreachable_streak < INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD ||
+           task->status != INC_ASSIGNED ||
+           task->assigned_team != NO_ASSIGNMENT)
+        {
+            seen[i] = 0u;
+            continue;
+        }
+
+        if(seen[i] == 0u)
+        {
+            seen[i] = current_tick + 1u;
+            continue;
+        }
+
+        if(current_tick + 1u - seen[i] >= INCIDENT_QUARANTINE_COOLDOWN_TICKS)
+        {
+            task->unreachable_streak = 0;
+            task->status = INC_OPEN;
+            seen[i] = 0u;
+            g_diag_quarantine_reopens++;
+        }
+    }
+}
+
+void release_quarantined_tasks(uint32_t current_tick)
+{
+    release_quarantined_pool(g_incidents, NUM_INCIDENTS,
+                             g_quarantine_seen_tick, current_tick);
+    release_quarantined_pool(g_system_tasks, NUM_SYSTEM_TASKS,
+                             &g_quarantine_seen_tick[NUM_INCIDENTS], current_tick);
+}
 
 void escalate_starved_incidents(uint32_t current_tick)
 {
