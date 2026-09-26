@@ -124,6 +124,7 @@ N ?= 5
 # STM32N6570-DK/Cortex-M55-specific (-mcpu=cortex-m55,
 # -D_STM32CUBE_DISCOVERY_N657_).
 ARM_CC ?= arm-none-eabi-gcc
+ARM_NM ?= arm-none-eabi-nm
 BSP_DIR ?= board/STM32N6570-DK/vendor/mtk3_bsp2
 # -mcmse: the real Appli build passes it, and it is what makes the CMSIS
 # header define CPU_IN_SECURE_STATE, without which the secure-alias
@@ -801,6 +802,49 @@ check-consensus-scenarios:
 check-consensus-airtime:
 	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1'
 	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test airtime
+
+# Shadow-mode regression (design 7.7): with CONSENSUS_ENFORCE=0 every column
+# the base branch writes must be identical. The base is built from
+# CONSENSUS_BASE_REF in a scratch tree. run_id (start time + seed) is the only
+# column ignored.
+CONSENSUS_BASE_REF ?= origin/submission/single-board-dk
+SHADOW_DIR = build/consensus-shadow
+
+check-consensus-shadow-regression:
+	@rm -rf $(SHADOW_DIR)
+	@mkdir -p $(SHADOW_DIR)/base
+	@git archive $(CONSENSUS_BASE_REF) | tar -x -C $(SHADOW_DIR)/base
+	@$(MAKE) --no-print-directory -C $(SHADOW_DIR)/base tron >/dev/null
+	@$(CC) $(CFLAGS) -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=0 $(LAPTOP_INCLUDES) \
+		-o $(SHADOW_DIR)/tron_shadow $(LAPTOP_SOURCES) $(LDFLAGS)
+	@$(PYTHON) $(TOOLS_DIR)/consensus_shadow_compare.py $(SHADOW_DIR)/base/$(TARGET) $(SHADOW_DIR)/tron_shadow
+
+# Multi-board builds must contain none of the virtual bus or consensus code
+# (design 7.8): the board, Pico and two-board targets build and pass as
+# before, and no consensus_* / vbus_* symbol appears in any board object.
+# Needs arm-none-eabi-gcc; without it the object scan is skipped and the
+# board targets say so themselves.
+# Without the vendor BSPs (board/*/vendor/mtk3_bsp*, not in this repo) the
+# whole-image link checks fail on the base branch too, for unrelated missing
+# snapshot and debug backends; the per-file compile checks still run, and so
+# does the link check whenever the BSP is present.
+CONSENSUS_MULTIBOARD_BOARD_CHECKS = check-board-compile check-pico-compile
+ifneq ($(wildcard $(BSP_DIR)/include),)
+  CONSENSUS_MULTIBOARD_BOARD_CHECKS = check-board check-pico
+endif
+
+check-consensus-multiboard-untouched: $(CONSENSUS_MULTIBOARD_BOARD_CHECKS) check-two-board-harness check-two-board-cbba-harness check-two-board-mission-harness
+	@found=0; \
+	for d in build/board-check build/pico-check; do \
+		[ -d $$d ] || continue; \
+		for o in $$d/*.o; do \
+			if $(ARM_NM) $$o 2>/dev/null | grep -Eq ' [A-Za-z] (consensus_|vbus_|g_diag_consensus|g_consensus|lora_time_on_air_ms_x1000)'; then \
+				echo "check-consensus-multiboard-untouched: consensus/vbus symbol in $$o"; found=1; \
+			fi; \
+		done; \
+	done; \
+	if [ $$found -ne 0 ]; then exit 1; fi; \
+	echo "check-consensus-multiboard-untouched: no consensus or vbus symbols in board or Pico objects"
 
 check-soft-spi-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)

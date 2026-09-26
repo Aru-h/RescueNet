@@ -1,7 +1,14 @@
 # Peer consensus on fault state: design
 
-Status: **design only, nothing implemented.** Branch `feat/consensus`, based on
-`origin/submission/single-board-dk` @ `29d855a`.
+Status: **implemented on `feat/consensus`** (revision 3, 2026-09-26): the design
+below is built as written, with the decisions of section 9 applied and the
+deviations listed in section 10. Based on `origin/submission/single-board-dk`
+@ `45298e2` (the base now has diagonal movement, building floors, the 12-wide
+evidence vector, `env_raw_travel_cost`, the stall leg-change reset and the audit
+fixes) plus `feat/virtual-bus`. Every file and line reference below was
+re-checked against that merged code. Measured numbers are in section 10 and
+are **provisional until `fix/single-board-errors` is merged** (it changes the
+twin, quarantine and sweeps).
 
 Goal: each team judges the other teams' fault state from what its own radio
 **receives**. A fault is escalated only when independent nodes agree. The
@@ -37,10 +44,10 @@ this design reads it, except the test harness, which uses it as a label.
 | Two-axis gate (x = distinct agreeing failure domains, y = Brooks–Iyengar overlap) | retired `core/consensus_weighting.c` (`b8c025c`), rationale in `bba265e:consensus_weighting_design.md` | deleted | **Partly.** The `x` axis (monotonic domain mask per round) and the tier structure of `consensus_gate_tier()` are ported. The threshold is fixed at `f+1` with a supermajority guard, and `y` becomes the fault-tolerant-interval lower bound (§3.3). |
 | `fault_buffer_fuse()` quorum fusion, board liveness | `core/fault_buffer.c` | in HEAD, never called | **No.** It sums vote weights, which is the flat scalar scheme the retired doc rejected. Its liveness is per board with a 16-tick window, and here a node is the unit. Left untouched (see §6). |
 | `FAULT_BROADCAST` / `FAULT_VOTE` | `core/fault_comms.c` | in HEAD, never called | **No.** Every voter runs `fault_predictor_run()` on the evidence vector the **target** broadcasts. That copies one opinion 9 times, the problem this design exists to fix. |
-| `evaluate_consensus_fault()` | `core/recovery_manager.c:1055`, behind `RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT=0` | parked | **Replaced** by `evaluate_peer_consensus()` (§4). |
-| `evaluate_fault_predictor()` | `core/recovery_manager.c:1291` | live, but the model is inert (all scores 0) | Unchanged in v1. |
-| Stall rule | `core/watchdog.c:199 update_movement_stalls()` | live | Mirrored exactly on the peer side (§2.2). |
-| Heartbeat gap | `core/team.c:473` sets `last_heartbeat_tick`; `core/mission_execution_twin.c:94-123` turns gaps into `communication_health` | live | The heartbeat becomes the **physical transmit gate** of the beacon (§1.4). |
+| `evaluate_consensus_fault()` | was `core/recovery_manager.c`, behind `RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT=0` | **deleted (D3)** | **Replaced** by `evaluate_peer_consensus()` (§4). |
+| `evaluate_fault_predictor()` | `core/recovery_manager.c:1259` | live, but the model is inert (`FAULT_MODEL_LOADED 0`, all scores 0) | Counts consensus ELEVATED as a third corroboration under `CONSENSUS_ENFORCE` (D1). Dormant until a model is loaded. |
+| Stall rule | `core/watchdog.c:198 update_movement_stalls()` | live | Mirrored exactly on the peer side (§2.2). |
+| Heartbeat gap | `core/team.c:495-505` sets `last_heartbeat_tick`; `core/mission_execution_twin.c:89-125` turns gaps into `communication_health` | live | The heartbeat becomes the **physical transmit gate** of the beacon (§1.4). |
 
 ---
 
@@ -108,7 +115,7 @@ real encrypted link will cost. At the `NUM_TEAMS ≤ 16` limit the payload is
 
 ### 1.3 Airtime per round
 
-Same Semtech AN1200.13 formula and radio settings that `comms_transport.c:83-109`
+Same Semtech AN1200.13 formula and radio settings that `comms_transport.c:92-110`
 derives (SF7, BW 125 kHz, CR 4/5, explicit header, CRC on, 8-symbol preamble,
 LDRO off):
 
@@ -247,10 +254,14 @@ counted ticks, stored as a `uint8_t` bitmap (`comm_miss_bits`) plus
   phi-accrual detector would never flag these intermittent faults, because
   every beacon that gets through resets it. The rule stays.
 - Latency: severity-2 misses fall on fault ticks 1, 2, 4 and 5, so the window
-  first holds 4 misses at fault tick 5. Fault durations are 5 to 16 ticks
-  (`fault_config.c`), so the shortest faults can end before consensus forms.
-  About 5 ticks is close to the information limit for any single-link rule
-  at these false-alarm levels; the fast path (§2.6) is what attacks R3.
+  first holds 4 misses at fault tick 5. Configured fault durations are 5 to 16
+  ticks (`fault_config.c`), but the injector keeps `active[]` set, and so keeps
+  the radio silent, through a further `FAULT_REPAIR_CONFIRM_DELAY_TICKS` (33)
+  after `recovery_tick` (`fault_injector.c`), so a built-in-profile fault
+  silences a node for 38 to 49 ticks and the shortest 6-tick fault exists only
+  in the scripted scenarios of §7. About 5 ticks is close to the information
+  limit for any single-link rule at these false-alarm levels; the fast path
+  (§2.6) is what attacks R3.
 
 ### 2.2 Mobility: stall fraction from received positions
 
@@ -287,9 +298,9 @@ It only delays samples. That is also why a communication fault on *t* makes
 the mobility voters abstain rather than vote wrongly.
 
 `move_team()` moves a healthy EN_ROUTE team exactly one cell per tick. That
-stays true with the 8-direction movement on `feat/core-data-path`, where one
-diagonal step is still one cell per tick. So the healthy stall rate is exactly
-0.
+holds with the 8-direction movement now in the base (`core/path.c`: one
+diagonal step is still one cell per tick, Chebyshev distance 1). So the healthy
+stall rate is exactly 0, and the speed check below is a Chebyshev distance.
 
 **Verdict** (the watchdog's own confirm and clear rule):
 
@@ -776,11 +787,13 @@ Multi-board builds (`check-board` with `THIS_BOARD_ID=0` and 5 teams per board,
 compile none of the new code, and the calls into it are `#if`'d out. The
 `nm`/grep check in §7.8 enforces this.
 
-The Makefile's ARM DK target today keeps the default of 5 teams per board.
-The submission's "one DK hosts all 10 teams" configuration must also set
-`COMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS`. I could not find where the
-submission build does that (not in the `Makefile` or `tron_board/`), so it
-needs confirming before wiring.
+The Makefile's ARM DK target today keeps the default of 5 teams per board and
+`VIRTUAL_BUS_ENABLED` 0 (the multi-board build must keep working, and this
+branch keeps it at 0). The submission's "one DK hosts all 10 teams"
+configuration would additionally need `COMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS`
+and `VIRTUAL_BUS_ENABLED=1`; neither is set anywhere in the `Makefile` or
+`tron_board/`, so that wiring is **not done here**. Only the laptop `tron`
+target runs consensus (`LAPTOP_CONSENSUS_FLAGS` in the `Makefile`).
 
 ### 6.2 New files
 
@@ -808,10 +821,10 @@ needs confirming before wiring.
 
 ### 6.4 Deliberately not touched
 
-- `core/fault_buffer.{c,h}` and `core/fault_comms.{c,h}`. They are unused by
-  this design. `feat/core-data-path` edits `fault_buffer.h` (widening
-  `FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES` to 12), and leaving them alone
-  avoids a merge conflict.
+- `core/fault_buffer.{c,h}` and `core/fault_comms.{c,h}` (decision D3). They
+  are unused by this design. `fault_buffer.h` already carries the 12-wide
+  `FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES` from the base; they stay untouched
+  and are still dormant.
 - Consensus code never names that macro or any fixed evidence width, because
   the beacon does not carry the evidence vector.
 - If a v2 beacon ever adds target-reported features, its size becomes
