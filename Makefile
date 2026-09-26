@@ -775,7 +775,8 @@ CONSENSUS_TEST_DEFS = -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_TEST_HOOKS=1
 check-consensus-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)
 	@echo "  CC      $(TOOLS_DIR)/consensus_selftest.c"
-	@$(CC) $(SELFTEST_CFLAGS) $(CONSENSUS_TEST_DEFS) -o $(SELFTEST_BIN_DIR)/consensus_selftest \
+	# The selftest exercises the fast path, which is off by default (decision D7).
+	@$(CC) $(SELFTEST_CFLAGS) $(CONSENSUS_TEST_DEFS) -DCONSENSUS_FAST_PATH=1 -o $(SELFTEST_BIN_DIR)/consensus_selftest \
 		$(TOOLS_DIR)/consensus_selftest.c $(CORE_DIR)/consensus.c $(CORE_DIR)/vbus.c \
 		$(CORE_DIR)/mission_state.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./consensus_selftest
@@ -801,6 +802,10 @@ check-consensus-scenarios:
 	@echo "  consensus scenarios: enforcing, periodic emission"
 	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1'
 	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test assert
+	@echo "  consensus scenarios: fast path compiled in (measured, off by default)"
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1 -DCONSENSUS_FAST_PATH=1' \
+		SCEN_BIN=$(SELFTEST_BIN_DIR)/consensus_scenario_test_fast
+	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test_fast assert quick
 	@echo "  consensus scenarios: shadow mode (CONSENSUS_ENFORCE=0)"
 	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=0' \
 		SCEN_BIN=$(SELFTEST_BIN_DIR)/consensus_scenario_test_shadow
