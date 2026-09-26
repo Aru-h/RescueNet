@@ -130,6 +130,7 @@ typedef struct
 {
     uint8_t mask, max_conc;
     uint16_t exclude;       /* teams the script never faults */
+    uint8_t long_dur;       /* 38..49 ticks: a built-in fault, 5-16 plus the 33-tick repair confirmation */
     uint32_t rng;
     uint32_t end_tick[NUM_TEAMS][NCLS_SCRIPT];
 } Script_t;
@@ -147,12 +148,14 @@ static uint32_t script_rand(void)
     return x;
 }
 
+static uint8_t g_script_long;
 static uint16_t g_script_exclude;     /* set by a test before run_score()/script_begin() */
 
 static void script_begin(uint32_t seed, uint8_t mask, uint8_t max_conc)
 {
     memset(&g_script, 0, sizeof(g_script));
     g_script.exclude = g_script_exclude;
+    g_script.long_dur = g_script_long;
     g_script.mask = mask;
     g_script.max_conc = max_conc;
     g_script.rng = seed * 2654435761u + 0x1234567u;
@@ -215,7 +218,8 @@ static void script_step(void)
             continue;
         {
             uint8_t t = (uint8_t)(script_rand() % NUM_TEAMS);
-            uint32_t dur = 6u + script_rand() % 11u;                 /* 6..16 ticks */
+            uint32_t dur = g_script.long_dur ? 38u + script_rand() % 12u    /* 38..49 ticks */
+                                             : 6u + script_rand() % 11u;    /* 6..16 ticks */
             uint8_t sev = (c == 0) ? 3u : (uint8_t)(2u + script_rand() % 2u);   /* comm: 2 or 3 */
 
             if(g_script.end_tick[t][c] == 0u && !(g_script.exclude & (1u << t)))
@@ -244,6 +248,7 @@ typedef struct
     uint8_t sev;
     uint32_t voters_mask;   /* peers that voted FAULT on this class during the episode */
     uint8_t max_silent_peers;   /* most OTHER teams with an active comm fault at once */
+    uint32_t en_route;          /* ticks the target spent EN_ROUTE during the episode */
 } Episode_t;
 
 typedef struct
@@ -254,6 +259,7 @@ typedef struct
     uint8_t sev;
     uint8_t voters;
     uint8_t max_silent_peers;
+    uint32_t en_route;
 } EpisodeResult_t;
 
 #define MAX_EP 4096
@@ -271,6 +277,10 @@ typedef struct
     uint64_t mob_fault_votes_in_comm_only;          /* mobility FAULT vote while no mobility fault */
     uint64_t ticks;
     uint64_t conc_hist[NUM_TEAMS + 1];              /* ticks with k comm-faulted teams */
+    uint64_t conc_any_hist[NUM_TEAMS + 1];          /* ticks with k teams having any fault active */
+    uint64_t conc_mob_hist[NUM_TEAMS + 1];
+    uint64_t rounds_b[2];                           /* target-rounds by silent peers: <= F, > F */
+    uint64_t false_b[NCLS][2];
 } Score_t;
 
 static Episode_t g_epi[NUM_TEAMS][NCLS];
@@ -294,6 +304,17 @@ static void score_tick(Score_t *s, uint8_t observe_pairs, uint32_t tick)
     for(uint8_t t = 0; t < NUM_TEAMS; t++)
         n_comm_active = (uint8_t)(n_comm_active + truth_active(t, CONSENSUS_CLASS_COMMUNICATION));
     s->conc_hist[n_comm_active]++;
+    {
+        uint8_t n_any = 0, n_mob = 0;
+
+        for(uint8_t t = 0; t < NUM_TEAMS; t++)
+        {
+            n_any = (uint8_t)(n_any + (g_teams[t].fault_state.active_mask != 0u));
+            n_mob = (uint8_t)(n_mob + truth_active(t, CONSENSUS_CLASS_MOBILITY));
+        }
+        s->conc_any_hist[n_any]++;
+        s->conc_mob_hist[n_mob]++;
+    }
 
     for(uint8_t t = 0; t < NUM_TEAMS; t++)
     {
@@ -322,6 +343,16 @@ static void score_tick(Score_t *s, uint8_t observe_pairs, uint32_t tick)
             }
             if(e->open && silent_peers > e->max_silent_peers)
                 e->max_silent_peers = silent_peers;
+            if(e->open && g_teams[t].status == STATUS_EN_ROUTE)
+                e->en_route++;
+            {
+                uint8_t b = (uint8_t)(silent_peers > CONSENSUS_F);
+
+                if((tick & 1u) && c == 0)
+                    s->rounds_b[b]++;
+                if((tick & 1u) && elevated && !lingering)
+                    s->false_b[c][b]++;
+            }
 
             if(elevated)
             {
@@ -352,6 +383,7 @@ static void score_tick(Score_t *s, uint8_t observe_pairs, uint32_t tick)
                     o->via_fast = e->first_via_fast;
                     o->sev = e->sev;
                     o->max_silent_peers = e->max_silent_peers;
+                    o->en_route = e->en_route;
                     o->voters = 0u;
                     for(uint8_t p = 0; p < NUM_TEAMS; p++)
                         if(e->voters_mask & (1u << p)) o->voters++;
@@ -416,6 +448,7 @@ typedef struct
     uint8_t observe_pairs;
     uint8_t script_mask;    /* SCRIPT_COMM / SCRIPT_MOB: scripted faults instead of a profile */
     uint8_t script_max_conc;
+    uint8_t script_long;
 } RunSpec_t;
 
 static void run_score(const RunSpec_t *spec, Score_t *s)
@@ -426,6 +459,7 @@ static void run_score(const RunSpec_t *spec, Score_t *s)
         set_bus(spec->kind, spec->loss);
         world_begin(spec->first_seed + si, spec->profile);
         score_reset_world();
+        g_script_long = spec->script_long;
         script_begin(spec->first_seed + si, spec->script_mask, spec->script_max_conc);
         for(uint32_t i = 0; i < spec->ticks; i++)
         {
@@ -501,6 +535,9 @@ static void do_table(LossKind_t kind, float q, uint32_t first_seed, uint32_t see
     Score_t *none = calloc(1, sizeof(Score_t));
     Score_t *scr = calloc(1, sizeof(Score_t));
     Score_t *prof = calloc(1, sizeof(Score_t));
+    Score_t *lng = calloc(1, sizeof(Score_t));
+    uint32_t nl, detl, by4l, viafl;
+    int medl, p90l;
     uint32_t n, det, by4, viaf, nb, detb, by4b, viafb, np, detp, by4p, viafp;
     int med, p90, medb, p90b, medp, p90p;
     double mean_conc = 0.0;
@@ -519,10 +556,15 @@ static void do_table(LossKind_t kind, float q, uint32_t first_seed, uint32_t see
     spec.script_max_conc = 3;
     run_score(&spec, scr);
 
+    spec.script_long = 1;                   /* the same, at the built-in fault length (38-49 ticks) */
+    run_score(&spec, lng);
+    spec.script_long = 0;
+
     spec.script_mask = 0;
     spec.profile = FAULT_PROFILE_COMMUNICATION;
     run_score(&spec, prof);
 
+    detection(lng, CONSENSUS_CLASS_COMMUNICATION, 6u, &nl, &detl, &by4l, &medl, &p90l, &viafl);
     detection(scr, CONSENSUS_CLASS_COMMUNICATION, 6u, &n, &det, &by4, &med, &p90, &viaf);
     detection(prof, CONSENSUS_CLASS_COMMUNICATION, 6u, &np, &detp, &by4p, &medp, &p90p, &viafp);
     detection_in_budget(prof, CONSENSUS_CLASS_COMMUNICATION, 6u, &nb, &detb, &by4b, &medb, &p90b, &viafb);
@@ -539,7 +581,8 @@ static void do_table(LossKind_t kind, float q, uint32_t first_seed, uint32_t see
     printf("ROW model=%s q=%.2f fast=%d emis=%s | none per1000: mob=%.3f comm_vote=%.3f comm_fast=%.3f (rounds=%llu) | "
            "SCRIPTED false comm_vote=%.3f comm_fast=%.3f faults=%u det=%.1f%% lat_med=%d lat_p90=%d by4=%.1f%% fast_first=%.1f%% | "
            "PROFILE(conc %.1f) false comm_vote=%.3f comm_fast=%.3f ALL faults=%u det=%.1f%% lat_med=%d by4=%.1f%% "
-           "IN-BUDGET faults=%u det=%.1f%% lat_med=%d by4=%.1f%%\n",
+           "IN-BUDGET faults=%u det=%.1f%% lat_med=%d by4=%.1f%% | "
+           "SCRIPTED-LONG(38-49) false comm_vote=%.3f comm_fast=%.3f faults=%u det=%.1f%% lat_med=%d by4=%.1f%%\n",
         loss_kind_name(kind), q, (int)CONSENSUS_FAST_PATH, TEAM_TEST_RANDOM_EMISSION ? "random" : "periodic",
         1000.0 * (double)none->false_vote[CONSENSUS_CLASS_MOBILITY] / (double)none->target_rounds,
         1000.0 * (double)none->false_vote[CONSENSUS_CLASS_COMMUNICATION] / (double)none->target_rounds,
@@ -551,11 +594,83 @@ static void do_table(LossKind_t kind, float q, uint32_t first_seed, uint32_t see
         mean_conc,
         1000.0 * (double)prof->false_vote[CONSENSUS_CLASS_COMMUNICATION] / (double)prof->target_rounds,
         1000.0 * (double)prof->false_fast[CONSENSUS_CLASS_COMMUNICATION] / (double)prof->target_rounds,
-        np, pct(detp, np), medp, pct(by4p, np), nb, pct(detb, nb), medb, pct(by4b, nb));
+        np, pct(detp, np), medp, pct(by4p, np), nb, pct(detb, nb), medb, pct(by4b, nb),
+        1000.0 * (double)lng->false_vote[CONSENSUS_CLASS_COMMUNICATION] / (double)lng->target_rounds,
+        1000.0 * (double)lng->false_fast[CONSENSUS_CLASS_COMMUNICATION] / (double)lng->target_rounds,
+        nl, pct(detl, nl), medl, pct(by4l, nl));
+    (void)p90l; (void)viafl;
+    free(lng);
     (void)p90p; (void)viafp; (void)p90b; (void)viafb;
     free(none);
     free(scr);
     free(prof);
+}
+
+static void print_hist(const char *label, const uint64_t *h)
+{
+    uint64_t total = 0;
+
+    for(uint32_t k = 0; k <= NUM_TEAMS; k++) total += h[k];
+    printf("%s", label);
+    for(uint32_t k = 0; k <= NUM_TEAMS; k++)
+        printf(" %u:%.1f%%", k, pct(h[k], total));
+    printf("\n");
+}
+
+/* Fault concurrency for one profile (design section 10): how many teams are
+   faulted at once, and how consensus fares inside (<= F other teams silent)
+   and outside (> F) the fault budget. */
+static void do_concurrency(uint32_t first_seed, uint32_t seeds, uint32_t ticks, float q, FaultProfile_t profile)
+{
+    Score_t *s = calloc(1, sizeof(Score_t));
+    RunSpec_t spec;
+
+    memset(&spec, 0, sizeof(spec));
+    spec.first_seed = first_seed; spec.seed_count = seeds; spec.ticks = ticks;
+    spec.kind = LM_IID; spec.loss = q; spec.profile = profile;
+    run_score(&spec, s);
+
+    printf("CONC profile=%s q=%.2f seeds=%u ticks=%u enforce=%d\n", fault_profile_to_string(profile), q, seeds, ticks,
+        (int)CONSENSUS_ENFORCE);
+    print_hist("CONC teams with any fault active (share of ticks):", s->conc_any_hist);
+    print_hist("CONC teams with a communication fault active:    ", s->conc_hist);
+    print_hist("CONC teams with a mobility fault active:         ", s->conc_mob_hist);
+    {
+        uint64_t in_budget = 0, total = 0;
+
+        for(uint32_t k = 0; k <= NUM_TEAMS; k++)
+        {
+            total += s->conc_hist[k];
+            if(k <= CONSENSUS_F + 1u) in_budget += s->conc_hist[k];
+        }
+        printf("CONC ticks with <= %u communication-faulted teams (target plus <= f peers): %.1f%%\n",
+            (unsigned)CONSENSUS_F + 1u, pct(in_budget, total));
+    }
+    for(uint8_t c = 0; c < NCLS; c++)
+    {
+        const char *name = c == 0 ? "mobility" : "communication";
+        uint32_t n[2] = {0, 0}, det[2] = {0, 0};
+
+        for(uint32_t i = 0; i < s->n_ep[c]; i++)
+        {
+            const EpisodeResult_t *e = &s->ep[c][i];
+            uint8_t b = (uint8_t)(e->max_silent_peers > CONSENSUS_F);
+
+            if(e->dur < 6u) continue;
+            if(c == 0 && e->en_route < 4u) continue;    /* nothing observable unless it travels */
+            n[b]++;
+            if(e->first_elev >= 0) det[b]++;
+        }
+        printf("CONC %s faults (>=6 ticks%s): silent peers <= %u: %u faults, detected %.1f%% | > %u: %u faults, detected %.1f%%\n",
+            name, c == 0 ? ", travelling >= 4 ticks" : "", (unsigned)CONSENSUS_F, n[0], pct(det[0], n[0]),
+            (unsigned)CONSENSUS_F, n[1], pct(det[1], n[1]));
+        printf("CONC %s false ELEVATED per 1000 target-rounds: silent peers <= %u: %.3f (%llu rounds) | > %u: %.3f (%llu rounds)\n",
+            name, (unsigned)CONSENSUS_F, 1000.0 * (double)s->false_b[c][0] / (double)(s->rounds_b[0] ? s->rounds_b[0] : 1),
+            (unsigned long long)s->rounds_b[0], (unsigned)CONSENSUS_F,
+            1000.0 * (double)s->false_b[c][1] / (double)(s->rounds_b[1] ? s->rounds_b[1] : 1),
+            (unsigned long long)s->rounds_b[1]);
+    }
+    free(s);
 }
 
 /* ------------------------------------------------------------------ */
@@ -598,7 +713,7 @@ static uint32_t g_seeds = 3, g_ticks = 1200;
 static void test_healthy_and_mirror(void)
 {
     Score_t *s = calloc(1, sizeof(Score_t));
-    RunSpec_t spec = { 1, g_seeds, g_ticks, FAULT_PROFILE_NONE, LM_IID, 0.0f, 1, 0, 0 };
+    RunSpec_t spec = { 1, g_seeds, g_ticks, FAULT_PROFILE_NONE, LM_IID, 0.0f, 1, 0, 0, 0 };
 
     /* 7.5: profile none, loss 0: zero FAULT verdicts, zero plausibility
        failures, zero ELEVATED, zero healthy stalls (any observer). */
@@ -769,6 +884,21 @@ static void test_comm_fault_voted(void)
            "by tick 4 %.1f%%, fast path first %.1f%%; mobility FAULT votes: %llu\n", n,
         pct(ok2, n), pct(det, nd), med, p90, pct(by4, nd), pct(viaf, det),
         (unsigned long long)s->mob_fault_votes_in_comm_only);
+    free(s);
+
+    /* Sparse faults at the built-in length (38-49 ticks: 5-16 plus the 33-tick
+       repair confirmation), still at most 3 at once. */
+    s = calloc(1, sizeof(Score_t));
+    memset(&spec, 0, sizeof(spec));
+    spec.first_seed = 1; spec.seed_count = g_seeds; spec.ticks = g_ticks;
+    spec.kind = LM_IID; spec.loss = 0.05f;
+    spec.script_mask = SCRIPT_COMM; spec.script_max_conc = 3; spec.script_long = 1;
+    run_score(&spec, s);
+    detection(s, CONSENSUS_CLASS_COMMUNICATION, 6u, &nd, &det, &by4, &med, &p90, &viaf);
+    CHECKF(nd > 0 && pct(det, nd) >= 90.0, "long scripted faults reaching ELEVATED: %.1f%% of %u", pct(det, nd), nd);
+    CHECKF(s->false_vote[1] + s->false_fast[1] == 0, "false comm ELEVATED outside long scripted faults");
+    printf("  scripted 38-49 tick comm faults: %u, ELEVATED %.1f%% (median latency %d), by tick 4 %.1f%%, false ELEVATED %llu\n",
+        nd, pct(det, nd), med, pct(by4, nd), (unsigned long long)(s->false_vote[1] + s->false_fast[1]));
     free(s);
 
     /* The built-in communication profile, for the record. */
@@ -1263,6 +1393,8 @@ int main(int argc, char **argv)
         do_table(kind, q, first, seeds, ticks);
     else if(!strcmp(mode, "compare"))
         do_compare(first, seeds, ticks, q, profile);
+    else if(!strcmp(mode, "concurrency"))
+        do_concurrency(first, seeds, ticks, q, profile);
     else if(!strcmp(mode, "airtime"))
         do_airtime();
     else
