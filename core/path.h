@@ -27,6 +27,13 @@ int find_next_path_step_remaining(
     int *next_y,
     uint16_t *remaining_after_step);
 uint16_t find_path_cost(int start_x, int start_y,int dest_x, int dest_y);
+/* Number of moves on the cheapest route (0 when start == dest,
+ * UINT16_MAX when there is none). find_path_cost() is a COST in cost
+ * units - cells cost 1-25 each - not a tick count: a team moves exactly
+ * one cell per tick (move_team()), so anything predicting "when will the
+ * team arrive" or "how much stamina will the walk drain" (stamina drains
+ * per step, team.c) needs this instead. */
+uint16_t find_path_steps(int start_x, int start_y, int dest_x, int dest_y);
 uint16_t find_path_cost_with_equipment(
     int start_x,
     int start_y,
