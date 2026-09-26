@@ -1010,7 +1010,136 @@ configured membership) **and the supermajority is `|F| >= 2|C| + 1`.**
 **D6. The LOCAL tier is diagnostic only.** It produces no action and the cap
 treats it like NONE.
 
-**D7. The fast path is on by default** (`CONSENSUS_FAST_PATH=1`). The rule for
-switching it off, fast-path false ELEVATED at q <= 0.05 in the correlated-loss
-sweep, is evaluated in §10.2.
+**D7. The fast path was to be on by default** (`CONSENSUS_FAST_PATH=1`), and
+switched off if the correlated-loss sweep showed fast-path false ELEVATED at
+q <= 0.05. It did (per-source loss, §10.2), so **the shipped default is
+`CONSENSUS_FAST_PATH=0`.**
 
+
+
+## 10. Measurements (merged base e37181a, fast path off by default)
+
+All numbers: `laptop/tools/consensus_sweep.py` (`table`, `compare`) and
+`consensus_scenario_test concurrency`, 5 seeds; `table` 1500 ticks, `compare` and
+`concurrency` 3000 ticks; q = 0.05 unless stated. They depend on simulator
+behaviour: re-run after the base changes.
+
+### 10.1 What differs from the design
+
+- **Fast path defaults to off** (D7 rule, §10.2).
+- **Built-in faults last 38-49 ticks** (33-tick repair confirmation) and the
+  built-in profiles fault many teams at once, so most built-in faults are outside
+  the f=2 budget. Detection claims are therefore given for scripted sparse faults
+  (6-16 and 38-49 ticks) and for the built-in profiles separately.
+- Delivery delay is fixed at 0; mobility votes abstain when the last beacon is
+  older than 4 ticks; a self-deaf tick also abstains on communication; `y` is
+  reported as 0 with no FAULT votes; a fuser that hears nobody holds for one round.
+- `gt_link_dropped` comes from the sender's bookkeeping (vbus exposes no per-copy
+  drop flag). `mobility_stall_count_6` in the peer log is the 4-tick watchdog window.
+- Predictor corroboration is dormant (`FAULT_MODEL_LOADED 0`). Single-board DK wiring
+  (§6.1), the dashboard page, and real-hardware behaviour are not done/verified.
+
+### 10.2 Loss sweep and the D7 result (periodic emission)
+
+Cells: false ELEVATED per 1000 target-rounds on healthy runs (mobility / comm vote path /
+comm fast path) | scripted 6-16 tick comm faults: detection %, median latency
+(ticks), % detected by tick 4 | scripted 38-49 tick: same.
+
+| model | q | fast off: false m/c/f | 6-16 det/lat/by4 | 38-49 det/lat | fast on: false m/c/f | 6-16 det/lat/by4 | 38-49 det/lat |
+|---|---|---|---|---|---|---|---|
+| iid | 0.00 | 0/0/0 | 99.4/8/0 | 100/8 | 0/0/0 | 100/4/100 | 100/4 |
+| iid | 0.05 | 0/0/0 | 99.4/7/0 | 100/8 | 0/0/0 | 100/4/100 | 100/4 |
+| iid | 0.10 | 0/0/0 | 99.4/7/0 | 100/8 | 0/0/0 | 100/4/99.4 | 100/4 |
+| iid | 0.20 | 0/0/0 | 99.6/6/3.9 | 99.7/8 | 0/0/0 | 100/4/92.4 | 100/4 |
+| iid | 0.40 | 0/22.7/0 | 84.8/7/9.1 | 84.1/16 | 0/22.7/0 | 93.6/5/38.3 | 99.0/9 |
+| src | 0.05 | 0/0.13/0 | 99.2/7/0.8 | 100/8 | 0/0/9.9 | 100/4/100 | 100/4 |
+| src | 0.10 | 0/1.6/0 | 98.1/7/2.3 | 100/8 | 0/0.03/36.9 | 100/4/99.6 | 100/4 |
+| src | 0.20 | 0/17.5/0 | 97.5/7/10.7 | 99.7/9 | 0/1.5/126.7 | 100/4/94.0 | 100/4 |
+| src | 0.40 | 0/110/0 | 78.6/7/19.3 | 79.3/16 | 0/36.6/245 | 94.4/4/63.0 | 99.0/5 |
+| ge3 | 0.05 | 0/0/0 | 99.4/7/0.4 | 100/8 | 0/0/0 | 100/4/100 | 100/4 |
+| ge3 | 0.20 | 0/0.93/0 | 94.9/7/3.9 | 98.4/11 | 0/0.93/0 | 100/4/93.6 | 100/4 |
+| ge3 | 0.40 | 0/8.1/0 | 41.4/9/1.4 | 40.8/23 | 0/8.1/0.32 | 85.4/5/38.9 | 99.4/8 |
+| ge10 | 0.05 | 0/0/0 | 99.4/7/0.6 | 100/8 | 0/0/0 | 100/4/100 | 100/4 |
+| ge10 | 0.20 | 0/0.61/0 | 85.6/8/1.6 | 85.4/15 | 0/0.61/0 | 99.4/4/93.6 | 100/4 |
+| ge10 | 0.40 | 0/1.4/0 | 7.2/10/0 | 12.6/22 | 0/1.1/3.6 | 76.1/4/45.7 | 95.8/8 |
+| burst | 0.05 | 0/0/0 | 97.3/8/0 | 100/8 | 0/0/0 | 99.0/4/93.0 | 100/4 |
+| burst | 0.40 | 0/0/0 | 62.8/10/0 | 99.4/15 | 0/0/0 | 81.1/7/37.0 | 100/8 |
+
+Full grid (including random emission, q=0.10 rows, per-episode false counts):
+`table_raw.txt` from `consensus_sweep.py table`.
+
+**D7 verdict: switch off.** Per-source loss gives fast-path false ELEVATED of 9.9 / 36.9 /
+126.7 / 245 per 1000 target-rounds at q = 0.05 / 0.10 / 0.20 / 0.40 (also ge10 at 0.40:
+3.6). The vote path stays at 0 for q <= 0.05 in every model. With the fast path off,
+scripted-fault detection is 97-100% for q <= 0.10 with median latency 7-8 ticks; the
+fast path buys latency 4 and about 100% detection by tick 4, and a larger margin at
+q = 0.40. Random emission (`TEAM_TEST_RANDOM_EMISSION`): fast-off detection 86-98%,
+fast-on by-tick-4 about 47%.
+
+Built-in `communication` profile, all faults (mean ~2.5 teams faulted at once):
+detection 37% fast off, 93% fast on. Only 8 faults were in budget (<= 2 concurrent
+silent peers), all detected.
+
+### 10.3 D1: ENFORCE=0 vs ENFORCE=1 (cap off, shipped) vs ENFORCE=1 + cap
+
+3000 ticks x 5 seeds x 10 teams, q = 0.05, fast path off. "escalated" = recovery
+manager escalated a faulted episode >= 6 ticks; "elevated" = consensus ELEVATED.
+
+| profile | mode | episodes | escalated | consensus elevated | false esc /1000 team-ticks | escalation ticks | capped |
+|---|---|---|---|---|---|---|---|
+| none | ENFORCE=0 | 0 | - | - | 0.000 | 252 | 0 |
+| none | ENFORCE=1 | 0 | - | - | 0.000 | 252 | 0 |
+| none | ENFORCE=1+cap | 0 | - | - | 0.000 | 252 | 0 |
+| mobility | ENFORCE=0 | 826 | 67.8% | 72.9% | 0.000 | 917 | 0 |
+| mobility | ENFORCE=1 | 826 | 64.6% | 71.5% | 0.000 | 869 | 0 |
+| mobility | ENFORCE=1+cap | 826 | 65.4% | 71.7% | 0.000 | 818 | 2677 |
+| communication | ENFORCE=0 | 847 | 50.9% | 40.6% | 0.000 | 628 | 0 |
+| communication | ENFORCE=1 | 847 | 50.2% | 40.6% | 0.000 | 619 | 0 |
+| communication | ENFORCE=1+cap | 847 | **20.1%** | 40.6% | 0.000 | 337 | 10747 |
+| combined | ENFORCE=0 | 1623 | 49.1% | 46.0% | 0.000 | 973 | 0 |
+| combined | ENFORCE=1 | 1627 | 50.9% | 49.9% | 0.000 | 1016 | 0 |
+| combined | ENFORCE=1+cap | 1621 | **35.9%** | 53.2% | 0.000 | 740 | 5607 |
+
+No short faults (6-10 ticks) occur in built-in profiles, so "missed recoveries on short
+faults" is 0 in every row and does not discriminate. **Verdict:** ENFORCE=1 without the
+cap (as D1 specifies) is neutral to slightly positive on the combined profile
+(+1.8 points escalation, no false escalations, no extra capped ticks) and leaves
+mobility 3 points lower. The cap costs 15-30 points of escalation on the communication
+and combined profiles because most built-in faults exceed the f=2 budget (§10.4), where
+consensus cannot corroborate; it stays behind `CONSENSUS_CAP_LOCAL_EVALUATORS=0`.
+Ship ENFORCE=1, cap off.
+
+### 10.4 Fault concurrency, `--fault-profile=combined` (q = 0.05, 5 seeds x 3000 ticks)
+
+Share of ticks by number of teams with any fault active (0..10):
+0: 0.8%, 1: 3.8%, 2: 9.8%, 3: 11.2%, 4: 11.4%, 5: 10.8%, 6: 9.3%, 7: 9.9%, 8: 11.7%,
+9: 11.5%, 10: 9.8%. **Only 14.4% of ticks have <= 2 teams faulted; 85.6% have > 2.**
+Communication faults alone: 72.4% of ticks have <= 3 communication-faulted teams
+(the target plus <= f peers).
+
+Detection and false ELEVATED, bucketed by silent peers (other teams with an active
+communication fault) at the fault's start, faults >= 6 ticks:
+
+| fast path | fault class | silent peers <= 2: faults / detected | > 2: faults / detected | false ELEVATED per 1000 rounds (<= 2 / > 2) |
+|---|---|---|---|---|
+| off | communication | 73 / 100.0% | 739 / 48.3% | 0.000 / 0.000 |
+| off | mobility | 47 / 89.4% | 504 / 65.9% | 0.122 / 1.590 |
+| on | communication | 69 / 100.0% | 739 / 98.8% | 0.000 / 0.000 |
+| on | mobility | 36 / 72.2% | 533 / 64.4% | 0.396 / 1.479 |
+
+E should treat about 90% of combined-profile communication faults as outside the f=2
+budget, where the vote path detects about half; only the fast path (off by default)
+recovers them. Mobility detection is 64-66% with > 2 silent peers on both settings (the fast path
+is a communication-only mechanism), and mobility false ELEVATED is above 1 per 1000
+target-rounds in that bucket; the cause was not investigated.
+
+### 10.5 `tron_peer_obs.csv`
+
+One row per (run, tick, observer, target): 90 rows per tick, 90,000 for a
+1000-tick 10-team run. Header (40 columns):
+
+`run_id,cycle,observer_id,target_id,heard_this_tick,rx_age_ticks,rx_on_time_6,comm_miss_6,mobility_stall_count_6,target_loc_x,target_loc_y,plausibility_fail,heard_count_window,world_seed,rx_on_time,rx_late,rx_stale,observer_self_deaf,comm_window_n,rep_status,rep_task_pool,rep_task_slot,rep_heading_to_rest,rep_resting_zone_id,leg_changed,mob_sampled,mob_stalled,mob_window_n,verdict_mobility,lo_mobility,hi_mobility,verdict_communication,lo_communication,hi_communication,observer_graded_abstain,reported_heard_target,rep_alpha,rep_beta,gt_link_dropped,gt_loss_model`
+
+`run_id` equals the snapshot CSV's. `gt_link_dropped`, `gt_loss_model` are in
+`GROUND_TRUTH_COLUMNS` (`data_prep-2.py`, plus a `gt_` prefix guard). No rssi/snr: vbus
+does not model them.

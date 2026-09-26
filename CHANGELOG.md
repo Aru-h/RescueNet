@@ -12,7 +12,9 @@
   self-deaf rules for a deaf observer). Node t fuses the votes about t
   in 2-tick rounds: ELEVATED needs 3 agreeing peers, a supermajority
   (`|F| >= 2|C|+1`) and a fixed fault budget f = 2. A heard-matrix fast
-  path catches communication faults from two consecutive silent ticks.
+  path catches communication faults from two consecutive silent ticks; it
+  is off by default (`CONSENSUS_FAST_PATH=0`) because per-source loss makes
+  it raise false ELEVATED at q=0.05.
 - Recovery manager: under `CONSENSUS_ENFORCE` a 7th evaluator,
   `evaluate_peer_consensus()`, and consensus ELEVATED as corroboration
   in `evaluate_fault_predictor()`. It only adds signals and never
