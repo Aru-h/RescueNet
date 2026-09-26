@@ -243,7 +243,6 @@ uint8_t environment_find_incident_site(IncidentType_t type, int16_t *x, int16_t 
  * a board, which has no world of its own). */
 uint8_t environment_building_at(int x, int y, uint16_t *building_id, uint8_t *floors);
 uint8_t environment_get_district_center(uint8_t district_id, int16_t *x, int16_t *y);
-uint8_t environment_find_incident_site_in_zone(IncidentType_t type, uint8_t zone_id, int16_t *x, int16_t *y);
 void environment_update_hazard_propagation(uint32_t tick);
 uint8_t environment_pop_pending_hazard_event(IncidentType_t *type, int16_t *x, int16_t *y);
 const char *environment_district_name(uint8_t district);

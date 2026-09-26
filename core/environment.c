@@ -2481,86 +2481,6 @@ static uint8_t select_damaged_cell_source(IncidentType_t type, int16_t *x, int16
     return 1;
 }
 
-static uint8_t select_damaged_building_source_in_zone(IncidentType_t type, uint8_t zone_id, int16_t *x, int16_t *y)
-{
-    uint8_t found = 0;
-    uint16_t best_id = ENV_NO_BUILDING;
-    uint16_t best_score = 0;
-
-    for(uint16_t i = 0; i < g_environment_summary.building_count; i++)
-    {
-        EnvironmentBuilding_t *building = &g_environment_buildings[i];
-        uint16_t score;
-
-        if(building->district_id != zone_id)
-            continue;
-
-        if(!building_can_spawn_incident(building, type))
-            continue;
-
-        score = building_incident_score(building);
-        if(!found || score > best_score ||
-           (score == best_score && random_range_stream(STREAM_INCIDENTS, 0, 1) == 1))
-        {
-            found = 1;
-            best_score = score;
-            best_id = i;
-        }
-    }
-
-    if(!found || best_id == ENV_NO_BUILDING)
-        return 0;
-
-    g_environment_buildings[best_id].spawned_incident_mask |= ENV_INCIDENT_BIT(type);
-    mark_building_incident_hazard(&g_environment_buildings[best_id], type);
-    g_environment[g_environment_buildings[best_id].loc_x][g_environment_buildings[best_id].loc_y].spawned_incident_mask |= ENV_INCIDENT_BIT(type);
-    *x = g_environment_buildings[best_id].loc_x;
-    *y = g_environment_buildings[best_id].loc_y;
-    return 1;
-}
-
-static uint8_t select_damaged_cell_source_in_zone(IncidentType_t type, uint8_t zone_id, int16_t *x, int16_t *y)
-{
-    uint8_t found = 0;
-    int best_x = -1;
-    int best_y = -1;
-    uint16_t best_score = 0;
-
-    for(int cx = 0; cx < GRID_WIDTH; cx++)
-    {
-        for(int cy = 0; cy < GRID_HEIGHT; cy++)
-        {
-            EnvironmentCell_t *cell = &g_environment[cx][cy];
-            uint16_t score;
-
-            if(cell->district_id != zone_id)
-                continue;
-
-            if(!cell_can_spawn_incident(cell, type))
-                continue;
-
-            score = cell_incident_score(cell);
-            if(!found || score > best_score ||
-               (score == best_score && random_range_stream(STREAM_INCIDENTS, 0, 1) == 1))
-            {
-                found = 1;
-                best_score = score;
-                best_x = cx;
-                best_y = cy;
-            }
-        }
-    }
-
-    if(!found)
-        return 0;
-
-    g_environment[best_x][best_y].spawned_incident_mask |= ENV_INCIDENT_BIT(type);
-    mark_cell_incident_hazard(&g_environment[best_x][best_y], type);
-    *x = (int16_t)best_x;
-    *y = (int16_t)best_y;
-    return 1;
-}
-
 static EnvironmentBuilding_t *building_at(int x, int y)
 {
     uint16_t building_id;
@@ -2860,33 +2780,6 @@ uint8_t environment_building_at(int x, int y, uint16_t *building_id, uint8_t *fl
     return 1;
 }
 
-/* Same site-selection rules as environment_find_incident_site(), but
- * scoped to a single search zone - used when a Search team's sweep of
- * that zone "discovers" an incident, rather than the periodic
- * whole-map generator picking anywhere on the grid. */
-uint8_t environment_find_incident_site_in_zone(IncidentType_t type, uint8_t zone_id, int16_t *x, int16_t *y)
-{
-    if(x == NULL || y == NULL)
-        return 0;
-
-    switch(type)
-    {
-        case INCIDENT_STRUCTURAL_COLLAPSE:
-        case INCIDENT_GAS_LEAK:
-        case INCIDENT_CHEMICAL_EXPOSURE:
-        case INCIDENT_MASS_CASUALTY:
-        case INCIDENT_ACTIVE_FIRE:
-        case INCIDENT_UNSEARCHED_SECTOR:
-        case INCIDENT_SURVIVOR_SIGNAL:
-        case INCIDENT_CONFINED_SPACE:
-            if(select_damaged_building_source_in_zone(type, zone_id, x, y))
-                return 1;
-            return select_damaged_cell_source_in_zone(type, zone_id, x, y);
-
-        default:
-            return 0;
-    }
-}
 #else /* !ENVIRONMENT_HAS_WORLD_STORAGE */
 
 /* Incidents are placed by the laptop and reach a board as
@@ -2894,15 +2787,6 @@ uint8_t environment_find_incident_site_in_zone(IncidentType_t type, uint8_t zone
 uint8_t environment_find_incident_site(IncidentType_t type, int16_t *x, int16_t *y)
 {
     (void)type;
-    (void)x;
-    (void)y;
-    return 0;
-}
-
-uint8_t environment_find_incident_site_in_zone(IncidentType_t type, uint8_t zone_id, int16_t *x, int16_t *y)
-{
-    (void)type;
-    (void)zone_id;
     (void)x;
     (void)y;
     return 0;
