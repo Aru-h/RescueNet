@@ -524,7 +524,6 @@ check-two-board-harness:
 # target is just the mechanical `make check-two-board-cbba-harness`
 # wiring the script's own top comment already anticipated adding later.
 check-two-board-cbba-harness:
-	@chmod +x $(TOOLS_DIR)/check-two-board-cbba-harness.sh
 	@$(TOOLS_DIR)/check-two-board-cbba-harness.sh
 
 # --- mission_link.c status-reporting under ABORT_MISSION regression test ---
