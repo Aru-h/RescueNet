@@ -55,7 +55,6 @@ typedef struct
     uint8_t last_escalation_level;
     uint64_t last_signature;
     uint32_t last_tick;
-    uint8_t allocated_this_tick;
 } RecoveryDispatchState_t;
 
 typedef RecoverySignal_t (*RecoveryEvaluatorFn)(
@@ -67,7 +66,16 @@ static RecoveryManagerTeamState_t g_recovery_state[NUM_TEAMS];
 static RecoveryDispatchState_t g_recovery_dispatch_state[NUM_TEAMS];
 static RecoveryMetricsTeamState_t g_recovery_metrics_state[NUM_TEAMS];
 static RecoveryMetrics_t g_recovery_metrics;
-static uint32_t g_last_dispatch_tick = UINT32_MAX;
+/* M5: tick on which REQUEST_TASK_REALLOCATION last ran
+ * allocate_all_incidents(), shared by ALL teams. This used to be a
+ * per-team allocated_this_tick flag, but each team is dispatched at most
+ * once per tick, so the flag never deduplicated anything: N teams on
+ * REALLOC meant N full reallocations per tick. On a board each one is a
+ * full cbba_run() (LoRa broadcast plus a blocking wait of up to
+ * CBBA_ROUND_TIMEOUT_MS). One reallocation per tick already re-auctions
+ * every open task for every team, so later REALLOC teams in the same
+ * tick have nothing left to gain from another. */
+static uint32_t g_realloc_done_tick = UINT32_MAX;
 
 static float recovery_clamp01(float value)
 {
@@ -1596,7 +1604,7 @@ void recovery_manager_init(void)
         g_recovery_state[team_id].last_status = g_teams[team_id].status;
         g_recovery_dispatch_state[team_id] = (RecoveryDispatchState_t){0};
     }
-    g_last_dispatch_tick = UINT32_MAX;
+    g_realloc_done_tick = UINT32_MAX;
 }
 
 void recovery_manager_step(void)
@@ -1720,13 +1728,6 @@ void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
     signature = recovery_team_signature(team) ^
         ((uint64_t)status.escalation_level << 56);
 
-    if(g_last_dispatch_tick != g_current_tick)
-    {
-        for(uint8_t i = 0; i < NUM_TEAMS; i++)
-            g_recovery_dispatch_state[i].allocated_this_tick = 0;
-        g_last_dispatch_tick = g_current_tick;
-    }
-
     if(dispatch->last_action == action &&
        dispatch->last_escalation_level == status.escalation_level &&
        dispatch->last_signature == signature &&
@@ -1813,10 +1814,10 @@ void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
             break;
 
         case RECOVERY_ACTION_REQUEST_TASK_REALLOCATION:
-            if(!dispatch->allocated_this_tick)
+            if(g_realloc_done_tick != g_current_tick)
             {
                 allocate_all_incidents();
-                dispatch->allocated_this_tick = 1u;
+                g_realloc_done_tick = g_current_tick;
             }
             break;
 

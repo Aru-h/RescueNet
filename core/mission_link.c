@@ -916,6 +916,18 @@ void mission_link_apply_roster(const MissionLinkRoster_t *msg)
         return;
     }
 
+    if (msg->specialization >= NUM_TEAM_SPECIALIZATIONS ||
+        msg->fitness_tier > (uint8_t)LIGHT)
+    {
+        /* Same whole-message reject (review finding H4): specialization
+           indexes CAPABILITY_MATRIX (core/scoring.c) and the per-
+           specialization diagnostics, and fitness_tier selects the
+           FITNESS_* speed/stamina multipliers - only ARDUOUS/MODERATE/
+           LIGHT exist. */
+        g_roster_reject_count++;
+        return;
+    }
+
     if (msg->equipment_level > EQ_MAX_LEVEL)
     {
         /* Same whole-message reject: a level above the gauge's maximum
@@ -978,6 +990,79 @@ static IncidentState_t *mission_link_find_free_incident_slot(void)
     return NULL;
 }
 
+/* Counts incidents that could not be held because the local table was
+   full: an incoming incident dropped for want of a slot, plus every
+   incident evicted to make room for a more urgent one. Silent by design
+   in portable core/ (no logging), same reasoning as g_roster_reject_
+   count above - this is what makes the loss visible. */
+static uint32_t g_incident_drop_count;
+
+uint32_t mission_link_incident_drop_count(void)
+{
+    return g_incident_drop_count;
+}
+
+/* When the table is full, the slot of the incident it is safe to give up
+   for msg, or NULL. Only an incident nobody is working is a candidate:
+   OPEN, no assigned or support team, and no team on this board heading
+   for it. Among those, the least urgent (numerically highest Priority_t,
+   PRIORITY_CRITICAL == 1 is the most urgent) goes, and only if msg is
+   STRICTLY more urgent - so a steady stream of equal-priority re-sends
+   can never churn the table. Ties are broken by incident_id (the
+   newest, highest id goes), never by slot position: both boards see the
+   same incident frames but lay their tables out differently, and the
+   choice must depend only on what they both hold, so they evict the
+   same incident for the same input (review finding H3). */
+static IncidentState_t *mission_link_find_eviction_victim(const MissionLinkIncident_t *msg)
+{
+    IncidentState_t *victim = NULL;
+    int i;
+
+    for (i = 0; i < NUM_INCIDENTS; i++)
+    {
+        IncidentState_t *candidate = &g_incidents[i];
+        uint8_t t;
+        uint8_t in_use = 0u;
+
+        if (!candidate->slot_occupied ||
+            candidate->status != INC_OPEN ||
+            candidate->assigned_team != NO_ASSIGNMENT ||
+            candidate->support_team != NO_ASSIGNMENT)
+        {
+            continue;
+        }
+
+        for (t = 0u; t < NUM_TEAMS; t++)
+        {
+            if (g_teams[t].assigned_task_pool == TASK_POOL_INCIDENT &&
+                g_teams[t].assigned_task_slot == (uint8_t)i)
+            {
+                in_use = 1u;
+                break;
+            }
+        }
+        if (in_use)
+        {
+            continue;
+        }
+
+        if (victim == NULL ||
+            (uint8_t)candidate->priority > (uint8_t)victim->priority ||
+            ((uint8_t)candidate->priority == (uint8_t)victim->priority &&
+             candidate->incident_id > victim->incident_id))
+        {
+            victim = candidate;
+        }
+    }
+
+    if (victim == NULL || msg->priority >= (uint8_t)victim->priority)
+    {
+        return NULL;
+    }
+
+    return victim;
+}
+
 /*
  * Who owns which incident field once the laptop mirrors board reports
  * (see mission_link.h's MissionLinkStatus_t doc):
@@ -1036,9 +1121,54 @@ static void mission_link_retarget_on_scene_teams(IncidentState_t *incident)
     }
 }
 
+/* Counts incident frames mission_link_apply_incident() rejected whole as
+   out of range - see mission_link_incident_is_valid(). Same "make a
+   silent reject visible" purpose as g_roster_reject_count. */
+static uint32_t g_incident_reject_count;
+
+uint32_t mission_link_incident_reject_count(void)
+{
+    return g_incident_reject_count;
+}
+
+/* Every field of an incident frame that is later used as an array index
+   or a grid coordinate, checked against its real range (review finding
+   H4). USART1 frames carry only an 8-bit additive checksum - roughly one
+   corrupted frame in 256 still passes it - and the LoRa relay is only as
+   trustworthy as its public default PSK, so these are not "can't
+   happen" values:
+     loc_x/loc_y     grid, path and hazard lookups
+     incident_type   g_diag_*_by_type[NUM_INCIDENT_TYPES], archetypes
+     req_capability  CAPABILITY_MATRIX and the *_by_spec diagnostics
+     priority        Priority_t is 1..4; 0 or >4 breaks every
+                     urgency comparison (and H3's eviction choice)
+     status          IncidentStatus_t is 0..INC_RESOLVED */
+static uint8_t mission_link_incident_is_valid(const MissionLinkIncident_t *msg)
+{
+    return msg->loc_x >= 0 && msg->loc_x < GRID_WIDTH &&
+           msg->loc_y >= 0 && msg->loc_y < GRID_HEIGHT &&
+           msg->incident_type < (uint8_t)NUM_INCIDENT_TYPES &&
+           msg->req_capability < (uint8_t)NUM_TEAM_SPECIALIZATIONS &&
+           msg->priority >= (uint8_t)PRIORITY_CRITICAL &&
+           msg->priority <= (uint8_t)PRIORITY_LOW &&
+           msg->status <= (uint8_t)INC_RESOLVED;
+}
+
 void mission_link_apply_incident(const MissionLinkIncident_t *msg)
 {
-    IncidentState_t *incident = mission_link_find_incident_slot(msg->incident_id);
+    IncidentState_t *incident;
+
+    if (!mission_link_incident_is_valid(msg))
+    {
+        /* Whole-message reject: a frame with one impossible field can't
+           be trusted for the rest either. The laptop re-sends open
+           incidents periodically, so a real update lost to corruption
+           arrives again. */
+        g_incident_reject_count++;
+        return;
+    }
+
+    incident = mission_link_find_incident_slot(msg->incident_id);
 
     if (incident != NULL)
     {
@@ -1108,14 +1238,34 @@ void mission_link_apply_incident(const MissionLinkIncident_t *msg)
 
         incident = mission_link_find_free_incident_slot();
 
+        if (incident == NULL && msg->discovered)
+        {
+            /* Local incident table is full. Make room if this one is
+               more urgent than something nobody here is working - see
+               mission_link_find_eviction_victim(). An undiscovered
+               incident never evicts anything: no team can accept it
+               (team_can_accept_incident()), so it isn't worth a slot
+               someone could use. */
+            IncidentState_t *victim = mission_link_find_eviction_victim(msg);
+
+            if (victim != NULL)
+            {
+                board_incident_cache_remove(victim->incident_id);
+                incident_close_for_authority(victim);
+                g_incident_drop_count++;
+                incident = victim;
+            }
+        }
+
         if (incident == NULL)
         {
-            /* Local incident table is full - this board's partial
-               view just can't hold this one right now. Not fatal:
-               the laptop remains the authoritative source and will
-               keep resending on subsequent field changes, same as
-               any other dropped/torn frame under this link's
-               documented resync policy. */
+            /* Still no room - this board's partial view just can't hold
+               this one right now. Not fatal: the laptop remains the
+               authoritative source and keeps re-sending open incidents
+               (telemetry_bridge.py's refresh), so it lands once a slot
+               frees up, same as any other dropped/torn frame under this
+               link's documented resync policy. Counted, not silent. */
+            g_incident_drop_count++;
             return;
         }
 
@@ -1191,10 +1341,25 @@ void mission_link_apply_fault(const MissionLinkFault_t *msg)
 
     fault_state = &g_teams[msg->team_id].fault_state;
 
+    /* Normalized rather than rejected (review finding H4): active[] is a
+       flag every reader tests for non-zero, so any non-zero byte means
+       "active"; severity feeds arithmetic (work-rate cuts, stamina and
+       equipment drain, movement skipping, the CBBA communication
+       cadence) rather than indexing anything, so a corrupted value is
+       clamped to MISSION_LINK_FAULT_SEVERITY_MAX instead of dropping the
+       whole fault update - losing a real fault onset would be worse than
+       applying one at bounded strength. */
     for (i = 0; i < NUM_OPERATIONAL_FAULT_CLASSES; i++)
     {
-        fault_state->active[i] = msg->active[i];
-        fault_state->severity[i] = msg->severity[i];
+        uint8_t severity = msg->severity[i];
+
+        if (severity > MISSION_LINK_FAULT_SEVERITY_MAX)
+        {
+            severity = MISSION_LINK_FAULT_SEVERITY_MAX;
+        }
+
+        fault_state->active[i] = (msg->active[i] != 0u) ? 1u : 0u;
+        fault_state->severity[i] = severity;
     }
 }
 

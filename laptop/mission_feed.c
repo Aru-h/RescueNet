@@ -195,6 +195,22 @@ static int mission_feed_task_slot(uint32_t tick, const IncidentState_t *inc,
         return emitted;
     }
 
+    /* Fog of war: nothing goes to the boards until it is discovered.
+       A board team can't act on an undiscovered incident anyway
+       (team_can_accept_incident() refuses it), and each one sent would
+       take one of a board's NUM_INCIDENTS slots - on the laptop the
+       table is often mostly undiscovered backlog, which crowded search
+       sweeps, evacuee runs and newly found incidents off the boards
+       entirely (review finding H3). Sweeps and evacuee runs are always
+       discovered (clear_task_slot() defaults it to 1 and nothing on the
+       system-task path clears it), so this only ever holds back real
+       incidents. Once sent, an incident keeps being updated and its
+       RESOLVED closure still goes out (sent->valid, above). */
+    if (!inc->discovered && !sent->valid)
+    {
+        return emitted;
+    }
+
     mission_feed_build_incident(inc, &msg);
     if (sent->valid)
     {

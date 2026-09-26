@@ -436,7 +436,11 @@ static void allocate_support_team(void)
             continue;
         if(!incident_needs_support(incident))
             continue;
-        if(best_slot == -1 || incident->priority > best_priority)
+        /* Priority_t runs PRIORITY_CRITICAL = 1 .. PRIORITY_LOW = 4, so
+         * "highest-priority" is the numerically SMALLEST value. This was
+         * `>`, which sent the support team to the least urgent incident.
+         * Strict `<` keeps the first-found slot on a tie. */
+        if(best_slot == -1 || incident->priority < best_priority)
         {
             best_slot = (int8_t)i;
             best_priority = incident->priority;

@@ -126,19 +126,80 @@ static void cbba_reset_broadcast_change_cache(void)
  * resolution) - see cbba_pack_bid()/cbba_unpack_bid() below for the
  * range/precision reasoning and the override-pin sentinel.
  *
- * sizeof(CBBAMessage_t) [144B, see that type's own doc] shrinks to
- * sizeof(CBBAWireMessage_t) [101B] on the wire: 1 (sender_id) +
- * 20 (winner[20]) + 40 (winning_bid_q[20], 2B each) + 40
- * (timestamp[10], 4B each) = 101, no padding (already 4-byte aligned
- * after the odd 21 leading bytes round up per the packed attribute).
+ * Keyed by incident_id, NOT by the sender's g_incidents[] slot index.
+ * Each board fills its own g_incidents[] independently (mission_link_
+ * apply_incident() takes the first free slot), and the two boards'
+ * slot layouts diverge in practice: the LoRa relay of incident frames
+ * is lossy, a resolution frees a slot on one board before the other,
+ * and frames can arrive in different orders. The original layout
+ * (winner[NUM_INCIDENTS]/winning_bid_q[NUM_INCIDENTS] indexed by the
+ * SENDER's slot) therefore let cbba_receive_and_update() merge a
+ * winner/bid for one incident into a completely different incident on
+ * the receiver. Now every claim carries the incident it is about, and
+ * the receiver maps it onto its OWN slot (cbba_find_incident_slot_by_
+ * key()), skipping incidents it doesn't hold at all.
+ *
+ * Sparse, not dense: only entries whose winner != NO_ASSIGNMENT go on
+ * the wire. That is lossless - cbba_receive_and_update() already treats
+ * a z_k == NO_ASSIGNMENT entry as a no-op ("continue"), so an entry the
+ * receiver never sees behaves exactly like one it saw as unassigned.
+ *
+ * Layout (packed, native little-endian - both boards are Cortex-M, same
+ * convention as every other struct this project memcpy()s onto the
+ * wire):
+ *
+ *   CBBAWireHeader_t                                   42 B
+ *     sender_id        u8     team whose belief this is
+ *     entry_count      u8     number of CBBAWireEntry_t that follow
+ *     timestamp[10]    u32    same meaning/width as before (see above)
+ *   CBBAWireEntry_t x entry_count (0..NUM_INCIDENTS)   5 B each
+ *     incident_key     u16    low 16 bits of incident_id
+ *     winner           u8     team id
+ *     winning_bid_q    u16    cbba_pack_bid() fixed-point
+ *
+ * Worst case 42 + 20 x 5 = 142 B, so a whole snapshot is always ONE
+ * frame (_Static_assert below). Why a 16-bit key rather than the full
+ * 32-bit incident_id: 20 x (4 + 1 + 2) + 42 = 182 B does not fit
+ * LORA_FRAME_MAX_PAYLOAD (144), and splitting a snapshot across frames
+ * does not survive the transport - comms_transport_tx_enqueue()
+ * deliberately overwrites a still-queued CBBA frame with the same
+ * team's newer one (a CBBA frame is normally that team's whole current
+ * belief), so the second fragment would replace the first before it
+ * was ever sent. It would also double the airtime of a full burst
+ * (see CBBA_ROUND_TIMEOUT_MS in cbba.h).
+ *
+ * The truncation is safe by construction, not just by probability:
+ * incident_id is a monotonic per-mission counter (allocate_incident_
+ * id()), so two incidents only share a key if they are 65536 ids
+ * apart, and the receiver only accepts a key that matches exactly ONE
+ * incident it currently holds - an ambiguous key is skipped (treated
+ * as NO_ASSIGNMENT, the same no-op as an incident it doesn't hold),
+ * never merged into the wrong slot. A sender likewise skips a claim
+ * whose key is shared by another incident in its own table.
  */
 typedef struct __attribute__((packed))
 {
     uint8_t sender_id;
-    uint8_t winner[NUM_INCIDENTS];
-    uint16_t winning_bid_q[NUM_INCIDENTS];
+    uint8_t entry_count;
     uint32_t timestamp[NUM_TEAMS];
-} CBBAWireMessage_t;
+} CBBAWireHeader_t;
+
+typedef struct __attribute__((packed))
+{
+    uint16_t incident_key;
+    uint8_t winner;
+    uint16_t winning_bid_q;
+} CBBAWireEntry_t;
+
+#define CBBA_WIRE_INCIDENT_KEY(incident_id) ((uint16_t)((incident_id) & 0xFFFFu))
+#define CBBA_WIRE_MAX_FRAME_SIZE \
+    (sizeof(CBBAWireHeader_t) + NUM_INCIDENTS * sizeof(CBBAWireEntry_t))
+
+_Static_assert(sizeof(CBBAWireHeader_t) == 2u + 4u * NUM_TEAMS, "CBBAWireHeader_t layout drifted");
+_Static_assert(sizeof(CBBAWireEntry_t) == 5u, "CBBAWireEntry_t layout drifted");
+_Static_assert(CBBA_WIRE_MAX_FRAME_SIZE <= LORA_FRAME_MAX_PAYLOAD,
+               "worst-case CBBA wire frame (every incident assigned) must fit one LoRa frame");
+_Static_assert(NUM_INCIDENTS <= 0xFF, "entry_count is a u8");
 
 /* uint16 fixed-point scale for winning_bid_q[] above: value*1000, so
    0..65.534 is representable at ~0.001 resolution. calculate_score()/
@@ -225,6 +286,29 @@ static uint8_t cbba_find_incident_slot_by_id(uint32_t incident_id)
     }
 
     return NO_ASSIGNMENT;
+}
+
+/* Wire-side counterpart of cbba_find_incident_slot_by_id(): the local
+   slot of the ONE occupied incident whose CBBA_WIRE_INCIDENT_KEY()
+   matches, or NO_ASSIGNMENT when none - or more than one - does. See
+   CBBAWireHeader_t's comment for why an ambiguous key must resolve to
+   "not held" rather than to either candidate. */
+static uint8_t cbba_find_incident_slot_by_key(uint16_t incident_key)
+{
+    uint8_t found = NO_ASSIGNMENT;
+
+    for(uint8_t i = 0; i < NUM_INCIDENTS; i++)
+    {
+        if(g_incidents[i].slot_occupied &&
+           CBBA_WIRE_INCIDENT_KEY(g_incidents[i].incident_id) == incident_key)
+        {
+            if(found != NO_ASSIGNMENT)
+                return NO_ASSIGNMENT;
+            found = i;
+        }
+    }
+
+    return found;
 }
 
 
@@ -1154,18 +1238,39 @@ void cbba_broadcast_local_teams(void)
 
         {
             /* Pack once per team, reused for every destination board -
-               see CBBAWireMessage_t's own comment above for why this
-               is smaller than CBBAMessage_t and why that's safe. */
-            CBBAWireMessage_t wire;
+               see CBBAWireHeader_t's own comment above for the layout,
+               why it is keyed by incident rather than slot, and why
+               only assigned entries are sent. */
+            uint8_t wire[CBBA_WIRE_MAX_FRAME_SIZE];
+            CBBAWireHeader_t header;
+            uint8_t wire_len;
 
-            wire.sender_id = msg.sender_id;
-            for(int j = 0; j < NUM_INCIDENTS; j++)
-            {
-                wire.winner[j] = msg.winner[j];
-                wire.winning_bid_q[j] = cbba_pack_bid(msg.winning_bid[j]);
-            }
+            header.sender_id = msg.sender_id;
+            header.entry_count = 0u;
             for(int k = 0; k < NUM_TEAMS; k++)
-                wire.timestamp[k] = msg.timestamp[k];
+                header.timestamp[k] = msg.timestamp[k];
+
+            for(uint8_t j = 0; j < NUM_INCIDENTS; j++)
+            {
+                CBBAWireEntry_t entry;
+
+                if(msg.winner[j] == NO_ASSIGNMENT || !g_incidents[j].slot_occupied)
+                    continue; /* nothing to claim, or no incident to key it by */
+
+                entry.incident_key = CBBA_WIRE_INCIDENT_KEY(g_incidents[j].incident_id);
+                if(cbba_find_incident_slot_by_key(entry.incident_key) != j)
+                    continue; /* key shared by two held incidents - see
+                                  CBBAWireHeader_t's comment */
+
+                entry.winner = msg.winner[j];
+                entry.winning_bid_q = cbba_pack_bid(msg.winning_bid[j]);
+                memcpy(wire + sizeof(header) + (size_t)header.entry_count * sizeof(entry),
+                       &entry, sizeof(entry));
+                header.entry_count++;
+            }
+
+            memcpy(wire, &header, sizeof(header));
+            wire_len = (uint8_t)(sizeof(header) + (size_t)header.entry_count * sizeof(CBBAWireEntry_t));
 
             for(uint8_t board = 0; board < num_boards; board++)
             {
@@ -1185,11 +1290,106 @@ void cbba_broadcast_local_teams(void)
                 (void)comms_transport_send(team_id, representative_team_id,
                                             LORA_FRAME_TYPE_CBBA,
                                             COMMS_PRECEDENCE_PRIORITY,
-                                            (const uint8_t *)&wire,
-                                            (uint8_t)sizeof(wire));
+                                            wire, wire_len);
             }
         }
     }
+}
+
+/* Monotonic counts of what cbba_decode_wire_message() threw away - see
+   cbba.h. Not reset by cbba_init(), which cbba_run() calls every tick. */
+static uint32_t s_cbba_wire_reject_count;
+static uint32_t s_cbba_wire_entry_reject_count;
+
+uint32_t cbba_wire_reject_count(void)
+{
+    return s_cbba_wire_reject_count;
+}
+
+uint32_t cbba_wire_entry_reject_count(void)
+{
+    return s_cbba_wire_entry_reject_count;
+}
+
+/* Decodes one CBBA wire frame (see CBBAWireHeader_t) into a
+   full-precision CBBAMessage_t indexed by THIS board's own slots - the
+   shape cbba_receive_and_update() (shared with cbba_consensus()'s
+   in-process gossip) works on. Every slot starts as NO_ASSIGNMENT, so an
+   incident the sender didn't claim, or one this board doesn't hold,
+   stays a no-op for that function. Returns 0 on success, -1 when the
+   frame is malformed and must be dropped whole.
+
+   The wire is untrusted (review finding H5): the LoRa PSK is a public
+   default in this repo, and a corrupt frame can in principle survive
+   the transport. Everything a field is later used to INDEX is checked
+   here, before cbba_receive_and_update() sees it:
+     - sender_id indexes receiver->timestamp[] as a WRITE
+       (timestamp[sender_id] = g_current_tick), so a frame whose
+       sender_id is >= NUM_TEAMS is rejected whole. So is one claiming
+       to come from a team hosted on THIS board: a real peer never
+       sends that, and accepting it would let a forged frame speak for
+       our own teams in the consensus table.
+     - winner values index timestamp[] and g_teams[] (through
+       candidate_claim_is_better()), so an entry whose winner is neither
+       a team id nor NO_ASSIGNMENT is dropped; the rest of the frame is
+       still usable. */
+static int cbba_decode_wire_message(const uint8_t *payload, uint8_t payload_len,
+                                    CBBAMessage_t *out)
+{
+    CBBAWireHeader_t header;
+
+    if(payload_len < sizeof(CBBAWireHeader_t))
+    {
+        s_cbba_wire_reject_count++;
+        return -1;
+    }
+
+    memcpy(&header, payload, sizeof(header));
+
+    if(header.entry_count > NUM_INCIDENTS ||
+       payload_len != sizeof(CBBAWireHeader_t) +
+                      (size_t)header.entry_count * sizeof(CBBAWireEntry_t) ||
+       header.sender_id >= NUM_TEAMS ||
+       cbba_team_is_local(header.sender_id))
+    {
+        s_cbba_wire_reject_count++;
+        return -1; /* protocol drift, a corrupt frame, or a forged sender */
+    }
+
+    out->sender_id = header.sender_id;
+    for(int j = 0; j < NUM_INCIDENTS; j++)
+    {
+        out->winner[j] = NO_ASSIGNMENT;
+        out->winning_bid[j] = 0.0f;
+    }
+    for(int k = 0; k < NUM_TEAMS; k++)
+        out->timestamp[k] = header.timestamp[k];
+
+    for(uint8_t e = 0u; e < header.entry_count; e++)
+    {
+        CBBAWireEntry_t entry;
+        uint8_t local_slot;
+
+        memcpy(&entry, payload + sizeof(CBBAWireHeader_t) + (size_t)e * sizeof(CBBAWireEntry_t),
+               sizeof(entry));
+
+        if(entry.winner >= NUM_TEAMS && entry.winner != NO_ASSIGNMENT)
+        {
+            s_cbba_wire_entry_reject_count++;
+            continue;
+        }
+
+        /* Map the sender's incident onto THIS board's own slot; an
+           incident this board doesn't hold has nothing to merge into. */
+        local_slot = cbba_find_incident_slot_by_key(entry.incident_key);
+        if(local_slot == NO_ASSIGNMENT)
+            continue;
+
+        out->winner[local_slot] = entry.winner;
+        out->winning_bid[local_slot] = cbba_unpack_bid(entry.winning_bid_q);
+    }
+
+    return 0;
 }
 
 /* Drains this board's comms_transport inbox for CBBA frames and folds
@@ -1257,7 +1457,6 @@ void cbba_ingest_remote_mesh_replies(void)
         uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
         uint8_t payload_len;
         CBBAMessage_t msg;
-        CBBAWireMessage_t wire;
 
         /* Takes only CBBA frames, from anywhere in the inbox. */
         if(!comms_transport_poll_received_types(COMMS_FRAME_TYPE_BIT(LORA_FRAME_TYPE_CBBA),
@@ -1281,31 +1480,22 @@ void cbba_ingest_remote_mesh_replies(void)
         if(frame_type != LORA_FRAME_TYPE_CBBA)
             continue; /* mission-link's RX task (Prompt 3) owns those */
 
-        if(payload_len != sizeof(CBBAWireMessage_t))
-            continue; /* protocol drift or a corrupt frame - drop it
-                          and keep draining rather than aborting the
-                          whole round over one bad message */
+        (void)sender_team_id; /* header.sender_id (wire field) is
+            authoritative - see comms_transport.h's "Open question" note:
+            sender identity for a genuinely separate board isn't on the
+            wire at the comms_transport layer today, only inside the CBBA
+            payload itself */
 
-        memcpy(&wire, payload, sizeof(wire));
-        (void)sender_team_id; /* msg.sender_id (wire field, set by
-            cbba_broadcast()) is authoritative - see comms_transport.h's
-            "Open question" note: sender identity for a genuinely
-            separate board isn't on the wire at the comms_transport
-            layer today, only inside CBBAMessage_t itself */
-
-        /* Unpack back to full-precision CBBAMessage_t before handing
-           off to cbba_receive_and_update() - that function (shared
-           with cbba_consensus()'s in-process gossip) always works on
-           full float bids/timestamps, so quantization is entirely
-           contained to the wire hop above and this unpack. */
-        msg.sender_id = wire.sender_id;
-        for(int j = 0; j < NUM_INCIDENTS; j++)
-        {
-            msg.winner[j] = wire.winner[j];
-            msg.winning_bid[j] = cbba_unpack_bid(wire.winning_bid_q[j]);
-        }
-        for(int k = 0; k < NUM_TEAMS; k++)
-            msg.timestamp[k] = wire.timestamp[k];
+        /* Unpacks back to a full-precision CBBAMessage_t keyed by THIS
+           board's slots before cbba_receive_and_update() sees it - that
+           function (shared with cbba_consensus()'s in-process gossip)
+           always works on full float bids indexed by local slot, so both
+           the quantization and the incident_id -> slot mapping are
+           entirely contained to the wire hop. */
+        if(cbba_decode_wire_message(payload, payload_len, &msg) != 0)
+            continue; /* malformed - drop it and keep draining rather
+                          than aborting the whole round over one bad
+                          message */
 
         ingested_replies++;
 #ifdef CBBA_DEBUG_TIMING

@@ -27,10 +27,10 @@ uint32_t g_diag_sweep_duplicate_while_in_progress = 0;
 uint32_t g_diag_sweep_retargets = 0;
 /* Cumulative count of passive-coverage cells whose own district differs
  * from the district the sweeping team is standing in - i.e. sweep-radius
- * cells that straddle a district boundary. These are currently all
- * miscredited to the team's district (the M37 bug); this measures how
- * pervasive that misattribution is. See search_sweep_step() for why the
- * fix is shelved. */
+ * cells that straddle a district boundary. Since the M37 fix these are
+ * credited to the cell's own district (they used to be miscredited to
+ * the team's); this still measures how often coverage crosses a
+ * boundary. See search_sweep_step(). */
 uint32_t g_diag_sweep_cross_district_cells = 0;
 /* Cumulative count of incidents that hit INCIDENT_UNREACHABLE_GIVEUP_
  * THRESHOLD consecutive no-path abandons and got quarantined out of the
@@ -391,7 +391,18 @@ void search_generate_sweep_tasks(uint32_t current_tick)
             search_teams_available_for_new_task++;
     }
 
-    for(uint8_t n = 0; n < search_teams_available_for_new_task; n++)
+    /* `created` only advances when a task is actually created, never on
+     * a skip. It used to be a plain `n++` loop, so every district skipped
+     * below (reclaim cooldown, or no frontier cell) burned one of the
+     * search teams' attempts: with 2 Search teams, the 2 stalest dead
+     * districts consumed every attempt every tick and sweep creation
+     * stopped for good (~tick 3,000 on seeds 1-5), leaving the whole
+     * team pool idle and the incident table full of never-discovered
+     * incidents. Termination is still bounded: every skip ORs its
+     * district into districts_with_task_in_flight, so
+     * search_zone_pick_next_target() returns NO_ASSIGNMENT (break) after
+     * at most NUM_SEARCH_ZONES picks. */
+    for(uint8_t created = 0; created < search_teams_available_for_new_task; )
     {
         uint8_t district_id = search_zone_pick_next_target(current_tick, districts_with_task_in_flight);
         if(district_id == NO_ASSIGNMENT)
@@ -451,6 +462,7 @@ void search_generate_sweep_tasks(uint32_t current_tick)
         districts_with_task_in_flight |= (uint16_t)(1u << district_id);
         extern uint32_t g_diag_sweep_tasks_created[NUM_SEARCH_ZONES];
         g_diag_sweep_tasks_created[district_id]++;
+        created++;
     }
 }
 
@@ -604,22 +616,26 @@ void search_sweep_step(uint32_t current_tick)
                 int16_t cx = (int16_t)(team->loc_x + dx);
                 int16_t cy = (int16_t)(team->loc_y + dy);
 
-                /* M37: this sweep cell may belong to a different district
-                 * than the team's own - crediting coverage to team_district
-                 * here (rather than the cell's own district) misattributes
-                 * boundary-straddling coverage. The straight fix (credit
-                 * zone_id_for_location(cx,cy) instead) was tried and shelved
-                 * for now: it's correct but shifts district coverage %s,
-                 * which feed sweep-cycle completion and thus incident
-                 * dispatch timing - moving the P1 quarantine count 44->47
-                 * even as no-path hits improved 204->196. Needs the same
-                 * coverage-accounting design decision as the deferred triad.
-                 * The counter below measures how often the misattribution
-                 * would apply. */
-                if(zone_id_for_location(cx, cy) != team_district)
+                /* M37: credit the cell's OWN district, not the team's.
+                 * Crediting team_district (the old behaviour) stamped
+                 * g_cell_last_covered_tick for a neighbouring district's
+                 * boundary cells without ever incrementing that district's
+                 * covered_cells. The neighbour could then have every
+                 * reachable cell stamped (so no frontier cell left) while
+                 * its coverage stayed under ZONE_SWEEP_COMPLETION_FLOOR_
+                 * PERCENT: it never completed, stayed the stalest candidate
+                 * forever, and fed the sweep-dispatch stall in
+                 * search_generate_sweep_tasks(). This fix was once shelved
+                 * because it moved the P1 quarantine count 44->47; it was
+                 * re-measured alongside that stall fix and kept (see the
+                 * H1 commit message for the numbers). The counter still
+                 * records how many sweep cells straddle a district
+                 * boundary, now all credited to the right district. */
+                uint8_t cell_district = zone_id_for_location(cx, cy);
+                if(cell_district != team_district)
                     g_diag_sweep_cross_district_cells++;
 
-                search_zone_mark_cell_covered(team_district, cx, cy, current_tick);
+                search_zone_mark_cell_covered(cell_district, cx, cy, current_tick);
             }
         }
     }

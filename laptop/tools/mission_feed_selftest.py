@@ -256,7 +256,9 @@ def test_resends():
     check(len(rosters) == 2, f"every roster re-sent once in {MissionFeed.ROSTER_RESEND_SEC}s ({len(rosters)})")
     check(set(incidents) == {11, 12}, f"open incidents refreshed round-robin ({incidents})")
 
-    # A resolved incident is sent once more and then never refreshed.
+    # A resolved incident is never refreshed as open again; it is re-sent
+    # as RESOLVED a bounded number of times (review finding M4 - see
+    # telemetry_bridge_selftest.py for the budget/window checks).
     feed.feed_line(line(9, incident(11, status=INCIDENT_STATUS_RESOLVED)))
     w.frames.clear()
     end = now + 3 * MissionFeed.INCIDENT_REFRESH_SEC + 0.5
@@ -265,8 +267,9 @@ def test_resends():
         now += 0.05
     keyed = [(mission_frame_key(f), f) for f in w.frames]
     resolved_sends = [f for k, f in keyed if k == ("incident", 11)]
-    check(len(resolved_sends) == 1 and resolved_sends[0] == incident(11, status=INCIDENT_STATUS_RESOLVED),
-          "resolved incident sent once, not refreshed")
+    check(1 <= len(resolved_sends) <= 1 + MissionFeed.RESOLVED_RESEND_COUNT and
+          all(f == incident(11, status=INCIDENT_STATUS_RESOLVED) for f in resolved_sends),
+          f"resolved incident only re-sent as RESOLVED, within budget ({len(resolved_sends)})")
     check(any(k == ("incident", 12) for k, _ in keyed), "other open incident still refreshed")
     check(feed.status_dict()["open_incidents"] == 1, "status counts open incidents")
 
@@ -585,7 +588,7 @@ def test_app_launch_route():
     joined = "".join(chunks)
     check('"type": "static_env"' in joined and '"type": "frame"' in joined,
           "stream route sends static_env then frames")
-    check(client.post("/api/board/mission/stop").status_code == 200, "stop route")
+    check(client.post("/api/board/mission/stop", json={}).status_code == 200, "stop route")
     check(bridge.mission is None, "feed stopped")
 
     check(client.post("/api/board/launch", json={"seed": "x"}).status_code == 400,

@@ -336,6 +336,69 @@ static void test_evacuee_run_legs(void)
     CHECK(!run->slot_occupied);
 }
 
+/* Reports the mirror must refuse or sanitize (review L18): a status
+   outside TeamStatus_t, an equipment_level above EQ_MAX_LEVEL, and a
+   report older than the one already applied for that team. */
+static void test_bad_and_out_of_order_reports(void)
+{
+    MissionLinkStatus_t s;
+    IncidentState_t *inc;
+
+    fresh_mission();
+    inc = make_incident(2u, 800u, INCIDENT_MASS_CASUALTY, SPEC_MEDICAL, 100u);
+
+    /* First report for a team at tick 0 - prev->report_tick is only the
+       zeroed default before any report, so this must still apply. */
+    s = report(5u, STATUS_EN_ROUTE, 800u, 100u, 5u, 0u, 3, 4);
+    mission_mirror_apply_status(&s);
+    CHECK(g_teams[5].loc_x == 3 && g_teams[5].loc_y == 4);
+    CHECK(inc->assigned_team == 5u);
+    CHECK(mission_mirror_reports_applied() == 1u && mission_mirror_reports_ignored() == 0u);
+
+    /* Status not in TeamStatus_t: ignored outright. */
+    s = report(5u, (uint8_t)(STATUS_RESTING + 1), 800u, 90u, 5u, 1u, 6, 6);
+    mission_mirror_apply_status(&s);
+    CHECK(g_teams[5].status == STATUS_EN_ROUTE);
+    CHECK(g_teams[5].loc_x == 3 && g_teams[5].loc_y == 4);
+    CHECK(mission_mirror_reports_ignored() == 1u && mission_mirror_reports_applied() == 1u);
+
+    /* equipment_level above EQ_MAX_LEVEL: clamped, report still applied. */
+    s = report(5u, STATUS_ON_SCENE, 800u, 80u, 5u, 20u, 10, 10);
+    s.equipment_level = 250u;
+    mission_mirror_apply_status(&s);
+    CHECK(g_teams[5].equipment_level == EQ_MAX_LEVEL);
+    CHECK(inc->status == INC_IN_PROGRESS && inc->work_remaining == 80u);
+    CHECK(mission_mirror_reports_applied() == 2u);
+
+    /* Out of order: a tick-18 report arriving after tick 20 would move
+       the team off the incident and re-open it. Must be ignored. */
+    s = report(5u, STATUS_RESTING, MISSION_LINK_NO_INCIDENT, 0u, 5u, 18u, 1, 1);
+    mission_mirror_apply_status(&s);
+    CHECK(mission_mirror_reports_ignored() == 2u && mission_mirror_reports_applied() == 2u);
+    CHECK(mission_mirror_incidents_reopened() == 0u);
+    CHECK(g_teams[5].status == STATUS_ON_SCENE && g_teams[5].loc_x == 10);
+    CHECK(inc->assigned_team == 5u && inc->status == INC_IN_PROGRESS);
+
+    /* Same tick as the last applied report: a real second change within
+       one tick, applied. */
+    s = report(5u, STATUS_ON_SCENE, 800u, 78u, 5u, 20u, 10, 10);
+    mission_mirror_apply_status(&s);
+    CHECK(mission_mirror_reports_applied() == 3u && inc->work_remaining == 78u);
+
+    /* Another team's clock is independent: team 6's first report at an
+       earlier tick than team 5's latest still applies. */
+    s = report(6u, STATUS_AVAILABLE, MISSION_LINK_NO_INCIDENT, 0u, 5u, 5u, 7, 7);
+    mission_mirror_apply_status(&s);
+    CHECK(g_teams[6].loc_x == 7 && mission_mirror_reports_applied() == 4u);
+
+    /* A new mission forgets the per-team ordering state. */
+    mission_mirror_begin();
+    CHECK(mission_mirror_reports_ignored() == 0u);
+    s = report(5u, STATUS_AVAILABLE, MISSION_LINK_NO_INCIDENT, 0u, 5u, 1u, 2, 2);
+    mission_mirror_apply_status(&s);
+    CHECK(mission_mirror_reports_applied() == 1u && g_teams[5].loc_x == 2);
+}
+
 int main(void)
 {
     test_report_copies_team_and_assignment();
@@ -345,6 +408,7 @@ int main(void)
     test_sweep_system_task();
     test_line_parsing();
     test_evacuee_run_legs();
+    test_bad_and_out_of_order_reports();
 
     if (g_failures == 0)
     {

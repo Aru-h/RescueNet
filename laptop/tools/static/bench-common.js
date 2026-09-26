@@ -102,15 +102,15 @@ const Bench = {
   },
 
   async pauseLive() {
-    const r = await fetch("/api/run-live/pause", { method: "POST" });
+    const r = await fetch("/api/run-live/pause", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     return r.json();
   },
   async resumeLive() {
-    const r = await fetch("/api/run-live/resume", { method: "POST" });
+    const r = await fetch("/api/run-live/resume", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     return r.json();
   },
   async stopLive() {
-    const r = await fetch("/api/run-live/stop", { method: "POST" });
+    const r = await fetch("/api/run-live/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     return r.json();
   },
 
