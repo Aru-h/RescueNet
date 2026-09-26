@@ -67,12 +67,20 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched
 
 all: $(TARGET) $(LABELER)
 
+# Peer consensus (CONSENSUS_DESIGN.md): the laptop `tron` build turns on the
+# virtual bus and enforcement (decision D1). Deliberately NOT part of CFLAGS:
+# every board build, Pico build, two-board harness and selftest keeps
+# VIRTUAL_BUS_ENABLED=0 and compiles none of it. Override with
+# LAPTOP_CONSENSUS_FLAGS='' or CONSENSUS_ENFORCE=0 for a shadow-mode build.
+CONSENSUS_ENFORCE ?= 1
+LAPTOP_CONSENSUS_FLAGS ?= -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=$(CONSENSUS_ENFORCE)
+
 $(TARGET): $(LAPTOP_SOURCES)
-	$(CC) $(CFLAGS) $(LAPTOP_INCLUDES) -o $(TARGET) $(LAPTOP_SOURCES) $(LDFLAGS)
+	$(CC) $(CFLAGS) $(LAPTOP_CONSENSUS_FLAGS) $(LAPTOP_INCLUDES) -o $(TARGET) $(LAPTOP_SOURCES) $(LDFLAGS)
 
 $(LABELER): $(LABELER_SOURCES)
 	$(CC) $(CFLAGS) -I$(CORE_DIR) -o $(LABELER) $(LABELER_SOURCES) $(LDFLAGS)
@@ -747,6 +755,18 @@ check-virtual-bus:
 	@$(CC) $(SELFTEST_CFLAGS) -DVIRTUAL_BUS_ENABLED=1 -o $(SELFTEST_BIN_DIR)/virtual_bus_selftest \
 		$(TOOLS_DIR)/virtual_bus_selftest.c $(CORE_DIR)/vbus.c $(CORE_DIR)/random.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./virtual_bus_selftest
+
+# Peer consensus unit tests (CONSENSUS_DESIGN.md 7.9, 7.11): real vbus,
+# synthetic teams, no simulation. Needs the virtual bus and the test hooks.
+CONSENSUS_TEST_DEFS = -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_TEST_HOOKS=1
+
+check-consensus-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/consensus_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) $(CONSENSUS_TEST_DEFS) -o $(SELFTEST_BIN_DIR)/consensus_selftest \
+		$(TOOLS_DIR)/consensus_selftest.c $(CORE_DIR)/consensus.c $(CORE_DIR)/vbus.c \
+		$(CORE_DIR)/mission_state.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./consensus_selftest
 
 check-soft-spi-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)

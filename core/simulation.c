@@ -21,6 +21,7 @@
 #include "fault_injector.h"
 #include "fault_comms.h"
 #include "mission_execution_twin.h"
+#include "consensus.h"
 
 uint8_t g_simulation_trace_enabled = 1;
 static uint8_t g_prev_anomaly_detected[NUM_TEAMS];
@@ -62,6 +63,9 @@ void generate_world(uint32_t seed)   //simulation
     cbba_reset_improvement_counters();
     recovery_manager_init();
     fault_comms_init();
+#if VIRTUAL_BUS_ENABLED
+    consensus_init(seed);
+#endif
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
@@ -113,6 +117,12 @@ void simulation_step(void) //simulation
     }
     if(runs_teams)
     {
+#if VIRTUAL_BUS_ENABLED
+        /* After movement and incident work, so the beacon carries this
+         * tick's final position and status, the same point the watchdog
+         * samples them at. */
+        consensus_step(g_current_tick);
+#endif
         mission_execution_twin_step();
         watchdog_step();
         recovery_manager_step();
@@ -147,6 +157,11 @@ void simulation_step(void) //simulation
             g_prev_recovery_action[team_id] = (uint8_t)action_now[team_id];
         }
     }
+
+#if VIRTUAL_BUS_ENABLED
+    if(runs_teams)
+        snapshot_record_peer_obs(g_current_tick);
+#endif
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {

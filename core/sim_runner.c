@@ -13,6 +13,7 @@
 #include "recovery_manager.h"
 #include "fault_comms.h"
 #include "search_zones.h"
+#include "consensus.h"
 
 int sim_runner_init(void)
 {
@@ -111,6 +112,9 @@ void sim_start_seed_board(uint32_t seed, FaultProfile_t fault_profile)
     cbba_reset_improvement_counters();
     recovery_manager_init();
     fault_comms_init();
+#if VIRTUAL_BUS_ENABLED
+    consensus_init(seed);
+#endif
 
     snapshot_begin_run(seed);
 }

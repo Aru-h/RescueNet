@@ -13,6 +13,7 @@
 #include "mission_execution_twin.h"
 #include "recovery_manager_config.h"
 #include "watchdog.h"
+#include "consensus.h"
 
 typedef struct
 {
@@ -1022,119 +1023,74 @@ static RecoverySignal_t evaluate_equipment(
         confidence);
 }
 
+#if CONSENSUS_ENFORCE
 /*
- * Sixth evaluator: cross-board Byzantine-fault-tolerant consensus on
- * this team's fault state, fed by core/fault_buffer.c's per-class vote
- * tally + dynamic-quorum Brooks-Iyengar fusion over incoming FAULT_
- * BROADCAST/FAULT_VOTE frames (Prompt 1). Fusion runs independently
- * per OperationalFaultClass_t (core/fault_config.h), but RecoverySignal_t
- * carries one confidence/reason - so this evaluator reports whichever
- * class currently has the highest weight/quorum ratio, using that
- * ratio directly as confidence (no separate confidence formula) and
- * RECOVERY_REASON_CONSENSUS_FAULT as the reason regardless of which
- * class won.
+ * Peer-consensus evaluator (CONSENSUS_DESIGN.md 4.2(b)), seventh slot under
+ * CONSENSUS_ENFORCE. It replaces the retired evaluate_consensus_fault().
  *
- * Known simplification, flagged not blocking: if two classes both
- * clear quorum in the same round (plausible given fault_injector.c's
- * confirmed concurrent-fault injection - fault_injector_step() has no
- * mutual-exclusivity check between FAULT_CLASS_t values), only the
- * higher-ratio class surfaces through this evaluator this tick. The
- * other isn't lost - fault_buffer_fuse()'s class_weight[] still has
- * it, and it'll surface as best_class on a later tick if it's
- * genuinely still active - simultaneous-dual-alarm handling just
- * isn't attempted here.
- *
- * Action mapping, scaled by weight/quorum ratio: 0 -> CONTINUE_
- * MONITORING; 0 < ratio < 1 -> LOCAL_RECOVERY, confidence scaling
- * toward 1.0; ratio == 1 (weight == quorum) -> REQUEST_TASK_
- * REALLOCATION; ratio > 1 (weight above quorum, up to N_live) ->
- * propose higher, same degraded/en-route-vs-idle split the other
- * evaluators already use to choose ABORT_MISSION vs RETURN_TO_
- * SAFE_ZONE for a team with nothing to abort. If N_live < 3,
- * fault_buffer_fuse() skips fusion for the round and this evaluator
- * reports confidence 0 - the other five evaluators' arbitration
- * stands on its own that tick.
- *
- * PARKED: compiled out by RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT
- * (recovery_manager_config.h, 0u by default) - see that macro's own
- * comment for why. Not registered in evaluators[] below regardless of
- * this guard; re-adding both is a two-line change once the underlying
- * weighting-scheme concern is actually fixed.
+ * It only ever adds a signal, and never ABORT_MISSION: aborting still needs
+ * a local evaluator's severe branch. LOCAL and NONE tiers are diagnostic
+ * (decision D6) and emit CONTINUE_MONITORING. ELEVATED mobility follows
+ * evaluate_mobility()'s guards, ELEVATED communication follows
+ * evaluate_communication()'s, both routed through the same achievable-action
+ * downgrade. Reads only consensus results, which come from received beacons.
  */
-#if RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT
-static RecoverySignal_t evaluate_consensus_fault(
+static RecoverySignal_t evaluate_peer_consensus(
     const TeamState_t *team,
     const MissionExecutionTwin_t *twin,
     const WatchdogStatus_t *watchdog)
 {
     MissionStage_t stage = recovery_stage_for_team(team, twin);
-    FaultBufferFusionResult_t fusion = fault_buffer_fuse(team->team_id);
-    float confidence;
-    /* Weight accumulates as whole votes (one team contributes one
-       weight unit per class it flags, in the common unweighted case),
-       so round to the nearest whole vote before comparing against the
-       integer quorum - avoids float-equality fragility on "weight ==
-       quorum" while still reflecting exact vote counts. */
-    uint8_t weight_rounded;
+    ConsensusResult_t mob = consensus_get_result(team->team_id, CONSENSUS_CLASS_MOBILITY);
+    ConsensusResult_t comm = consensus_get_result(team->team_id, CONSENSUS_CLASS_COMMUNICATION);
+    RecoverySignal_t best = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
+        RECOVERY_REASON_NONE,
+        mob.y > comm.y ? mob.y : comm.y);
 
     (void)watchdog;
 
-    if(fusion.fusion_skipped)
-        return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
-            RECOVERY_REASON_NONE,
-            0.0f);
+    /* A team already resting, or already routed to its safe zone, has
+       nothing further to be told (same guard as the local evaluators). */
+    if(team->status == STATUS_RESTING || team->heading_to_rest)
+        return best;
 
-    confidence = fusion.best_ratio;
-    weight_rounded = (uint8_t)(fusion.class_weight[fusion.best_class] + 0.5f);
-
-    if(weight_rounded == 0u)
-        return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
-            RECOVERY_REASON_NONE,
-            confidence);
-
-    if(confidence < recovery_stage_action_floor(stage, RECOVERY_ACTION_LOCAL_RECOVERY))
-        return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
-            RECOVERY_REASON_NONE,
-            confidence);
-
-    if(weight_rounded > fusion.quorum)
+    if(mob.tier == CONSENSUS_TIER_ELEVATED)
     {
-        if(team->degraded &&
-           (team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE))
-        {
-            return recovery_make_signal(
-                recovery_downgrade_to_achievable_action(RECOVERY_ACTION_ABORT_MISSION, stage, confidence),
-                RECOVERY_REASON_CONSENSUS_FAULT,
-                confidence);
-        }
+        float confidence = mob.y;
+        RecoveryAction_t desired = (stage == MISSION_STAGE_WORK) ?
+            RECOVERY_ACTION_REQUEST_TASK_REALLOCATION :
+            RECOVERY_ACTION_RETURN_TO_SAFE_ZONE;
 
-        return recovery_make_signal(
-            recovery_downgrade_to_achievable_action(RECOVERY_ACTION_RETURN_TO_SAFE_ZONE, stage, confidence),
+        best = recovery_make_signal(
+            recovery_downgrade_to_achievable_action(desired, stage, confidence),
             RECOVERY_REASON_CONSENSUS_FAULT,
             confidence);
     }
 
-    if(weight_rounded == fusion.quorum)
+    if(comm.tier == CONSENSUS_TIER_ELEVATED)
     {
-        return recovery_make_signal(
-            recovery_downgrade_to_achievable_action(RECOVERY_ACTION_REQUEST_TASK_REALLOCATION, stage, confidence),
+        float confidence = comm.y > 0.0f ? comm.y : CONSENSUS_FAST_PATH_CONFIDENCE;
+        RecoveryAction_t desired =
+            (team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE) ?
+            RECOVERY_ACTION_REQUEST_TASK_REALLOCATION :
+            RECOVERY_ACTION_RETURN_TO_SAFE_ZONE;
+        RecoverySignal_t candidate = recovery_make_signal(
+            recovery_downgrade_to_achievable_action(desired, stage, confidence),
             RECOVERY_REASON_CONSENSUS_FAULT,
             confidence);
+
+        if(candidate.action > best.action ||
+           (candidate.action == best.action && candidate.confidence > best.confidence))
+            best = candidate;
     }
 
-    /* 0 < weight < quorum: below the Byzantine-safe bound - stay at the
-       lowest actionable tier and let confidence (the weight/quorum
-       ratio) do the scaling. */
-    return recovery_make_signal(RECOVERY_ACTION_LOCAL_RECOVERY,
-        RECOVERY_REASON_CONSENSUS_FAULT,
-        confidence);
+    return best;
 }
-#endif /* RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT */
+#endif /* CONSENSUS_ENFORCE */
 
 /*
- * Sixth evaluator (current): single-team AI fault prediction, replacing
- * evaluate_consensus_fault above in the registered lineup while cross-
- * board consensus is parked (v4 architecture doc, Section 4/9). Runs
+ * Sixth evaluator: single-team AI fault prediction (v4 architecture doc,
+ * Section 4/9). Runs
  * core/fault_predictor.c's model against this team's own live evidence
  * vector - watchdog_get_evidence_vector() for the 7 accumulated_evidence
  * channels + confirmed_mobility_impairment, team->equipment_level/100.0f,
@@ -1148,7 +1104,7 @@ static RecoverySignal_t evaluate_consensus_fault(
  * reason"), this reports the highest-scoring class's score directly as
  * confidence - no separate formula - but uses one reason
  * (RECOVERY_REASON_PREDICTED_FAULT) for all 5 classes rather than a
- * per-class mapping, the same simplification evaluate_consensus_fault
+ * per-class mapping, the same simplification the peer evaluator
  * makes with RECOVERY_REASON_CONSENSUS_FAULT: RESOURCE and ENVIRONMENT
  * don't have a clean existing RecoveryReason_t counterpart, and forcing
  * one risks conflating them with MOBILITY/EQUIPMENT's existing reasons
@@ -1370,6 +1326,13 @@ static RecoverySignal_t evaluate_fault_predictor(
             confidence);
 
     corroborated = watchdog->anomaly_detected || sustained;
+#if CONSENSUS_ENFORCE
+    /* Peers agreeing is a third independent corroboration, on top of the
+     * watchdog and the sustained streak (decision D1). It only ever adds. */
+    if(consensus_get_result(team->team_id, CONSENSUS_CLASS_MOBILITY).tier == CONSENSUS_TIER_ELEVATED ||
+       consensus_get_result(team->team_id, CONSENSUS_CLASS_COMMUNICATION).tier == CONSENSUS_TIER_ELEVATED)
+        corroborated = 1u;
+#endif
 
     if(corroborated && confidence >= RECOVERY_MANAGER_PREDICTOR_ESCALATE_CONFIDENCE)
     {
@@ -1607,6 +1570,39 @@ void recovery_manager_init(void)
     g_realloc_done_tick = UINT32_MAX;
 }
 
+/* Positions in evaluators[] below. The optional consensus cap addresses
+ * evaluators by index, not by reason string, so a new reason cannot slip
+ * past it. */
+enum
+{
+    RM_EVAL_IDX_PROGRESS = 0,
+    RM_EVAL_IDX_STAMINA,
+    RM_EVAL_IDX_MOBILITY,
+    RM_EVAL_IDX_COMMUNICATION,
+    RM_EVAL_IDX_EQUIPMENT,
+    RM_EVAL_IDX_FAULT_PREDICTOR
+#if CONSENSUS_ENFORCE
+    , RM_EVAL_IDX_PEER_CONSENSUS
+#endif
+};
+
+#if CONSENSUS_CAP_LOCAL_EVALUATORS
+/* Design 4.2(a). Without consensus ELEVATED, the local mobility and
+ * communication evaluators may not go above LOCAL_RECOVERY. Reason and
+ * confidence are kept so the logs still show what they wanted. */
+static RecoverySignal_t recovery_consensus_cap(RecoverySignal_t signal,
+    ConsensusTier_t tier, uint8_t team_id)
+{
+    if(tier != CONSENSUS_TIER_ELEVATED && signal.action > RECOVERY_ACTION_LOCAL_RECOVERY)
+    {
+        signal.action = RECOVERY_ACTION_LOCAL_RECOVERY;
+        g_diag_consensus_capped[team_id]++;
+        g_consensus_capped_now[team_id] = 1u;
+    }
+    return signal;
+}
+#endif
+
 void recovery_manager_step(void)
 {
     static const RecoveryEvaluatorFn evaluators[RECOVERY_MANAGER_EVALUATOR_COUNT] =
@@ -1617,6 +1613,9 @@ void recovery_manager_step(void)
         evaluate_communication,
         evaluate_equipment,
         evaluate_fault_predictor
+#if CONSENSUS_ENFORCE
+        , evaluate_peer_consensus
+#endif
     };
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
@@ -1698,6 +1697,18 @@ void recovery_manager_step(void)
 
         for(size_t i = 0; i < RECOVERY_MANAGER_EVALUATOR_COUNT; i++)
             signals[i] = evaluators[i](team, twin, &watchdog);
+
+#if CONSENSUS_ENFORCE
+        g_consensus_capped_now[team_id] = 0u;
+#endif
+#if CONSENSUS_CAP_LOCAL_EVALUATORS
+        signals[RM_EVAL_IDX_MOBILITY] = recovery_consensus_cap(
+            signals[RM_EVAL_IDX_MOBILITY],
+            consensus_get_result(team_id, CONSENSUS_CLASS_MOBILITY).tier, team_id);
+        signals[RM_EVAL_IDX_COMMUNICATION] = recovery_consensus_cap(
+            signals[RM_EVAL_IDX_COMMUNICATION],
+            consensus_get_result(team_id, CONSENSUS_CLASS_COMMUNICATION).tier, team_id);
+#endif
 
         (void)recovery_build_status(&g_recovery_state[team_id], signals,
             RECOVERY_MANAGER_EVALUATOR_COUNT, stage);

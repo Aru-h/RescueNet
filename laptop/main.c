@@ -20,6 +20,7 @@
 #include "mission_feed.h"
 #include "mission_mirror.h"
 #include "mission_state.h" /* TICK_TIME_SEC */
+#include "consensus.h"
 
 static uint64_t monotonic_ms(void)
 {
@@ -229,6 +230,25 @@ int main(int argc, char **argv)
         if(is_tick_delay_flag(argv[i]))
         {
             tick_delay_ms = (uint32_t)strtoul(argv[i] + 16, NULL, 10);
+            continue;
+        }
+
+        /* Per-link loss probability on the virtual peer bus
+         * (CONSENSUS_DESIGN.md 3.5, decision D4: default 0.05). Ignored in a
+         * build without the virtual bus. */
+        if(strncmp(argv[i], "--vbus-loss=", 12) == 0)
+        {
+#if VIRTUAL_BUS_ENABLED
+            consensus_set_link_loss((float)atof(argv[i] + 12));
+#endif
+            continue;
+        }
+
+        /* Writes tron_peer_obs.csv, one row per (tick, observer, target):
+         * the training set for a future peer-judge model (design 5.2). */
+        if(strcmp(argv[i], "--peer-log") == 0)
+        {
+            snapshot_peer_log_enable(1);
             continue;
         }
 

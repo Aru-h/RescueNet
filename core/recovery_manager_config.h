@@ -3,7 +3,15 @@
 
 #include "mission_state.h"
 
+#include "consensus_config.h"
+
+/* Six local evaluators, plus evaluate_peer_consensus() when
+ * CONSENSUS_ENFORCE (core/consensus_config.h). */
+#if CONSENSUS_ENFORCE
+#define RECOVERY_MANAGER_EVALUATOR_COUNT 7u
+#else
 #define RECOVERY_MANAGER_EVALUATOR_COUNT 6u
+#endif
 
 #define RECOVERY_MANAGER_PROGRESS_ERROR_SCALE 0.35f
 #define RECOVERY_MANAGER_STAMINA_ERROR_SCALE 18.0f
@@ -116,20 +124,6 @@
 #define RECOVERY_MANAGER_DEESCALATION_TICKS (TICKS_PER_HOUR / 12)
 #define RECOVERY_MANAGER_MAX_ESCALATION_LEVEL 4u
 #define RECOVERY_EVALUATION_WINDOW 20u
-
-/* Parked, not deleted: evaluate_consensus_fault() (recovery_manager.c)
- * is compiled out by default via this guard. v4 architecture doc,
- * Concern 1: the f<N/3 Byzantine bound assumes independently-failing
- * voters, but 5 teams share one physical board, so a single board
- * fault can invalidate up to 5 votes at once - already more than the
- * assumed budget at N=9 (f_max=2). Until a corrected weighting scheme
- * (e.g. per-board rather than per-team) lands, this evaluator isn't
- * producing a trustworthy signal, so it's left uncompiled rather than
- * silently registered-but-wrong or silently unregistered-but-present
- * (either of which risks bitrot going unnoticed). Flip to 1u and add
- * it back into evaluators[] to re-enable.
- */
-#define RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT 0u
 
 /* Tiered-trust rule for evaluate_fault_predictor() (v4 doc Section 3):
  * CONTINUE_MONITORING/LOCAL_RECOVERY are fine on the AI's word alone;
