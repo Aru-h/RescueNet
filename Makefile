@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario
 
 all: $(TARGET) $(LABELER)
 
@@ -767,6 +767,40 @@ check-consensus-selftest:
 		$(TOOLS_DIR)/consensus_selftest.c $(CORE_DIR)/consensus.c $(CORE_DIR)/vbus.c \
 		$(CORE_DIR)/mission_state.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./consensus_selftest
+
+# Whole-simulation scenario tests and the measurement modes (design 7.1-7.5,
+# 7.11). The variant flags are compile-time, so each variant is its own
+# binary: make build-consensus-scenario SCEN_BIN=path SCEN_DEFS='-D...'.
+# The binary links the laptop sim like `tron` does (same
+# COMMS_TRANSPORT_TEAMS_PER_BOARD override), plus the test hooks.
+SCEN_DEFS ?= -DCONSENSUS_ENFORCE=1
+SCEN_BIN ?= $(SELFTEST_BIN_DIR)/consensus_scenario_test
+
+build-consensus-scenario:
+	@mkdir -p $(dir $(SCEN_BIN))
+	@$(CC) $(SELFTEST_CFLAGS) -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS $(CONSENSUS_TEST_DEFS) $(SCEN_DEFS) \
+		-o $(SCEN_BIN) $(TOOLS_DIR)/consensus_scenario_test.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+
+# Asserted scenarios: the shipped configuration (enforcing, cap off, fast
+# path on) and the shadow-mode build, then the random-emission variant, whose
+# detection is reported rather than asserted.
+check-consensus-scenarios:
+	@echo "  consensus scenarios: enforcing, periodic emission"
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1'
+	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test assert
+	@echo "  consensus scenarios: shadow mode (CONSENSUS_ENFORCE=0)"
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=0' \
+		SCEN_BIN=$(SELFTEST_BIN_DIR)/consensus_scenario_test_shadow
+	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test_shadow assert quick
+	@echo "  consensus scenarios: random emission variant"
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1 -DTEAM_TEST_RANDOM_EMISSION=1' \
+		SCEN_BIN=$(SELFTEST_BIN_DIR)/consensus_scenario_test_random
+	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test_random assert quick
+
+check-consensus-airtime:
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1'
+	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test airtime
 
 check-soft-spi-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)
