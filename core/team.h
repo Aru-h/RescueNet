@@ -9,6 +9,24 @@ void update_all_teams(void);
 void move_team(TeamState_t *team);
 void move_all_teams(void);
 
+/* Physics output, not ground truth: true iff update_team() produced a
+ * heartbeat this tick. update_team() is the only code that consults
+ * fault_state[FAULT_CLASS_COMMUNICATION] to decide this, so the peer
+ * beacon (core/consensus.c) uses it as its physical transmit gate
+ * without ever reading fault_state itself. */
+uint8_t team_radio_emitted(const TeamState_t *team);
+
+/* Scenario tests only (CONSENSUS_DESIGN.md 7.2): a communication fault of
+ * severity s emits with probability 1/(s+1) per tick from a dedicated RNG
+ * instead of on every (s+1)-th tick. Compiled out unless
+ * TEAM_TEST_RANDOM_EMISSION is nonzero. */
+#ifndef TEAM_TEST_RANDOM_EMISSION
+#define TEAM_TEST_RANDOM_EMISSION 0
+#endif
+#if TEAM_TEST_RANDOM_EMISSION
+void team_test_seed_random_emission(uint32_t seed);
+#endif
+
 /*
  * Single source of truth for "how much stamina does a resting team
  * need before it's genuinely ready to leave rest" - shared with
