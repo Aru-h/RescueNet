@@ -20,9 +20,11 @@ import csv
 import json
 import os
 import re
+import signal
 import struct
 import subprocess
 import sys
+import threading
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -844,6 +846,55 @@ def api_run():
     })
 
 
+# The one live run in flight (the tron process /api/run-live is streaming),
+# so /api/run-live/pause, /resume and /stop can reach it. Pause and resume
+# are SIGSTOP/SIGCONT: the tick loop simply freezes and continues, with its
+# world state intact. Guarded by a lock because Flask serves these routes
+# and the streaming generator on different threads.
+_live_lock = threading.Lock()
+_live_proc = None
+_live_paused = False
+
+
+def _live_signal(action):
+    """Applies pause/resume/stop to the live run. Returns (body, status)."""
+    global _live_paused
+    with _live_lock:
+        proc = _live_proc
+        if proc is None or proc.poll() is not None:
+            return {"ok": False, "error": "no live run in progress"}, 409
+        if action != "stop" and not hasattr(signal, "SIGSTOP"):
+            return {"ok": False, "error": "pause/resume not supported on this platform"}, 501
+        if action == "pause":
+            proc.send_signal(signal.SIGSTOP)
+            _live_paused = True
+        elif action == "resume":
+            proc.send_signal(signal.SIGCONT)
+            _live_paused = False
+        else:
+            proc.kill()   # SIGKILL also ends a stopped process
+            _live_paused = False
+        return {"ok": True, "action": action, "paused": _live_paused}, 200
+
+
+@app.route("/api/run-live/pause", methods=["POST"])
+def api_run_live_pause():
+    body, status = _live_signal("pause")
+    return jsonify(body), status
+
+
+@app.route("/api/run-live/resume", methods=["POST"])
+def api_run_live_resume():
+    body, status = _live_signal("resume")
+    return jsonify(body), status
+
+
+@app.route("/api/run-live/stop", methods=["POST"])
+def api_run_live_stop():
+    body, status = _live_signal("stop")
+    return jsonify(body), status
+
+
 @app.route("/api/run-live", methods=["POST"])
 def api_run_live():
     payload = _json_object_body()
@@ -869,10 +920,14 @@ def api_run_live():
         args += ["--fault-profile", fault_profile]
 
     def generate():
+        global _live_proc, _live_paused
         proc = subprocess.Popen(
             args, cwd=PROJECT_DIR, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1,
         )
+        with _live_lock:
+            _live_proc = proc
+            _live_paused = False
         stderr_lines = []
         start = time.time()
         try:
@@ -897,6 +952,10 @@ def api_run_live():
         finally:
             if proc.poll() is None:
                 proc.kill()
+            with _live_lock:
+                if _live_proc is proc:
+                    _live_proc = None
+                    _live_paused = False
 
         elapsed = time.time() - start
         diag = parse_diag("\n".join(stderr_lines))
