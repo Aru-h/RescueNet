@@ -192,16 +192,15 @@ void snapshot_begin_run(uint32_t seed)
         g_peer_file = fopen("tron_peer_obs.csv", "w");
         if(g_peer_file != NULL)
             fprintf(g_peer_file,
-                "run_id,world_seed,cycle,observer_id,target_id,"
-                "rx_on_time,rx_late,rx_stale,rx_age_ticks,observer_self_deaf,"
-                "comm_window_n,comm_misses,"
-                "rep_status,rep_loc_x,rep_loc_y,rep_task_pool,rep_task_slot,"
-                "rep_heading_to_rest,rep_resting_zone_id,"
-                "leg_changed,mob_sampled,mob_stalled,mob_window_n,mob_stalls,"
+                "run_id,cycle,observer_id,target_id,heard_this_tick,rx_age_ticks,"
+                "rx_on_time_6,comm_miss_6,mobility_stall_count_6,target_loc_x,target_loc_y,"
+                "plausibility_fail,heard_count_window,"
+                "world_seed,rx_on_time,rx_late,rx_stale,observer_self_deaf,comm_window_n,"
+                "rep_status,rep_task_pool,rep_task_slot,rep_heading_to_rest,rep_resting_zone_id,"
+                "leg_changed,mob_sampled,mob_stalled,mob_window_n,"
                 "verdict_mobility,lo_mobility,hi_mobility,"
                 "verdict_communication,lo_communication,hi_communication,"
-                "observer_graded_abstain,observer_heard_count,reported_heard_target,"
-                "plaus_fail,rep_alpha,rep_beta,"
+                "observer_graded_abstain,reported_heard_target,rep_alpha,rep_beta,"
                 "gt_link_dropped,gt_loss_model\n");
     }
 #endif
@@ -583,22 +582,24 @@ void snapshot_record_peer_obs(uint32_t cycle)
                 continue;
             consensus_get_peer_observation(o, t, &p);
             fprintf(g_peer_file,
-                "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,"
-                "%u,%.3f,%.3f,%u,%.3f,%.3f,%u,%u,%u,%u,%u,%u,%u,%u\n",
-                g_run_id, g_dataset_seed, cycle, o, t,
-                p.rx_on_time, p.rx_late, p.rx_stale, p.rx_age_ticks,
-                p.observer_self_deaf, p.comm_window_n, p.comm_misses,
-                p.rep_status, p.rep_loc_x, p.rep_loc_y, p.rep_task_pool,
-                p.rep_task_slot, p.rep_heading_to_rest, p.rep_resting_zone_id,
+                "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,"
+                "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,"
+                "%u,%.3f,%.3f,%u,%.3f,%.3f,%u,%u,%u,%u,%u,%u\n",
+                g_run_id, cycle, o, t,
+                (unsigned)(p.rx_on_time || p.rx_late), p.rx_age_ticks,
+                (unsigned)(p.comm_window_n - p.comm_misses), p.comm_misses, p.mob_stalls,
+                p.rep_loc_x, p.rep_loc_y, p.plaus_fail, p.observer_heard_count,
+                g_dataset_seed, p.rx_on_time, p.rx_late, p.rx_stale,
+                p.observer_self_deaf, p.comm_window_n,
+                p.rep_status, p.rep_task_pool, p.rep_task_slot,
+                p.rep_heading_to_rest, p.rep_resting_zone_id,
                 p.leg_changed, p.mob_sampled, p.mob_stalled, p.mob_window_n,
-                p.mob_stalls,
                 p.vote[CONSENSUS_CLASS_MOBILITY].verdict,
                 p.lo[CONSENSUS_CLASS_MOBILITY], p.hi[CONSENSUS_CLASS_MOBILITY],
                 p.vote[CONSENSUS_CLASS_COMMUNICATION].verdict,
                 p.lo[CONSENSUS_CLASS_COMMUNICATION], p.hi[CONSENSUS_CLASS_COMMUNICATION],
-                p.observer_graded_abstain, p.observer_heard_count,
-                p.reported_heard_target, p.plaus_fail, p.rep_alpha, p.rep_beta,
-                p.gt_link_dropped, p.gt_loss_model);
+                p.observer_graded_abstain, p.reported_heard_target,
+                p.rep_alpha, p.rep_beta, p.gt_link_dropped, p.gt_loss_model);
         }
     }
 #else
