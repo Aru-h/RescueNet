@@ -1100,15 +1100,12 @@ void consensus_get_peer_observation(uint8_t observer, uint8_t target,
     PeerObservation_t *out)
 {
     const PeerObserver_t *o;
-    const Fuser_t *f;
 
     memset(out, 0, sizeof(*out));
     if(observer >= NUM_TEAMS || target >= NUM_TEAMS || observer == target)
         return;
 
     o = &g_obs[observer][target];
-    f = &g_fuser[observer];
-    (void)f;
 
     out->rx_on_time = o->on_time;
     out->rx_late = o->late;
