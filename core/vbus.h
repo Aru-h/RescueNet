@@ -4,6 +4,19 @@
 #include <stdint.h>
 
 /*
+ * Notes for consensus (D2)
+ *  - Call vbus_step() exactly once per sim tick. Delivery delay is counted in
+ *    vbus_step() calls, not in now_tick, so a skipped or doubled call shifts
+ *    every frame's arrival.
+ *  - Each inbox holds VBUS_INBOX_DEPTH (16) frames. With 10 teams a node
+ *    hears up to 9 beacons per tick, so every node must vbus_poll() until
+ *    empty every tick. A fault-free run (no loss, nothing dark) should show
+ *    VbusStats_t.dropped == 0; anything else means an inbox overflowed.
+ *  - VIRTUAL_BUS_ENABLED stays 0 in the laptop CFLAGS. D2 turns it on (and
+ *    in the single-board DK target).
+ */
+
+/*
  * Virtual bus: a simulated LoRa-like broadcast medium so each team can be
  * its own node on one board (see CONSENSUS_DESIGN.md sections 1.3, 1.4,
  * 3.5 and 6.2). Compiled only when VIRTUAL_BUS_ENABLED is nonzero (default
