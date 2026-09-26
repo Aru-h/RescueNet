@@ -381,6 +381,7 @@ static uint8_t popcount8(uint8_t v)
     return n;
 }
 
+#if CONSENSUS_FAST_PATH
 static uint8_t popcount16(uint16_t v)
 {
     uint8_t n = 0u;
@@ -392,6 +393,7 @@ static uint8_t popcount16(uint16_t v)
     }
     return n;
 }
+#endif
 
 void consensus_configure_bus(const ConsensusBusConfig_t *cfg)
 {
@@ -995,6 +997,9 @@ static void fuse_round(uint8_t t, uint32_t now)
 
 static void publish_results(uint32_t now)
 {
+#if !CONSENSUS_FAST_PATH
+    (void)now;
+#endif
     for(uint8_t t = 0; t < NUM_TEAMS; t++)
     {
         Fuser_t *f = &g_fuser[t];
