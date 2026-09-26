@@ -1017,7 +1017,17 @@ q <= 0.05. It did (per-source loss, §10.2), so **the shipped default is
 
 
 
-## 10. Measurements (merged base e37181a, fast path off by default)
+## 10. Measurements (merged base e37181a, measured with the fast path off)
+
+> **Revised at merge into submission/single-board-dk: the fast path is ON by default**
+> (`CONSENSUS_FAST_PATH=1`). The D7 verdict below turned it off because of per-source loss.
+> The default link is IID at q = 0.05, where the fast path gives 0 false ELEVATED (0 up to
+> q = 0.20; also 0 for ge3/ge10/burst at q = 0.05), and on the combined profile, where about
+> 91% of comm faults are outside the f = 2 budget, it detects 98.8% vs 48.3% (§10.4).
+> Known cost: under PER_SOURCE loss it raises 9.9 / 36.9 / 126.7 / 245 false ELEVATED per
+> 1000 target-rounds at q = 0.05 / 0.10 / 0.20 / 0.40. Per-source loss is one transmitter
+> being lossy to every receiver, which is observationally a comm degradation. The numbers
+> in this section were measured with the fast path off unless a column says otherwise.
 
 All numbers: `laptop/tools/consensus_sweep.py` (`table`, `compare`) and
 `consensus_scenario_test concurrency`, 5 seeds; `table` 1500 ticks, `compare` and
@@ -1026,7 +1036,7 @@ behaviour: re-run after the base changes.
 
 ### 10.1 What differs from the design
 
-- **Fast path defaults to off** (D7 rule, §10.2).
+- **Fast path defaults to on** (revised at merge; the D7 rule in §10.2 had turned it off).
 - **Built-in faults last 38-49 ticks** (33-tick repair confirmation) and the
   built-in profiles fault many teams at once, so most built-in faults are outside
   the f=2 budget. Detection claims are therefore given for scripted sparse faults

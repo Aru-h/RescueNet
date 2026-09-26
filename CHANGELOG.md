@@ -13,8 +13,10 @@
   in 2-tick rounds: ELEVATED needs 3 agreeing peers, a supermajority
   (`|F| >= 2|C|+1`) and a fixed fault budget f = 2. A heard-matrix fast
   path catches communication faults from two consecutive silent ticks; it
-  is off by default (`CONSENSUS_FAST_PATH=0`) because per-source loss makes
-  it raise false ELEVATED at q=0.05.
+  is on by default (`CONSENSUS_FAST_PATH=1`): 0 false ELEVATED under the
+  default IID loss, and 98.8% vs 48.3% detection on the combined profile.
+  Under per-source loss it raises false ELEVATED (about 10 per 1000
+  target-rounds at q=0.05); set it to 0 for the vote path only.
 - Recovery manager: under `CONSENSUS_ENFORCE` a 7th evaluator,
   `evaluate_peer_consensus()`, and consensus ELEVATED as corroboration
   in `evaluate_fault_predictor()`. It only adds signals and never

@@ -799,19 +799,19 @@ build-consensus-scenario:
 # path on) and the shadow-mode build, then the random-emission variant, whose
 # detection is reported rather than asserted.
 check-consensus-scenarios:
-	@echo "  consensus scenarios: enforcing, periodic emission"
-	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1'
+	@echo "  consensus scenarios: enforcing, fast path on (shipped), periodic emission"
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1 -DCONSENSUS_FAST_PATH=1'
 	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test assert
-	@echo "  consensus scenarios: fast path compiled in (measured, off by default)"
-	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1 -DCONSENSUS_FAST_PATH=1' \
+	@echo "  consensus scenarios: vote path only (fast path off)"
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1 -DCONSENSUS_FAST_PATH=0' \
 		SCEN_BIN=$(SELFTEST_BIN_DIR)/consensus_scenario_test_fast
 	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test_fast assert quick
 	@echo "  consensus scenarios: shadow mode (CONSENSUS_ENFORCE=0)"
-	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=0' \
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=0 -DCONSENSUS_FAST_PATH=0' \
 		SCEN_BIN=$(SELFTEST_BIN_DIR)/consensus_scenario_test_shadow
 	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test_shadow assert quick
 	@echo "  consensus scenarios: random emission variant"
-	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1 -DTEAM_TEST_RANDOM_EMISSION=1' \
+	@$(MAKE) --no-print-directory build-consensus-scenario SCEN_DEFS='-DCONSENSUS_ENFORCE=1 -DCONSENSUS_FAST_PATH=0 -DTEAM_TEST_RANDOM_EMISSION=1' \
 		SCEN_BIN=$(SELFTEST_BIN_DIR)/consensus_scenario_test_random
 	@cd $(SELFTEST_BIN_DIR) && ./consensus_scenario_test_random assert quick
 
@@ -822,8 +822,9 @@ check-consensus-airtime:
 # Shadow-mode regression (design 7.7): with CONSENSUS_ENFORCE=0 every column
 # the base branch writes must be identical. The base is built from
 # CONSENSUS_BASE_REF in a scratch tree. run_id (start time + seed) is the only
-# column ignored.
-CONSENSUS_BASE_REF ?= origin/submission/single-board-dk
+# column ignored. The base is pinned to e37181a, the last submission commit
+# before consensus was merged: the branch tip now contains consensus itself.
+CONSENSUS_BASE_REF ?= e37181a
 SHADOW_DIR = build/consensus-shadow
 
 check-consensus-shadow-regression:

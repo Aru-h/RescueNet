@@ -19,11 +19,14 @@
  *                       communication evaluators at LOCAL_RECOVERY unless
  *                       consensus is ELEVATED (design 4.2(a)). Needs
  *                       CONSENSUS_ENFORCE.
- * CONSENSUS_FAST_PATH   0 (default). Communication fast path (design 2.6). Decision D7
- *                       switched it off: with per-source loss (a transmitter-side
- *                       glitch that is not a fault) it gives false ELEVATED of
- *                       about 10 per 1000 target-rounds at q = 0.05
- *                       (CONSENSUS_DESIGN.md 10.2). Set 1 to measure it.
+ * CONSENSUS_FAST_PATH   1 (default). Communication fast path (design 2.6). On by
+ *                       default (decision D7, revised at merge): with the default
+ *                       IID link loss it gives 0 false ELEVATED up to q = 0.20, and
+ *                       on the combined profile, where most comm faults are outside
+ *                       the f = 2 budget, it detects 98.8% vs 48.3% with it off
+ *                       (CONSENSUS_DESIGN.md 10.2, 10.4). Known cost: under
+ *                       PER_SOURCE loss it raises about 10 false ELEVATED per 1000
+ *                       target-rounds at q = 0.05. Set 0 for the vote path only.
  * CONSENSUS_TEST_HOOKS  0 (default). Test-only forcing hooks.
  */
 
@@ -36,7 +39,7 @@
 #define CONSENSUS_CAP_LOCAL_EVALUATORS 0
 #endif
 #ifndef CONSENSUS_FAST_PATH
-#define CONSENSUS_FAST_PATH 0
+#define CONSENSUS_FAST_PATH 1
 #endif
 #ifndef CONSENSUS_TEST_HOOKS
 #define CONSENSUS_TEST_HOOKS 0
