@@ -218,7 +218,8 @@ void move_team(TeamState_t *team) //simulation
         SafeZone_t *safezone = &g_safezones[team->resting_zone_id];
 
         int next_x, next_y;
-        int pre_step_cost = find_next_path_step(team->loc_x, team->loc_y, safezone->loc_x, safezone->loc_y, 0, &next_x, &next_y);
+        uint16_t remaining_after_step = 0;
+        int pre_step_cost = find_next_path_step_remaining(team->loc_x, team->loc_y, safezone->loc_x, safezone->loc_y, &next_x, &next_y, &remaining_after_step);
 
         if(pre_step_cost <= 0)
         {
@@ -257,12 +258,9 @@ void move_team(TeamState_t *team) //simulation
         team->loc_x = next_x;
         team->loc_y = next_y;
         if(g_simulation_trace_enabled) debug_trace(" -> (%d,%d)", team->loc_x, team->loc_y);
-        uint16_t step_cost = environment_cell_travel_cost(next_x, next_y);
-        if(step_cost >= (uint16_t)pre_step_cost)
-            team->cached_remaining_path_cost = 0;
-        else
-            team->cached_remaining_path_cost = (uint16_t)((uint16_t)pre_step_cost - step_cost);
-
+        /* From the pathfinder, not pre_step_cost minus the cell's travel
+         * cost: a diagonal step costs more than the cell it enters. */
+        team->cached_remaining_path_cost = remaining_after_step;
         team->cached_remaining_path_cost_tick = g_current_tick;
 
         if(g_simulation_trace_enabled) debug_trace(" | Destination: (%d,%d)\n", safezone->loc_x, safezone->loc_y);
@@ -297,18 +295,14 @@ void move_team(TeamState_t *team) //simulation
     }
 
     int next_x, next_y;
-    int pre_step_cost = find_next_path_step(team->loc_x, team->loc_y, task->loc_x, task->loc_y, 0, &next_x, &next_y);
+    uint16_t remaining_after_step = 0;
+    int pre_step_cost = find_next_path_step_remaining(team->loc_x, team->loc_y, task->loc_x, task->loc_y, &next_x, &next_y, &remaining_after_step);
     if(pre_step_cost > 0)
     {
         team->loc_x = next_x;
         team->loc_y = next_y;
         if(g_simulation_trace_enabled) debug_trace(" -> (%d,%d)", team->loc_x, team->loc_y);
-        uint16_t step_cost = environment_cell_travel_cost(next_x, next_y);
-        if(step_cost >= (uint16_t)pre_step_cost)
-            team->cached_remaining_path_cost = 0;
-        else
-            team->cached_remaining_path_cost = (uint16_t)((uint16_t)pre_step_cost - step_cost);
-
+        team->cached_remaining_path_cost = remaining_after_step;
         team->cached_remaining_path_cost_tick = g_current_tick;
     }
     else

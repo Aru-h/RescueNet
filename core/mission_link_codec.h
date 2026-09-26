@@ -167,7 +167,8 @@ void mission_link_parse_status_payload(const uint8_t *payload,
 void mission_link_apply_roster(const MissionLinkRoster_t *msg);
 
 /* Monotonic count of rosters mission_link_apply_roster() rejected whole
-   (bad team_id, or a location outside the grid). Both rejects are silent,
+   (bad team_id, a location outside the grid, an equipment_level above
+   EQ_MAX_LEVEL, or a specialization/fitness_tier outside its enum). Both rejects are silent,
    so a board gating boot on a roster arriving cannot otherwise distinguish
    "rejected" from "never sent" - see each board's own main_board.c
    roster-wait loop, which uses this to report the difference. */
@@ -181,6 +182,18 @@ uint32_t mission_link_roster_reject_count(void);
    (assignment, status, work_remaining) while one of its teams is on it -
    see the ownership comment above this function in mission_link.c. */
 void mission_link_apply_incident(const MissionLinkIncident_t *msg);
+
+/* Monotonic count of incidents mission_link_apply_incident() could not
+   keep because the local table was full: a new incident dropped for want
+   of a slot, plus each unworked, less urgent incident evicted to make
+   room for a strictly more urgent one (review finding H3). */
+uint32_t mission_link_incident_drop_count(void);
+
+/* Monotonic count of incident frames mission_link_apply_incident()
+   rejected whole because a field was out of range (location off the
+   grid, incident_type/req_capability/priority/status outside their
+   enums - review finding H4). */
+uint32_t mission_link_incident_reject_count(void);
 
 /* Ongoing: mirrors msg->active[]/severity[] into
    g_teams[msg->team_id].fault_state.active[]/severity[] - the two

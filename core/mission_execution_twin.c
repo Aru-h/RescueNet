@@ -385,18 +385,22 @@ static void twin_advance_expected_position(MissionExecutionTwin_t *twin, const T
 {
     int next_x = twin->expected_loc_x;
     int next_y = twin->expected_loc_y;
+    uint16_t remaining_after_step = 0;
+    int pre_step_cost;
 
     if(twin->expected_remaining_path_cost == 0u)
         return;
 
-    if(find_next_path_step(
+    pre_step_cost = find_next_path_step_remaining(
         twin->expected_loc_x,
         twin->expected_loc_y,
         twin->destination_x,
         twin->destination_y,
-        0,
         &next_x,
-        &next_y) <= 0)
+        &next_y,
+        &remaining_after_step);
+
+    if(pre_step_cost <= 0)
     {
         twin->expected_remaining_path_cost = resolve_actual_remaining_path_cost(
             twin->expected_loc_x,
@@ -410,7 +414,12 @@ static void twin_advance_expected_position(MissionExecutionTwin_t *twin, const T
     twin->expected_loc_y = (int16_t)next_y;
 
     {
-        uint16_t step_cost = environment_cell_travel_cost(next_x, next_y);
+        /* What this step takes off the route, as the pathfinder costs it
+         * (a diagonal step costs 1.4x the cell it enters) - the same drop
+         * move_team() applies to the real team's remaining cost. */
+        uint16_t step_cost = (uint16_t)pre_step_cost > remaining_after_step
+            ? (uint16_t)((uint16_t)pre_step_cost - remaining_after_step)
+            : 0u;
 
         if(step_cost >= twin->expected_remaining_path_cost)
             twin->expected_remaining_path_cost = 0;

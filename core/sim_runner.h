@@ -44,9 +44,11 @@ int sim_runner_init(void);
  *
  * DOES NOT CALL generate_world() — READ THIS BEFORE CHOOSING WHICH
  * FUNCTION TO CALL:
- * board/STM32N6570-DK/main_board.c does NOT call this function. It calls
+ * The boards' main_board.c (DK and Pico) do NOT call this function. They call
  * sim_start_seed_board() instead, which is IDENTICAL to this
- * function except it skips generate_world(). This split exists
+ * function except that in place of generate_world() it runs only the
+ * board-safe subset of generate_world()'s per-run module resets (see
+ * its doc below). This split exists
  * because per the laptop/board mission-link architecture, the
  * laptop is the sole world authority — a board must not generate
  * its own world/team roster locally, it receives them over the
@@ -69,23 +71,39 @@ void sim_start_seed(uint32_t seed, FaultProfile_t fault_profile);
  * team/incident/environment state locally — that state arrives over
  * the mission link (MissionLinkRoster_t / MissionLinkIncident_t /
  * MissionLinkFault_t, core/mission_link.h) from the laptop instead.
+ * It does run the module resets generate_world() performs that touch
+ * only a module's own state (watchdog, mission-execution twin, CBBA
+ * improvement counters, recovery manager, fault comms/fault buffer,
+ * search-zone bookkeeping), so those start from their intended
+ * defaults rather than zero-initialised statics. It must never call
+ * anything that clears g_incidents[], the g_teams[] roster/location
+ * fields, the map or the sites: all of that may already have arrived
+ * from the laptop before the seed starts. See the list in
+ * sim_runner.c for what each call touches.
  *
- * ONLY caller: board/STM32N6570-DK/main_board.c. If you're tempted to
+ * ONLY callers: board/STM32N6570-DK/main_board.c and
+ * board/Raspberry_Pi_Pico/main_board.c. If you're tempted to
  * call this from anywhere else, stop and check: does that caller
  * receive its world state from a mission-link peer? If not, it
  * wants sim_start_seed(), not this.
  *
  * MAINTENANCE WARNING — this function's body is a deliberate,
  * partial duplicate of sim_start_seed()'s (same fault-profile /
- * snapshot-open lines, minus generate_world()). If you change
- * sim_start_seed()'s fault-profile or snapshot-open logic, mirror
- * that change here too (or factor the shared lines into a static
- * helper both functions call) — do NOT let the two silently
- * diverge on anything other than the generate_world() call, or a
+ * snapshot-open lines) plus a hand-picked subset of generate_world()'s
+ * module resets. If you change sim_start_seed()'s fault-profile or
+ * snapshot-open logic, mirror that change here too (or factor the
+ * shared lines into a static helper both functions call); and if you
+ * add a module reset to generate_world() (core/simulation.c), decide
+ * whether it is board-safe and add it here too if so — do NOT let the
+ * two silently diverge on anything other than world generation, or a
  * board build and a laptop build will start a seed in
  * inconsistently-initialized states for no documented reason. There
  * is currently no compiler or test that catches this drift for
  * you; it is only caught by reading both functions side by side.
+ *
+ * Once per boot only: g_current_tick follows the laptop's clock and
+ * is never reset here, so a second seed would start with its tick
+ * loop already finished (main_board.c asserts BOARD_SEED_COUNT == 1).
  */
 void sim_start_seed_board(uint32_t seed, FaultProfile_t fault_profile);
 

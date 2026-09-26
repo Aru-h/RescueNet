@@ -206,6 +206,12 @@ typedef struct __attribute__((packed))
     uint8_t severity[NUM_OPERATIONAL_FAULT_CLASSES];
 } MissionLinkFault_t;
 
+/* Upper bound mission_link_apply_fault() clamps each severity[] entry to
+   on receipt. Real fault profiles use 1-3 (core/fault_config.c's
+   effect_strength); nothing indexes by severity, so this only bounds the
+   arithmetic a corrupted frame could drive (see that function). */
+#define MISSION_LINK_FAULT_SEVERITY_MAX ((uint8_t)10u)
+
 #define MISSION_LINK_FAULT_PAYLOAD_SIZE \
     ((uint32_t)sizeof(MissionLinkFault_t)) /* 11 bytes, NUM_OPERATIONAL_FAULT_CLASSES == 5 */
 

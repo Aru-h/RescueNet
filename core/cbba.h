@@ -28,12 +28,25 @@
  *   BOARD) to the other board every round it has something to report.
  *   The other board's own worst-case burst is therefore up to 5
  *   frames, serialized one at a time over this single half-duplex
- *   channel. Using core/cbba.c's compact CBBAWireMessage_t (129-byte
- *   on-air frame, not the original 172 - see that type's own doc) and
- *   the SX126x time-on-air formula at SF7/BW125/CR4:5/preamble
- *   8/explicit header/CRC on (core/lora_radio_params.h): one frame is
- *   ~215.3 ms, so 5 frames is ~1076.5 ms. Adding ~15% margin for
- *   radio/processing overhead and rounding gives 1250 ms.
+ *   channel. This 1250 ms was calibrated for the earlier dense, slot-
+ *   indexed CBBA frame (101-byte payload, 129 bytes on air): by the
+ *   SX126x time-on-air formula at SF7/BW125/CR4:5/preamble 8/explicit
+ *   header/CRC on (core/lora_radio_params.h) one frame is ~215.3 ms,
+ *   so 5 frames is ~1076.5 ms, plus ~15% margin and rounding.
+ *
+ *   KNOWN GAP since the wire format became incident-keyed (core/cbba.c
+ *   CBBAWireHeader_t, review finding H2): the frame is now variable
+ *   length, 42 + 5 bytes per ASSIGNED incident. Up to 11 assigned
+ *   incidents it is no bigger than the old frame, so the budget above
+ *   holds; the worst case (all 20 assigned: 142-byte payload, 170 on
+ *   air, ~276.7 ms) makes a full 5-frame burst ~1383.5 ms, which this
+ *   timeout does not cover. A reply that misses the window is not lost -
+ *   it stays in the inbox and is ingested at the start of the next
+ *   round - it just lands a tick late. The timeout was deliberately NOT
+ *   raised to fit: MISSION_LINK_HEARTBEAT_INTERVAL_MS (mission_link.h)
+ *   must stay a whole multiple of it (5000 = 4 x 1250, enforced by a
+ *   _Static_assert in mission_link.c) and is mirrored by telemetry_
+ *   bridge.py, so changing it is a link-timing decision of its own.
  *
  *   This still ONLY fits comfortably inside the 1x (36 s/tick) and 10x
  *   (3.6 s/tick) sim-speed tick budgets (1250 ms is ~3.5%/~35% of
@@ -118,5 +131,16 @@ void cbba_reset_improvement_counters(void);
    comms_transport itself" pattern as lora_frame_accept_count() (core/
    lora_frame.h). */
 uint32_t cbba_broadcast_send_count(void);
+
+/* Monotonic count of whole CBBA mesh frames cbba_ingest_remote_mesh_
+   replies() dropped as malformed or untrusted: wrong length, sender_id
+   >= NUM_TEAMS, or a sender_id hosted on this very board (see
+   cbba_decode_wire_message() in cbba.c - review finding H5). Never reset. */
+uint32_t cbba_wire_reject_count(void);
+
+/* Monotonic count of individual claims dropped from otherwise-valid CBBA
+   frames because their winner was neither a team id nor NO_ASSIGNMENT.
+   Never reset. */
+uint32_t cbba_wire_entry_reject_count(void);
 
 #endif

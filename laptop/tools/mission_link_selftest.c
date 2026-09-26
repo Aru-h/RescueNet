@@ -195,8 +195,11 @@ static MissionLinkIncident_t make_incident_with_id(uint32_t incident_id,
     MissionLinkIncident_t inc;
 
     inc.incident_id = incident_id;
-    inc.loc_x = (int16_t)(incident_id % 30000u);
-    inc.loc_y = -30;
+    /* Kept on the grid: mission_link_apply_incident() now rejects an
+       off-grid location outright (review finding H4), and several tests
+       below apply these. Still derived from incident_id. */
+    inc.loc_x = (int16_t)(incident_id % GRID_WIDTH);
+    inc.loc_y = (int16_t)((incident_id / GRID_WIDTH) % GRID_HEIGHT);
     inc.work_remaining = work_remaining;
     inc.priority = priority;
     inc.incident_type = 0u;   /* INCIDENT_STRUCTURAL_COLLAPSE */

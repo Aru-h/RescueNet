@@ -12,6 +12,20 @@ int find_next_path_step_with_equipment(
     uint8_t equipment_flags,
     int *next_x,
     int *next_y);
+/* Same search as find_next_path_step(), and also reports the cost of the
+ * route that remains once the team has taken that first step. move_team()
+ * and the mission-execution twin use this instead of subtracting the next
+ * cell's travel cost themselves: with diagonal steps a step costs more
+ * than the cell's travel cost, and the route cost is rounded from a finer
+ * internal scale, so only the pathfinder knows the exact drop. */
+int find_next_path_step_remaining(
+    int start_x,
+    int start_y,
+    int dest_x,
+    int dest_y,
+    int *next_x,
+    int *next_y,
+    uint16_t *remaining_after_step);
 uint16_t find_path_cost(int start_x, int start_y,int dest_x, int dest_y);
 uint16_t find_path_cost_with_equipment(
     int start_x,

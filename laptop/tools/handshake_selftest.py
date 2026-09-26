@@ -43,7 +43,6 @@ from telemetry_bridge import (
     HandshakeReplyParser,
     HANDSHAKE_MAGIC0,
     HANDSHAKE_MAGIC1,
-    HANDSHAKE_REPLY_WIRE_SIZE,
     MISSION_LINK_PROTOCOL_VERSION,
     handshake_checksum,
     pack_handshake_req,

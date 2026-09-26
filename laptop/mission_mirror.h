@@ -39,7 +39,11 @@
    is generated. */
 void mission_mirror_begin(void);
 
-/* Applies one board report - see the file comment. */
+/* Applies one board report - see the file comment. Ignored (and counted
+   in mission_mirror_reports_ignored()) when its status is not a
+   TeamStatus_t value, or when its report_tick is older than the last
+   report applied for that team (out-of-order delivery). equipment_level
+   is clamped to EQ_MAX_LEVEL. */
 void mission_mirror_apply_status(const MissionLinkStatus_t *status);
 
 /* Parses one stdin line. Returns 1 if it was a valid MLSTATUS line (and
@@ -51,5 +55,7 @@ uint32_t mission_mirror_reports_applied(void);
 uint32_t mission_mirror_lines_rejected(void);
 uint32_t mission_mirror_stages_completed(void);
 uint32_t mission_mirror_incidents_reopened(void);
+/* Reports mission_mirror_apply_status() refused - see its doc. */
+uint32_t mission_mirror_reports_ignored(void);
 
 #endif /* MISSION_MIRROR_H */

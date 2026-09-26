@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 
 CSV = "tron_snapshot_dataset.csv"
 CHUNK = 2_000_000  # rows per chunk, safe for limited RAM

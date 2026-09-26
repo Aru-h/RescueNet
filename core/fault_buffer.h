@@ -39,11 +39,13 @@
 
 /* Wire feature count for a FAULT_BROADCAST payload (core/fault_comms.h,
    Prompt 1): 7 accumulated_evidence[] floats + equipment_level/100.0f +
-   confirmed_mobility_impairment + incident_priority + victim_count.
+   confirmed_mobility_impairment + incident_priority + victim_count +
+   env_raw_travel_cost (environment_cell_travel_cost() at the team's own
+   cell, raw 0-255 - same value as the snapshot CSV column).
    Defined here (not in fault_comms.h) because this module needs it to
    size the remote evidence ring, and fault_comms.c already depends on
    this header. */
-#define FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES 11u
+#define FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES 12u
 
 /*
  * ---------------------------------------------------------------
@@ -121,7 +123,7 @@ _Static_assert(FAULT_BUFFER_TEAMS_PER_BOARD < FAULT_BUFFER_FULL_STRENGTH_QUORUM,
 
 typedef struct
 {
-    float    evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES]; /* full 11-feature vector */
+    float    evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES]; /* full 12-feature vector */
     uint32_t tick;
     uint8_t  known;
 } FaultBufferLocalSample_t;

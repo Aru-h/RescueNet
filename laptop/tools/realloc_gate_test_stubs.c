@@ -11,6 +11,7 @@
  * for-loop) to run for real, which none of these touch.
  */
 #include "watchdog.h"
+#include "environment.h"
 #include "fault_predictor.h"
 #include "mission_state.h"
 #include "incident.h"
@@ -43,7 +44,14 @@ float watchdog_get_mobility_stall_fraction(uint8_t team_id)
     return 0.0f;
 }
 
-FaultPredictorScores_t fault_predictor_run(const float evidence[11])
+uint8_t environment_cell_travel_cost(int x, int y)
+{
+    (void)x;
+    (void)y;
+    return 1u;
+}
+
+FaultPredictorScores_t fault_predictor_run(const float evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES])
 {
     (void)evidence;
     return g_test_predictor_scores[0];

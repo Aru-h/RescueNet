@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-env-raw-travel-cost-ablation
 
 all: $(TARGET) $(LABELER)
 
@@ -145,7 +145,7 @@ ifneq ($(wildcard $(BSP_DIR)/include),)
   BSP_MODE = real BSP2 headers ($(BSP_DIR))
 else
   ARM_CFLAGS = $(ARM_CFLAGS_BASE)
-  # board/STM32N6570-DK/debug.c and main_board.c call real BSP APIs
+  # board/STM32N6570-DK/dk_debug.c and main_board.c call real BSP APIs
   # (tm_printf, tk_cre_tsk, ...) now, so they genuinely can't compile
   # without board/STM32N6570-DK/vendor/mtk3_bsp2 -- that's correct,
   # not a check-board bug. Fallback mode checks core/ only: still a
@@ -527,7 +527,7 @@ check-two-board-cbba-harness:
 	@chmod +x $(TOOLS_DIR)/check-two-board-cbba-harness.sh
 	@$(TOOLS_DIR)/check-two-board-cbba-harness.sh
 
-# --- mission_link.c status-reporting ABORT_MISSION gate selftest -----------
+# --- mission_link.c status-reporting under ABORT_MISSION regression test ---
 # core/fault_predictor.c and core/watchdog.c are excluded from CORE_SOURCES
 # below (this test provides its own strong overrides so it can drive a
 # real ABORT_MISSION recommendation with a synthetic confidence sequence -
@@ -536,16 +536,18 @@ check-two-board-cbba-harness:
 FAULT_COMMS_ABORT_GATE_TEST_CORE_SOURCES = $(filter-out $(CORE_DIR)/fault_predictor.c $(CORE_DIR)/watchdog.c,$(CORE_SOURCES))
 
 # Confirms board/STM32N6570-DK/mission_link_task.c's mission_link_
-# status_tx_step() new RECOVERY_ACTION_ABORT_MISSION gate with REAL
-# frame sequencing: links the actual mission_link_task.c, calls its
-# real public mission_link_task_step(), and decodes the real wire
-# bytes it writes (captured via this test's own tm_putchar() stub,
+# status_tx_step() keeps reporting a team whose recovery recommendation
+# is RECOVERY_ACTION_ABORT_MISSION (it used to skip such teams, hiding
+# the abort-to-rest status/location change from the laptop). REAL frame
+# sequencing: links the actual mission_link_task.c, calls its real
+# public mission_link_task_step() twice (once to anchor every team, once
+# after team 0 aborts and moves), and decodes the real wire bytes it
+# writes (captured via this test's own tm_putchar() stub,
 # laptop/tools/mission_link_gate_test_stubs/) with the real core/
 # mission_link.c mission_link_parse_status() codec - see laptop/tools/
 # mission_link_status_gate_test.c's own header doc. Excludes core/
-# fault_predictor.c and core/watchdog.c from CORE_SOURCES for the same
-# reason check-fault-comms-abort-gate does (this test provides its own
-# strong overrides to drive a real ABORT_MISSION recommendation).
+# fault_predictor.c and core/watchdog.c from CORE_SOURCES as described
+# above.
 MISSION_LINK_STATUS_GATE_TEST_BIN = build/mission_link_status_gate_test
 
 check-mission-link-status-gate:
@@ -641,6 +643,16 @@ check-persistence-bounded-forgiveness:
 # not a pass/fail gate.
 check-environment-e2e-stress:
 	$(PYTHON) $(TOOLS_DIR)/environment_class_e2e_stress.py
+
+# --- env_raw_travel_cost before/after ablation --------------------------
+# Environment-class F1 with and without the env_raw_travel_cost CSV
+# column (laptop/snapshot.c; environment_cell_travel_cost() at the team's
+# own cell). Same sklearn pipeline as the other ablations. Requires
+# tron_snapshot_dataset.csv generated with --fault-profile=combined
+# (e.g. `./tron 1 5 3000 --fault-profile=combined`) - not run
+# automatically, same reason as check-environment-e2e-stress.
+check-env-raw-travel-cost-ablation:
+	$(PYTHON) $(TOOLS_DIR)/env_raw_travel_cost_ablation.py
 
 # --- Standalone laptop/tools selftests ---------------------------------------
 # These seven selftests existed with no Makefile target at all, so nothing
@@ -834,3 +846,46 @@ check-two-board-mission-harness:
 	done
 	@echo "check-two-board-mission-harness: clock, map, sites and positions crossed both boards"
 
+
+# =============================================================================
+# Agent C review-fix tests (board code, dashboard and tooling)
+# =============================================================================
+
+# app.py's cross-site request forgery guard, through Flask's test client:
+# JSON same-origin/tooling POSTs work; text/plain and form POSTs (CORS-
+# "simple", sent cross-site with no preflight) are 415 with no side effect;
+# a foreign Origin/Referer is 403 even as JSON. Skips if Flask is missing.
+# See laptop/tools/dashboard_csrf_selftest.py.
+.PHONY: check-dashboard-csrf-selftest
+check-dashboard-csrf-selftest:
+	@cd $(TOOLS_DIR) && $(PYTHON) dashboard_csrf_selftest.py
+
+# ---------------------------------------------------------------------
+# Board-to-board protocol review fixes (H2 H3 H4 H5) - selftests.
+# Each is built twice, plainly and under ASan/UBSan: several of these
+# tests feed deliberately malformed frames whose only failure mode on
+# the old code was an out-of-bounds access, which a CHECK() alone can
+# miss.
+# ---------------------------------------------------------------------
+AGENT_B_SANITIZE = -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined
+
+.PHONY: check-mission-link-validation-selftest
+check-mission-link-validation-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/mission_link_validation_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/mission_link_validation_selftest \
+		$(TOOLS_DIR)/mission_link_validation_selftest.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@$(CC) $(SELFTEST_CFLAGS) $(AGENT_B_SANITIZE) -o $(SELFTEST_BIN_DIR)/mission_link_validation_selftest_asan \
+		$(TOOLS_DIR)/mission_link_validation_selftest.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./mission_link_validation_selftest > /dev/null 2>&1 && \
+		./mission_link_validation_selftest_asan
+
+.PHONY: check-cbba-wire-validation
+check-cbba-wire-validation:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/cbba_board_selftest.c (ASan/UBSan)"
+	@$(CC) $(SELFTEST_CFLAGS) $(AGENT_B_SANITIZE) -o $(SELFTEST_BIN_DIR)/cbba_board_selftest_asan \
+		$(TOOLS_DIR)/cbba_board_selftest.c $(CBBA_BOARD_SELFTEST_CORE_SOURCES) $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./cbba_board_selftest_asan
