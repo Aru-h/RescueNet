@@ -11,6 +11,7 @@
 #include "watchdog.h"
 #include "search_zones.h"
 #include "mission_link.h"
+#include "environment.h" /* environment_cell_travel_cost() - env_raw_travel_cost column below */
 
 /*
  * core/cbba.c's cbba_team_is_local() - public, but deliberately not
@@ -211,7 +212,10 @@ void snapshot_begin_run(uint32_t seed)
         "fault_severity_environment,fault_severity_mission,"
         "fault_ticks_remaining_mobility,fault_ticks_remaining_communication,"
         "fault_ticks_remaining_resource,fault_ticks_remaining_environment,"
-        "fault_ticks_remaining_mission\n");
+        "fault_ticks_remaining_mission,"
+        "env_raw_travel_cost,"
+        "team_task_pool,team_task_slot,heading_to_rest,resting_zone_id,"
+        "incident_floor,incident_building_id\n");
 }
 
 /*
@@ -224,7 +228,7 @@ void snapshot_begin_run(uint32_t seed)
 static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
     uint8_t team_id, int incident_id, int priority, int capability,
     int ix, int iy, int victims, unsigned hazards, int selected_team,
-    int support_team, int discovered)
+    int support_team, int discovered, int floor, int building_id)
 {
     TeamState_t *team;
     MissionExecutionTwin_t *twin;
@@ -232,6 +236,7 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
     RecoveryStatus_t recovery;
     uint8_t zone_id;
     uint8_t zone_trust;
+    uint8_t env_raw_travel_cost;
     float display_stamina;
 
     if(g_snapshot_file == NULL || team_id >= NUM_TEAMS)
@@ -261,8 +266,24 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
     zone_id = zone_id_for_location(team->loc_x, team->loc_y);
     zone_trust = search_zone_trust(zone_id, cycle);
 
+    /* fault_predictor_architecture_v4.md Section 8 item 4: a raw, non-
+     * twin-relative reading of the team's own live grid cell's travel
+     * cost - environment_cell_travel_cost() reads the SAME shared
+     * g_environment[][] grid inject_environment_fault() (core/
+     * fault_injector.c) writes its cost bump into, at the team's
+     * actual current position, not twin_remaining_path_cost's twin-
+     * relative comparison (which the same doc section identifies as
+     * the reason ENVIRONMENT-class faults are structurally invisible
+     * to every other logged signal - the twin's own expected-cost
+     * recomputation cancels the bump before it ever shows up as
+     * error). This is a plain derived-for-logging value, computed
+     * here the same way zone_id/zone_trust just above it are -
+     * nothing in TeamState_t/MissionExecutionTwin_t changes size or
+     * layout. */
+    env_raw_travel_cost = environment_cell_travel_cost(team->loc_x, team->loc_y);
+
     fprintf(g_snapshot_file,
-        "%u,%u,%u,%u,%d,%d,%.2f,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%d,%d,%u,%.4f,%u,%u,%u,%u,%u,%.4f,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+        "%u,%u,%u,%u,%d,%d,%.2f,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%d,%d,%u,%.4f,%u,%u,%u,%u,%u,%.4f,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d\n",
         g_run_id,
         g_dataset_seed,
         cycle,
@@ -346,7 +367,17 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
             ? team->fault_state.recovery_tick[FAULT_CLASS_ENVIRONMENT] - cycle : 0u),
         (team->fault_state.active[FAULT_CLASS_MISSION] &&
          team->fault_state.recovery_tick[FAULT_CLASS_MISSION] > cycle
-            ? team->fault_state.recovery_tick[FAULT_CLASS_MISSION] - cycle : 0u));
+            ? team->fault_state.recovery_tick[FAULT_CLASS_MISSION] - cycle : 0u),
+        env_raw_travel_cost,
+        /* The team's own tasking, as watchdog.c's update_movement_stalls()
+         * sees it (its leg-change reset) - evidence_channels.py mirrors
+         * that from these. Observable tasking, not fault_state. */
+        (unsigned)team->assigned_task_pool,
+        (unsigned)team->assigned_task_slot,
+        (unsigned)team->heading_to_rest,
+        (unsigned)team->resting_zone_id,
+        floor,
+        building_id);
 }
 
 void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)
@@ -362,6 +393,8 @@ void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)
     int selected_team = NO_ASSIGNMENT;
     int support_team = -1;
     int discovered = -1;
+    int floor = -1;
+    int building_id = -1;
 
     if(team_id >= NUM_TEAMS)
         return;
@@ -396,11 +429,13 @@ void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)
         selected_team = inc->assigned_team;
         support_team = (inc->support_team == NO_ASSIGNMENT) ? -1 : (int)inc->support_team;
         discovered = inc->discovered;
+        floor = inc->floor;
+        building_id = inc->building_id == INCIDENT_NO_BUILDING ? -1 : (int)inc->building_id;
     }
 
     write_snapshot_row(cycle, event_type, team_id, incident_id, priority,
         capability, ix, iy, victims, hazards, selected_team, support_team,
-        discovered);
+        discovered, floor, building_id);
 }
 
 /*
@@ -423,6 +458,8 @@ void snapshot_record_resolved(uint32_t cycle, TaskPool_t pool, const IncidentSta
     int selected_team = NO_ASSIGNMENT;
     int support_team = -1;
     int discovered = -1;
+    int floor = -1;
+    int building_id = -1;
 
     if(task == NULL || task->assigned_team >= NUM_TEAMS)
         return;
@@ -439,11 +476,13 @@ void snapshot_record_resolved(uint32_t cycle, TaskPool_t pool, const IncidentSta
         selected_team = task->assigned_team;
         support_team = (task->support_team == NO_ASSIGNMENT) ? -1 : (int)task->support_team;
         discovered = task->discovered;
+        floor = task->floor;
+        building_id = task->building_id == INCIDENT_NO_BUILDING ? -1 : (int)task->building_id;
     }
 
     write_snapshot_row(cycle, EVENT_INCIDENT_RESOLVED, task->assigned_team,
         incident_id, priority, capability, ix, iy, victims, hazards,
-        selected_team, support_team, discovered);
+        selected_team, support_team, discovered, floor, building_id);
 }
 
 void snapshot_end_run(void)

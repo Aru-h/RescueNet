@@ -98,7 +98,9 @@ uint8_t recovery_manager_persistence_streak_step_bounded_forgiveness(
  * watchdog_get_evidence_vector()'s 7 accumulated_evidence[] channels,
  * team->equipment_level/100.0f, confirmed_mobility_impairment, then
  * incident_priority/victim_count looked up from whichever task pool
- * team_id is currently assigned to (0.0f for both when unassigned).
+ * team_id is currently assigned to (0.0f for both when unassigned), then
+ * env_raw_travel_cost (environment_cell_travel_cost() at the team's own
+ * cell).
  *
  * Exposed here (not static/inlined in evaluate_fault_predictor(), same
  * rationale as recovery_manager_persistence_streak_step() above) purely

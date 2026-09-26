@@ -325,6 +325,14 @@ typedef struct {
     uint8_t  spawned_by;
     uint8_t  support_team;
     uint16_t work_remaining;
+    /* Building the incident is in (INCIDENT_NO_BUILDING when it isn't in
+     * one) and the floor it is on, 0 = ground. Set by generate_incident_at()
+     * on the laptop; not sent over mission_link. stage_work is what
+     * work_remaining resets to at each stage: INCIDENT_BASE_STAGE_WORK
+     * scaled up by floor (see incident_stage_work_for_floor()). */
+    uint16_t building_id;
+    uint8_t  floor;
+    uint16_t stage_work;
     uint8_t discovered;                          /* Fog-of-war reveal flag */
     uint8_t mission_fault_active_count;          /* Fault injection tracking */
     uint8_t unreachable_streak;                  /* consecutive no-path abandons; quarantines a
@@ -350,6 +358,14 @@ typedef struct {
     uint8_t evac_gateway_id;       /* NO_EVAC_TARGET until a gateway is picked */
     uint8_t evac_capacity;         /* max evacuees this run can carry per trip */
 } IncidentState_t;
+
+#define INCIDENT_NO_BUILDING      0xFFFFu
+/* On-scene work per stage: 100 on the ground floor, +15% per floor above
+ * it (getting equipment and people up and victims down), capped at 250
+ * (reached at floor 10). */
+#define INCIDENT_BASE_STAGE_WORK  100u
+#define INCIDENT_FLOOR_WORK_PCT   15u
+#define INCIDENT_MAX_STAGE_WORK   250u
 
 /* One board-side cache slot: a single MissionLinkIncident_t frame
  * (the board's already-partial, wire-shaped view of an incident - see

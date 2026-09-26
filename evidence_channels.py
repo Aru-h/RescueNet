@@ -46,6 +46,9 @@ STAGNATION_STREAK_MAX = 5
 TIMEOUT_STREAK_MAX = 6
 MOBILITY_CONFIRM_TICKS = 3
 MOBILITY_PROGRESS_MARGIN = 0.02
+# Stall-based mobility detection (update_movement_stalls() in watchdog.c).
+STALL_WINDOW_TICKS = 4
+STALL_CONFIRM_COUNT = 2
 
 STATUS_AVAILABLE = 0
 STATUS_EN_ROUTE = 1
@@ -67,7 +70,8 @@ RAW_COLUMNS = [
     "twin_communication_health", "status", "twin_expected_operating_state",
     "twin_mission_stage", "twin_assigned_task_pool", "twin_assigned_task_slot",
     "twin_remaining_path_cost", "twin_actual_progress", "twin_expected_progress",
-    "twin_expected_arrival_tick",
+    "twin_expected_arrival_tick", "loc_x", "loc_y",
+    "team_task_pool", "team_task_slot", "heading_to_rest", "resting_zone_id",
 ]
 
 DEFAULTS = {
@@ -84,6 +88,12 @@ DEFAULTS = {
     "twin_actual_progress": 0.0,
     "twin_expected_progress": 0.0,
     "twin_expected_arrival_tick": 0,
+    "loc_x": 0,
+    "loc_y": 0,
+    "team_task_pool": TASK_POOL_NONE,
+    "team_task_slot": NO_ASSIGNMENT_SLOT,
+    "heading_to_rest": 0,
+    "resting_zone_id": 0,
 }
 
 FLAG_BITS = {
@@ -126,6 +136,11 @@ def reconstruct_full_timeline(team_rows, run_max_cycle):
     n_gap_ticks = int((~was_logged).sum())
 
     reindexed = team_rows.reindex(full_index)
+    # Datasets written before the tasking columns existed: the leg never
+    # changes, i.e. the pre-N2 stall behaviour.
+    for col in RAW_COLUMNS:
+        if col not in reindexed.columns:
+            reindexed[col] = DEFAULTS[col]
     reindexed[RAW_COLUMNS] = reindexed[RAW_COLUMNS].ffill()
 
     for col, default in DEFAULTS.items():
@@ -149,8 +164,10 @@ def recompute_team_timeline(full_timeline):
       - recomputed_anomaly_confidence / recomputed_anomaly_detected: the
         combined weighted score and its threshold-based detection flag
       - confirmed_mobility_impairment: 0/1, disambiguates a genuine mobility
-        fault from an ENVIRONMENT-class obstruction by checking whether
-        travel-time progress degradation persists after arrival on scene
+        fault from an ENVIRONMENT-class obstruction: set by movement stalls
+        while travelling (update_movement_stalls()) or by travel-time
+        progress degradation that persists after arrival on scene
+        (update_mobility_confirmation())
     """
     n = len(full_timeline)
     acc = {ch: 0.0 for ch in WEIGHTS}
@@ -164,6 +181,14 @@ def recompute_team_timeline(full_timeline):
     mobility_watch_ticks = 0
     mobility_watch_baseline_error = 0.0
     confirmed_mobility_impairment = False
+
+    # update_movement_stalls() state: newest EN_ROUTE tick in bit 0.
+    stall_mask = (1 << STALL_WINDOW_TICKS) - 1
+    stall_history = 0
+    stall_samples = 0
+    last_loc = None
+    # The travel leg seen last tick (watchdog_init() zeroes these).
+    last_leg = (0, 0, 0, 0)
 
     path_stagnation_streak = 0
     last_remaining_cost = None
@@ -188,6 +213,35 @@ def recompute_team_timeline(full_timeline):
         inst_operating_state = 0.0 if row["status"] == row["twin_expected_operating_state"] else 1.0
 
         now_en_route = row["status"] == STATUS_EN_ROUTE
+
+        # update_movement_stalls() - runs before the mobility confirmation
+        # below, which is what advances prev_status.
+        loc = (row["loc_x"], row["loc_y"])
+        leg = (row["team_task_pool"], row["team_task_slot"],
+               row["heading_to_rest"], row["resting_zone_id"])
+        # A re-task, or a heading-to-rest team retargeting to another safe
+        # zone, restarts the window and that tick is not sampled.
+        leg_changed = (leg[0] != last_leg[0] or leg[1] != last_leg[1] or
+                       leg[2] != last_leg[2] or
+                       (leg[2] and leg[3] != last_leg[3]))
+        if (now_en_route and prev_status == STATUS_EN_ROUTE and has_last_sample
+                and not leg_changed):
+            stalled = 1 if loc == last_loc else 0
+            stall_history = ((stall_history << 1) | stalled) & stall_mask
+            if stall_samples < STALL_WINDOW_TICKS:
+                stall_samples += 1
+            if bin(stall_history).count("1") >= STALL_CONFIRM_COUNT:
+                confirmed_mobility_impairment = True
+                travel_degradation_seen = True
+            elif stall_samples >= STALL_WINDOW_TICKS and stall_history == 0:
+                confirmed_mobility_impairment = False
+        elif not now_en_route or leg_changed:
+            stall_history = 0
+            stall_samples = 0
+        last_loc = loc
+        last_leg = leg
+
+        # update_mobility_confirmation()
         now_on_scene = row["status"] == STATUS_ON_SCENE
         was_en_route = prev_status == STATUS_EN_ROUTE
 
@@ -222,7 +276,9 @@ def recompute_team_timeline(full_timeline):
         has_assignment = row["twin_assigned_task_pool"] != TASK_POOL_NONE and \
                           row["twin_assigned_task_slot"] != NO_ASSIGNMENT_SLOT
 
-        if not in_travel or not has_assignment:
+        # path_evidence() gates on mission_stage alone: a team heading to a
+        # safe zone is in TRAVEL with no task slot and still accrues evidence.
+        if not in_travel:
             path_stagnation_streak = 0
             inst_path = 0.0
         elif not has_last_sample:

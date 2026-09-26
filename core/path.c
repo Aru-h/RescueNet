@@ -9,6 +9,17 @@ static uint8_t path_in_bounds(int x, int y)
     return x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT;
 }
 
+/* 8-direction movement. A* runs in tenths of a cost unit so a diagonal
+ * step can cost 1.4x the entered cell's travel cost exactly (14 vs 10)
+ * without integer rounding making a cost-1 diagonal as cheap as a
+ * straight step. Every cost this file returns is rounded back to whole
+ * units, so callers keep the units they always had. A team still moves
+ * exactly one cell per tick, diagonal or not. */
+#define PATH_COST_SCALE 10u
+#define PATH_STRAIGHT_WEIGHT 10u
+#define PATH_DIAGONAL_WEIGHT 14u
+#define PATH_G_UNREACHED UINT32_MAX
+
 /* --- Intra-call path cost cache ---------------------------------------
  * Direct-mapped, fixed-size table. A collision just means a cache miss
  * (the incoming key overwrites whatever was there) -- never a wrong
@@ -23,7 +34,7 @@ typedef struct
     uint8_t occupied;
     int16_t start_x, start_y, dest_x, dest_y;
     uint8_t equipment_flags;
-    int32_t cost;
+    int32_t cost;           /* tenths (PATH_COST_SCALE); -1 = no route */
     int16_t next_x, next_y;
 } PathCacheEntry_t;
 
@@ -96,7 +107,7 @@ static void path_cache_store(
 
 typedef struct //path
 {
-    uint16_t g_cost;
+    uint32_t g_cost;        /* tenths (PATH_COST_SCALE) */
     uint8_t parent_x;
     uint8_t parent_y;
     uint8_t state;
@@ -132,9 +143,59 @@ static uint8_t can_traverse_cell(int x, int y, uint8_t equipment_flags)
     return environment_cell_is_navigable(x, y);
 }
 
-static uint16_t get_heuristic(int x,int y,int dest_x,int dest_y) //path
+/* Octile distance in tenths. Admissible: every navigable cell costs at
+ * least 1 (see get_movement_cost()), so no route to dest can be cheaper. */
+static uint32_t get_heuristic(int x,int y,int dest_x,int dest_y) //path
 {
-    return abs(x-dest_x)+abs(y-dest_y);
+    int ax = abs(x - dest_x);
+    int ay = abs(y - dest_y);
+    int diag = ax < ay ? ax : ay;
+    int straight = (ax > ay ? ax : ay) - diag;
+
+    return (uint32_t)straight * PATH_STRAIGHT_WEIGHT +
+           (uint32_t)diag * PATH_DIAGONAL_WEIGHT;
+}
+
+/* Cost in tenths of stepping from (from_x, from_y) into the adjacent
+ * cell (to_x, to_y), or -1 if that step is not allowed. A diagonal step
+ * must not cut a corner: both cells it squeezes between have to be
+ * navigable, otherwise a team could slip diagonally past the end of a
+ * wall, a blocked road or a collapsed building. */
+static int32_t path_step_cost(int from_x, int from_y, int to_x, int to_y,
+                              uint8_t equipment_flags)
+{
+    int cell_cost = get_movement_cost(to_x, to_y, equipment_flags);
+
+    if(cell_cost < 0)
+        return -1;
+
+    /* A navigable cell always costs at least 1 - the octile heuristic
+     * above relies on it. */
+    if(cell_cost < 1)
+        cell_cost = 1;
+
+    if(from_x != to_x && from_y != to_y)
+    {
+        if(get_movement_cost(to_x, from_y, equipment_flags) < 0 ||
+           get_movement_cost(from_x, to_y, equipment_flags) < 0)
+            return -1;
+
+        return (int32_t)cell_cost * (int32_t)PATH_DIAGONAL_WEIGHT;
+    }
+
+    return (int32_t)cell_cost * (int32_t)PATH_STRAIGHT_WEIGHT;
+}
+
+/* Tenths -> whole cost units, rounded, kept clear of the UINT16_MAX
+ * "unreachable" value find_path_cost() returns. */
+static int path_cost_to_units(int32_t tenths)
+{
+    int32_t units = (tenths + (int32_t)(PATH_COST_SCALE / 2u)) / (int32_t)PATH_COST_SCALE;
+
+    if(units > (int32_t)UINT16_MAX - 1)
+        units = (int32_t)UINT16_MAX - 1;
+
+    return (int)units;
 }
 
 /*
@@ -185,8 +246,7 @@ static uint32_t path_heap_f_cost(PathNode_t nodes[GRID_WIDTH][GRID_HEIGHT],
     int x = cell / GRID_HEIGHT;
     int y = cell % GRID_HEIGHT;
 
-    return (uint32_t)nodes[x][y].g_cost +
-           get_heuristic(x, y, dest_x, dest_y);
+    return nodes[x][y].g_cost + get_heuristic(x, y, dest_x, dest_y);
 }
 
 static void path_heap_swap(int i, int j)
@@ -305,7 +365,9 @@ static int path_heap_pop_min(PathNode_t nodes[GRID_WIDTH][GRID_HEIGHT],
     return 1;
 }
 
-int find_next_path_step_with_equipment(
+/* The A* search. Returns the route cost in tenths (0 when start == dest)
+ * and the first step, or -1 when there is no route. */
+static int32_t path_search(
     int start_x,
     int start_y,
     int dest_x,
@@ -353,7 +415,7 @@ int find_next_path_step_with_equipment(
         if(next_y != NULL)
             *next_y = start_y;
 
-        return 1;
+        return 0;
     }
 
     {
@@ -378,22 +440,16 @@ int find_next_path_step_with_equipment(
     {
         for(int y = 0; y < GRID_HEIGHT; y++)
         {
-            nodes[x][y].g_cost = UINT16_MAX;
+            nodes[x][y].g_cost = PATH_G_UNREACHED;
             nodes[x][y].parent_x = (uint8_t)x;
             nodes[x][y].parent_y = (uint8_t)y;
             nodes[x][y].state = PATH_UNVISITED;
         }
     }
-    /* NOTE: g_cost is uint16_t (max 65,535). Under normal conditions this
-    * is safe -- per-cell travel_cost is clamped to <=25 by generation/
-    * hazard code, so a worst-case full-grid path (1,296 cells) tops out
-    * around 32,400. However, fault_injector.c's environment fault path
-    * (inject_environment_fault -> environment_set_cell_operational_state)
-    * adds severity on top of travel_cost and casts back to uint8_t WITHOUT
-    * re-clamping, so a cell's cost can wrap up toward 255 under active
-    * faults. Worst theoretical case: 1,296 cells x 255 = 330,480, which
-    * overflows uint16_t. Not hit in practice yet, but if path costs ever
-    * look wrong during heavy fault-injection testing, check here first. */
+    /* g_cost is uint32_t in tenths: even the worst case (every cell of the
+     * grid at cost 255, all diagonal) is far below UINT32_MAX. The whole-
+     * unit value handed back to callers is capped below UINT16_MAX by
+     * path_cost_to_units(). */
     nodes[start_x][start_y].g_cost = 0;
     nodes[start_x][start_y].parent_x = (uint8_t)start_x;
     nodes[start_x][start_y].parent_y = (uint8_t)start_y;
@@ -419,10 +475,12 @@ int find_next_path_step_with_equipment(
 
         nodes[current_x][current_y].state = PATH_CLOSED;
 
-        static const int dx[4] = {1, -1, 0, 0};
-        static const int dy[4] = {0, 0, 1, -1};
+        /* Straight neighbours first, so on an exact cost tie the
+         * earlier-found straight step is kept. */
+        static const int dx[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+        static const int dy[8] = {0, 0, 1, -1, 1, -1, 1, -1};
 
-        for(int i = 0; i < 4; i++)
+        for(int i = 0; i < 8; i++)
         {
             int nx = current_x + dx[i];
             int ny = current_y + dy[i];
@@ -430,17 +488,17 @@ int find_next_path_step_with_equipment(
             if(!path_in_bounds(nx, ny))
                 continue;
 
-            int movement_cost = get_movement_cost(nx, ny, equipment_flags);
+            if(nodes[nx][ny].state == PATH_CLOSED)
+                continue;
+
+            int32_t movement_cost = path_step_cost(current_x, current_y, nx, ny, equipment_flags);
 
             if(movement_cost < 0)
                 continue;
 
-            if(nodes[nx][ny].state == PATH_CLOSED)
-                continue;
-
             uint32_t new_g =
                 nodes[current_x][current_y].g_cost +
-                movement_cost;
+                (uint32_t)movement_cost;
 
             if(new_g < nodes[nx][ny].g_cost)
             {
@@ -465,7 +523,7 @@ int find_next_path_step_with_equipment(
     }
 
     if(!path_in_bounds(dest_x, dest_y) ||
-       nodes[dest_x][dest_y].g_cost == UINT16_MAX)
+       nodes[dest_x][dest_y].g_cost == PATH_G_UNREACHED)
     {
         path_cache_store(start_x, start_y, dest_x, dest_y, equipment_flags, -1, 0, 0);
         return -1;
@@ -510,9 +568,74 @@ int find_next_path_step_with_equipment(
         *next_y = path_y;
 
     path_cache_store(start_x, start_y, dest_x, dest_y, equipment_flags,
-                      (int)nodes[dest_x][dest_y].g_cost, path_x, path_y);
+                      (int32_t)nodes[dest_x][dest_y].g_cost, path_x, path_y);
 
-    return (int)nodes[dest_x][dest_y].g_cost;
+    return (int32_t)nodes[dest_x][dest_y].g_cost;
+}
+
+/* Whole-unit wrapper. Keeps the old contract: 1 when start == dest, the
+ * rounded route cost (always >= 1) otherwise, -1 for no route. */
+int find_next_path_step_with_equipment(
+    int start_x,
+    int start_y,
+    int dest_x,
+    int dest_y,
+    uint8_t equipment_flags,
+    int *next_x,
+    int *next_y) //path
+{
+    int32_t tenths = path_search(start_x, start_y, dest_x, dest_y,
+                                 equipment_flags, next_x, next_y);
+
+    if(tenths < 0)
+        return -1;
+
+    if(start_x == dest_x && start_y == dest_y)
+        return 1;
+
+    return path_cost_to_units(tenths);
+}
+
+int find_next_path_step_remaining(
+    int start_x,
+    int start_y,
+    int dest_x,
+    int dest_y,
+    int *next_x,
+    int *next_y,
+    uint16_t *remaining_after_step)
+{
+    int step_x = start_x;
+    int step_y = start_y;
+    int32_t tenths = path_search(start_x, start_y, dest_x, dest_y, 0u,
+                                 &step_x, &step_y);
+
+    if(next_x != NULL)
+        *next_x = step_x;
+    if(next_y != NULL)
+        *next_y = step_y;
+
+    if(tenths < 0)
+        return -1;
+
+    if(start_x == dest_x && start_y == dest_y)
+    {
+        if(remaining_after_step != NULL)
+            *remaining_after_step = 0u;
+        return 1;
+    }
+
+    if(remaining_after_step != NULL)
+    {
+        /* The first step lies on the optimal route, so the route left
+         * from it costs exactly total minus that step. */
+        int32_t step = path_step_cost(start_x, start_y, step_x, step_y, 0u);
+        int32_t rest = (step < 0 || step >= tenths) ? 0 : tenths - step;
+
+        *remaining_after_step = (uint16_t)path_cost_to_units(rest);
+    }
+
+    return path_cost_to_units(tenths);
 }
 
 int find_next_path_step(int start_x, int start_y,int dest_x, int dest_y,int cost,int *next_x, int *next_y) //path

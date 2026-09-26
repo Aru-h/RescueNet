@@ -2846,6 +2846,20 @@ uint8_t environment_find_incident_site(IncidentType_t type, int16_t *x, int16_t 
     }
 }
 
+uint8_t environment_building_at(int x, int y, uint16_t *building_id, uint8_t *floors)
+{
+    const EnvironmentBuilding_t *building = building_at(x, y);
+
+    if(building == NULL)
+        return 0;
+
+    if(building_id != NULL)
+        *building_id = building->building_id;
+    if(floors != NULL)
+        *floors = building->floors > 0u ? building->floors : 1u;
+    return 1;
+}
+
 /* Same site-selection rules as environment_find_incident_site(), but
  * scoped to a single search zone - used when a Search team's sweep of
  * that zone "discovers" an incident, rather than the periodic
@@ -2891,6 +2905,15 @@ uint8_t environment_find_incident_site_in_zone(IncidentType_t type, uint8_t zone
     (void)zone_id;
     (void)x;
     (void)y;
+    return 0;
+}
+
+uint8_t environment_building_at(int x, int y, uint16_t *building_id, uint8_t *floors)
+{
+    (void)x;
+    (void)y;
+    (void)building_id;
+    (void)floors;
     return 0;
 }
 #endif /* ENVIRONMENT_HAS_WORLD_STORAGE */

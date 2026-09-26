@@ -15,6 +15,7 @@
  * these exist purely to satisfy the linker.
  */
 #include "watchdog.h"
+#include "environment.h"
 #include "fault_predictor.h"
 #include "mission_state.h"
 #include "incident.h"
@@ -44,10 +45,17 @@ float watchdog_get_mobility_stall_fraction(uint8_t team_id)
     return 0.0f;
 }
 
+uint8_t environment_cell_travel_cost(int x, int y)
+{
+    (void)x;
+    (void)y;
+    return 1u;
+}
+
 /* ---- test-controlled fault_predictor stub ---- */
 FaultPredictorScores_t g_test_predictor_scores[NUM_TEAMS];
 
-FaultPredictorScores_t fault_predictor_run(const float evidence[11])
+FaultPredictorScores_t fault_predictor_run(const float evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES])
 {
     (void)evidence;
     /* Matches the real signature exactly: no team_id parameter, so every

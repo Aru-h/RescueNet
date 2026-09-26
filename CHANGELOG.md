@@ -1,5 +1,80 @@
 # Changelog
 
+## Building floors in incidents
+
+- `IncidentState_t` gains `building_id` (`INCIDENT_NO_BUILDING` when
+  none), `floor` (0 = ground) and `stage_work`. `generate_incident_at()`
+  fills them from the building covering the incident cell (new
+  `environment_building_at()`), which covers both the periodic
+  generator (building anchor cells) and hazard events inside a
+  building's footprint.
+- Floor rules (STREAM_INCIDENTS, deterministic per seed): structural
+  collapse, confined space and survivor signal take the lower of two
+  uniform draws over the building's floors; gas leaks are on the
+  ground floor; fire and everything else can be on any floor.
+- Every stage's `work_remaining` (first stage and each stage reset in
+  `complete_incident_stage()`) is `100 * (1 + 0.15 * floor)`, capped at
+  250. The twin already takes its baseline from `work_remaining`.
+- Mission-link wire format unchanged. A board seeds `stage_work` from
+  the first frame it sees for an incident (`max(work_remaining, 100)`),
+  so its later stages use the same floor-scaled amount; an incident a
+  board first sees part-way through falls back to 100.
+- Dashboard live frame: incidents carry `"floor"` and `"building_id"`
+  (-1 when not in a building); the incident detail panel shows them.
+- CSV: `incident_floor`, `incident_building_id` appended at the end of
+  the row (-1 when the team has no incident).
+
+`./tron 1 5 3000 --fault-profile=combined`: 99% of incidents are in a
+building, floors 0/1/2/3/4/5 = 74/53/36/14/5/2; resolved 175 -> 164.
+
+## Diagonal (8-direction) movement
+
+- `core/path.c`: A* now expands 8 neighbours. It runs in tenths of a
+  cost unit: a straight step costs 10x the entered cell's travel cost,
+  a diagonal 14x, and costs returned to callers are rounded back to
+  whole units. The heuristic is octile distance, admissible because a
+  navigable cell costs at least 1. A diagonal step is refused when
+  either cell it squeezes between is non-navigable (no corner cutting
+  past walls, blocked roads or collapsed buildings). `g_cost` is now
+  `uint32_t`, so the old uint16 overflow note is gone.
+- New `find_next_path_step_remaining()`: `move_team()` and the twin's
+  expected-position advance take the remaining cost after a step from
+  the pathfinder instead of subtracting the cell's travel cost, which
+  no longer equals the step cost on a diagonal.
+- A team still moves exactly one cell per tick. Reachability floods
+  (search sweep, world generation) stay 4-connected; without corner
+  cutting, a diagonal step is only possible where both orthogonal
+  detours exist, so 8-connected reachability is the same set.
+
+Measured on `./tron 1 5 3000`, before -> after:
+- combined faults: incidents resolved 169 -> 175, 33% of moves
+  diagonal; recovery-reason onsets PROGRESS_DEVIATION 888 -> 1263,
+  MOBILITY 369 -> 371, COMM 738 -> 733, EQUIPMENT 209 -> 249,
+  TEAM_DEGRADED 280 -> 282.
+- no faults: resolved 234 -> 243; PROGRESS_DEVIATION 1205 -> 1923.
+  Most of these come from search sweeps: a sweep moves its task's
+  destination to the next frontier cell when the team arrives, but the
+  twin only resets on a task change, so every retarget reads as a
+  deviation. That was already the case before (1033 of the 1205), and
+  faster diagonal sweeps retarget more often.
+
+## Re-add env_raw_travel_cost (CSV + on-board predictor input)
+
+- `laptop/snapshot.c`: trailing CSV column `env_raw_travel_cost` =
+  `environment_cell_travel_cost()` at the team's own cell (restored from
+  cd6c7ec).
+- `data_prep-2.py`: added to `numerical_features`; the value-based leak
+  guard does not flag it (|r| <= 0.18 against every label).
+- `FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES` 11 -> 12. The new last slot is
+  filled with the raw cost (same scale as the CSV) in both
+  `recovery_manager_build_predictor_evidence()` and
+  `fault_comms_broadcast_local_teams()`. This makes the FAULT_BROADCAST
+  payload 4 bytes wider (still well within `LORA_FRAME_MAX_PAYLOAD`).
+- `laptop/tools/env_raw_travel_cost_ablation.py` + `make
+  check-env-raw-travel-cost-ablation` restored. Environment-class F1
+  0.124 -> 0.288 on 5 seeds x 3000 ticks, combined profile (the old
+  0.27 -> 0.33 claim was measured on leaky data).
+
 ## Remove ground-truth fault leakage from detection
 
 The watchdog and recovery manager were reading the fault injector's

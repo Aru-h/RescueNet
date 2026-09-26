@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-env-raw-travel-cost-ablation
 
 all: $(TARGET) $(LABELER)
 
@@ -641,6 +641,16 @@ check-persistence-bounded-forgiveness:
 # not a pass/fail gate.
 check-environment-e2e-stress:
 	$(PYTHON) $(TOOLS_DIR)/environment_class_e2e_stress.py
+
+# --- env_raw_travel_cost before/after ablation --------------------------
+# Environment-class F1 with and without the env_raw_travel_cost CSV
+# column (laptop/snapshot.c; environment_cell_travel_cost() at the team's
+# own cell). Same sklearn pipeline as the other ablations. Requires
+# tron_snapshot_dataset.csv generated with --fault-profile=combined
+# (e.g. `./tron 1 5 3000 --fault-profile=combined`) - not run
+# automatically, same reason as check-environment-e2e-stress.
+check-env-raw-travel-cost-ablation:
+	$(PYTHON) $(TOOLS_DIR)/env_raw_travel_cost_ablation.py
 
 # --- Standalone laptop/tools selftests ---------------------------------------
 # These seven selftests existed with no Makefile target at all, so nothing

@@ -198,6 +198,7 @@ numerical_features = [
     "twin_expected_stamina", "twin_actual_stamina", "twin_stamina_error",
     "twin_remaining_path_cost", "twin_expected_work_remaining",
     "twin_mission_stage", "twin_communication_health", "equipment_level", "team_zone_trust",
+    "env_raw_travel_cost",
 ]
 
 one_hot_features = [

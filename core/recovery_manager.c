@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "allocator.h"
+#include "environment.h"
 #include "fault_buffer.h"
 #include "fault_predictor.h"
 #include "incident.h"
@@ -1129,9 +1130,9 @@ static RecoverySignal_t evaluate_consensus_fault(
  * core/fault_predictor.c's model against this team's own live evidence
  * vector - watchdog_get_evidence_vector() for the 7 accumulated_evidence
  * channels + confirmed_mobility_impairment, team->equipment_level/100.0f,
- * plus incident_priority/victim_count - the exact same 11-feature shape
- * core/fault_comms.c assembles for FAULT_BROADCAST, so this team's own
- * inference input matches what gets broadcast about it.
+ * plus incident_priority/victim_count and env_raw_travel_cost - the exact
+ * same 12-feature shape core/fault_comms.c assembles for FAULT_BROADCAST,
+ * so this team's own inference input matches what gets broadcast about it.
  *
  * fault_predictor_run() returns 5 independent per-class scores (not a
  * softmax - see fault_predictor.h). Per the doc's Section 2 ("collapse 5
@@ -1286,6 +1287,9 @@ void recovery_manager_build_predictor_evidence(
         evidence_out[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS + 3u] =
             (task != NULL) ? (float)task->victim_count : 0.0f;
     }
+
+    evidence_out[FAULT_BUFFER_LOCAL_EVIDENCE_SLOTS + 4u] =
+        (float)environment_cell_travel_cost(team->loc_x, team->loc_y);
 }
 
 static RecoverySignal_t evaluate_fault_predictor(

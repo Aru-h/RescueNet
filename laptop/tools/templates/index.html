@@ -1253,7 +1253,7 @@ function renderInspector() {
     const assignedText = d.assigned_team === 255 ? "unassigned" : `${SPEC_NAMES[d.assigned_team % SPEC_NAMES.length] || "team"} #${d.assigned_team}`;
     const supportText = d.support_team !== undefined && d.support_team !== 255 ? `${SPEC_NAMES[d.support_team % SPEC_NAMES.length] || "team"} #${d.support_team}` : "none";
     el.innerHTML = `<b>Incident #${d.id}</b> &nbsp; <span class="pill ${d.status === 0 ? 'bad' : 'good'}">${statusName}</span> &nbsp; Priority P${d.priority}<br>
-      Position: (${d.x}, ${d.y}) &nbsp; Victims: ${d.victims} &nbsp; Work remaining: ${d.work_remaining ?? "–"}<br>
+      Position: (${d.x}, ${d.y}) &nbsp; Victims: ${d.victims} &nbsp; Work remaining: ${d.work_remaining ?? "–"}${d.building_id !== undefined && d.building_id >= 0 ? ` &nbsp; Building #${d.building_id}, floor ${d.floor}` : ""}<br>
       Needs: ${SPEC_NAMES[d.req_capability % SPEC_NAMES.length] || d.req_capability} &nbsp; Assigned: ${assignedText} &nbsp; Support: ${supportText}`;
   } else if (hit.type === "safezone") {
     el.innerHTML = `<b>Safe Zone #${d.id}</b><br>
