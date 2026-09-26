@@ -973,61 +973,44 @@ harness, to label and score.
 
 ---
 
-## 9. Decisions I need from you
+## 9. Decisions (resolved, revision 3)
 
-**D1. Should the submission build run with `CONSENSUS_ENFORCE=1`?**
-Recommendation: **yes**, with one condition.
+These were the open questions of revision 2. They are decided and applied in
+this branch. The recommendation text that used to stand here is kept only where
+it still explains the code.
 
-- *Why:* shadow mode shows nothing in behaviour, and "escalate only when
-  independent nodes agree" is the feature. On one board the peers see the
-  same facts as the local evaluators, so the behaviour change is small: a
-  1 to 3 tick delay on mobility escalations above LOCAL_RECOVERY, a similar
-  or smaller one on communication once the fast path fires, and no triggers
-  the local evaluators would not also produce on one board.
-- *Condition:* an ENFORCE=1 run must pass the existing behaviour gates
-  (`compare_behaviour.py`, the stress tests, incidents resolved within your
-  tolerance) before the switch.
-- *Data:* regenerate the whole training dataset with ENFORCE=1 before the next
-  training run, and never mix it with ENFORCE=0 data. The `consensus_enforce`
-  column enforces this.
-- If there is no time to regenerate and retrain before the deadline, ship
-  ENFORCE=0 (shadow) instead of a model trained on a behaviour it will not see.
+**D1. `CONSENSUS_ENFORCE=1` is the submission setting, but consensus is an
+additional signal, not a veto.** Applied as:
 
-**D2. Should votes ever become inputs to the fault-predictor model?**
-Recommendation: **no, not as inputs to the target's own predictor.**
+- `evaluate_peer_consensus()` (§4.2(b)) is the 7th evaluator under
+  `CONSENSUS_ENFORCE`, and never returns ABORT_MISSION.
+- Consensus ELEVATED, for that team, counts as corroboration in
+  `evaluate_fault_predictor()`: `corroborated = anomaly_detected || sustained ||
+  consensus ELEVATED`. The predictor is inert today (`FAULT_MODEL_LOADED 0`), so
+  this line has no live effect until a model is loaded.
+- The §4.2(a) cap sits behind its own flag, `CONSENSUS_CAP_LOCAL_EVALUATORS`,
+  **default 0**. It is implemented and measured (§10.3); it ships 0 unless the
+  numbers clearly justify 1.
+- The dataset-provenance rule stands: never mix `consensus_enforce` 0 and 1 rows
+  in one training set.
 
-1. With ENFORCE=1, votes drive the actions that shape future data, so feeding
-   them back creates a feedback loop between labels and features.
-2. On one board, votes are a function of the same stall and heartbeat facts
-   the predictor already sees. They add no information and add a leakage path.
-3. The tiered-trust rule wants the AI and the peers as **two separate
-   opinions**. Once the model reads votes, "AI + consensus" becomes one opinion
-   counted twice.
+**D2. Votes are not fault-predictor inputs.** `tron_peer_obs.csv` (`--peer-log`)
+is kept for a future peer-judge model. `data_prep-2.py` picks its features by
+name, so none of the new columns reach it, and its value-based leak guard is
+untouched.
 
-Instead, use `tron_peer_obs.csv` to train a separate **peer-judge** model that
-replaces the voter's hand rules and runs on received data only. Revisit once
-per-peer observables carry information the target lacks (real radios: RSSI,
-per-link loss).
+**D3. `evaluate_consensus_fault()` and `RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT`
+are deleted.** `fault_buffer.{c,h}` and `fault_comms.{c,h}` are untouched.
 
-**D3.** Delete the parked `evaluate_consensus_fault()` and
-`RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT` in this branch? Recommendation:
-**yes.** Leave `fault_buffer` and `fault_comms` untouched until
-`feat/core-data-path` merges, then decide whether to delete them.
+**D4. Default `--vbus-loss` is 0.05** (`CONSENSUS_DEFAULT_LINK_LOSS`).
 
-**D4.** Default `--vbus-loss` for the submission and for training runs?
-Recommendation: **0.05.** It makes peers actually differ and keeps false
-escalations at zero (§7.2). Loss 0 makes consensus a pure delay line.
+**D5. `x_min` is fixed at 3** (`CONSENSUS_F = (NUM_TEAMS-2)/3`, from the
+configured membership) **and the supermajority is `|F| >= 2|C| + 1`.**
 
-**D5.** Accept the revised gate: `x_min` fixed at 3 from the configured
-membership, and the supermajority `|F| ≥ 2|C| + 1`? Recommendation: **yes**
-(§3.3). Revision 1's turnout-dependent `x_min` let two liars with three honest
-peers dark elevate a healthy target in 72 % of rounds at *q* = 0.2.
+**D6. The LOCAL tier is diagnostic only.** It produces no action and the cap
+treats it like NONE.
 
-**D6.** Make LOCAL tier diagnostic only (no action)? Recommendation: **yes**
-(§4.3). Otherwise one lying voter can push every team into LOCAL_RECOVERY.
+**D7. The fast path is on by default** (`CONSENSUS_FAST_PATH=1`). The rule for
+switching it off, fast-path false ELEVATED at q <= 0.05 in the correlated-loss
+sweep, is evaluated in §10.2.
 
-**D7.** Ship the communication fast path (§2.6) on by default? Recommendation:
-**yes, conditionally.** It is the only change that shortens communication
-detection (fault tick 4 against about 7), for 2 bytes per beacon. It stays on
-only if the §7.2 correlated-loss sweep shows no fast-path false ELEVATED at
-*q* ≤ 0.05; otherwise `CONSENSUS_FAST_PATH=0` until the rule is fixed.
