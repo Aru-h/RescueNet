@@ -932,10 +932,16 @@ static uint8_t incident_work_rate_for_team(uint8_t team_id)
     return random_range_stream(STREAM_WORK_RATE, WORK_RATE_MIN, WORK_RATE_MAX);
 }
 
-static void update_incident_work(IncidentState_t *incident) //incident
+static void update_incident_work(IncidentState_t *incident, TaskPool_t pool) //incident
 {
     if(incident->status!=INC_IN_PROGRESS) return;
-    if(incident->incident_type == INCIDENT_UNSEARCHED_SECTOR) return;
+    /* T3: only the SYSTEM-pool sweep task is "not worked" (it is credited
+     * by search_sweep_step() and has work_remaining 0). This used to skip
+     * every UNSEARCHED_SECTOR, including the ordinary INCIDENT-pool ones
+     * the environment spawns, whose SEARCH stage complete_incident_stage()
+     * does handle: a team arrived, never made progress, was pulled off by
+     * the recovery manager, and the incident reopened forever. */
+    if(pool == TASK_POOL_SYSTEM && incident->incident_type == INCIDENT_UNSEARCHED_SECTOR) return;
     if(!is_valid_team_id(incident->assigned_team)) return;
     if(g_teams[incident->assigned_team].status!=STATUS_ON_SCENE) return;
     if(g_teams[incident->assigned_team].equipment_level == 0) return;
@@ -966,7 +972,7 @@ void update_all_incident_work(void) //incident
         if(!g_incidents[i].slot_occupied)
             continue;
 
-        update_incident_work(&g_incidents[i]);
+        update_incident_work(&g_incidents[i], TASK_POOL_INCIDENT);
     }
 
     for(uint8_t i = 0; i < NUM_SYSTEM_TASKS; i++)
@@ -974,7 +980,7 @@ void update_all_incident_work(void) //incident
         if(!g_system_tasks[i].slot_occupied)
             continue;
 
-        update_incident_work(&g_system_tasks[i]);
+        update_incident_work(&g_system_tasks[i], TASK_POOL_SYSTEM);
     }
 }
 
