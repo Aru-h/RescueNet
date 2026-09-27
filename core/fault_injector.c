@@ -305,11 +305,14 @@ static void inject_mission_fault(uint8_t team_id)
     }
     task->mission_fault_active_count++;
 
-    /* Worsen priority: increment toward LOW (4), not toward CRITICAL (1).
-       PRIORITY_CRITICAL=1 is the most urgent — faults make things worse,
-       so we move away from it. */
-    if(task->priority < PRIORITY_LOW)
-        task->priority = (Priority_t)((uint8_t)task->priority + 1u);
+    /* L7: a mission fault makes the incident WORSE (more victims, added
+       just below), so it escalates one level toward PRIORITY_CRITICAL (1),
+       the most urgent - not toward LOW, which is where this used to send
+       it and made a deteriorating incident look less urgent. The value
+       captured above as mission_fault_original_priority is what recovery
+       restores, so the escalation is temporary. */
+    if(task->priority > PRIORITY_CRITICAL)
+        task->priority = (Priority_t)((uint8_t)task->priority - 1u);
 
     /* Cap victim_count with a post-add clamp, not a pre-add threshold */
     {

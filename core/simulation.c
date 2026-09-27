@@ -21,6 +21,7 @@
 #include "fault_injector.h"
 #include "fault_comms.h"
 #include "mission_execution_twin.h"
+#include "consensus.h"
 
 uint8_t g_simulation_trace_enabled = 1;
 static uint8_t g_prev_anomaly_detected[NUM_TEAMS];
@@ -62,6 +63,9 @@ void generate_world(uint32_t seed)   //simulation
     cbba_reset_improvement_counters();
     recovery_manager_init();
     fault_comms_init();
+#if VIRTUAL_BUS_ENABLED
+    consensus_init(seed);
+#endif
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
@@ -102,6 +106,7 @@ void simulation_step(void) //simulation
          * frames. */
         search_sweep_step(g_current_tick);
         escalate_starved_incidents(g_current_tick);
+        release_quarantined_tasks(g_current_tick);
     }
     if(runs_teams)
     {
@@ -113,6 +118,12 @@ void simulation_step(void) //simulation
     }
     if(runs_teams)
     {
+#if VIRTUAL_BUS_ENABLED
+        /* After movement and incident work, so the beacon carries this
+         * tick's final position and status, the same point the watchdog
+         * samples them at. */
+        consensus_step(g_current_tick);
+#endif
         mission_execution_twin_step();
         watchdog_step();
         recovery_manager_step();
@@ -147,6 +158,11 @@ void simulation_step(void) //simulation
             g_prev_recovery_action[team_id] = (uint8_t)action_now[team_id];
         }
     }
+
+#if VIRTUAL_BUS_ENABLED
+    if(runs_teams)
+        snapshot_record_peer_obs(g_current_tick);
+#endif
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
@@ -340,7 +356,10 @@ void move_team(TeamState_t *team) //simulation
         /* Track consecutive no-path abandons so abandon_task_for_recovery()
          * can quarantine a structurally-unreachable incident instead of
          * re-opening it for another doomed bid/abandon cycle. */
-        if(task->unreachable_streak < 255)
+        /* L8: only the team that OWNS the task counts as evidence about
+         * the task. A support team (task->support_team) failing to route
+         * says something about that team's position, not the incident. */
+        if(task->assigned_team == team->team_id && task->unreachable_streak < 255)
             task->unreachable_streak++;
         abandon_task_for_recovery(team);
         return;

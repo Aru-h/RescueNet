@@ -1,3 +1,4 @@
+#include "consensus.h"
 #include "mission_state.h"
 #include "incident.h"
 #include "mission_state_utils.h"
@@ -170,14 +171,30 @@ void debug_emit_live_frame(uint32_t tick)
         total_stage_completions += g_diag_stage_completions[t];
     }
 
+    /* Virtual peer bus counters (CONSENSUS_DESIGN.md 5.3). Always present so
+       the frame schema does not depend on the build; zeros without the bus. */
+    unsigned vbus_sent = 0, vbus_delivered = 0, vbus_dropped = 0, vbus_airtime_ms = 0;
+#if VIRTUAL_BUS_ENABLED
+    {
+        VbusStats_t vs = vbus_get_stats();
+
+        vbus_sent = vs.sent;
+        vbus_delivered = vs.delivered;
+        vbus_dropped = vs.dropped;
+        vbus_airtime_ms = vs.airtime_ms_total;
+    }
+#endif
+
     printf("LIVEFRAME {\"tick\":%u,"
            "\"incidents_resolved\":%u,\"stage_completions\":%u,"
            "\"work_progress_calls\":%u,\"in_progress_entries\":%u,"
            "\"safezone_fallback_count\":%u,\"discarded_signal_count\":%u,"
+           "\"vbus\":{\"sent\":%u,\"delivered\":%u,\"dropped\":%u,\"airtime_ms\":%u},"
            "\"teams\":[",
            tick, total_incidents_resolved, total_stage_completions,
            g_diag_work_progress_calls, g_diag_in_progress_entries,
-           g_diag_safezone_fallback_count, g_diag_discarded_signal_count);
+           g_diag_safezone_fallback_count, g_diag_discarded_signal_count,
+           vbus_sent, vbus_delivered, vbus_dropped, vbus_airtime_ms);
     for(uint8_t t = 0; t < NUM_TEAMS; t++)
     {
         const TeamState_t *team = &g_teams[t];
@@ -209,12 +226,36 @@ void debug_emit_live_frame(uint32_t tick)
             has_dest = 1;
         }
 
+        /* Peer consensus about this team as a target: tier per class
+           [mobility, communication] (-1 = not built, 0 NONE, 1 LOCAL,
+           2 ELEVATED) and the votes behind it [fault, clear, abstain]. */
+        int tier_mob = CONSENSUS_TIER_NOT_BUILT, tier_comm = CONSENSUS_TIER_NOT_BUILT;
+        unsigned mob_f = 0, mob_c = 0, mob_a = 0, comm_f = 0, comm_c = 0, comm_a = 0;
+        unsigned peer_live = 0, peer_dark = 0, peer_fast = 0;
+#if VIRTUAL_BUS_ENABLED
+        {
+            ConsensusResult_t cm = consensus_get_result(t, CONSENSUS_CLASS_MOBILITY);
+            ConsensusResult_t cc = consensus_get_result(t, CONSENSUS_CLASS_COMMUNICATION);
+
+            tier_mob = (int)cm.tier;
+            tier_comm = (int)cc.tier;
+            mob_f = cm.n_fault; mob_c = cm.n_clear; mob_a = cm.n_abstain;
+            comm_f = cc.n_fault; comm_c = cc.n_clear; comm_a = cc.n_abstain;
+            peer_live = cm.n_live;
+            peer_dark = cm.n_dark;
+            peer_fast = cc.fast_path;
+        }
+#endif
+
         printf("%s{\"id\":%u,\"x\":%d,\"y\":%d,\"stamina\":%.2f,\"status\":%u,"
                "\"spec\":%u,\"pool\":%u,\"slot\":%u,\"fault_mask\":%u,"
                "\"degraded\":%u,\"hours\":%u,\"has_dest\":%u,\"dest_x\":%d,"
                "\"dest_y\":%d,\"dest_id\":%u,\"incidents_resolved\":%u,"
                "\"stage_completions\":%u,\"ticks_resting\":%u,"
-               "\"ticks_working\":%u,\"ticks_available\":%u}",
+               "\"ticks_working\":%u,\"ticks_available\":%u,"
+               "\"consensus_tier\":[%d,%d],"
+               "\"peer_votes\":{\"mob\":[%u,%u,%u],\"comm\":[%u,%u,%u],"
+               "\"live\":%u,\"dark\":%u,\"fast\":%u}}",
                t == 0 ? "" : ",",
                team->team_id, team->loc_x, team->loc_y, team->stamina,
                team->status, team->specialization,
@@ -223,7 +264,9 @@ void debug_emit_live_frame(uint32_t tick)
                team->hours_worked, has_dest, dest_x, dest_y, dest_id,
                g_diag_incidents_resolved[t], g_diag_stage_completions[t],
                g_diag_ticks_resting[t], g_diag_ticks_working[t],
-               g_diag_ticks_available[t]);
+               g_diag_ticks_available[t],
+               tier_mob, tier_comm, mob_f, mob_c, mob_a, comm_f, comm_c, comm_a,
+               peer_live, peer_dark, peer_fast);
     }
     printf("],\"incidents\":[");
     uint8_t first = 1;

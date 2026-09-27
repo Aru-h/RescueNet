@@ -12,6 +12,7 @@
 #include "search_zones.h"
 #include "mission_link.h"
 #include "environment.h" /* environment_cell_travel_cost() - env_raw_travel_cost column below */
+#include "consensus.h"
 
 /*
  * core/cbba.c's cbba_team_is_local() - public, but deliberately not
@@ -166,6 +167,8 @@ static int mission_link_anchor_is_live(uint8_t team_id)
 }
 
 static FILE *g_snapshot_file = NULL;
+static FILE *g_peer_file = NULL;
+static uint8_t g_peer_log_enabled = 0;
 static uint32_t g_dataset_seed = 0;
 static uint32_t g_run_id = 0;
 static uint32_t g_process_epoch = 0;
@@ -182,6 +185,25 @@ void snapshot_begin_run(uint32_t seed)
     }
 
     g_run_id = g_process_epoch + seed;
+
+#if VIRTUAL_BUS_ENABLED
+    if(g_peer_log_enabled && g_peer_file == NULL)
+    {
+        g_peer_file = fopen("tron_peer_obs.csv", "w");
+        if(g_peer_file != NULL)
+            fprintf(g_peer_file,
+                "run_id,cycle,observer_id,target_id,heard_this_tick,rx_age_ticks,"
+                "rx_on_time_6,comm_miss_6,mobility_stall_count_6,target_loc_x,target_loc_y,"
+                "plausibility_fail,heard_count_window,"
+                "world_seed,rx_on_time,rx_late,rx_stale,observer_self_deaf,comm_window_n,"
+                "rep_status,rep_task_pool,rep_task_slot,rep_heading_to_rest,rep_resting_zone_id,"
+                "leg_changed,mob_sampled,mob_stalled,mob_window_n,"
+                "verdict_mobility,lo_mobility,hi_mobility,"
+                "verdict_communication,lo_communication,hi_communication,"
+                "observer_graded_abstain,reported_heard_target,rep_alpha,rep_beta,"
+                "gt_link_dropped,gt_loss_model\n");
+    }
+#endif
 
     if(g_snapshot_file != NULL)
         return;
@@ -215,7 +237,52 @@ void snapshot_begin_run(uint32_t seed)
         "fault_ticks_remaining_mission,"
         "env_raw_travel_cost,"
         "team_task_pool,team_task_slot,heading_to_rest,resting_zone_id,"
-        "incident_floor,incident_building_id\n");
+        "incident_floor,incident_building_id,"
+        "consensus_enforce,vbus_link_loss_ppm,consensus_round,"
+        "consensus_tier_mobility,consensus_tier_communication,"
+        "consensus_x_mobility,consensus_x_communication,"
+        "consensus_y_mobility,consensus_y_communication,"
+        "peer_fault_votes_mobility,peer_fault_votes_communication,"
+        "peer_clear_votes_mobility,peer_clear_votes_communication,"
+        "peer_abstain_votes_mobility,peer_abstain_votes_communication,"
+        "peer_live_voters,peer_dark_voters,"
+        "consensus_fast_path_communication,peer_reporters,peer_heard_target,"
+        "beacon_emitted,consensus_capped\n");
+}
+
+/*
+ * Appended consensus columns (CONSENSUS_DESIGN.md 5.1). The header is the
+ * same in every build: a build without the virtual bus writes -1 for the
+ * tiers and 0 elsewhere, so data_prep needs no per-build branches. Describes
+ * the team as a TARGET, from the latest published result computed at that
+ * team's own node. Terminates the row.
+ */
+static void write_consensus_columns(uint8_t team_id)
+{
+#if VIRTUAL_BUS_ENABLED
+    ConsensusResult_t mob = consensus_get_result(team_id, CONSENSUS_CLASS_MOBILITY);
+    ConsensusResult_t comm = consensus_get_result(team_id, CONSENSUS_CLASS_COMMUNICATION);
+    ConsensusRunInfo_t info = consensus_get_run_info();
+
+    fprintf(g_snapshot_file,
+        ",%u,%u,%u,%d,%d,%u,%u,%.3f,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+        info.enforce, info.vbus_link_loss_ppm, (unsigned)mob.round,
+        (int)mob.tier, (int)comm.tier,
+        mob.x, comm.x,
+        mob.y, comm.y,
+        mob.n_fault, comm.n_fault,
+        mob.n_clear, comm.n_clear,
+        mob.n_abstain, comm.n_abstain,
+        mob.n_live, mob.n_dark,
+        comm.fast_path, comm.n_reporters, comm.n_heard_target,
+        (unsigned)team_radio_emitted(&g_teams[team_id]),
+        (unsigned)g_consensus_capped_now[team_id]);
+#else
+    (void)team_id;
+    fprintf(g_snapshot_file,
+        ",0,0,0,%d,%d,0,0,0.000,0.000,0,0,0,0,0,0,0,0,0,0,0,0,0\n",
+        CONSENSUS_TIER_NOT_BUILT, CONSENSUS_TIER_NOT_BUILT);
+#endif
 }
 
 /*
@@ -283,7 +350,7 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
     env_raw_travel_cost = environment_cell_travel_cost(team->loc_x, team->loc_y);
 
     fprintf(g_snapshot_file,
-        "%u,%u,%u,%u,%d,%d,%.2f,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%d,%d,%u,%.4f,%u,%u,%u,%u,%u,%.4f,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d\n",
+        "%u,%u,%u,%u,%d,%d,%.2f,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%d,%d,%u,%.4f,%u,%u,%u,%u,%u,%.4f,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d",
         g_run_id,
         g_dataset_seed,
         cycle,
@@ -378,6 +445,8 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
         (unsigned)team->resting_zone_id,
         floor,
         building_id);
+
+    write_consensus_columns(team_id);
 }
 
 void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)
@@ -485,6 +554,59 @@ void snapshot_record_resolved(uint32_t cycle, TaskPool_t pool, const IncidentSta
         selected_team, support_team, discovered, floor, building_id);
 }
 
+void snapshot_peer_log_enable(uint8_t enable)
+{
+    g_peer_log_enabled = enable;
+}
+
+/*
+ * Training set for a future peer-judge model (CONSENSUS_DESIGN.md 5.2): one
+ * row per (tick, observer, target), observer != target. Labels come from
+ * joining the main CSV on (run_id, cycle, target_id). Columns prefixed gt_
+ * are label-only, like fault_*; data_prep must never feed them to a model.
+ * Every other column is something the observer actually had.
+ */
+void snapshot_record_peer_obs(uint32_t cycle)
+{
+#if VIRTUAL_BUS_ENABLED
+    if(g_peer_file == NULL)
+        return;
+
+    for(uint8_t o = 0; o < NUM_TEAMS; o++)
+    {
+        for(uint8_t t = 0; t < NUM_TEAMS; t++)
+        {
+            PeerObservation_t p;
+
+            if(o == t)
+                continue;
+            consensus_get_peer_observation(o, t, &p);
+            fprintf(g_peer_file,
+                "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,"
+                "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,"
+                "%u,%.3f,%.3f,%u,%.3f,%.3f,%u,%u,%u,%u,%u,%u\n",
+                g_run_id, cycle, o, t,
+                (unsigned)(p.rx_on_time || p.rx_late), p.rx_age_ticks,
+                (unsigned)(p.comm_window_n - p.comm_misses), p.comm_misses, p.mob_stalls,
+                p.rep_loc_x, p.rep_loc_y, p.plaus_fail, p.observer_heard_count,
+                g_dataset_seed, p.rx_on_time, p.rx_late, p.rx_stale,
+                p.observer_self_deaf, p.comm_window_n,
+                p.rep_status, p.rep_task_pool, p.rep_task_slot,
+                p.rep_heading_to_rest, p.rep_resting_zone_id,
+                p.leg_changed, p.mob_sampled, p.mob_stalled, p.mob_window_n,
+                p.vote[CONSENSUS_CLASS_MOBILITY].verdict,
+                p.lo[CONSENSUS_CLASS_MOBILITY], p.hi[CONSENSUS_CLASS_MOBILITY],
+                p.vote[CONSENSUS_CLASS_COMMUNICATION].verdict,
+                p.lo[CONSENSUS_CLASS_COMMUNICATION], p.hi[CONSENSUS_CLASS_COMMUNICATION],
+                p.observer_graded_abstain, p.reported_heard_target,
+                p.rep_alpha, p.rep_beta, p.gt_link_dropped, p.gt_loss_model);
+        }
+    }
+#else
+    (void)cycle;
+#endif
+}
+
 void snapshot_end_run(void)
 {
 }
@@ -495,5 +617,10 @@ void snapshot_close_dataset(void)
     {
         fclose(g_snapshot_file);
         g_snapshot_file = NULL;
+    }
+    if(g_peer_file != NULL)
+    {
+        fclose(g_peer_file);
+        g_peer_file = NULL;
     }
 }

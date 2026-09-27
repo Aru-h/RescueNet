@@ -76,6 +76,11 @@ void generate_incidents_if_needed(void);
  * function's own comment in incident.c for the full contract. Called
  * from simulation_step(). */
 void escalate_starved_incidents(uint32_t current_tick);
+/* L8 safety net: re-opens a task that has sat quarantined (see
+ * abandon_task_for_recovery()) for INCIDENT_QUARANTINE_COOLDOWN_TICKS,
+ * with its unreachable_streak reset. Called from simulation_step(). */
+#define INCIDENT_QUARANTINE_COOLDOWN_TICKS 500u
+void release_quarantined_tasks(uint32_t current_tick);
 /* Generates open sweep tasks for stale districts, left for the normal
  * competitive system-task loop to assign - see the large comment on
  * this function's definition in incident.c for why this isn't a

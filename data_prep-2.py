@@ -228,8 +228,12 @@ GROUND_TRUTH_COLUMNS = (
     + [f"fault_severity_{name}" for name in FAULT_CLASS_NAMES]
     + [f"fault_ticks_remaining_{name}" for name in FAULT_CLASS_NAMES]
     + ["fault_active_mask"]
+    # Label-only columns of tron_peer_obs.csv (--peer-log): the bus's own
+    # record of what it dropped. Never a feature; the gt_ prefix marks them.
+    + ["gt_link_dropped", "gt_loss_model"]
 )
 leaked = set(feature_columns) & set(GROUND_TRUTH_COLUMNS)
+leaked |= {c for c in feature_columns if c.startswith("gt_")}
 assert not leaked, f"Ground-truth column(s) leaked into features: {leaked}"
 
 # By value: a name check alone can't catch a feature that is the label

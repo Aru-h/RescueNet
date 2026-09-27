@@ -75,4 +75,22 @@ void watchdog_get_evidence_vector(uint8_t team_id,
    every other tick (0.5). */
 float watchdog_get_mobility_stall_fraction(uint8_t team_id);
 
+/* Movement-stall window: the last WATCHDOG_STALL_WINDOW_TICKS EN_ROUTE
+ * ticks of one travel leg, a stall being "did not change cell". A window
+ * with at least WATCHDOG_STALL_MIN_SAMPLES samples reports a stall
+ * fraction, and WATCHDOG_STALL_CONFIRM_COUNT stalls in it confirm an
+ * impairment. Exported so the peer-side mirror in core/consensus.c uses the
+ * same numbers (CONSENSUS_DESIGN.md 2.2). */
+#define WATCHDOG_STALL_WINDOW_TICKS 4u
+#define WATCHDOG_STALL_MIN_SAMPLES 2u
+#define WATCHDOG_STALL_CONFIRM_COUNT 2u
+
+#ifndef CONSENSUS_TEST_HOOKS
+#define CONSENSUS_TEST_HOOKS 0
+#endif
+#if CONSENSUS_TEST_HOOKS
+/* Test-only: the raw stall window, for the mobility mirror-equivalence test. */
+void watchdog_test_get_stall_state(uint8_t team_id, uint8_t *history, uint8_t *samples);
+#endif
+
 #endif

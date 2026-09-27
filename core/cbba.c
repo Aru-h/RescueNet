@@ -393,15 +393,21 @@ static void cbba_sync_team_execution_twin(uint8_t team_id)
             twin->expected_operating_state = STATUS_EN_ROUTE;
         }
 
-        uint16_t travel_cost = find_path_cost(
+        /* Steps, not path COST: a team moves one cell per tick whatever the
+         * cell costs (1-25), and stamina drains per step moved (team.c). The
+         * twin's own countdown (mission_execution_twin.c) already works in
+         * steps, so this must too or the two disagree from the first tick.
+         * Nominal on purpose - a mobility fault's skipped ticks are what the
+         * watchdog is meant to notice against it. */
+        uint16_t travel_steps = find_path_steps(
             team->loc_x,
             team->loc_y,
             twin->destination_x,
             twin->destination_y);
 
-        if(travel_cost != UINT16_MAX)
+        if(travel_steps != UINT16_MAX)
         {
-            float expected_stamina = team->stamina - ((float)travel_cost * team_travel_stamina_cost(team));
+            float expected_stamina = team->stamina - ((float)travel_steps * team_travel_stamina_cost(team));
 
             if(expected_stamina < MIN_STAMINA)
                 expected_stamina = MIN_STAMINA;
@@ -410,7 +416,7 @@ static void cbba_sync_team_execution_twin(uint8_t team_id)
                 expected_stamina = MAX_STAMINA;
 
             twin->expected_stamina = expected_stamina;
-            twin->expected_arrival_tick = g_current_tick + travel_cost;
+            twin->expected_arrival_tick = g_current_tick + travel_steps;
         }
     }
 }
