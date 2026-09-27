@@ -21,6 +21,8 @@
 #include "random.h"
 #include "snapshot.h"
 #include "path.h"
+#include "mission_link.h"
+#include "feature_pack.h"
 
 #include <string.h>
 
@@ -52,10 +54,24 @@ uint8_t environment_cell_travel_cost(int x, int y)
     return 1u;
 }
 
-FaultPredictorScores_t fault_predictor_run(const float evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES])
+FaultPredictorScores_t fault_predictor_run(const float evidence[FEATURE_SPEC_NUM_INPUTS])
 {
     (void)evidence;
     return g_test_predictor_scores[0];
+}
+
+/* This test drives fault_predictor_run() directly via g_test_predictor_
+   scores and never touches real mission-link map/district state, so the
+   inference gate ahead of it (core/recovery_manager.c's evaluate_fault_
+   predictor()) needs to see both maps as "fully arrived" without this
+   test having to link and prime the real core/mission_link.c. */
+uint32_t mission_link_map_rows_received(void) { return MISSION_LINK_MAP_HEIGHT; }
+uint32_t mission_link_district_rows_received(void) { return MISSION_LINK_MAP_HEIGHT; }
+
+void feature_pack_build_vector(uint8_t team_id, float out_scaled[FEATURE_SPEC_NUM_INPUTS])
+{
+    (void)team_id;
+    memset(out_scaled, 0, FEATURE_SPEC_NUM_INPUTS * sizeof(float));
 }
 
 void abandon_task_for_recovery(TeamState_t *team) { (void)team; }

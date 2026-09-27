@@ -2,7 +2,7 @@
 
 #include <stddef.h>
 
-FaultPredictorScores_t fault_predictor_run(const float evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES])
+FaultPredictorScores_t fault_predictor_run(const float evidence[FEATURE_SPEC_NUM_INPUTS])
 {
     FaultPredictorScores_t scores = {0};
 

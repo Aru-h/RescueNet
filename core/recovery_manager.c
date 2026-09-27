@@ -9,8 +9,10 @@
 #include "environment.h"
 #include "fault_buffer.h"
 #include "fault_predictor.h"
+#include "feature_pack.h"
 #include "incident.h"
 #include "mission_execution_twin.h"
+#include "mission_link.h"
 #include "recovery_manager_config.h"
 #include "watchdog.h"
 #include "consensus.h"
@@ -1090,13 +1092,14 @@ static RecoverySignal_t evaluate_peer_consensus(
 
 /*
  * Sixth evaluator: single-team AI fault prediction (v4 architecture doc,
- * Section 4/9). Runs
- * core/fault_predictor.c's model against this team's own live evidence
- * vector - watchdog_get_evidence_vector() for the 7 accumulated_evidence
- * channels + confirmed_mobility_impairment, team->equipment_level/100.0f,
- * plus incident_priority/victim_count and env_raw_travel_cost - the exact
- * same 12-feature shape core/fault_comms.c assembles for FAULT_BROADCAST,
- * so this team's own inference input matches what gets broadcast about it.
+ * Section 4/9; feature contract per FEATURE_CONTRACT_DESIGN.md). Runs
+ * core/fault_predictor.c's model against this team's own 74-input feature
+ * vector - core/feature_pack.c's feature_pack_build_vector(), built from
+ * this team's own observables (never team->fault_state). This is NOT the
+ * same shape core/fault_comms.c assembles for a remote team's received
+ * FAULT_BROADCAST (that stays the older, still-live 12-feature core/
+ * fault_buffer.h vector, unrelated to and unchanged by this feature
+ * contract - see fault_predictor.h's own doc for why the two coexist).
  *
  * fault_predictor_run() returns 5 independent per-class scores (not a
  * softmax - see fault_predictor.h). Per the doc's Section 2 ("collapse 5
@@ -1262,7 +1265,7 @@ static RecoverySignal_t evaluate_fault_predictor(
     const WatchdogStatus_t *watchdog)
 {
     MissionStage_t stage = recovery_stage_for_team(team, twin);
-    float evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES];
+    float feature_vector[FEATURE_SPEC_NUM_INPUTS];
     FaultPredictorScores_t scores;
     uint8_t best_class = 0u;
     float confidence;
@@ -1271,9 +1274,25 @@ static RecoverySignal_t evaluate_fault_predictor(
 
     (void)twin;
 
-    recovery_manager_build_predictor_evidence(team->team_id, evidence);
-
-    scores = fault_predictor_run(evidence);
+    /* Inference gate (core/feature_pack.h's own doc): before the route
+     * map and district map have both fully arrived, env_raw_travel_cost
+     * and team_zone_id read silently-wrong defaults rather than missing
+     * values. Not yet a behavioural gate on anything - FAULT_MODEL_
+     * LOADED is 0, so fault_predictor_run() ignores its input and always
+     * returns all-zero scores regardless - but the check belongs here,
+     * at the one call site that builds and uses this vector, so it is
+     * already in place for when a real model lands. */
+    if(mission_link_map_rows_received() < MISSION_LINK_MAP_HEIGHT ||
+       mission_link_district_rows_received() < MISSION_LINK_MAP_HEIGHT)
+    {
+        FaultPredictorScores_t no_scores = {0};
+        scores = no_scores;
+    }
+    else
+    {
+        feature_pack_build_vector(team->team_id, feature_vector);
+        scores = fault_predictor_run(feature_vector);
+    }
 
     for(uint8_t fault_class = 1u; fault_class < NUM_OPERATIONAL_FAULT_CLASSES; fault_class++)
     {
