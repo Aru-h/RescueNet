@@ -33,7 +33,7 @@
   }
   /* --- Tier badges (consensus mobility/communication tiers) --- */
   .tier-badge {
-    display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px;
+    display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px;
     font-weight: 600; letter-spacing: .02em; white-space: nowrap;
   }
   .tier-badge.tier-none { background: rgba(139,152,165,.15); color: var(--muted); }
@@ -103,22 +103,21 @@
   .error-msg { color: var(--bad); font-size: 13px; margin-top: 12px; text-align: center; display: none; }
   /* ------------------------ */
 
-  header {
-    padding: 16px 24px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  header .sub { color: var(--muted); font-size: 12px; }
   .layout { display: flex; flex: 1 1 auto; min-height: 0; }
+  /* Collapsed icon rail (was a 200px text nav) - the freed width goes
+     to the map/right panel, and dropping the header (below) already
+     recovered the vertical space that mattered more for the one-screen
+     Live Ops layout. */
   nav {
-    width: 200px; border-right: 1px solid var(--border); padding: 16px 0;
-    flex-shrink: 0;
+    width: 60px; border-right: 1px solid var(--border); padding: 10px 0;
+    flex-shrink: 0; display: flex; flex-direction: column; align-items: stretch; gap: 2px;
   }
   nav button {
-    display: block; width: 100%; text-align: left; padding: 10px 20px;
-    background: none; border: none; color: var(--muted); cursor: pointer;
-    font-size: 13px;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    width: 100%; padding: 7px 2px; background: none; border: none; border-left: 2px solid transparent;
+    color: var(--muted); cursor: pointer; font-size: 9px; text-align: center;
   }
+  nav button .nav-icon { font-size: 17px; line-height: 1; }
   nav button.active { color: var(--text); background: var(--panel2); border-left: 2px solid var(--blue); }
   nav button:hover { color: var(--text); }
   main { flex: 1; padding: 20px 28px; overflow-y: auto; }
@@ -209,12 +208,15 @@
   main { padding: 12px 20px; display: flex; flex-direction: column; min-height: 0; }
 
   .topbar {
-    display: flex; align-items: center; justify-content: space-between; gap: 16px;
-    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: 7px 14px; margin-bottom: 10px; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: flex-start; gap: 14px;
+    background: var(--panel); border-bottom: 1px solid var(--border); border-radius: 0;
+    padding: 8px 16px; flex: 0 0 auto;
     overflow-x: auto; flex-wrap: nowrap;
   }
-  .topbar-group { display: flex; align-items: flex-end; gap: 7px; flex-wrap: nowrap; }
+  .topbar-title { display: flex; align-items: baseline; gap: 8px; flex: 0 0 auto; white-space: nowrap; font-size: 14px; }
+  .topbar-title .sub { font-size: 11px; color: var(--muted); }
+  .topbar-group { display: flex; align-items: flex-end; gap: 7px; flex-wrap: nowrap; flex: 0 0 auto; }
+  .topbar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-left: auto; }
   .tfield { display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; }
   .tfield label { font-size: 9px; color: var(--muted); text-transform: uppercase; white-space: nowrap; }
   .tfield input, .tfield select {
@@ -253,12 +255,30 @@
     border-bottom: 2px solid transparent;
   }
   .side-tab-btn.active { color: var(--text); border-bottom-color: var(--blue); }
-  .live-inspector-compact {
-    flex: 0 0 auto; max-height: 92px; overflow-y: auto; margin: 8px 12px 0;
-    padding: 7px 10px; background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
-    font-size: 11px; line-height: 1.45;
-  }
   .live-side-content { flex: 1 1 auto; min-height: 0; padding: 8px 12px 10px; overflow-y: auto; }
+  /* Network sub-tab: legend (fixed) + ring (fills whatever is left) +
+     team card (fixed) + override box (fixed, only present while a
+     proposal/ack is pending) - everything must fit with no inner
+     scroll, so this is a column flex box, not just stacked blocks. */
+  #sidetab-network { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+  .network-legend {
+    flex: 0 0 auto; font-size: 10.5px; color: var(--muted);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 2px 0 6px;
+  }
+  .tier-key { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; white-space: nowrap; }
+  .tier-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: -1px; margin-right: 1px; }
+  .network-ring-area { flex: 1 1 auto; min-height: 0; position: relative; }
+  .team-card {
+    flex: 0 0 auto; margin-top: 6px; padding: 6px 8px; background: #0d1117;
+    border: 1px solid #21262d; border-radius: 6px; font-size: 11.5px; line-height: 1.4;
+    /* Deliberately-dark "console" accent regardless of theme (same
+       choice as the map's own dark canvas/toolbar) - fixed text colour
+       to match, since inheriting var(--text) under the light theme put
+       near-black text on this near-black background. */
+    color: #e6edf3;
+  }
+  .team-card b { color: #e6edf3; }
+  .override-box { flex: 0 0 auto; margin-top: 6px; }
   .live-side-content table { font-size: 11.5px; }
   .live-side-content th, .live-side-content td { padding: 4px 6px; font-size: 10.5px; }
   /* The Team/ID column stays put while the rest of a wide row scrolls
@@ -285,7 +305,11 @@
   .side-tab-panel h2 { font-size: 12px; }
 
   .live-timeline-panel {
-    flex: 0 0 176px; min-height: 0; overflow: hidden;
+    /* 210px (was 176px): merging the header into the topbar freed
+       ~80px of vertical chrome; most of it came here so all 10 rows
+       can have an 11-12px team label (item 10) instead of one that
+       shrinks with the row. */
+    flex: 0 0 210px; min-height: 0; overflow: hidden;
     display: flex; flex-direction: column; padding: 8px 14px; margin-bottom: 0;
   }
   .live-timeline-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: nowrap; }
@@ -332,72 +356,78 @@
      SCREEN 2: MAIN DASHBOARD
      ========================================== -->
 <div id="main-dashboard" class="app-screen">
-  <header>
-    <div>
-      <h1>CONCORD / REMCE — Local Test Dashboard</h1>
-      <div class="sub" id="statusLine">checking project…</div>
-      <div class="sub hidden" id="boardMissionBar">
-        <span id="boardMissionText">Waiting for board handshake…</span>
-        <select id="boardMissionSpeed" title="Mission pace. Real time is one tick per 36 s, as in a real deployment."
-                style="margin-left:8px;font-size:12px;">
-          <option value="1">Real time (36 s/tick)</option>
-          <option value="10">10× (3.6 s/tick)</option>
-          <option value="60">60× (0.6 s/tick)</option>
+  <!-- One bar: title, run/replay controls (Part 2 will add replay
+       controls in the same spot - the run-state label and button
+       cluster below are already shaped for that), live stats, one
+       theme toggle, Disconnect/Exit. Replaces the old separate
+       <header> (title + filesystem-path status line) and the run
+       panel - folding both saves ~80px of vertical chrome, most of
+       which went to the detection timeline (see timeline.js: row
+       height/label font were fighting for space in the old layout). -->
+  <div class="topbar" id="runTopBar">
+    <div class="topbar-title">
+      <b>CONCORD / REMCE</b>
+      <span class="sub hidden" id="statusLine"></span>
+      <span class="hidden" id="lastRunLine"></span>
+    </div>
+    <div class="topbar-group">
+      <div class="tfield"><label>Seed</label><input id="seed" type="number" value="1"></div>
+      <div class="tfield"><label>Seeds</label><input id="seedCount" type="number" value="1"></div>
+      <div class="tfield"><label>Ticks</label><input id="ticks" type="number" value="2000"></div>
+      <div class="tfield">
+        <label>Faults</label>
+        <select id="faultProfile">
+          <option value="none">none</option>
+          <option value="mobility">mobility</option>
+          <option value="communication">communication</option>
+          <option value="resource">resource</option>
+          <option value="combined">combined</option>
+          <option value="random" selected>random</option>
         </select>
-        <button type="button" id="startMissionBtn" onclick="startBoardMission()" disabled
-                title="Sends START, then runs the mission: the laptop sends the world and the clock, the boards run the teams, and Live Ops shows what the boards report (uses the Seed, Ticks and Fault profile fields below)"
-                style="margin-left:8px;padding:2px 10px;font-size:12px;">Start board mission</button>
       </div>
+      <div class="tfield"><label>Delay ms</label><input id="tickDelay" type="number" value="150"></div>
+      <button type="button" id="liveBtn" class="topbar-btn" onclick="runLive()" title="Start a live, tick-by-tick simulator run">▶ Live</button>
+      <button type="button" id="pauseLiveBtn" onclick="pauseLive()" class="topbar-btn hidden" title="Pause the live run (SIGSTOP - world state is frozen, not lost)">⏸ Pause</button>
+      <button type="button" id="resumeLiveBtn" onclick="resumeLive()" class="topbar-btn hidden" title="Resume the paused run">▶ Resume</button>
+      <button type="button" id="stopLiveBtn" onclick="stopLive()" class="topbar-btn hidden" style="background:var(--bad);color:#fff;">■ Stop</button>
+      <span class="tstat hidden" id="runStateWrap"><span class="tstat-label">State</span><span class="tstat-value" id="runStateLabel">–</span></span>
+      <button type="button" id="runBtn" class="topbar-btn" onclick="runSimulation()" style="background:var(--accent);color:#04150a;border:none;font-weight:600;">Batch</button>
     </div>
-    <div style="text-align: right;">
-      <div class="sub" id="lastRunLine"></div>
-      <div style="margin-top:6px;display:flex;gap:10px;align-items:center;justify-content:flex-end;">
-        <button type="button" id="themeToggleBtn" onclick="DashboardTheme.toggle()">☀️ Light</button>
-        <button type="button" onclick="exitDashboard()" style="background: none; border: none; color: var(--bad); cursor: pointer; font-size: 12px; padding: 0;">Disconnect / Exit</button>
-      </div>
+    <div class="topbar-stats">
+      <span class="tstat"><span class="tstat-label">Tick</span><span class="tstat-value" id="topbarTick">–</span></span>
+      <span class="tstat"><span class="tstat-label">Resolved</span><span class="tstat-value" id="topbarResolved">–</span></span>
+      <span class="tstat" title="Per-receiver loss: dropped / (delivered + dropped), from vbus_get_stats()"><span class="tstat-label">Radio loss</span><span class="tstat-value" id="topbarLoss">–</span></span>
     </div>
-  </header>
+    <div class="topbar-actions">
+      <button type="button" id="themeToggleBtn" class="topbar-btn" onclick="DashboardTheme.toggle()">☀️ Light</button>
+      <button type="button" onclick="exitDashboard()" class="topbar-btn" style="background:none;border:none;color:var(--bad);">Disconnect / Exit</button>
+    </div>
+  </div>
+  <div class="sub hidden" id="boardMissionBar" style="padding:4px 20px;border-bottom:1px solid var(--border);">
+    <span id="boardMissionText">Waiting for board handshake…</span>
+    <select id="boardMissionSpeed" title="Mission pace. Real time is one tick per 36 s, as in a real deployment."
+            style="margin-left:8px;font-size:12px;">
+      <option value="1">Real time (36 s/tick)</option>
+      <option value="10">10× (3.6 s/tick)</option>
+      <option value="60">60× (0.6 s/tick)</option>
+    </select>
+    <button type="button" id="startMissionBtn" onclick="startBoardMission()" disabled
+            title="Sends START, then runs the mission: the laptop sends the world and the clock, the boards run the teams, and Live Ops shows what the boards report (uses the Seed, Ticks and Fault profile fields below)"
+            style="margin-left:8px;padding:2px 10px;font-size:12px;">Start board mission</button>
+  </div>
 
   <div class="layout">
     <nav>
-      <button type="button" class="tab-btn active" data-tab="live">Live Ops</button>
-      <button type="button" class="tab-btn" data-tab="overview">Overview</button>
-      <button type="button" class="tab-btn" data-tab="journal">Incident Journal</button>
-      <button type="button" class="tab-btn" data-tab="recovery">Recovery / Rest</button>
-      <button type="button" class="tab-btn" data-tab="telemetry">Telemetry</button>
-      <button type="button" class="tab-btn" data-tab="raw">Raw Output</button>
-      <button type="button" class="tab-btn" data-tab="history">Run History</button>
+      <button type="button" class="tab-btn active" data-tab="live" title="Live Ops"><span class="nav-icon">📡</span><span>Live</span></button>
+      <button type="button" class="tab-btn" data-tab="overview" title="Overview"><span class="nav-icon">📊</span><span>Overview</span></button>
+      <button type="button" class="tab-btn" data-tab="journal" title="Incident Journal"><span class="nav-icon">📓</span><span>Journal</span></button>
+      <button type="button" class="tab-btn" data-tab="recovery" title="Recovery / Rest"><span class="nav-icon">🛌</span><span>Rest</span></button>
+      <button type="button" class="tab-btn" data-tab="telemetry" title="Telemetry"><span class="nav-icon">📈</span><span>Telem</span></button>
+      <button type="button" class="tab-btn" data-tab="raw" title="Raw Output"><span class="nav-icon">🧾</span><span>Raw</span></button>
+      <button type="button" class="tab-btn" data-tab="history" title="Run History"><span class="nav-icon">🕘</span><span>History</span></button>
     </nav>
 
     <main>
-      <div class="topbar" id="runTopBar">
-        <div class="topbar-group">
-          <div class="tfield"><label>Seed</label><input id="seed" type="number" value="1"></div>
-          <div class="tfield"><label>Seeds</label><input id="seedCount" type="number" value="1"></div>
-          <div class="tfield"><label>Ticks</label><input id="ticks" type="number" value="2000"></div>
-          <div class="tfield">
-            <label>Faults</label>
-            <select id="faultProfile">
-              <option value="none">none</option>
-              <option value="mobility">mobility</option>
-              <option value="communication">communication</option>
-              <option value="resource">resource</option>
-              <option value="combined">combined</option>
-              <option value="random">random</option>
-            </select>
-          </div>
-          <div class="tfield"><label>Delay ms</label><input id="tickDelay" type="number" value="150"></div>
-          <button type="button" id="liveBtn" class="topbar-btn" onclick="runLive()">▶ Start Live</button>
-          <button type="button" id="runBtn" class="topbar-btn" onclick="runSimulation()" style="background:var(--accent);color:#04150a;border:none;font-weight:600;">Batch</button>
-          <button type="button" id="stopLiveBtn" onclick="stopLive()" class="topbar-btn hidden" style="background:var(--bad);color:#fff;">Stop</button>
-        </div>
-        <div class="topbar-stats">
-          <span class="tstat"><span class="tstat-label">Tick</span><span class="tstat-value" id="topbarTick">–</span></span>
-          <span class="tstat"><span class="tstat-label">Resolved</span><span class="tstat-value" id="topbarResolved">–</span></span>
-          <span class="tstat" title="Per-receiver loss: dropped / (delivered + dropped), from vbus_get_stats()"><span class="tstat-label">Radio loss</span><span class="tstat-value" id="topbarLoss">–</span></span>
-          <button type="button" id="themeToggleBtnBar" class="topbar-btn" onclick="DashboardTheme.toggle()" title="Toggle light/dark theme">☀️</button>
-        </div>
-      </div>
 
       <!-- LIVE OPS TAB -->
       <div class="tab-content" id="tab-live">
@@ -432,34 +462,37 @@
               <button type="button" class="side-tab-btn" data-sidetab="teams">Teams</button>
               <button type="button" class="side-tab-btn" data-sidetab="incidents">Incidents</button>
             </div>
-            <div id="mapInspector" class="live-inspector-compact">
-              <span style="color:var(--muted);">click a marker to inspect it</span>
-            </div>
             <div class="live-side-content">
               <div class="side-tab-panel" id="sidetab-network">
-                <p class="sub" style="color:var(--muted);font-size:11px;margin:0 0 6px;">
+                <div class="network-legend">
                   9 peers judge each team from its radio beacons; ELEVATED needs 3 or more to agree.
-                </p>
-                <div style="position:relative;width:100%;height:190px;">
+                  <span class="tier-key">
+                    <span class="tier-dot" style="background:#8b98a5;"></span>NONE
+                    <span class="tier-dot" style="background:#d29922;"></span>LOCAL
+                    <span class="tier-dot" style="background:#f85149;"></span>ELEVATED
+                    <span>⚡ fast-path</span>
+                  </span>
+                </div>
+                <div class="network-ring-area">
                   <canvas id="consensusCanvas" style="width:100%;height:100%;display:block;"></canvas>
                 </div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0;font-size:10px;color:var(--muted);">
-                  <span><span style="display:inline-block;width:8px;height:8px;background:#8b98a5;border-radius:50%;vertical-align:-1px;"></span> NONE</span>
-                  <span><span style="display:inline-block;width:8px;height:8px;background:#d29922;border-radius:50%;vertical-align:-1px;"></span> LOCAL</span>
-                  <span><span style="display:inline-block;width:8px;height:8px;background:#f85149;border-radius:50%;vertical-align:-1px;"></span> ELEVATED</span>
-                  <span>⚡ fast-path</span>
+                <!-- Selected-team/incident/safezone card. Still called
+                     #mapInspector (unchanged id - see renderInspector()
+                     in the inline script) so every existing click/drag
+                     handler that already targets it keeps working; only
+                     its position (now inside the Network tab, not a
+                     shared strip above all three tabs) and its team-
+                     specific markup changed. -->
+                <div id="mapInspector" class="team-card">
+                  <span style="color:#8b98a5;">click a marker to inspect it</span>
                 </div>
-                <div id="consensusDetail" style="padding:6px 8px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-size:11px;line-height:1.5;min-height:18px;"></div>
-                <h2 style="margin-top:10px;">Radio (virtual peer bus)</h2>
-                <div id="radioPanelBody"><span style="color:var(--muted);">no run yet</span></div>
+                <div id="overrideBox" class="override-box hidden"></div>
               </div>
               <div class="side-tab-panel hidden" id="sidetab-teams">
-                <div style="overflow-x:auto;">
-                  <table id="liveTeamTable" style="min-width:600px;white-space:nowrap;">
-                    <thead><tr><th>Team</th><th>Status</th><th>Stamina</th><th>Pos</th><th>Fault<br><span style="font-weight:400;text-transform:none;font-size:9px;">(injected)</span></th><th>Hours</th><th title="Ticks since status last changed">PAR</th><th>Mob</th><th>Comm</th><th>Votes</th></tr></thead>
-                    <tbody></tbody>
-                  </table>
-                </div>
+                <table id="liveTeamTable">
+                  <thead><tr><th>Team</th><th>Status</th><th>Stamina</th><th>Fault<br><span style="font-weight:400;text-transform:none;font-size:9px;">(injected)</span></th><th title="Ticks since status last changed">PAR</th><th>Mob</th><th>Comm</th></tr></thead>
+                  <tbody></tbody>
+                </table>
               </div>
               <div class="side-tab-panel hidden" id="sidetab-incidents">
                 <div style="margin-bottom:6px;font-size:11px;color:var(--muted);">Active Incidents (<span id="liveIncidentCount">0</span>)</div>
@@ -508,6 +541,16 @@
             from the Live Ops tab so that tab fits on one screen; still updates live while a run streams.
           </p>
           <div class="chart-wrap"><canvas id="liveThroughputChart"></canvas></div>
+        </div>
+        <div class="panel">
+          <h2>Radio (virtual peer bus)</h2>
+          <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
+            Cumulative counters from vbus_get_stats(), reported once per tick. Moved here from Live Ops,
+            which only needs the per-receiver loss % (shown in its topbar) - full stats live here where
+            there's room. "Channel busy %" is the average share of each tick's 36s of mission time the
+            radio spent transmitting, over the whole run so far - not an instantaneous reading.
+          </p>
+          <div id="overviewRadioPanelBody"><span style="color:var(--muted);">no run yet</span></div>
         </div>
       </div>
 
@@ -747,6 +790,7 @@ let boardMissionAbort = null;
 async function followBoardMission() {
   if (boardMissionAbort) boardMissionAbort.abort();
   boardMissionAbort = new AbortController();
+  liveRunMode = "board";
   showTab("live");
   resizeMapCanvas();
   drawGrid();
@@ -972,15 +1016,14 @@ function showSideTab(name) {
 document.querySelectorAll(".side-tab-btn").forEach(b => b.addEventListener("click", () => showSideTab(b.dataset.sidetab)));
 
 async function checkStatus() {
+  // Used to also print "<project dir> · Makefile: found · binary: built"
+  // into #statusLine - dropped per the UI pass that folded the header
+  // into the topbar (that line was the one the project owner asked to
+  // remove). The request itself is kept (cheap backend reachability
+  // check + still available for anything that wants d.binary_exists
+  // etc. later) but no longer writes the filesystem path anywhere.
   try {
-    const r = await fetch("/api/status");
-    const d = await r.json();
-    let currentStatus = document.getElementById("statusLine").innerHTML;
-    // Don't overwrite the connection status if we are hardware connected
-    if (!currentStatus.includes("Connected to")) {
-      document.getElementById("statusLine").textContent =
-        `${d.project_dir}  ·  Makefile: ${d.makefile_found ? "found" : "NOT FOUND"}  ·  binary: ${d.binary_exists ? "built" : "not built yet"}`;
-    }
+    await fetch("/api/status");
   } catch (e) {
     console.error("Backend check failed.");
   }
@@ -1006,7 +1049,8 @@ function renderHistory(rows) {
     tbody.appendChild(tr);
   });
   if (rows.length) {
-    document.getElementById("lastRunLine").textContent = `last run: ${rows[0].timestamp}`;
+    const el = document.getElementById("lastRunLine");
+    if (el) el.textContent = `last run: ${rows[0].timestamp}`;
   }
 }
 
@@ -1346,58 +1390,59 @@ function drawFrame(frame, skipInspector) {
   if (!skipInspector) renderInspector();
 }
 
+// Split in two (UI pass: the override box moved out of the shared
+// inspector into its own element, below the team card, in the space
+// the Radio panel used to occupy - see #overrideBox in index.html):
+// renderTeamCard() always shows whatever is selected (or a
+// placeholder); renderOverrideBox() shows only while a proposal or its
+// ack is in flight, independent of selection. renderInspector() is
+// kept as the one call site every existing handler already uses.
 function renderInspector() {
+  renderTeamCard();
+  renderOverrideBox();
+}
+
+function voteLine(label, triplet) {
+  if (!triplet) return `${label} n/a`;
+  return `${label} ${triplet[0]} fault · ${triplet[1]} clear · ${triplet[2]} abstain`;
+}
+
+function renderTeamCard() {
   const el = document.getElementById("mapInspector");
 
-  // An override result or in-progress status outranks the preview card:
-  // map redraws while waiting for the board's ack must not replace it.
-  if (overrideStatus) {
-    drawOverrideStatus(el);
-    return;
-  }
-
-  if (pendingOverride) {
-    const p = pendingOverride;
-    const specName = SPEC_NAMES[p.teamIndex % SPEC_NAMES.length] || "team";
-    el.innerHTML = `
-      <div class="override-card">
-        <div class="override-title">⚠ Proposed Override — Preview Only</div>
-        <div class="override-route">
-          <span class="team-chip">${specName} #${p.teamIndex}</span>
-          <span class="arrow">→</span>
-          <span class="team-chip">Incident #${p.to.id}</span>
-        </div>
-        <div style="font-size:11.5px;color:var(--muted);">
-          (${p.from.x}, ${p.from.y}) &nbsp;→&nbsp; (${p.to.x}, ${p.to.y})
-        </div>
-        <div class="override-note">Requires a connected, ready board (USART1) - confirming sends this straight to the board's mission-link layer.</div>
-        <div class="override-actions">
-          <button id="overrideConfirmBtn" class="override-btn confirm">Confirm</button>
-          <button id="overrideCancelBtn" class="override-btn cancel">Cancel</button>
-        </div>
-      </div>`;
-    document.getElementById("overrideConfirmBtn").addEventListener("click", confirmPendingOverride);
-    document.getElementById("overrideCancelBtn").addEventListener("click", cancelPendingOverride);
-    return;
-  }
-
-  if (!selectedMarker) { el.innerHTML = '<span style="color:var(--muted);">click a marker to inspect it, or drag a team onto an incident to propose a reassignment</span>'; return; }
-  const hit = mapHitTargets.find(h => h.type === selectedMarker.type &&
-    (selectedMarker.type === "team" ? h.data.id === selectedMarker.id : h.data.id === selectedMarker.id));
-  if (!hit) { el.innerHTML = '<span style="color:var(--muted);">marker no longer present this tick</span>'; return; }
+  if (!selectedMarker) { el.innerHTML = '<span style="color:#8b98a5;">click a marker to inspect it, or drag a team onto an incident to propose a reassignment</span>'; return; }
+  const hit = mapHitTargets.find(h => h.type === selectedMarker.type && h.data.id === selectedMarker.id);
+  if (!hit) { el.innerHTML = '<span style="color:#8b98a5;">marker no longer present this tick</span>'; return; }
   const d = hit.data;
+
   if (hit.type === "team") {
-    const specName = SPEC_NAMES[d.i % SPEC_NAMES.length] || "team";
-    const statusName = STATUS_NAMES[d.status] || d.status;
-    const destText = d.has_dest
-      ? (d.dest_x === d.x && d.dest_y === d.y ? "on scene" : `(${d.dest_x}, ${d.dest_y}) — incident #${d.dest_id}`)
-      : "none (available)";
-    el.innerHTML = `<b>${specName} #${d.i}</b> &nbsp; <span class="pill ${d.status === 3 ? 'bad' : 'good'}">${statusName}</span><br>
-      Position: (${d.x}, ${d.y}) &nbsp; Stamina: ${d.stamina.toFixed(1)}% &nbsp; Hours worked: ${d.hours}<br>
-      Heading to: ${destText}<br>
-      Fault: ${d.fault_mask ? '<span class="pill bad">active (mask ' + d.fault_mask + ')</span>' : 'none'}
-      &nbsp; Degraded: ${d.degraded ? 'yes' : 'no'}<br>
-      <span style="color:var(--muted);font-size:11px;">drag this marker onto an incident to propose reassigning it</span>`;
+    // Compact 2-row card (UI pass item 8): row 1 is identity + tier
+    // pills + live/dark counts, right-aligned; row 2 is the vote
+    // breakdown spelled out. Status/stamina/position/heading-to (the
+    // old richer text) aren't dropped information - they're on the
+    // map marker itself, its tooltip, and the Teams table - just not
+    // duplicated a third time here, which is what bought back the
+    // "~2 rows tall" card the override box needs room to sit under.
+    const tier = d.consensus_tier;
+    const mobBadge = DashboardPanels.tierBadge(tier ? tier[0] : undefined, "Mobility tier");
+    const commBadge = DashboardPanels.tierBadge(tier ? tier[1] : undefined, "Communication tier");
+    const pv = d.peer_votes;
+    const liveDark = pv ? `${pv.live} live · ${pv.dark} dark` : "n/a";
+    // Colours are hardcoded (not var(--text)/var(--muted)) inside this
+    // card on purpose: it's a fixed dark "console" surface in both
+    // themes (see .team-card's own comment), and the CSS variables
+    // flip to light-theme values that go near-invisible on it.
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;">
+        <b>Team ${d.i}</b>
+        ${mobBadge}
+        ${commBadge}
+        <span style="margin-left:auto;color:#8b98a5;font-size:11px;white-space:nowrap;">${liveDark}</span>
+      </div>
+      <div style="margin-top:4px;color:#8b98a5;">
+        <b style="color:#e6edf3;">Votes</b>
+        &nbsp; ${voteLine("Mob", pv && pv.mob)} &nbsp;&nbsp; ${voteLine("Comm", pv && pv.comm)}
+      </div>`;
   } else if (hit.type === "incident") {
     const statusName = INCIDENT_STATUS_NAMES[d.status] || d.status;
     const assignedText = d.assigned_team === 255 ? "unassigned" : `${SPEC_NAMES[d.assigned_team % SPEC_NAMES.length] || "team"} #${d.assigned_team}`;
@@ -1409,6 +1454,53 @@ function renderInspector() {
     el.innerHTML = `<b>Safe Zone #${d.id}</b><br>
       Position: (${d.x}, ${d.y}) &nbsp; Occupancy: ${d.evacuees} / ${d.capacity}`;
   }
+}
+
+function renderOverrideBox() {
+  const box = document.getElementById("overrideBox");
+
+  // An override result or in-progress status outranks the preview card.
+  if (overrideStatus) {
+    box.classList.remove("hidden");
+    drawOverrideStatus(box);
+    return;
+  }
+
+  if (pendingOverride) {
+    box.classList.remove("hidden");
+    const p = pendingOverride;
+    const specName = SPEC_NAMES[p.teamIndex % SPEC_NAMES.length] || "team";
+    // Label only - Part 4 is what actually makes the sim-live path
+    // apply an override; today confirming this in sim-live mode still
+    // reaches the same /api/board/override route as board mode and
+    // gets "Board not connected" back, unchanged from before this UI
+    // pass. liveRunMode just decides which sentence describes what
+    // SHOULD happen once Part 4 lands.
+    const destText = liveRunMode === "board" ? "Sent to the board (USART1)." : "Applied in the simulator.";
+    box.innerHTML = `
+      <div class="override-card">
+        <div class="override-title">⚠ Proposed Override</div>
+        <div class="override-route">
+          <span class="team-chip">${specName} #${p.teamIndex}</span>
+          <span class="arrow">→</span>
+          <span class="team-chip">Incident #${p.to.id}</span>
+        </div>
+        <div style="font-size:11.5px;color:var(--muted);">
+          (${p.from.x}, ${p.from.y}) &nbsp;→&nbsp; (${p.to.x}, ${p.to.y})
+        </div>
+        <div class="override-note">${destText}</div>
+        <div class="override-actions">
+          <button id="overrideConfirmBtn" class="override-btn confirm">Confirm</button>
+          <button id="overrideCancelBtn" class="override-btn cancel">Cancel</button>
+        </div>
+      </div>`;
+    document.getElementById("overrideConfirmBtn").addEventListener("click", confirmPendingOverride);
+    document.getElementById("overrideCancelBtn").addEventListener("click", cancelPendingOverride);
+    return;
+  }
+
+  box.classList.add("hidden");
+  box.innerHTML = "";
 }
 
 // Screen point (CSS px, relative to the canvas box) for a mouse event -
@@ -1492,6 +1584,11 @@ function handleMapMouseUp(evt) {
       to: dropHit.data,
     };
     selectedMarker = { type: "team", id: dragState.teamHit.data.id };
+    // The override box only lives in the Network sub-tab - switch to
+    // it so a proposal made while looking at Teams/Incidents is
+    // actually seen, not silently built on a hidden tab.
+    const activeSideTab = document.querySelector(".side-tab-btn.active");
+    if (activeSideTab && activeSideTab.dataset.sidetab !== "network") showSideTab("network");
   }
   dragState = null;
   mapCanvas.style.cursor = "grab";
@@ -1622,7 +1719,9 @@ function drawOverrideStatus(el) {
 
 function showOverrideResult(title, detail, withOk) {
   overrideStatus = { title, detail, withOk };
-  drawOverrideStatus(document.getElementById("mapInspector"));
+  const box = document.getElementById("overrideBox");
+  box.classList.remove("hidden");
+  drawOverrideStatus(box);
 }
 
 function pollOverrideAck(teamId, incidentId) {
@@ -1647,7 +1746,8 @@ function pollOverrideAck(teamId, incidentId) {
 }
 
 function confirmPendingOverride() {
-  const el = document.getElementById("mapInspector");
+  const el = document.getElementById("overrideBox");
+  el.classList.remove("hidden");
   const p = pendingOverride;
   if (!p) return;
 
@@ -1703,6 +1803,24 @@ function cancelPendingOverride() {
   renderInspector();
 }
 
+// Esc cancels a pending (not-yet-confirmed) override proposal - a fast
+// way out of an accidental drag-drop without hunting for the Cancel
+// button. Does nothing once a real request is in flight (overrideStatus
+// set): that has its own OK-button-gated acknowledgement flow instead,
+// since a request already sent to the board shouldn't look cancel-able.
+window.addEventListener("keydown", (evt) => {
+  if (evt.key === "Escape" && pendingOverride && !overrideStatus) {
+    cancelPendingOverride();
+  }
+});
+
+// Which run is currently feeding Live Ops - decides the override box's
+// destination sentence (see renderOverrideBox()) and nothing else;
+// board mission mode and simulator-only live runs already render
+// through the same drawFrame()/updateLiveTables() pipeline regardless
+// of this flag.
+let liveRunMode = "sim";
+
 function updateLiveTables(frame) {
   document.getElementById("liveTickLabel").textContent = `tick ${frame.tick}`;
   DashboardPanels.updateTopBarStats("topbarTick", "topbarResolved", "topbarLoss", frame, simTelemetry);
@@ -1722,17 +1840,19 @@ function updateLiveTables(frame) {
       ? `<span class="pill bad" title="No status change in ${ticksSince} ticks">⚠ ${ticksSince}t</span>`
       : `<span style="color:var(--muted);">${ticksSince}t</span>`;
     const cc = DashboardPanels.teamConsensusCells(t);
+    // Pos, Hours and Votes were dropped from this table (UI pass item
+    // 6, "no horizontal scrolling"): position is already on the map,
+    // hours worked wasn't essential here, and the vote breakdown is
+    // spelled out in full in the selected-team card (Network tab)
+    // instead of duplicated in cramped monospace here.
     tr.innerHTML = `
       <td><span style="color:${TEAM_COLORS[i % TEAM_COLORS.length]}">●</span> ${SPEC_NAMES[i % SPEC_NAMES.length] || "team" + i} #${i}</td>
       <td><span class="pill ${t.status === 3 ? 'bad' : 'good'}">${statusName}</span></td>
       <td>${t.stamina.toFixed(1)}%</td>
-      <td>(${t.x}, ${t.y})</td>
       <td>${t.fault_mask ? '<span class="pill bad">FAULT</span>' : '–'}</td>
-      <td>${t.hours}</td>
       <td>${parCell}</td>
       <td>${cc.mobBadge}</td>
-      <td>${cc.commBadge}</td>
-      <td style="font-family:monospace;font-size:10.5px;white-space:nowrap;" title="${cc.votes}">${cc.votesCompact}</td>`;
+      <td>${cc.commBadge}</td>`;
     tr.addEventListener("click", () => {
       selectedMarker = { type: "team", id: t.id };
       if (window.DashboardSelection) DashboardSelection.set(selectedMarker);
@@ -1766,14 +1886,64 @@ function updateLiveTables(frame) {
       itbody.appendChild(tr);
     });
 
-  DashboardPanels.updateRadioPanel("radioPanelBody", frame);
+  // Radio panel moved to the Overview tab (UI pass item 5) - the
+  // per-receiver loss % in the topbar is what Live Ops itself needs;
+  // full stats (sent/delivered/dropped/channel-busy%) live where
+  // there's room to show them without a projector squinting.
+  DashboardPanels.updateRadioPanel("overviewRadioPanelBody", frame);
+}
+
+// Run state shown in the topbar (running / paused / finished) and the
+// Pause/Resume/Stop button visibility that goes with it. Kept as one
+// function so every place that changes the run's lifecycle (start,
+// pause, resume, done, stopped, errored) goes through the same rules
+// instead of each toggling buttons by hand - and so Part 2's replay
+// controls, which share this same topbar spot, have one clear place
+// to plug into rather than duplicating this logic.
+function setRunState(state) {
+  const wrap = document.getElementById("runStateWrap");
+  const label = document.getElementById("runStateLabel");
+  const pauseBtn = document.getElementById("pauseLiveBtn");
+  const resumeBtn = document.getElementById("resumeLiveBtn");
+  const stopBtn = document.getElementById("stopLiveBtn");
+  const liveBtn = document.getElementById("liveBtn");
+  label.textContent = state;
+  label.style.color = state === "paused" ? "var(--warn)" : state === "running" ? "var(--accent)" : "var(--muted)";
+  if (state === "idle") {
+    wrap.classList.add("hidden");
+    pauseBtn.classList.add("hidden");
+    resumeBtn.classList.add("hidden");
+    stopBtn.classList.add("hidden");
+    liveBtn.disabled = false;
+    return;
+  }
+  wrap.classList.remove("hidden");
+  pauseBtn.classList.toggle("hidden", state !== "running");
+  resumeBtn.classList.toggle("hidden", state !== "paused");
+  stopBtn.classList.toggle("hidden", state === "finished");
+  liveBtn.disabled = state === "running" || state === "paused";
+}
+
+async function pauseLive() {
+  try {
+    const r = await fetch("/api/run-live/pause", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const body = await r.json();
+    if (body.ok) setRunState("paused");
+  } catch (e) { console.error("pause failed:", e); }
+}
+
+async function resumeLive() {
+  try {
+    const r = await fetch("/api/run-live/resume", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const body = await r.json();
+    if (body.ok) setRunState("running");
+  } catch (e) { console.error("resume failed:", e); }
 }
 
 async function runLive() {
-  const liveBtn = document.getElementById("liveBtn");
-  const stopBtn = document.getElementById("stopLiveBtn");
-  liveBtn.disabled = true;
-  stopBtn.classList.remove("hidden");
+  let liveEndedCleanly = false;
+  liveRunMode = "sim";
+  setRunState("running");
   showTab("live");
   resizeMapCanvas();
   drawGrid();
@@ -1828,7 +1998,9 @@ async function runLive() {
             }
           }
         } else if (msg.type === "done") {
-          renderLiveCharts(); 
+          liveEndedCleanly = true;
+          setRunState("finished");
+          renderLiveCharts();
           const mismatches = telemetryFinalize(msg.diag);
           renderRun({
             elapsed_seconds: msg.elapsed_seconds, returncode: 0,
@@ -1849,8 +2021,7 @@ async function runLive() {
   } catch (e) {
     if (e.name !== "AbortError") alert("Live run error: " + e);
   } finally {
-    liveBtn.disabled = false;
-    stopBtn.classList.add("hidden");
+    if (!liveEndedCleanly) setRunState("idle");
   }
 }
 
@@ -1861,7 +2032,10 @@ function stopLive() {
 // ---------- Dashboard panel wiring (Part 1: map camera, consensus
 // network, detection timeline, theme toggle) ----------
 DashboardTheme.init();
-ConsensusNetwork.init(document.getElementById("consensusCanvas"), document.getElementById("consensusDetail"));
+// No detail element passed: the vote-breakdown-on-click now renders
+// into the shared team card (#mapInspector, see renderTeamCard()) via
+// the existing cross-panel DashboardSelection, not a panel of its own.
+ConsensusNetwork.init(document.getElementById("consensusCanvas"));
 DetectionTimeline.init(document.getElementById("timelineCanvas"), document.getElementById("timelineLegend"), TEAM_COLORS, SPEC_NAMES, document.getElementById("timelineRange"));
 </script>
 </body>

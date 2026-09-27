@@ -76,6 +76,27 @@
     return (v.dropped / denom) * 100;
   }
 
+  // One tick = 36 seconds of mission time (the same constant the
+  // board-mission "real time" pace option in index.html uses) - the
+  // only place in this file a wall-clock assumption is made, and it's
+  // only for this one derived, clearly-labeled stat.
+  const TICK_DURATION_MS = 36000;
+
+  // "Channel busy %": average radio airtime per tick, as a fraction of
+  // how long a tick actually represents (36 s of mission time) - i.e.
+  // "of each tick's real duration, how much of it was the radio
+  // actually transmitting". airtime_ms is cumulative, so this is a
+  // whole-run average, not an instantaneous reading; both facts are
+  // spelled out in the panel's own label/title for a non-expert
+  // reader, not just in this comment. Returns null when there's no
+  // tick to average over yet.
+  function channelBusyPct(frame) {
+    const v = frame && frame.vbus;
+    if (!v || !frame || !(frame.tick >= 0)) return null;
+    const ticksElapsed = frame.tick + 1;
+    return (v.airtime_ms / ticksElapsed / TICK_DURATION_MS) * 100;
+  }
+
   function updateRadioPanel(elId, frame) {
     const el = document.getElementById(elId);
     if (!el) return;
@@ -86,13 +107,15 @@
     }
     const lossPct = radioLossPct(frame);
     const lossText = lossPct === null ? "–" : lossPct.toFixed(1) + "%";
+    const busyPct = channelBusyPct(frame);
+    const busyText = busyPct === null ? "–" : busyPct.toFixed(2) + "%";
     el.innerHTML = `
       <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;">
         <div><div class="label" style="font-size:11px;color:var(--muted);text-transform:uppercase;">Sent</div><div style="font-size:20px;font-weight:700;">${v.sent}</div></div>
         <div><div class="label" style="font-size:11px;color:var(--muted);text-transform:uppercase;">Delivered</div><div style="font-size:20px;font-weight:700;color:var(--accent);">${v.delivered}</div></div>
         <div><div class="label" style="font-size:11px;color:var(--muted);text-transform:uppercase;">Dropped</div><div style="font-size:20px;font-weight:700;color:var(--bad);">${v.dropped}</div></div>
         <div><div class="label" style="font-size:11px;color:var(--muted);text-transform:uppercase;" title="dropped / (delivered + dropped) - per-receiver outcomes, not per-broadcast">Per-receiver loss</div><div style="font-size:20px;font-weight:700;">${lossText}</div></div>
-        <div><div class="label" style="font-size:11px;color:var(--muted);text-transform:uppercase;">Airtime (cum.)</div><div style="font-size:20px;font-weight:700;">${v.airtime_ms} ms</div></div>
+        <div><div class="label" style="font-size:11px;color:var(--muted);text-transform:uppercase;" title="Average radio airtime per tick, as a share of the 36s a tick represents in mission time - a whole-run average, not instantaneous">Channel busy %</div><div style="font-size:20px;font-weight:700;">${busyText}</div></div>
       </div>`;
   }
 
@@ -117,6 +140,6 @@
   }
 
   global.DashboardPanels = {
-    tierBadge, voteString, teamConsensusCells, updateRadioPanel, radioLossPct, updateTopBarStats,
+    tierBadge, voteString, teamConsensusCells, updateRadioPanel, radioLossPct, channelBusyPct, updateTopBarStats,
   };
 })(window);

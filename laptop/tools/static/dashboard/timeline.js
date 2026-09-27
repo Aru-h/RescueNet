@@ -97,7 +97,12 @@
       const rowH = currentRowH(h);
       const plotW = w - LABEL_W;
       const visibleTicks = Math.max(1, Math.floor(plotW / PX_PER_TICK));
-      const labelFont = Math.max(6, Math.min(11, rowH * 0.55));
+      // Floor of 11px regardless of row height (projector readability -
+      // UI pass item 10): the panel is sized (see .live-timeline-panel
+      // in index.html) so 10 rows comfortably clear this floor, but the
+      // floor comes first so a label never silently shrinks below it
+      // again if that sizing assumption changes.
+      const labelFont = Math.max(11, Math.min(13, rowH * 0.6));
 
       for (let i = 0; i < numTeams; i++) {
         const y = i * rowH;

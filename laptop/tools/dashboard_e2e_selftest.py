@@ -221,6 +221,9 @@ def main():
             startup_display = page.eval_on_selector("#startup-screen", "el => getComputedStyle(el).display")
             check(startup_display == "none", "startup screen actually hides once simulation mode is entered")
 
+            default_fault = page.eval_on_selector("#faultProfile", "el => el.value")
+            check(default_fault == "random", f"default fault profile is 'random' (UI pass item 3, got {default_fault!r})")
+
             # A short real live run (simulator-only - no board/hardware
             # involved) so the map/consensus-network/timeline/radio panels
             # all get real LIVEFRAME data to render, not just their
@@ -248,27 +251,83 @@ def main():
             team_rows = page.eval_on_selector_all("#liveTeamTable tbody tr", "els => els.length")
             check(team_rows == 10, f"Team Status table has one row per team (got {team_rows})")
 
-            # Compact form (panels.js's voteStringCompact()): "M f/c/a · C f/c/a",
-            # no F/C/A letters - those are one hover (the cell's title
-            # attribute) away, kept off the visible text so the column
-            # doesn't force the whole table wider than the side panel.
-            votes_cell = page.eval_on_selector("#liveTeamTable tbody tr td:nth-child(10)", "el => el.textContent")
-            check(bool(votes_cell and ("n/a" in votes_cell or "M " in votes_cell)),
-                  f"a team row's Votes cell reads either a vote string or n/a (got {votes_cell!r})")
-
-            # Side-tab switching (Network / Teams / Incidents) - the
-            # compact right-hand panel introduced by the one-screen
-            # layout rework.
+            # Teams table columns (UI pass item 6): Pos/Hours/Votes were
+            # dropped so the table needs no horizontal scroll - assert
+            # both the column count and the actual fit.
             page.click(".side-tab-btn[data-sidetab='teams']")
             teams_visible = page.eval_on_selector("#sidetab-teams", "el => !el.classList.contains('hidden')")
             check(teams_visible, "clicking the Teams side-tab shows the team table panel")
             network_hidden = page.eval_on_selector("#sidetab-network", "el => el.classList.contains('hidden')")
             check(network_hidden, "switching to Teams hides the Network side-tab panel")
+            header_cells = page.eval_on_selector_all("#liveTeamTable thead th", "els => els.map(e => e.textContent.trim())")
+            check(header_cells == ["Team", "Status", "Stamina", "Fault(injected)", "PAR", "Mob", "Comm"],
+                  f"Teams table has exactly the 7 kept columns, in order (got {header_cells})")
+            teams_overflow = page.evaluate("""() => {
+              const t = document.getElementById('liveTeamTable');
+              return { scrollWidth: t.parentElement.scrollWidth, clientWidth: t.parentElement.clientWidth };
+            }""")
+            check(teams_overflow["scrollWidth"] <= teams_overflow["clientWidth"] + 1,
+                  f"Teams panel has no horizontal overflow (scrollWidth={teams_overflow['scrollWidth']} "
+                  f"vs. clientWidth={teams_overflow['clientWidth']})")
             page.click(".side-tab-btn[data-sidetab='network']")
 
-            radio_text = page.eval_on_selector("#radioPanelBody", "el => el.textContent")
-            check(bool(radio_text and radio_text.strip()), "Radio panel populated from vbus")
+            # Selected-team card (UI pass item 8): compact 2-row format,
+            # tier pills, live/dark count, votes spelled out in full
+            # (this is where the Votes column moved to, off the table).
+            page.evaluate("() => { selectedMarker = {type:'team', id: window._lastFrame.teams[0].id}; renderInspector(); }")
+            page.wait_for_timeout(100)
+            card_text = page.eval_on_selector("#mapInspector", "el => el.textContent")
+            check(bool(card_text and "Team 0" in card_text and "live" in card_text and "dark" in card_text),
+                  f"selected-team card shows identity + live/dark count (got {card_text!r})")
+            check(bool(card_text and "fault" in card_text and "clear" in card_text and "abstain" in card_text),
+                  f"selected-team card spells out the vote breakdown (got {card_text!r})")
+
+            # Network tab (UI pass item 7): legend + ring + team card all
+            # fit without the side panel needing its own inner scroll.
+            net_fit = page.evaluate("""() => {
+              const c = document.querySelector('.live-side-content');
+              return { scrollHeight: c.scrollHeight, clientHeight: c.clientHeight };
+            }""")
+            check(net_fit["scrollHeight"] <= net_fit["clientHeight"] + 1,
+                  f"Network tab fits without inner scroll (content scrollHeight={net_fit['scrollHeight']} "
+                  f"vs. clientHeight={net_fit['clientHeight']})")
+
+            # Pending override box (UI pass item 9): appears in the
+            # Network tab, and both action buttons stay fully inside
+            # the viewport - nothing cut off at the panel's bottom edge.
+            page.evaluate("""() => {
+              const frame = window._lastFrame;
+              const team = frame.teams[1];
+              const inc = frame.incidents.find(i => i.status !== 3 && i.id !== team.dest_id);
+              if (inc) {
+                pendingOverride = { team, teamIndex: team.i !== undefined ? team.i : 1, from: {x: team.x, y: team.y}, to: inc };
+                selectedMarker = {type:'team', id: team.id};
+                renderInspector();
+              }
+            }""")
+            page.wait_for_timeout(150)
+            override_fit = page.evaluate("""() => {
+              const confirmBtn = document.getElementById('overrideConfirmBtn');
+              const cancelBtn = document.getElementById('overrideCancelBtn');
+              if (!confirmBtn || !cancelBtn) return null;
+              const vw = window.innerWidth, vh = window.innerHeight;
+              const within = (r) => r.top >= 0 && r.left >= 0 && r.bottom <= vh + 1 && r.right <= vw + 1 && r.width > 0 && r.height > 0;
+              return { confirmWithin: within(confirmBtn.getBoundingClientRect()), cancelWithin: within(cancelBtn.getBoundingClientRect()) };
+            }""")
+            check(bool(override_fit and override_fit["confirmWithin"] and override_fit["cancelWithin"]),
+                  f"pending override's Confirm/Cancel buttons are fully inside the viewport (got {override_fit})")
+            page.evaluate("() => { pendingOverride = null; renderInspector(); }")
+
+            # Radio panel moved to Overview (UI pass item 5), replacing
+            # cumulative airtime with "channel busy %".
+            page.click("[data-tab='overview']")
+            page.wait_for_timeout(150)
+            radio_text = page.eval_on_selector("#overviewRadioPanelBody", "el => el.textContent")
+            check(bool(radio_text and radio_text.strip()), "Overview's Radio panel populated from vbus")
             check("Per-receiver loss" in (radio_text or ""), "Radio panel labels loss as per-receiver, not per-broadcast")
+            check("Channel busy" in (radio_text or ""), "Radio panel shows channel busy %, not raw cumulative airtime")
+            page.click("[data-tab='live']")
+            page.wait_for_timeout(150)
 
             # Radio per-receiver loss %: dropped / (delivered + dropped),
             # not dropped / sent (see panels.js's radioLossPct()).
@@ -281,19 +340,48 @@ def main():
                       f"topbar radio loss ({loss_text!r}) matches dropped/(delivered+dropped) "
                       f"(expected {expected_pct:.1f}%)")
 
-            # Theme toggle (both buttons - the header's original and the
-            # topbar's compact copy - stay in sync).
+            # Only one theme toggle exists (a UI pass removed the header's
+            # duplicate).
+            toggle_count = page.evaluate("() => document.querySelectorAll('#themeToggleBtn, #themeToggleBtnBar').length")
+            check(toggle_count == 1, f"exactly one theme toggle button exists (got {toggle_count})")
+
             page.click("#themeToggleBtn")
             page.wait_for_timeout(150)
             theme_attr = page.eval_on_selector("html", "el => el.getAttribute('data-theme')")
             check(theme_attr == "light", f"theme toggle switches to light (got {theme_attr!r})")
             bg_light = page.eval_on_selector("body", "el => getComputedStyle(el).backgroundColor")
-            page.click("#themeToggleBtnBar")
+            page.click("#themeToggleBtn")
             page.wait_for_timeout(150)
-            theme_attr2 = page.eval_on_selector("html", "el => el.getAttribute('data-theme')")
-            check(theme_attr2 == "dark", "the topbar's theme button also toggles the (shared) theme state")
             bg_dark = page.eval_on_selector("body", "el => getComputedStyle(el).backgroundColor")
             check(bg_light != bg_dark, "toggling the theme actually changes the rendered background colour")
+
+            # Pause/Resume/Stop change the run state (UI pass item 2).
+            # A fresh, deliberately long-running live run: the earlier
+            # 60-tick/5ms run this test already exercised may well have
+            # finished by now (several checks and waits happened since),
+            # and a finished run hides #pauseLiveBtn - clicking a hidden
+            # button would just time out rather than test anything.
+            if page.query_selector("#stopLiveBtn") and page.is_visible("#stopLiveBtn"):
+                page.click("#stopLiveBtn")
+                page.wait_for_timeout(200)
+            page.fill("#seed", "11")
+            page.fill("#ticks", "5000")
+            page.fill("#tickDelay", "50")
+            page.click("#liveBtn")
+            page.wait_for_timeout(500)
+            state_running = page.eval_on_selector("#runStateLabel", "el => el.textContent")
+            check(state_running == "running", f"run state starts at 'running' (got {state_running!r})")
+            page.click("#pauseLiveBtn")
+            page.wait_for_timeout(300)
+            state_paused = page.eval_on_selector("#runStateLabel", "el => el.textContent")
+            pause_btn_hidden = page.eval_on_selector("#pauseLiveBtn", "el => el.classList.contains('hidden')")
+            resume_btn_shown = page.eval_on_selector("#resumeLiveBtn", "el => !el.classList.contains('hidden')")
+            check(state_paused == "paused" and pause_btn_hidden and resume_btn_shown,
+                  f"Pause switches run state to 'paused' and swaps the button for Resume (state={state_paused!r})")
+            page.click("#resumeLiveBtn")
+            page.wait_for_timeout(300)
+            state_resumed = page.eval_on_selector("#runStateLabel", "el => el.textContent")
+            check(state_resumed == "running", f"Resume switches run state back to 'running' (got {state_resumed!r})")
 
             # The run may already have finished on its own (a short,
             # fast tick-delay run easily beats the wait above) - #stopLiveBtn
@@ -302,7 +390,9 @@ def main():
             stop_btn = page.query_selector("#stopLiveBtn")
             if stop_btn and stop_btn.is_visible():
                 stop_btn.click()
-            page.wait_for_timeout(300)
+                page.wait_for_timeout(300)
+                state_stopped = page.eval_on_selector("#runStateLabel", "el => el.textContent")
+                check(state_stopped == "idle", f"Stop switches run state to 'idle' (got {state_stopped!r})")
 
             check(len(console_errors) == 0,
                   f"no browser console errors / page errors during the run (got {len(console_errors)}: "
