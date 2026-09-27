@@ -1,0 +1,120 @@
+run_id re-keyed to world_seed (40 -> 40 unique)
+merged csv: /private/tmp/claude-501/scratch_g/tron_snapshot_dataset_merged.csv 276 MiB
+Number of distinct seeds: 40
+Min seed: 1 Max seed: 40
+Contiguous (max-min+1 == count)? True
+
+ticks_per_seed candidates (max cycle per run):
+cycle
+3000    40
+Name: count, dtype: int64
+['run_id', 'world_seed', 'cycle', 'team_id', 'loc_x', 'loc_y', 'stamina', 'specialization', 'status', 'assigned_incident', 'incident_priority', 'incident_req_capability', 'incident_loc_x', 'incident_loc_y', 'victim_count', 'hazard_flags', 'hours_worked', 'fitness_tier', 'equipment_flags', 'event_type', 'cbba_selected_team', 'equipment_level', 'support_team', 'fault_active_mask', 'twin_expected_progress', 'twin_actual_progress', 'twin_progress_error', 'twin_expected_stamina', 'twin_actual_stamina', 'twin_stamina_error', 'twin_remaining_path_cost', 'twin_expected_work_remaining', 'twin_mission_stage', 'twin_communication_health', 'twin_expected_loc_x', 'twin_expected_loc_y', 'watchdog_anomaly_detected', 'watchdog_anomaly_confidence', 'watchdog_failure_mode', 'watchdog_evidence_flags', 'watchdog_recommended_action', 'recovery_recommendation', 'recovery_reason', 'recovery_confidence', 'recovery_escalation_level', 'twin_expected_arrival_tick', 'twin_expected_operating_state', 'twin_assigned_task_pool', 'twin_assigned_task_slot', 'incident_discovered', 'team_zone_id', 'team_zone_trust', 'fault_active_mobility', 'fault_active_communication', 'fault_active_resource', 'fault_active_environment', 'fault_active_mission', 'fault_severity_mobility', 'fault_severity_communication', 'fault_severity_resource', 'fault_severity_environment', 'fault_severity_mission', 'fault_ticks_remaining_mobility', 'fault_ticks_remaining_communication', 'fault_ticks_remaining_resource', 'fault_ticks_remaining_environment', 'fault_ticks_remaining_mission', 'env_raw_travel_cost', 'team_task_pool', 'team_task_slot', 'heading_to_rest', 'resting_zone_id', 'incident_floor', 'incident_building_id', 'heartbeat_emitted', '_row_seq']
+watchdog_failure_mode
+3    284814
+2     34432
+5     26998
+1     14249
+6     14035
+0       703
+4       449
+Name: count, dtype: int64
+Shape: (1200000, 76)
+
+watchdog_anomaly_detected (reference only, not the label):
+watchdog_anomaly_detected
+0    824320
+1    375680
+Name: count, dtype: int64
+True
+watchdog_failure_mode
+0    531087
+3    313107
+6    165182
+2    110814
+1     50242
+5     28749
+4       819
+Name: count, dtype: int64
+
+Ground-truth label positive rates (per class, whole dataset):
+communication    0.235076
+resource         0.234864
+mobility         0.234841
+mission          0.120096
+environment      0.056414
+dtype: float64
+Any-fault-active rate (row has >=1 of the 5 classes active): 0.5789575
+
+Evidence-channel features merged in: ['evidence_progress', 'evidence_stamina', 'evidence_communication', 'evidence_operating_state', 'evidence_path', 'evidence_assignment', 'evidence_timeout', 'confirmed_mobility_impairment']
+       evidence_progress  evidence_stamina  evidence_communication  \
+count       1.200000e+06      1.200000e+06            1.200000e+06   
+mean        3.078909e-02      7.696293e-02            1.699372e-01   
+std         8.904417e-02      1.497105e-01            2.757662e-01   
+min         0.000000e+00      0.000000e+00            7.181839e-24   
+25%         2.782563e-12      4.561645e-05            5.180450e-10   
+50%         3.957796e-06      3.138839e-03            1.858395e-05   
+75%         9.676583e-03      9.434685e-02            3.413333e-01   
+max         9.978727e-01      9.999999e-01            6.666667e-01   
+
+       evidence_operating_state  evidence_path  evidence_assignment  \
+count              1.200000e+06   1.200000e+06         1.200000e+06   
+mean               4.128018e-02   3.110308e-02         2.358572e-02   
+std                1.499714e-01   9.325614e-02         6.471671e-02   
+min                0.000000e+00   0.000000e+00         0.000000e+00   
+25%                1.989948e-15   5.615195e-24         1.880194e-11   
+50%                1.215047e-08   2.592271e-10         7.805261e-06   
+75%                7.534422e-04   2.818904e-04         5.044032e-03   
+max                1.000000e+00   8.883958e-01         7.165752e-01   
+
+       evidence_timeout  confirmed_mobility_impairment  
+count      1.200000e+06                   1.200000e+06  
+mean       5.022940e-03                   2.519417e-01  
+std        2.865850e-02                   4.341281e-01  
+min        0.000000e+00                   0.000000e+00  
+25%       1.898193e-103                   0.000000e+00  
+50%        6.733653e-36                   0.000000e+00  
+75%        2.316260e-12                   1.000000e+00  
+max        8.874684e-01                   1.000000e+00  
+['team_zone_id_0', 'team_zone_id_1', 'team_zone_id_2', 'team_zone_id_3', 'team_zone_id_4', 'team_zone_id_5', 'team_zone_id_6', 'team_zone_id_7', 'team_zone_id_8', 'team_zone_id_9']
+
+Number of features (before path_is_unreachable): 71
+Missing values:
+ 0 total NaNs
+Accepted split on attempt 0. Any-fault-active rates — train: 0.5798, val: 0.5861, test: 0.5680 (overall: 0.5790)
+
+Per-class positive rate by split:
+  train:
+mobility         0.234954
+communication    0.235143
+resource         0.235277
+environment      0.056299
+mission          0.118162
+  val:
+mobility         0.233961
+communication    0.234450
+resource         0.233761
+environment      0.056644
+mission          0.130056
+  test:
+mobility         0.235194
+communication    0.235389
+resource         0.234039
+environment      0.056722
+mission          0.119161
+
+twin_remaining_path_cost training-set mean (actively-traveling rows only): 49.04
+Number of features (with path_is_unreachable): 72
+
+Any NaNs after scaling? — train: False val: False test: False
+AttributeError: module '__main__' has no attribute 'SafeStandardScaler'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/harushsgtemkar/projects/Tron project/Tron project Code/tron-features/docs/research/feature_contract_experiments/01_prepare.py", line 54, in <module>
+    exec(compile(src, "data_prep-2.py(patched copy)", "exec"), {"__name__": "__main__"})
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "data_prep-2.py(patched copy)", line 396, in <module>
+_pickle.PicklingError: Can't pickle <class '__main__.SafeStandardScaler'>: it's not found as __main__.SafeStandardScaler
+when serializing SafeStandardScaler class
+when serializing SafeStandardScaler object

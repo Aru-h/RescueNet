@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-single-board-dk-harness
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-single-board-dk-harness check-fault-predictor-features-selftest check-zone-parity check-feature-spec-fresh check-feature-spec-leak-guard
 
 all: $(TARGET) $(LABELER)
 
@@ -773,6 +773,28 @@ check-environment-e2e-stress: tron_snapshot_dataset.csv
 check-env-raw-travel-cost-ablation: tron_snapshot_dataset.csv
 	$(PYTHON) $(TOOLS_DIR)/env_raw_travel_cost_ablation.py
 
+# Feature contract (single source of truth): core/feature_spec.h and
+# feature_spec.py are GENERATED from the committed feature_spec.json by
+# generate_feature_spec.py - never hand-edited. This regenerates both in
+# place and fails if that changes anything relative to what's committed,
+# so a feature_spec.json edit that forgot to re-run the generator (or a
+# hand-edit to either generated file) is caught, not silently merged.
+check-feature-spec-fresh:
+	@test -f feature_spec.json || (echo "check-feature-spec-fresh: feature_spec.json missing - run data_prep.py first" && exit 1)
+	@$(PYTHON) generate_feature_spec.py feature_spec.json
+	@git diff --quiet -- core/feature_spec.h feature_spec.py || \
+		(echo "check-feature-spec-fresh: core/feature_spec.h / feature_spec.py are stale relative to the committed feature_spec.json:" && \
+		 git diff -- core/feature_spec.h feature_spec.py && exit 1)
+	@echo "check-feature-spec-fresh: core/feature_spec.h and feature_spec.py match feature_spec.json"
+
+# Fast leak guard on the committed feature_spec.json alone (no CSV, no
+# simulator run) - data_prep.py asserts the same thing every time it runs;
+# this is the always-cheap version for CI/a plain `make check-feature-
+# spec-leak-guard` with nothing else built.
+check-feature-spec-leak-guard:
+	@test -f feature_spec.json || (echo "check-feature-spec-leak-guard: feature_spec.json missing - run data_prep.py first" && exit 1)
+	@$(PYTHON) $(TOOLS_DIR)/feature_spec_leak_check.py feature_spec.json
+
 # --- Standalone laptop/tools selftests ---------------------------------------
 # These seven selftests existed with no Makefile target at all, so nothing
 # ever ran them (each file's own "Build:" comment was the only way in, and
@@ -867,6 +889,39 @@ check-virtual-bus:
 		$(TOOLS_DIR)/virtual_bus_selftest.c $(CORE_DIR)/vbus.c $(CORE_DIR)/random.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./virtual_bus_selftest
 
+# Fault-predictor history features (stall fractions over the last 5 and
+# 10 ticks, incident priority / victim-count deltas): a hand-worked
+# 17-tick sequence checked against data_prep's rolling/baseline logic.
+check-fault-predictor-features-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/fault_predictor_features_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/fault_predictor_features_selftest \
+		$(TOOLS_DIR)/fault_predictor_features_selftest.c $(CORE_DIR)/fault_predictor_features.c \
+		$(CORE_DIR)/mission_state.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./fault_predictor_features_selftest
+
+# Zone parity (feature-contract Decision D): a board fed only the district-
+# map/zone-trust frames (mission_link.h 5e/5f) must compute the exact same
+# zone_id_for_location()/search_zone_trust() the laptop does. One source
+# file, two binaries - "gen" (normal build, generates ground truth + the
+# frame stream from a real seeded mission) and "check" (built with
+# ENVIRONMENT_HAS_WORLD_STORAGE=0, the real board port, applies only the
+# frames and compares). See zone_parity_test.c's own top-of-file comment.
+ZONE_PARITY_DIR = build/zone-parity
+
+check-zone-parity:
+	@mkdir -p $(ZONE_PARITY_DIR)
+	@echo "  CC      $(TOOLS_DIR)/zone_parity_test.c (gen)"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(ZONE_PARITY_DIR)/zone_parity_gen \
+		$(TOOLS_DIR)/zone_parity_test.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@echo "  CC      $(TOOLS_DIR)/zone_parity_test.c (check, ENVIRONMENT_HAS_WORLD_STORAGE=0)"
+	@$(CC) $(SELFTEST_CFLAGS) -DENVIRONMENT_HAS_WORLD_STORAGE=0 -o $(ZONE_PARITY_DIR)/zone_parity_check \
+		$(TOOLS_DIR)/zone_parity_test.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(ZONE_PARITY_DIR) && ./zone_parity_gen frames.txt truth.csv
+	@cd $(ZONE_PARITY_DIR) && ./zone_parity_check frames.txt truth.csv
+
 # Peer consensus unit tests (CONSENSUS_DESIGN.md 7.9, 7.11): real vbus,
 # synthetic teams, no simulation. Needs the virtual bus and the test hooks.
 CONSENSUS_TEST_DEFS = -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_TEST_HOOKS=1
@@ -920,9 +975,13 @@ check-consensus-airtime:
 
 # Shadow-mode regression (design 7.7): with CONSENSUS_ENFORCE=0 every column
 # the base branch writes must be identical. The base is built from
-# CONSENSUS_BASE_REF in a scratch tree. run_id (start time + seed) is the only
-# column ignored. The base is pinned to e37181a, the last submission commit
-# before consensus was merged: the branch tip now contains consensus itself.
+# CONSENSUS_BASE_REF in a scratch tree. run_id is excluded outright;
+# incident_priority/victim_count are compared after mapping the base's old
+# no-task sentinel (-1) to the candidate's new one (0), so a genuine
+# regression in either still fails (see consensus_shadow_compare.py's
+# EXCLUDED_COLUMNS/REMAPPED_COLUMNS and module docstring). The base is
+# pinned to e37181a, the last submission commit before consensus was
+# merged: the branch tip now contains consensus itself.
 CONSENSUS_BASE_REF ?= e37181a
 SHADOW_DIR = build/consensus-shadow
 

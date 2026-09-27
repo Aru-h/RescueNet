@@ -21,13 +21,12 @@ import sys
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, REPO_ROOT)
 
-import gc
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.ensemble import HistGradientBoostingClassifier
 
-from evidence_channels import reconstruct_full_timeline, recompute_team_timeline, WEIGHTS
+from evidence_channels import WEIGHTS
 
 CSV_PATH = os.path.join(REPO_ROOT, "tron_snapshot_dataset.csv")
 
@@ -172,20 +171,22 @@ if _missing_labels or _n_runs < 3 or _n_env_fault_rows == 0:
 y_multi_full = df[FAULT_LABEL_COLUMNS].astype(np.uint8)
 y_multi_full.columns = FAULT_CLASS_NAMES
 
-print("Evidence-channel reconstruction...")
-run_max_cycle_dict = df.groupby("run_id")["cycle"].max().to_dict()
-pieces = []
-for (run_id, team_id), team_rows in df.groupby(["run_id", "team_id"]):
-    full_timeline, _ = reconstruct_full_timeline(team_rows, run_max_cycle_dict[run_id])
-    full_timeline = recompute_team_timeline(full_timeline)
-    full_timeline["run_id"] = run_id
-    full_timeline["team_id"] = team_id
-    pieces.append(full_timeline[["run_id", "team_id", "cycle"] + EVIDENCE_FEATURE_COLUMNS])
-evidence_df = pd.concat(pieces, ignore_index=True)
-del pieces
-df = df.merge(evidence_df, on=["run_id", "team_id", "cycle"], how="left")
-del evidence_df
-gc.collect()
+# Feature-contract Decision 2: the evidence-channel columns come straight
+# from the C watchdog now (laptop/snapshot.c emits watchdog_get_evidence_
+# vector() directly), not from evidence_channels.py's Python reconstruction
+# - train == serve, no mirror-drift residual. Re-deriving them here via
+# reconstruct_full_timeline()/recompute_team_timeline() and merging back in,
+# as this script used to, would silently collide with the CSV's own
+# evidence_progress/etc. columns (pandas suffixes both _x/_y on merge,
+# and neither name survives), so that merge is gone; the columns are simply
+# already in df, read straight off the CSV like everything else.
+_missing_evidence = [c for c in EVIDENCE_FEATURE_COLUMNS if c not in df.columns]
+if _missing_evidence:
+    sys.stdout.flush()
+    print(f"ERROR: {CSV_PATH} is missing evidence columns {_missing_evidence} - "
+          "regenerate with a build that includes feature-contract Decision 2 "
+          "(laptop/snapshot.c's write_evidence_columns()).", file=sys.stderr)
+    sys.exit(1)
 df = df.drop(columns=["_row_seq"])
 
 equipment_names = ["rope", "spreader", "medical_kit", "boat", "k9", "hazmat_suit", "structural", "generator"]

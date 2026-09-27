@@ -75,7 +75,7 @@ static FaultPredictorScores_t g_test_scores[NUM_TEAMS];
 static WatchdogStatus_t g_test_watchdog[NUM_TEAMS];
 static uint8_t g_call_index = 0u;
 
-FaultPredictorScores_t fault_predictor_run(const float evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES])
+FaultPredictorScores_t fault_predictor_run(const float evidence[FEATURE_SPEC_NUM_INPUTS])
 {
     (void)evidence;
     FaultPredictorScores_t scores = g_test_scores[g_call_index];
@@ -186,6 +186,34 @@ int main(void)
     recovery_manager_init();
     comms_transport_init();
     g_current_tick = 0u;
+
+    /* evaluate_fault_predictor()'s inference gate (core/recovery_manager.c)
+       withholds fault_predictor_run() entirely until the route map and
+       district map have both fully arrived - core/feature_pack.h's own
+       doc explains why. A real board gets both from the laptop before
+       any team can reach an AI-driven recommendation; this test drives
+       fault_predictor_run() directly via its override below, so it must
+       prime both maps itself first, exactly as a real board would. */
+    {
+        MissionLinkMapRow_t map_row;
+        MissionLinkDistrictRow_t district_row;
+        uint8_t y;
+
+        for (y = 0u; y < MISSION_LINK_MAP_HEIGHT; y++)
+        {
+            uint8_t x;
+
+            map_row.row = y;
+            for (x = 0u; x < MISSION_LINK_MAP_WIDTH; x++)
+                map_row.cells[x] = mission_link_map_encode_cell(1u, 1u);
+            (void)mission_link_apply_map_row(&map_row);
+
+            district_row.row = y;
+            memset(district_row.cells, mission_link_district_encode_byte(0u, 0u),
+                   sizeof(district_row.cells));
+            (void)mission_link_apply_district_row(&district_row);
+        }
+    }
 
     uint8_t seen_team[NUM_TEAMS];
     MissionLinkStatus_t last_frame[NUM_TEAMS];

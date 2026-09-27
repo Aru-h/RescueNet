@@ -1,0 +1,78 @@
+
+== change rate classes (share of 72 columns):
+class
+slow        35
+per-tick    20
+static      17
+scaler reconstruction max |diff| vs saved X_train_scaled: 0.0 at column incident_priority
+
+quantisation error, evidence_bits=8: max |err| per numeric column (raw units)
+  stamina                    0.25000
+  twin_expected_stamina      0.38000
+  twin_stamina_error         0.12000
+  twin_expected_progress     0.00781
+  twin_actual_progress       0.00196
+  twin_progress_error        0.00781
+  twin_remaining_path_cost   0.00348
+  evidence_progress          0.00196
+  evidence_communication     0.00196
+
+quantisation error, evidence_bits=6: max |err| per numeric column (raw units)
+  stamina                    0.25000
+  twin_expected_stamina      0.38000
+  twin_stamina_error         0.12000
+  twin_expected_progress     0.00781
+  twin_actual_progress       0.00196
+  twin_progress_error        0.00781
+  twin_remaining_path_cost   0.00348
+  evidence_progress          0.00794
+  evidence_communication     0.00794
+
+== absolute record bits (evidence bits 8/6/5): {8: 181, 6: 167, 5: 160}  bytes: {8: 23, 6: 21, 5: 20}
+per-tick fields only: 120 bits = 15 B; static+slow: 61 bits
+
+== per-group probability the quantised value changed vs previous tick (delta-encoding hit rate):
+  mixed                          0.122
+  bits12                         0.013
+  equipment_level                0.219
+  team_zone_trust                0.087
+  hours_worked                   0.004
+  incident_priority              0.017
+  victim_count                   0.018
+  twin_mission_stage             0.052
+  twin_communication_health      0.018
+  stamina                        0.308
+  twin_stamina_error             0.201
+  twin_actual_progress           0.244
+  twin_progress_error            0.060
+  twin_remaining_path_cost       0.302
+  twin_expected_work_remaining   0.080
+  env_raw_travel_cost            0.177
+  evidence                       0.637
+  cmi                            0.006
+  evidence per channel           [0.233 0.398 0.187 0.184 0.18  0.241 0.06 ]
+
+== bytes per team per tick, absolute vs keyframe+delta (payload only, before 28 B frame overhead):
+  absolute: 22.6 B
+  delta K=5   mean 9.7  p50 7.2  p95 22.6  max 23.1 B
+  delta K=10  mean 8.1  p50 6.0  p95 22.6  max 23.1 B
+  delta K=20  mean 7.3  p50 5.9  p95 22.6  max 23.1 B
+  delta K=50  mean 6.9  p50 5.2  p95 14.2  max 23.1 B
+
+== airtime (SF7/BW125/CR4/5, 28 B frame overhead, 100 ticks/h => tick=36 s)
+  ref: 52 B consensus beacon (80 B wire): 143.616 ms, duty 0.40 %
+  absolute record (1 team)                       payload  23 B wire  51 B  ToA  102.66 ms  duty(1 frame/tick) 0.29 %  1 frame/tick x10 nodes 1.03 s
+  delta mean (K=10)                              payload   9 B wire  37 B  ToA   82.18 ms  duty(1 frame/tick) 0.23 %  1 frame/tick x10 nodes 0.82 s
+  delta p95 (K=10)                               payload  23 B wire  51 B  ToA  102.66 ms  duty(1 frame/tick) 0.29 %  1 frame/tick x10 nodes 1.03 s
+  keyframe only (per-tick fields only)           payload  17 B wire  45 B  ToA   92.42 ms  duty(1 frame/tick) 0.26 %  1 frame/tick x10 nodes 0.92 s
+  scores only, 5 x u8                            payload   5 B wire  33 B  ToA   71.94 ms  duty(1 frame/tick) 0.20 %  1 frame/tick x10 nodes 0.72 s
+  split k=8 int8                                 payload   8 B wire  36 B  ToA   77.06 ms  duty(1 frame/tick) 0.21 %  1 frame/tick x10 nodes 0.77 s
+  split k=16 int8                                payload  16 B wire  44 B  ToA   92.42 ms  duty(1 frame/tick) 0.26 %  1 frame/tick x10 nodes 0.92 s
+  beacon 52 B + absolute record                  payload  75 B wire 103 B  ToA  174.34 ms  duty(1 frame/tick) 0.48 %  1 frame/tick x10 nodes 1.74 s
+  beacon 52 B + delta mean (K=10)                payload  61 B wire  89 B  ToA  153.86 ms  duty(1 frame/tick) 0.43 %  1 frame/tick x10 nodes 1.54 s
+  beacon 52 B + delta p95 (K=10)                 payload  75 B wire 103 B  ToA  174.34 ms  duty(1 frame/tick) 0.48 %  1 frame/tick x10 nodes 1.74 s
+  board hosting 5 teams, 5 abs records           payload 116 B wire 144 B  ToA  235.78 ms  duty(1 frame/tick) 0.65 %  1 frame/tick x10 nodes 2.36 s
+  board hosting 5 teams, 5 delta mean            payload  46 B wire  74 B  ToA  133.38 ms  duty(1 frame/tick) 0.37 %  1 frame/tick x10 nodes 1.33 s
+  max payload 144 B                              payload 144 B wire 172 B  ToA  276.74 ms  duty(1 frame/tick) 0.77 %  1 frame/tick x10 nodes 2.77 s
+
+wrote wire_spec.json; sentinel fill value present in data: 49.043479919433594

@@ -620,6 +620,8 @@ static int mission_link_rx_try_consume_one(void)
     MissionLinkClock_t clock_msg;
     MissionLinkMapRow_t map_row;
     MissionLinkSites_t sites;
+    MissionLinkDistrictRow_t district_row;
+    MissionLinkZoneTrust_t zone_trust;
     int rc;
     uint32_t consumed;
 
@@ -732,6 +734,35 @@ static int mission_link_rx_try_consume_one(void)
     {
         mission_link_apply_and_relay_sites(&sites);
         consumed = MISSION_LINK_SITES_WIRE_SIZE;
+        goto consume;
+    }
+    if (rc == 0)
+    {
+        return 0;
+    }
+
+    /* District map / zone trust (mission_link.h sections 5e/5f): apply
+       only, no relay - this is a single-board submission (all 10 teams
+       on this one DK), so unlike map_row/sites/incident/fault/clock
+       above there is no second board to forward toward over
+       comms_transport/LoRa. */
+    rc = mission_link_parse_district_row(g_rx_buf, g_rx_buf_len, &district_row);
+    if (rc == 1)
+    {
+        (void)mission_link_apply_district_row(&district_row);
+        consumed = MISSION_LINK_DISTRICT_ROW_WIRE_SIZE;
+        goto consume;
+    }
+    if (rc == 0)
+    {
+        return 0;
+    }
+
+    rc = mission_link_parse_zone_trust(g_rx_buf, g_rx_buf_len, &zone_trust);
+    if (rc == 1)
+    {
+        (void)mission_link_apply_zone_trust(&zone_trust);
+        consumed = MISSION_LINK_ZONE_TRUST_WIRE_SIZE;
         goto consume;
     }
     if (rc == 0)
