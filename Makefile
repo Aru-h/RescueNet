@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest
 
 all: $(TARGET) $(LABELER)
 
@@ -767,6 +767,17 @@ check-virtual-bus:
 	@$(CC) $(SELFTEST_CFLAGS) -DVIRTUAL_BUS_ENABLED=1 -o $(SELFTEST_BIN_DIR)/virtual_bus_selftest \
 		$(TOOLS_DIR)/virtual_bus_selftest.c $(CORE_DIR)/vbus.c $(CORE_DIR)/random.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./virtual_bus_selftest
+
+# Fault-predictor history features (stall fractions over the last 5 and
+# 10 ticks, incident priority / victim-count deltas): a hand-worked
+# 17-tick sequence checked against data_prep's rolling/baseline logic.
+check-fault-predictor-features-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/fault_predictor_features_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/fault_predictor_features_selftest \
+		$(TOOLS_DIR)/fault_predictor_features_selftest.c $(CORE_DIR)/fault_predictor_features.c \
+		$(CORE_DIR)/mission_state.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./fault_predictor_features_selftest
 
 # Peer consensus unit tests (CONSENSUS_DESIGN.md 7.9, 7.11): real vbus,
 # synthetic teams, no simulation. Needs the virtual bus and the test hooks.
