@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-feature-spec-fresh check-feature-spec-leak-guard
 
 all: $(TARGET) $(LABELER)
 
@@ -673,6 +673,28 @@ check-environment-e2e-stress: tron_snapshot_dataset.csv
 # automatically, same reason as check-environment-e2e-stress.
 check-env-raw-travel-cost-ablation: tron_snapshot_dataset.csv
 	$(PYTHON) $(TOOLS_DIR)/env_raw_travel_cost_ablation.py
+
+# Feature contract (single source of truth): core/feature_spec.h and
+# feature_spec.py are GENERATED from the committed feature_spec.json by
+# generate_feature_spec.py - never hand-edited. This regenerates both in
+# place and fails if that changes anything relative to what's committed,
+# so a feature_spec.json edit that forgot to re-run the generator (or a
+# hand-edit to either generated file) is caught, not silently merged.
+check-feature-spec-fresh:
+	@test -f feature_spec.json || (echo "check-feature-spec-fresh: feature_spec.json missing - run data_prep.py first" && exit 1)
+	@$(PYTHON) generate_feature_spec.py feature_spec.json
+	@git diff --quiet -- core/feature_spec.h feature_spec.py || \
+		(echo "check-feature-spec-fresh: core/feature_spec.h / feature_spec.py are stale relative to the committed feature_spec.json:" && \
+		 git diff -- core/feature_spec.h feature_spec.py && exit 1)
+	@echo "check-feature-spec-fresh: core/feature_spec.h and feature_spec.py match feature_spec.json"
+
+# Fast leak guard on the committed feature_spec.json alone (no CSV, no
+# simulator run) - data_prep.py asserts the same thing every time it runs;
+# this is the always-cheap version for CI/a plain `make check-feature-
+# spec-leak-guard` with nothing else built.
+check-feature-spec-leak-guard:
+	@test -f feature_spec.json || (echo "check-feature-spec-leak-guard: feature_spec.json missing - run data_prep.py first" && exit 1)
+	@$(PYTHON) $(TOOLS_DIR)/feature_spec_leak_check.py feature_spec.json
 
 # --- Standalone laptop/tools selftests ---------------------------------------
 # These seven selftests existed with no Makefile target at all, so nothing
