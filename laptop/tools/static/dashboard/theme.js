@@ -17,11 +17,17 @@
     return document.documentElement.getAttribute("data-theme") || "dark";
   }
 
+  // Two toggle buttons exist (the page header's original one, and a
+  // compact copy in the Live Ops layout's topbar - see index.html) -
+  // both call DashboardTheme.toggle() and both get their label synced
+  // here rather than picking one to be the "real" one.
   function apply(theme) {
     document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem(KEY, theme); } catch (e) { /* private mode etc. - not fatal */ }
     const btn = document.getElementById("themeToggleBtn");
     if (btn) btn.textContent = theme === "light" ? "🌙 Dark" : "☀️ Light";
+    const barBtn = document.getElementById("themeToggleBtnBar");
+    if (barBtn) barBtn.textContent = theme === "light" ? "🌙" : "☀️";
   }
 
   function toggle() {

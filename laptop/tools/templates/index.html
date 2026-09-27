@@ -3,6 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <title>CONCORD / REMCE — Test Dashboard</title>
+<!-- Empty data URI: tells the browser there is no favicon rather than
+     letting it request /favicon.ico, which 404s in a real browser and
+     would otherwise show up as a spurious console error in any check
+     that asserts "no console errors" (see dashboard_e2e_selftest.py). -->
+<link rel="icon" href="data:,">
 <script src="/static/chart.umd.min.js"></script>
 <style>
   :root {
@@ -104,7 +109,7 @@
   }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; }
   header .sub { color: var(--muted); font-size: 12px; }
-  .layout { display: flex; min-height: calc(100vh - 57px); }
+  .layout { display: flex; flex: 1 1 auto; min-height: 0; }
   nav {
     width: 200px; border-right: 1px solid var(--border); padding: 16px 0;
     flex-shrink: 0;
@@ -185,6 +190,107 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
   @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+
+  /* ===================================================================
+     Live Ops one-screen layout.
+     No magic-number header-height constant: #main-dashboard itself
+     becomes a column flex box filling the viewport (height:100vh),
+     header takes its natural height, and `.layout` (already
+     display:flex from the rule above) gets flex:1 to fill whatever is
+     left - so this keeps working if the header's own height ever
+     changes (it already grew once, from 57px to ~85px, when the theme
+     toggle button was added to it). `main`'s `overflow-y:auto` bounds
+     it to that same height; other tabs with more content than fits
+     scroll inside `main` exactly as before. The Live Ops tab is laid
+     out (topbar + main row + timeline) to sum to exactly that height,
+     so it never needs to.
+     =================================================================== */
+  #main-dashboard.active { display: flex; flex-direction: column; height: 100vh; }
+  main { padding: 12px 20px; display: flex; flex-direction: column; min-height: 0; }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 14px; margin-bottom: 10px; flex: 0 0 auto;
+    overflow-x: auto; flex-wrap: nowrap;
+  }
+  .topbar-group { display: flex; align-items: flex-end; gap: 7px; flex-wrap: nowrap; }
+  .tfield { display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; }
+  .tfield label { font-size: 9px; color: var(--muted); text-transform: uppercase; white-space: nowrap; }
+  .tfield input, .tfield select {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 6px; border-radius: 5px; font-size: 12px; width: 54px;
+  }
+  .tfield select { width: 92px; }
+  .topbar-btn {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .topbar-btn:disabled { opacity: .5; cursor: default; }
+  .topbar-stats { display: flex; align-items: center; gap: 14px; flex-wrap: nowrap; flex: 0 0 auto; }
+  .tstat { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.15; white-space: nowrap; }
+  .tstat-label { font-size: 9px; color: var(--muted); text-transform: uppercase; }
+  .tstat-value { font-size: 13px; font-weight: 700; }
+
+  #tab-live.tab-content:not(.hidden) { display: flex; }
+  #tab-live { flex-direction: column; flex: 1 1 auto; min-height: 0; gap: 10px; }
+  .live-main-row { display: flex; gap: 10px; flex: 1 1 auto; min-height: 0; }
+  .live-main-row .panel { margin-bottom: 0; }
+  .live-map-col { flex: 1.15 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 10px 12px; }
+  .live-side-col { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+
+  .live-map-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: nowrap; margin-bottom: 4px; }
+  .live-map-header h2 { margin: 0; font-size: 13px; }
+  .live-map-canvas-area { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  .live-map-square { position: relative; aspect-ratio: 1 / 1; max-width: 100%; max-height: 100%; width: auto; height: 100%; margin: auto; }
+  .live-map-legend { font-size: 10px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow-x: auto; flex: 0 0 auto; }
+
+  .live-side-tabs { display: flex; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+  .side-tab-btn {
+    flex: 1; background: none; border: none; color: var(--muted); cursor: pointer;
+    padding: 8px 6px; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+    border-bottom: 2px solid transparent;
+  }
+  .side-tab-btn.active { color: var(--text); border-bottom-color: var(--blue); }
+  .live-inspector-compact {
+    flex: 0 0 auto; max-height: 92px; overflow-y: auto; margin: 8px 12px 0;
+    padding: 7px 10px; background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    font-size: 11px; line-height: 1.45;
+  }
+  .live-side-content { flex: 1 1 auto; min-height: 0; padding: 8px 12px 10px; overflow-y: auto; }
+  .live-side-content table { font-size: 11.5px; }
+  .live-side-content th, .live-side-content td { padding: 4px 6px; font-size: 10.5px; }
+  /* The Team/ID column stays put while the rest of a wide row scrolls
+     sideways, so whichever row you're looking at (e.g. its Votes cell,
+     scrolled into view) is still identifiable without scrolling back. */
+  .live-side-content td:first-child, .live-side-content th:first-child {
+    position: sticky; left: 0; background: var(--panel); z-index: 1;
+  }
+  /* A visible (not OS-overlay-invisible) horizontal scrollbar on the
+     Teams/Incidents tables - at narrower viewports these tables are
+     wider than the side panel by design (10+ columns of real data in
+     a ~530px panel; see the layout-rework report for the numbers),
+     and "scrolls inside its own panel, never the page" only reads as
+     a fix, not a new way to lose a column, if the scrollbar is
+     something a person actually notices. */
+  .live-side-content div[style*="overflow-x"] {
+    scrollbar-width: thin;
+    scrollbar-color: var(--muted) var(--panel2);
+  }
+  .live-side-content div[style*="overflow-x"]::-webkit-scrollbar { height: 8px; }
+  .live-side-content div[style*="overflow-x"]::-webkit-scrollbar-track { background: var(--panel2); }
+  .live-side-content div[style*="overflow-x"]::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 4px; }
+  .side-tab-panel.hidden { display: none; }
+  .side-tab-panel h2 { font-size: 12px; }
+
+  .live-timeline-panel {
+    flex: 0 0 176px; min-height: 0; overflow: hidden;
+    display: flex; flex-direction: column; padding: 8px 14px; margin-bottom: 0;
+  }
+  .live-timeline-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: nowrap; }
+  .live-timeline-header h2 { margin: 0; font-size: 13px; }
+  .live-timeline-canvas-wrap { flex: 1 1 auto; min-height: 0; }
 </style>
 </head>
 <body>
@@ -264,14 +370,13 @@
     </nav>
 
     <main>
-      <div class="panel">
-        <h2>Run Simulation</h2>
-        <div class="run-form">
-          <div class="field"><label>Seed</label><input id="seed" type="number" value="1"></div>
-          <div class="field"><label>Seed count</label><input id="seedCount" type="number" value="1"></div>
-          <div class="field"><label>Ticks</label><input id="ticks" type="number" value="2000"></div>
-          <div class="field">
-            <label>Fault profile</label>
+      <div class="topbar" id="runTopBar">
+        <div class="topbar-group">
+          <div class="tfield"><label>Seed</label><input id="seed" type="number" value="1"></div>
+          <div class="tfield"><label>Seeds</label><input id="seedCount" type="number" value="1"></div>
+          <div class="tfield"><label>Ticks</label><input id="ticks" type="number" value="2000"></div>
+          <div class="tfield">
+            <label>Faults</label>
             <select id="faultProfile">
               <option value="none">none</option>
               <option value="mobility">mobility</option>
@@ -281,111 +386,105 @@
               <option value="random">random</option>
             </select>
           </div>
-          <div class="field"><label>Tick delay (ms)</label><input id="tickDelay" type="number" value="150"></div>
-          <button type="button" id="liveBtn" onclick="runLive()">Start Live</button>
-          <button type="button" id="runBtn" onclick="runSimulation()" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);">Run Full Speed (batch)</button>
-          <button type="button" id="stopLiveBtn" onclick="stopLive()" class="hidden" style="background:var(--bad);color:#fff;">Stop</button>
+          <div class="tfield"><label>Delay ms</label><input id="tickDelay" type="number" value="150"></div>
+          <button type="button" id="liveBtn" class="topbar-btn" onclick="runLive()">▶ Start Live</button>
+          <button type="button" id="runBtn" class="topbar-btn" onclick="runSimulation()" style="background:var(--accent);color:#04150a;border:none;font-weight:600;">Batch</button>
+          <button type="button" id="stopLiveBtn" onclick="stopLive()" class="topbar-btn hidden" style="background:var(--bad);color:#fff;">Stop</button>
+        </div>
+        <div class="topbar-stats">
+          <span class="tstat"><span class="tstat-label">Tick</span><span class="tstat-value" id="topbarTick">–</span></span>
+          <span class="tstat"><span class="tstat-label">Resolved</span><span class="tstat-value" id="topbarResolved">–</span></span>
+          <span class="tstat" title="Per-receiver loss: dropped / (delivered + dropped), from vbus_get_stats()"><span class="tstat-label">Radio loss</span><span class="tstat-value" id="topbarLoss">–</span></span>
+          <button type="button" id="themeToggleBtnBar" class="topbar-btn" onclick="DashboardTheme.toggle()" title="Toggle light/dark theme">☀️</button>
         </div>
       </div>
 
       <!-- LIVE OPS TAB -->
       <div class="tab-content" id="tab-live">
-        <div class="grid2" style="align-items:start;grid-template-columns:minmax(0,1fr) minmax(0,1fr);">
-          <div class="panel" style="min-width:0;">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-              <h2 style="margin:0;">Region Map (36×36)</h2>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <button type="button" id="resetViewBtn" class="map-toolbar-btn" title="Recenter and re-fit the pan/zoom">↺ Reset view</button>
-                <button type="button" id="fogToggleBtn" onclick="toggleFogView()" class="map-toolbar-btn">
-                  🔍 God mode (all tasks visible)
-                </button>
+        <div class="live-main-row">
+          <div class="panel live-map-col">
+            <div class="live-map-header">
+              <h2>Region Map (36×36) <span id="liveTickLabel" style="color:var(--muted);font-weight:400;text-transform:none;font-size:11px;">no run yet</span></h2>
+              <div style="display:flex;gap:6px;flex-wrap:nowrap;">
+                <button type="button" id="resetViewBtn" class="map-toolbar-btn" title="Recenter and re-fit the pan/zoom">↺</button>
+                <button type="button" id="fogToggleBtn" onclick="toggleFogView()" class="map-toolbar-btn" title="Toggle god mode / operator (fog-of-war) view">🔍 God mode</button>
               </div>
             </div>
-            <div id="liveTickLabel" class="sub" style="color:var(--muted);font-size:12px;margin-bottom:8px;">no run yet</div>
-            <div style="position:relative;width:100%;height:60vh;min-height:380px;max-height:680px;">
-              <canvas id="mapCanvas" style="width:100%;height:100%;display:block;background:#05080c;border-radius:6px;cursor:grab;"></canvas>
-              <div id="mapTooltip" class="map-tooltip"></div>
+            <div class="live-map-canvas-area">
+              <div class="live-map-square">
+                <canvas id="mapCanvas" style="width:100%;height:100%;display:block;background:#05080c;border-radius:6px;cursor:grab;"></canvas>
+                <div id="mapTooltip" class="map-tooltip"></div>
+              </div>
             </div>
-            <div id="mapInspector" style="margin-top:10px;padding:10px 12px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-size:12.5px;line-height:1.7;min-height:20px;">
+            <div class="live-map-legend">
+              <span style="display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span> critical
+              <span style="margin-left:8px;display:inline-block;width:9px;height:9px;background:#8b98a5;vertical-align:-1px;"></span> lower priority
+              <span style="margin-left:8px;">ring = status</span>
+              <span style="margin-left:8px;"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;vertical-align:-1px;"></span> safe zone</span>
+              <span style="margin-left:8px;">🔥 fire · ☢ gas</span>
+              <span style="margin-left:8px;">- - epicenter</span>
+              <span style="margin-left:8px;">drag to pan · wheel to zoom · drag a team onto an incident to reassign</span>
+            </div>
+          </div>
+          <div class="panel live-side-col">
+            <div class="live-side-tabs">
+              <button type="button" class="side-tab-btn active" data-sidetab="network">Network</button>
+              <button type="button" class="side-tab-btn" data-sidetab="teams">Teams</button>
+              <button type="button" class="side-tab-btn" data-sidetab="incidents">Incidents</button>
+            </div>
+            <div id="mapInspector" class="live-inspector-compact">
               <span style="color:var(--muted);">click a marker to inspect it</span>
             </div>
-            <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--muted);">
-              <span><span style="display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span> Critical incident</span>
-              <span><span style="display:inline-block;width:9px;height:9px;background:#8b98a5;vertical-align:-1px;"></span> Lower priority</span>
-              <span style="margin-left:10px;">ring colour = status (green available · blue en-route · amber on-scene · dashed grey resting)</span>
-              <span style="margin-left:10px;"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;vertical-align:-1px;"></span> Safe zone</span>
-              <span style="margin-left:10px;">🔥 fire &nbsp; ☢ gas leak</span>
-              <span style="margin-left:10px;"><span style="display:inline-block;width:9px;height:9px;background:rgba(248,81,73,.3);vertical-align:-1px;"></span> damaged building (label = floor count)</span>
-              <span style="margin-left:10px;"><span style="display:inline-block;width:9px;height:9px;background:rgba(248,81,73,.28);vertical-align:-1px;"></span> blocked road</span>
-              <span style="margin-left:10px;">- - epicenter</span>
-              <span style="margin-left:10px;">drag empty space to pan, wheel to zoom, drag a team onto an incident to propose reassignment</span>
+            <div class="live-side-content">
+              <div class="side-tab-panel" id="sidetab-network">
+                <p class="sub" style="color:var(--muted);font-size:11px;margin:0 0 6px;">
+                  9 peers judge each team from its radio beacons; ELEVATED needs 3 or more to agree.
+                </p>
+                <div style="position:relative;width:100%;height:190px;">
+                  <canvas id="consensusCanvas" style="width:100%;height:100%;display:block;"></canvas>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0;font-size:10px;color:var(--muted);">
+                  <span><span style="display:inline-block;width:8px;height:8px;background:#8b98a5;border-radius:50%;vertical-align:-1px;"></span> NONE</span>
+                  <span><span style="display:inline-block;width:8px;height:8px;background:#d29922;border-radius:50%;vertical-align:-1px;"></span> LOCAL</span>
+                  <span><span style="display:inline-block;width:8px;height:8px;background:#f85149;border-radius:50%;vertical-align:-1px;"></span> ELEVATED</span>
+                  <span>⚡ fast-path</span>
+                </div>
+                <div id="consensusDetail" style="padding:6px 8px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-size:11px;line-height:1.5;min-height:18px;"></div>
+                <h2 style="margin-top:10px;">Radio (virtual peer bus)</h2>
+                <div id="radioPanelBody"><span style="color:var(--muted);">no run yet</span></div>
+              </div>
+              <div class="side-tab-panel hidden" id="sidetab-teams">
+                <div style="overflow-x:auto;">
+                  <table id="liveTeamTable" style="min-width:600px;white-space:nowrap;">
+                    <thead><tr><th>Team</th><th>Status</th><th>Stamina</th><th>Pos</th><th>Fault<br><span style="font-weight:400;text-transform:none;font-size:9px;">(injected)</span></th><th>Hours</th><th title="Ticks since status last changed">PAR</th><th>Mob</th><th>Comm</th><th>Votes</th></tr></thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="side-tab-panel hidden" id="sidetab-incidents">
+                <div style="margin-bottom:6px;font-size:11px;color:var(--muted);">Active Incidents (<span id="liveIncidentCount">0</span>)</div>
+                <div style="overflow-x:auto;">
+                  <table id="liveIncidentTable" style="min-width:0;white-space:nowrap;">
+                    <thead><tr><th>ID</th><th>Priority</th><th>Pos</th><th>Status</th><th>Assigned</th><th>Victims</th><th>Floor</th></tr></thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-          </div>
-          <div class="panel" style="min-width:0;">
-            <h2>Team Status</h2>
-            <div style="overflow-x:auto;">
-              <table id="liveTeamTable" style="min-width:760px;">
-                <thead><tr><th>Team</th><th>Status</th><th>Stamina</th><th>Pos</th><th>Fault<br><span style="font-weight:400;text-transform:none;font-size:9.5px;">(injected, ground truth)</span></th><th>Hours</th><th title="Ticks since status last changed">PAR</th><th>Mobility</th><th>Comm</th><th>Votes</th></tr></thead>
-                <tbody></tbody>
-              </table>
-            </div>
-            <h2 style="margin-top:18px;">Active Incidents (<span id="liveIncidentCount">0</span>)</h2>
-            <div style="max-height:260px;overflow-y:auto;overflow-x:auto;">
-              <table id="liveIncidentTable">
-                <thead><tr><th>ID</th><th>Priority</th><th>Pos</th><th>Status</th><th>Assigned</th><th>Victims</th><th>Floor</th></tr></thead>
-                <tbody></tbody>
-              </table>
-            </div>
-            <div id="liveStatsRow" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);"></div>
           </div>
         </div>
 
-        <div class="grid2" style="align-items:start;margin-top:14px;">
-          <div class="panel">
-            <h2>Consensus Network</h2>
-            <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
-              9 peers judge each team from its radio beacons; ELEVATED needs 3 or more to agree.
-            </p>
-            <div style="position:relative;width:100%;height:320px;">
-              <canvas id="consensusCanvas" style="width:100%;height:100%;display:block;"></canvas>
+        <div class="panel live-timeline-panel">
+          <div class="live-timeline-header">
+            <h2>Detection Timeline</h2>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div id="timelineLegend" style="font-size:9.5px;color:var(--muted);"></div>
+              <span id="timelineRange" style="font-size:9.5px;color:var(--muted);white-space:nowrap;"></span>
             </div>
-            <div style="display:flex;gap:14px;flex-wrap:wrap;margin:8px 0;font-size:11px;color:var(--muted);">
-              <span><span style="display:inline-block;width:9px;height:9px;background:#8b98a5;border-radius:50%;vertical-align:-1px;"></span> NONE</span>
-              <span><span style="display:inline-block;width:9px;height:9px;background:#d29922;border-radius:50%;vertical-align:-1px;"></span> LOCAL</span>
-              <span><span style="display:inline-block;width:9px;height:9px;background:#f85149;border-radius:50%;vertical-align:-1px;"></span> ELEVATED</span>
-              <span><span style="display:inline-block;width:9px;height:9px;background:#3a4552;border-radius:50%;vertical-align:-1px;"></span> n/a (not built)</span>
-              <span>⚡ fast-path comm fault</span>
-              <span style="margin-left:auto;">inner fill = mobility tier · outer ring = communication tier · spokes = that team's own live-vote fraction (no per-edge data in the frame — see report)</span>
-            </div>
-            <div id="consensusDetail" style="padding:10px 12px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-size:12.5px;line-height:1.7;min-height:20px;"></div>
           </div>
-          <div class="panel">
-            <h2>Radio (virtual peer bus)</h2>
-            <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
-              Cumulative counters from vbus_get_stats(), reported once per tick.
-            </p>
-            <div id="radioPanelBody"><span style="color:var(--muted);">no run yet</span></div>
-          </div>
-        </div>
-
-        <div class="panel" style="margin-top:14px;">
-          <h2>Detection Timeline</h2>
-          <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
-            One row per team. Click a row to select that team everywhere else on this tab.
-          </p>
-          <div id="timelineLegend" style="font-size:11px;color:var(--muted);margin-bottom:6px;"></div>
-          <div style="width:100%;height:310px;">
+          <div class="live-timeline-canvas-wrap">
             <canvas id="timelineCanvas" style="width:100%;height:100%;display:block;cursor:pointer;"></canvas>
           </div>
-        </div>
-
-        <div class="panel" style="margin-top:14px;">
-          <h2>Live Throughput (updates as the run happens — cumulative, sim-authoritative counters)</h2>
-          <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
-            Streamed from every tick, not the end-of-run summary. Reconciled against the final
-            diagnostics when the run completes — a mismatch there is shown, not hidden.
-          </p>
-          <div class="chart-wrap"><canvas id="liveThroughputChart"></canvas></div>
         </div>
       </div>
 
@@ -400,6 +499,15 @@
             collapse before Medical takes over) — use this one to see who's actually doing work.
           </p>
           <div class="chart-wrap"><canvas id="throughputChart"></canvas></div>
+        </div>
+        <div class="panel">
+          <h2>Live Throughput (updates as the run happens — cumulative, sim-authoritative counters)</h2>
+          <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
+            Streamed from every tick, not the end-of-run summary. Reconciled against the final
+            diagnostics when the run completes — a mismatch there is shown, not hidden. Moved here
+            from the Live Ops tab so that tab fits on one screen; still updates live while a run streams.
+          </p>
+          <div class="chart-wrap"><canvas id="liveThroughputChart"></canvas></div>
         </div>
       </div>
 
@@ -845,6 +953,23 @@ function showTab(name) {
   document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
 }
 document.querySelectorAll(".tab-btn").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
+
+// Live Ops right panel's own Network/Teams/Incidents sub-tabs (layout
+// rework: these used to be three always-visible panels stacked below
+// the map; a team/incident selection opens its compact inspector in
+// the space above these, inside the same right-hand column). Hiding a
+// sub-panel is a plain classList toggle, same pattern as showTab()
+// above - the consensus network and detection timeline canvases each
+// already watch their own size with a ResizeObserver (see
+// static/dashboard/consensus-network.js / timeline.js), so switching
+// back to "network" after it was display:none picks up the right
+// size on its own; no extra resize call needed here.
+function showSideTab(name) {
+  document.querySelectorAll(".side-tab-panel").forEach(el => el.classList.add("hidden"));
+  document.getElementById("sidetab-" + name).classList.remove("hidden");
+  document.querySelectorAll(".side-tab-btn").forEach(b => b.classList.toggle("active", b.dataset.sidetab === name));
+}
+document.querySelectorAll(".side-tab-btn").forEach(b => b.addEventListener("click", () => showSideTab(b.dataset.sidetab)));
 
 async function checkStatus() {
   try {
@@ -1580,6 +1705,7 @@ function cancelPendingOverride() {
 
 function updateLiveTables(frame) {
   document.getElementById("liveTickLabel").textContent = `tick ${frame.tick}`;
+  DashboardPanels.updateTopBarStats("topbarTick", "topbarResolved", "topbarLoss", frame, simTelemetry);
 
   const tbody = document.querySelector("#liveTeamTable tbody");
   tbody.innerHTML = "";
@@ -1606,7 +1732,7 @@ function updateLiveTables(frame) {
       <td>${parCell}</td>
       <td>${cc.mobBadge}</td>
       <td>${cc.commBadge}</td>
-      <td style="font-family:monospace;font-size:11px;white-space:nowrap;">${cc.votes}</td>`;
+      <td style="font-family:monospace;font-size:10.5px;white-space:nowrap;" title="${cc.votes}">${cc.votesCompact}</td>`;
     tr.addEventListener("click", () => {
       selectedMarker = { type: "team", id: t.id };
       if (window.DashboardSelection) DashboardSelection.set(selectedMarker);
@@ -1736,7 +1862,7 @@ function stopLive() {
 // network, detection timeline, theme toggle) ----------
 DashboardTheme.init();
 ConsensusNetwork.init(document.getElementById("consensusCanvas"), document.getElementById("consensusDetail"));
-DetectionTimeline.init(document.getElementById("timelineCanvas"), document.getElementById("timelineLegend"), TEAM_COLORS, SPEC_NAMES);
+DetectionTimeline.init(document.getElementById("timelineCanvas"), document.getElementById("timelineLegend"), TEAM_COLORS, SPEC_NAMES, document.getElementById("timelineRange"));
 </script>
 </body>
 </html>

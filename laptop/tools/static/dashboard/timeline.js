@@ -34,17 +34,17 @@
   const RENDER_INTERVAL_MS = 100;
   const MAX_HISTORY = 600;
   const PX_PER_TICK = 3;
-  const ROW_H = 30;
   const LABEL_W = 92;
 
   function create() {
-    let canvas = null, ctx = null, legendEl = null;
+    let canvas = null, ctx = null, legendEl = null, rangeEl = null;
     let history = []; // per-team array of {tick, fault_mask, tierMob, tierComm, degraded}
     let numTeams = 10;
     let lastRenderMs = 0;
     let teamColors = [];
     let specNames = [];
     let selected = null;
+    let trackedRange = null; // {first, last} tick shown, same for every row - see draw()
 
     function ensureRows() {
       while (history.length < numTeams) history.push([]);
@@ -75,37 +75,55 @@
       return dims;
     }
 
+    // Row height is computed from the canvas's actual height / team
+    // count rather than a fixed constant, so all `numTeams` rows are
+    // ALWAYS visible without scrolling or clipping regardless of how
+    // tall the panel's flex-allocated box ends up being (the one-screen
+    // Live Ops layout gives this panel a fixed ~176px total, which at
+    // 10 teams is a much shorter row than the original fixed 30px).
+    // Every sub-element below (ground-truth strip, detected lanes, team
+    // label font) scales off this the same way, so the row still reads
+    // as "ground truth on top, detected below" at any size.
+    function currentRowH(h) {
+      return Math.max(6, h / Math.max(1, numTeams));
+    }
+
     function draw() {
       if (!ctx) return;
       const rect = canvas.getBoundingClientRect();
       const w = rect.width, h = rect.height;
       ctx.clearRect(0, 0, w, h);
 
+      const rowH = currentRowH(h);
       const plotW = w - LABEL_W;
       const visibleTicks = Math.max(1, Math.floor(plotW / PX_PER_TICK));
+      const labelFont = Math.max(6, Math.min(11, rowH * 0.55));
 
       for (let i = 0; i < numTeams; i++) {
-        const y = i * ROW_H;
+        const y = i * rowH;
         if (y > h) break;
         const row = history[i] || [];
         const isSel = selected === i;
 
         if (isSel) {
           ctx.fillStyle = "rgba(88,166,255,0.08)";
-          ctx.fillRect(0, y, w, ROW_H);
+          ctx.fillRect(0, y, w, rowH);
         }
 
         ctx.fillStyle = teamColors[i % teamColors.length] || "#8b98a5";
-        ctx.font = "11px sans-serif";
+        ctx.font = `${labelFont}px sans-serif`;
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
-        ctx.fillText(`${(specNames[i % specNames.length] || "team")} #${i}`, 4, y + ROW_H / 2);
+        ctx.fillText(`${(specNames[i % specNames.length] || "team")} #${i}`, 4, y + rowH / 2);
 
         const visible = row.slice(-visibleTicks);
-        const groundY = y + 4;
-        const groundH = 10;
-        const detectY = y + 17;
-        const laneH = 3.2;
+        // Ground-truth strip: top ~55% of the row. Detected strip
+        // (3 thin lanes): remaining ~40%, with a hairline gap and the
+        // row-separator line eating the last ~5%.
+        const groundY = y + rowH * 0.06;
+        const groundH = rowH * 0.5;
+        const detectY = y + rowH * 0.62;
+        const laneH = (rowH * 0.32) / 3;
 
         visible.forEach((sample, idx) => {
           const x = LABEL_W + idx * PX_PER_TICK;
@@ -146,23 +164,25 @@
 
         ctx.strokeStyle = "rgba(139,152,165,0.15)";
         ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(0, y + ROW_H); ctx.lineTo(w, y + ROW_H); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, y + rowH); ctx.lineTo(w, y + rowH); ctx.stroke();
 
-        if (visible.length) {
-          const lastTick = visible[visible.length - 1].tick;
-          const firstTick = visible[0].tick;
-          ctx.fillStyle = "rgba(139,152,165,0.6)";
-          ctx.font = "9px sans-serif";
-          ctx.textAlign = "right";
-          ctx.fillText(`${firstTick}–${lastTick}`, w - 2, y + 8);
-        }
+        // The visible tick range is the same for every row (they all
+        // share one x-axis), so it's drawn once, outside this canvas
+        // entirely (see rangeEl below) - drawing it per row used to
+        // stack ten overlapping copies against the canvas's right
+        // edge, which read as visual clutter rather than a label.
+        if (i === 0 && visible.length) trackedRange = { first: visible[0].tick, last: visible[visible.length - 1].tick };
+      }
+      if (rangeEl) {
+        rangeEl.textContent = trackedRange ? `ticks ${trackedRange.first}–${trackedRange.last}` : "";
       }
     }
 
     function pickRow(evt) {
       const rect = canvas.getBoundingClientRect();
       const py = evt.clientY - rect.top;
-      const i = Math.floor(py / ROW_H);
+      const rowH = currentRowH(rect.height);
+      const i = Math.floor(py / rowH);
       return (i >= 0 && i < numTeams) ? i : null;
     }
 
@@ -191,9 +211,10 @@
         </div>`;
     }
 
-    function init(canvasEl, legendElArg, colors, specs) {
+    function init(canvasEl, legendElArg, colors, specs, rangeElArg) {
       canvas = canvasEl;
       legendEl = legendElArg;
+      rangeEl = rangeElArg || null;
       teamColors = colors || [];
       specNames = specs || [];
       layout();
@@ -220,6 +241,8 @@
     function reset() {
       history = [];
       selected = null;
+      trackedRange = null;
+      if (rangeEl) rangeEl.textContent = "";
       ensureRows();
       if (ctx && canvas) {
         const rect = canvas.getBoundingClientRect();
