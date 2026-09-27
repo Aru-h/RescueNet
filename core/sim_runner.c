@@ -14,6 +14,7 @@
 #include "fault_comms.h"
 #include "search_zones.h"
 #include "consensus.h"
+#include "fault_predictor_features.h"
 
 int sim_runner_init(void)
 {
@@ -97,6 +98,10 @@ void sim_start_seed_board(uint32_t seed, FaultProfile_t fault_profile)
      *                                    comms_transport_init() has run
      *   search_zones_init()              sweep bookkeeping, which is
      *                                    laptop-side only on a board
+     *   fault_predictor_features_init()  g_fault_predictor_team_state[]/
+     *                                    g_fault_predictor_incident_
+     *                                    baseline[] only - own module,
+     *                                    reads nothing at init time
      * Deliberately NOT called: initialize_incidents(), generate_teams(),
      * initialize_grid(), environment/safe-zone/gateway generation,
      * random_seed_all() and fault_injector_init() (a board injects no
@@ -115,6 +120,7 @@ void sim_start_seed_board(uint32_t seed, FaultProfile_t fault_profile)
 #if VIRTUAL_BUS_ENABLED
     consensus_init(seed);
 #endif
+    fault_predictor_features_init();
 
     snapshot_begin_run(seed);
 }
