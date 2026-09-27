@@ -1169,7 +1169,17 @@ class HandshakeCoordinator:
     #: THE one knob to change if a board is added or removed - see
     #: this class's own docstring above. Board ids expected on the
     #: wire: 0..NUM_BOARDS-1.
-    NUM_BOARDS = 2
+    #:
+    #: Defaults to 1 (the single-board DK submission target): with no
+    #: peer board to wait for, can_proceed goes true as soon as board 0
+    #: itself replies ready - no PEER_TIMEOUT_SEC wait, no operator
+    #: dk_only_override() needed, since peer_board_ids is empty and
+    #: all_peers_ready is vacuously true. A multi-board layout (e.g. the
+    #: existing DK+NUCLEO one) sets this explicitly, e.g.
+    #: `coord.NUM_BOARDS = 2`, to restore today's "wait for every peer"
+    #: behaviour - see laptop/tools/handshake_selftest.py's
+    #: test_multi_peer_independence for the established pattern.
+    NUM_BOARDS = 1
 
     def __init__(self):
         self.replies = {}  # board_id -> {"protocol_version": int, "ready": bool}

@@ -523,6 +523,59 @@ static void board_usart1_enable_rx_fifo(void)
     EI(imask);
 }
 
+/*
+ * Per-tick CPU cost, task 7: read via the Cortex-M55's own DWT cycle
+ * counter (CYCCNT), not a µT-Kernel timer - a sim_tick() (CBBA auction
+ * for up to 10 teams, the mission-execution twin, watchdog, and now
+ * consensus_step() over 90 observer pairs when VIRTUAL_BUS_ENABLED=1)
+ * is expected to run well under one tick period, but that has only
+ * ever been estimated host-side (see the single-board DK report's CPU
+ * section) - nothing on this board actually measured it before. DWT is
+ * standard CMSIS (core_cm55.h, pulled in transitively via
+ * stm32n657xx.h, already included above for USART1's registers), not
+ * board-specific, so this needs no extra header.
+ *
+ * UNVERIFIED against real hardware: this project has no vendored BSP2
+ * in this environment (see Makefile's BSP_MODE fallback), so this has
+ * only been reviewed against the standard CMSIS DWT/CoreDebug register
+ * layout, never actually compiled or run on a real STM32N657. Treat
+ * board_dwt_init()'s effect (whether CYCCNT actually starts counting)
+ * as unconfirmed until someone checks it on hardware.
+ */
+#define BOARD_DWT_DEMCR_TRCENA   (1u << 24)
+#define BOARD_DWT_CTRL_CYCCNTENA (1u << 0)
+
+typedef struct
+{
+    volatile uint32_t CTRL;
+    volatile uint32_t CYCCNT;
+} BoardDwtRegs_t;
+
+#define BOARD_DWT       ((BoardDwtRegs_t *)0xE0001000u)
+#define BOARD_DEMCR_REG (*(volatile uint32_t *)0xE000EDFCu)
+
+static void board_dwt_init(void)
+{
+    BOARD_DEMCR_REG |= BOARD_DWT_DEMCR_TRCENA;
+    BOARD_DWT->CYCCNT = 0u;
+    BOARD_DWT->CTRL |= BOARD_DWT_CTRL_CYCCNTENA;
+}
+
+static uint32_t board_dwt_cycles(void)
+{
+    return BOARD_DWT->CYCCNT;
+}
+
+/* tron_board.ioc: RCC.CpuClockFreq_Value=600000000 - the actual
+   STM32CubeIDE project's configured CPU clock for this board, not an
+   assumed value. Used only to print an approximate microsecond
+   figure alongside the raw cycle count below; the raw count is the
+   authoritative number if this ever drifts from the real .ioc. */
+#define BOARD_CPU_CLOCK_HZ 600000000u
+
+static uint32_t g_tick_cycles_last;
+static uint32_t g_tick_cycles_max;
+
 /* Real milliseconds for CBBA's reply timeout and the status heartbeat
    (cbba.h requires this on hardware). Neither board used to define it, so
    both ran on cbba.c's simulated clock - 10 ms per call - and a "530 ms"
@@ -821,6 +874,8 @@ LOCAL void sim_task(INT stacd, void *exinf)
 
     tm_putstring((UB*)"tron: roster, map and sites received, starting seed loop\n");
 
+    board_dwt_init();
+
     for(uint32_t seed = BOARD_SEED; seed < BOARD_SEED + BOARD_SEED_COUNT; ++seed)
     {
         tm_printf((UB*)"tron: seed %lu start\n", (unsigned long)seed);
@@ -857,7 +912,21 @@ LOCAL void sim_task(INT stacd, void *exinf)
                 g_current_tick = start_tick;
             }
 
-            sim_tick();
+            {
+                uint32_t cycles_before = board_dwt_cycles();
+
+                sim_tick();
+
+                /* Wraps cleanly even if CYCCNT itself wraps (32-bit
+                   unsigned subtraction), same as every other free-
+                   running-counter delta in this codebase (cbba_now_ms()
+                   above relies on the same property for SYSTIM). */
+                g_tick_cycles_last = board_dwt_cycles() - cycles_before;
+                if(g_tick_cycles_last > g_tick_cycles_max)
+                {
+                    g_tick_cycles_max = g_tick_cycles_last;
+                }
+            }
             tick = g_current_tick;
 
             /* Heartbeat trigger hook (this prompt's addition - see the
@@ -879,6 +948,23 @@ LOCAL void sim_task(INT stacd, void *exinf)
                 /* Throttled to the drain interval: during a post-reboot
                    lockout the auth-fail count can climb every tick. */
                 board_report_link_diagnostics();
+
+                /* Task 7: per-tick CPU cost, on hardware. Same cadence
+                   as the diagnostics just above rather than every tick -
+                   this is a text status line over the same USART1 debug
+                   channel (tm_printf), not a wire-format telemetry field
+                   (see this build's report on why the binary MissionLink
+                   Status_t schema stays untouched), so there is no
+                   reason to print it more often than a human watching
+                   the console would want a fresh number. */
+                tm_printf((UB*)"tron: tick cost last=%lu cyc (%lu.%02lu us) max=%lu cyc (%lu.%02lu us) @%lu MHz\n",
+                          (unsigned long)g_tick_cycles_last,
+                          (unsigned long)(g_tick_cycles_last / (BOARD_CPU_CLOCK_HZ / 1000000u)),
+                          (unsigned long)(((uint64_t)g_tick_cycles_last * 100u / (BOARD_CPU_CLOCK_HZ / 1000000u)) % 100u),
+                          (unsigned long)g_tick_cycles_max,
+                          (unsigned long)(g_tick_cycles_max / (BOARD_CPU_CLOCK_HZ / 1000000u)),
+                          (unsigned long)(((uint64_t)g_tick_cycles_max * 100u / (BOARD_CPU_CLOCK_HZ / 1000000u)) % 100u),
+                          (unsigned long)(BOARD_CPU_CLOCK_HZ / 1000000u));
             }
 
         }

@@ -1,5 +1,50 @@
 # Changelog
 
+## Single-board STM32N6570-DK (the submission target)
+
+- New `DK_SINGLE_BOARD_FLAGS` in the `Makefile`
+  (`-DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS -DVIRTUAL_BUS_ENABLED=1
+  -DCONSENSUS_ENFORCE=1`) and `check-board-single-{compile,link,symbols}`
+  targets, built and object-directory-isolated from the existing
+  `check-board`/`check-pico` multi-board targets (`build/board-single-check`
+  vs `build/board-check`), which keep their 5-teams-per-board,
+  `VIRTUAL_BUS_ENABLED=0` behaviour completely unchanged.
+- The tick-loop order and the local-vs-relay routing needed no code
+  changes: `core/simulation.c` already runs `consensus_step()` in the
+  same place on a board as on the laptop, and every
+  `board/STM32N6570-DK/mission_link_task.c` route-or-apply function and
+  `core/comms_transport.c` already resolve to "always local" once
+  `COMMS_TRANSPORT_TEAMS_PER_BOARD` equals `NUM_TEAMS` (`comms_transport_
+  board_count() == 1`).
+- Fixed two gaps only a single board turning on the virtual bus for the
+  first time could expose: `board/STM32N6570-DK/snapshot.c` was missing
+  `snapshot_peer_log_enable()`/`snapshot_record_peer_obs()` (added as
+  no-ops - laptop-only diagnostic log, no on-device consumer); and
+  `core/comms_transport.c`'s `comms_transport_dispatch_pending()` queued a
+  LoRa session-control HELLO broadcast on every boot with no board-count
+  gate, unlike every other cross-board send path - found by the new
+  single-board harness's relay trap, fixed with a one-line guard.
+- `laptop/tools/telemetry_bridge.py`'s `HandshakeCoordinator.NUM_BOARDS`
+  now defaults to 1 (was 2): a single DK reaches `can_proceed`/
+  `send_start()` as soon as it replies, with no peer-timeout wait and no
+  operator override needed. A multi-board deployment sets
+  `coord.NUM_BOARDS = 2` explicitly to keep today's two-board behaviour -
+  see the new tests in `laptop/tools/handshake_selftest.py`.
+- New `laptop/tools/single_board_dk_harness.c` / `make
+  check-single-board-dk-harness`: real `mission_link_task.c` + core
+  sources, unmodified, driving all 10 teams locally for 500 ticks with
+  vbus+consensus on, asserting zero relay sends the whole run (a strong
+  `lora_spi_transmit()` override, not a counter) and that every
+  roster/map/sites/fault/override message applies locally.
+- Added a DWT cycle-counter-based per-tick duration measurement to
+  `board/STM32N6570-DK/main_board.c`, reported over the existing USART1
+  debug text channel every `BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL` ticks
+  (raw cycles plus an approximate microsecond figure using this board's
+  actual configured 600 MHz CPU clock, `tron_board.ioc`). Text
+  diagnostic only - no wire/telemetry schema changed.
+- See `CONSENSUS_DESIGN.md` §6.1 for the full account, including what did
+  *not* need changing and why.
+
 ## Peer consensus on fault state (laptop build)
 
 - New `core/consensus.{c,h}` (design: `CONSENSUS_DESIGN.md`). Every team

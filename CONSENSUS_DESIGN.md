@@ -787,13 +787,62 @@ Multi-board builds (`check-board` with `THIS_BOARD_ID=0` and 5 teams per board,
 compile none of the new code, and the calls into it are `#if`'d out. The
 `nm`/grep check in §7.8 enforces this.
 
-The Makefile's ARM DK target today keeps the default of 5 teams per board and
-`VIRTUAL_BUS_ENABLED` 0 (the multi-board build must keep working, and this
-branch keeps it at 0). The submission's "one DK hosts all 10 teams"
-configuration would additionally need `COMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS`
-and `VIRTUAL_BUS_ENABLED=1`; neither is set anywhere in the `Makefile` or
-`tron_board/`, so that wiring is **not done here**. Only the laptop `tron`
-target runs consensus (`LAPTOP_CONSENSUS_FLAGS` in the `Makefile`).
+The Makefile's original ARM DK target (`check-board`/`check-board-compile`/
+`check-board-link`) keeps the default of 5 teams per board and
+`VIRTUAL_BUS_ENABLED` 0 unchanged - the multi-board build still builds and
+tests exactly as before, and the `nm`/grep check in §7.8
+(`check-consensus-multiboard-untouched`) still passes against it.
+
+**Single-board DK wiring is now done** (agent F): a second flag bundle,
+`DK_SINGLE_BOARD_FLAGS` in the `Makefile`
+(`-DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS -DVIRTUAL_BUS_ENABLED=1
+-DCONSENSUS_ENFORCE=$(CONSENSUS_ENFORCE)`, same consensus flags
+`LAPTOP_CONSENSUS_FLAGS` already uses), plus its own compile/link/symbol
+checks (`check-board-single-compile`, `check-board-single-link`,
+`check-board-single-symbols`) and object directory
+(`build/board-single-check`), separate from the multi-board ones so the
+§7.8 check keeps scanning only the untouched multi-board objects. No change
+was needed to the tick-loop order (`simulation.c`'s
+`consensus_step() -> mission_execution_twin_step() -> watchdog_step() ->
+recovery_manager_step()` already runs identically on a board, gated only by
+this flag) or to the local-vs-relay routing (every `mission_link_task.c`
+route-or-apply function and `mission_link_representative_team()` already key
+off `comms_transport_board_count()`/`comms_transport_board_id_for_team()`,
+which resolve to "always local" once `COMMS_TRANSPORT_TEAMS_PER_BOARD` equals
+`NUM_TEAMS`). Two real gaps this DID require fixing, both because no board
+had ever turned `VIRTUAL_BUS_ENABLED` on before this:
+
+  1. `board/STM32N6570-DK/snapshot.c` never defined `snapshot_peer_log_enable()`/
+     `snapshot_record_peer_obs()` (§6.2's peer-observation log is laptop-only
+     and gated behind `--peer-log`, off by default) - added as genuine no-ops
+     (no filesystem or dashboard consumer on-device for this log; does not
+     change simulation behaviour).
+  2. `core/comms_transport.c`'s `comms_transport_dispatch_pending()` queued a
+     LoRa session-control HELLO broadcast (`core/lora_crypto.c`'s reboot-
+     recovery epoch announcement) on every boot regardless of board count -
+     unlike every mission-link/CBBA/fault-comms send path, it was not gated on
+     `comms_transport_board_count() <= 1`. Found by
+     `laptop/tools/single_board_dk_harness.c`'s `lora_spi_transmit()` trap
+     (§7.8's sibling for the single-board case - see that file), fixed with a
+     one-line early return.
+
+A separate, pre-existing gap (not consensus/vbus-specific) also had to be
+closed for a single DK to reach `can_proceed`/`send_start()` without a second
+board or any radio: `laptop/tools/telemetry_bridge.py`'s
+`HandshakeCoordinator.NUM_BOARDS` defaulted to 2 (DK + NUCLEO), which made a
+single DK wait `PEER_TIMEOUT_SEC` and then require an explicit operator
+override before starting. Default is now 1 (the single-board submission
+target); a multi-board deployment sets it explicitly
+(`coord.NUM_BOARDS = 2`) - see `laptop/tools/handshake_selftest.py`'s
+`test_single_board_default_unblocks_on_board0_alone`/
+`test_two_board_explicit_still_requires_peer`.
+
+`make check-single-board-dk-harness` (`laptop/tools/single_board_dk_harness.c`)
+is the single-board counterpart to §7.8's two-board harnesses: real
+`board/STM32N6570-DK/mission_link_task.c` and the core sources, unmodified,
+driving all 10 teams locally for 500 ticks with vbus+consensus enabled,
+asserting zero relay sends throughout (via a `lora_spi_transmit()` trap) and
+that every roster/map/sites/fault/override message applies locally.
 
 ### 6.2 New files
 

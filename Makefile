@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-single-board-dk-harness
 
 all: $(TARGET) $(LABELER)
 
@@ -78,6 +78,18 @@ all: $(TARGET) $(LABELER)
 # LAPTOP_CONSENSUS_FLAGS='' or CONSENSUS_ENFORCE=0 for a shadow-mode build.
 CONSENSUS_ENFORCE ?= 1
 LAPTOP_CONSENSUS_FLAGS ?= -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=$(CONSENSUS_ENFORCE)
+
+# Single-board STM32N6570-DK build (the submission target): all 10 teams
+# local to board 0 (COMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS, same override
+# the laptop CFLAGS above already apply unconditionally), plus the same
+# consensus flags LAPTOP_CONSENSUS_FLAGS uses (fast path stays on via
+# consensus_config.h's own default - not repeated here). Deliberately NOT
+# folded into ARM_CFLAGS/PICO_ARM_CFLAGS below: those stay exactly as they
+# are (VIRTUAL_BUS_ENABLED=0, default 5-teams-per-board split) so every
+# existing multi-board board/Pico/two-board-harness target keeps building
+# and testing unchanged - see check-board-single-* targets and
+# check-single-board-dk-harness further down for what actually uses this.
+DK_SINGLE_BOARD_FLAGS ?= -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=$(CONSENSUS_ENFORCE)
 
 $(TARGET): $(LAPTOP_SOURCES)
 	$(CC) $(CFLAGS) $(LAPTOP_CONSENSUS_FLAGS) $(LAPTOP_INCLUDES) -o $(TARGET) $(LAPTOP_SOURCES) $(LDFLAGS)
@@ -291,9 +303,96 @@ check-board-link: check-board-compile
 	echo "  every undefined reference is accounted for by libc/libm/libgcc or an"; \
 	echo "  IMPORT-declared BSP symbol under $(BSP_DIR); no cross-file interface breaks."
 
+# --- Single-board DK compile/link check --------------------------------
+# Mirrors check-board-compile/check-board-link exactly (same BOARD_SOURCES,
+# same BSP_MODE fallback), just with DK_SINGLE_BOARD_FLAGS added and a
+# separate object directory, so this never touches build/board-check --
+# check-consensus-multiboard-untouched's nm scan of that directory (and of
+# build/pico-check) must keep seeing zero vbus_/consensus_ symbols, and this
+# target's whole point is the opposite assertion (see check-board-single-
+# symbols below). Two independent object sets from the same sources, one
+# with the flag on and one with it off, is what actually proves the flag -
+# not board identity - is what turns the virtual bus on.
+ARM_CFLAGS_DK_SINGLE = $(ARM_CFLAGS) $(DK_SINGLE_BOARD_FLAGS)
+BOARD_OBJ_DIR_SINGLE = build/board-single-check
+
+check-board-single: check-board-ids-distinct check-board-single-compile check-board-single-link check-board-single-symbols
+	@echo "check-board-single: single-board DK compile + link + symbol checks all passed ($(BSP_MODE))"
+
+check-board-single-compile:
+	@echo "check-board-single mode: $(BSP_MODE)"
+	@mkdir -p $(BOARD_OBJ_DIR_SINGLE)
+	@for f in $(BOARD_SOURCES); do \
+		obj=$(BOARD_OBJ_DIR_SINGLE)/$$(basename $$f .c).o; \
+		echo "  ARM-CC  $$f (single-board DK flags)"; \
+		$(ARM_CC) $(ARM_CFLAGS_DK_SINGLE) -c $$f -o $$obj || exit 1; \
+	done
+	@echo "check-board-single-compile: all sources compile clean for Cortex-M55 with vbus+consensus enabled ($(BSP_MODE))"
+
+check-board-single-link: check-board-single-compile
+	@echo "check-board-single-link: partial-linking every $(BOARD_OBJ_DIR_SINGLE)/*.o together to check for undefined cross-file references"
+	@objs="$$(ls $(BOARD_OBJ_DIR_SINGLE)/*.o 2>/dev/null)"; \
+	if [ -z "$$objs" ]; then \
+		echo "check-board-single-link: no objects in $(BOARD_OBJ_DIR_SINGLE) -- check-board-single-compile did not run?"; \
+		exit 1; \
+	fi; \
+	$(ARM_NM) -o $$objs | awk -F'[: \t]+' '$$2=="U" {print $$3}' | sort -u > $(BOARD_OBJ_DIR_SINGLE)/.undefined_syms.txt; \
+	$(ARM_NM) -o $$objs | awk -F'[: \t]+' '$$2!="U" && NF>=4 {print $$4}' | sort -u > $(BOARD_OBJ_DIR_SINGLE)/.defined_syms.txt; \
+	comm -23 $(BOARD_OBJ_DIR_SINGLE)/.undefined_syms.txt $(BOARD_OBJ_DIR_SINGLE)/.defined_syms.txt > $(BOARD_OBJ_DIR_SINGLE)/.unresolved_syms.txt; \
+	libc_a="$$($(ARM_CC) $(ARM_TARGET_FLAGS) -print-file-name=libc.a)"; \
+	libm_a="$$($(ARM_CC) $(ARM_TARGET_FLAGS) -print-file-name=libm.a)"; \
+	libgcc_a="$$($(ARM_CC) $(ARM_TARGET_FLAGS) -print-file-name=libgcc.a)"; \
+	: > $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+	for lib in "$$libc_a" "$$libm_a" "$$libgcc_a"; do \
+		if [ -f "$$lib" ]; then \
+			$(ARM_NM) "$$lib" 2>/dev/null | awk -F'[: \t]+' 'NF>=3 && $$2 ~ /^[A-Za-z]$$/ && $$2!="U" && $$2!="u" {print $$3}' >> $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+		fi; \
+	done; \
+	if [ -d "$(BSP_DIR)" ]; then \
+		grep -rhoE '^[[:space:]]*IMPORT[[:space:]]+[A-Za-z_][A-Za-z0-9_ ]*\*?[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(' $(BSP_DIR) 2>/dev/null \
+			| sed -E 's/^.*[[:space:]\*]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\($$/\1/' \
+			>> $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+	fi; \
+	sort -u $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt -o $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+	comm -23 $(BOARD_OBJ_DIR_SINGLE)/.unresolved_syms.txt $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt > $(BOARD_OBJ_DIR_SINGLE)/.bad_undefined_syms.txt; \
+	if [ -s $(BOARD_OBJ_DIR_SINGLE)/.bad_undefined_syms.txt ]; then \
+		echo ""; \
+		echo "check-board-single-link: FAILED -- undefined reference(s) to symbol(s) that should be"; \
+		echo "defined somewhere in core/*.c or board/STM32N6570-DK/*.c, but aren't in this build:"; \
+		echo ""; \
+		sed 's/^/    /' $(BOARD_OBJ_DIR_SINGLE)/.bad_undefined_syms.txt; \
+		echo ""; \
+		exit 1; \
+	fi; \
+	echo "check-board-single-link: real partial link of $$(echo $$objs | wc -w) objects clean"
+
+# Positive counterpart to check-consensus-multiboard-untouched's negative
+# assertion: the single-board DK build MUST contain vbus_*/consensus_*
+# symbols (that's the entire point of DK_SINGLE_BOARD_FLAGS), so a build
+# that silently loses -DVIRTUAL_BUS_ENABLED=1 (a Makefile edit, a typo in
+# the flag variable, ...) fails loudly here instead of quietly shipping a
+# single-board image with no peer consensus at all. In fallback (no-BSP)
+# mode this only has core/*.o to check (board/*.c isn't compiled at all -
+# same limitation check-board-compile's own comment documents), which is
+# still a real check: core/vbus.c and core/consensus.c only define these
+# symbols when actually compiled with VIRTUAL_BUS_ENABLED=1.
+check-board-single-symbols: check-board-single-compile
+	@objs="$$(ls $(BOARD_OBJ_DIR_SINGLE)/*.o 2>/dev/null)"; \
+	if [ -z "$$objs" ]; then \
+		echo "check-board-single-symbols: no objects in $(BOARD_OBJ_DIR_SINGLE) -- check-board-single-compile did not run?"; \
+		exit 1; \
+	fi; \
+	if $(ARM_NM) $$objs 2>/dev/null | grep -Eq ' [A-Za-z] (vbus_init|vbus_step|consensus_step|consensus_init)'; then \
+		echo "check-board-single-symbols: vbus_init/vbus_step/consensus_init/consensus_step all found defined in $(BOARD_OBJ_DIR_SINGLE) -- single-board DK build carries the virtual bus and consensus"; \
+	else \
+		echo "check-board-single-symbols: FAILED -- no vbus_*/consensus_* symbols defined in $(BOARD_OBJ_DIR_SINGLE)"; \
+		echo "  DK_SINGLE_BOARD_FLAGS's -DVIRTUAL_BUS_ENABLED=1 is not taking effect for this build."; \
+		exit 1; \
+	fi
+
 clean:
 	rm -f $(TARGET) $(LABELER) tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv tron_telemetry.log
-	rm -rf $(BOARD_OBJ_DIR) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
+	rm -rf $(BOARD_OBJ_DIR) $(BOARD_OBJ_DIR_SINGLE) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
 	rm -f $(TWO_BOARD_HARNESS_BIN) $(MISSION_LINK_STATUS_GATE_TEST_BIN) \
 		$(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) \
 		$(RECOVERY_MANAGER_PERSISTENCE_SELFTEST_BIN)
@@ -970,6 +1069,28 @@ check-two-board-mission-harness:
 		./$(MISSION_HARNESS_BIN_DIR)/$$board; \
 	done
 	@echo "check-two-board-mission-harness: clock, map, sites and positions crossed both boards"
+
+# --- Single-board DK harness ---------------------------------------------
+# The submission target, proven end to end host-side: real board/STM32N6570-
+# DK/mission_link_task.c + core/*.c (unmodified), built with
+# DK_SINGLE_BOARD_FLAGS (all 10 teams local, vbus + consensus enabled). See
+# laptop/tools/single_board_dk_harness.c's own top comment for exactly what
+# it asserts and why lora_spi_transmit() (not a counter or a mock) is the
+# right seam to prove "no relay send is ever attempted" - unlike every
+# two-board harness, there is deliberately no second process and no socket
+# here, since single-board-dk has no peer board and no radio to simulate.
+SINGLE_BOARD_HARNESS_BIN = build/single_board_dk_harness
+
+check-single-board-dk-harness:
+	@mkdir -p build
+	@echo "  CC      $(TOOLS_DIR)/single_board_dk_harness.c (+ real board/STM32N6570-DK/mission_link_task.c)"
+	@$(CC) -std=gnu11 -Wall -Wextra -Wpedantic $(DK_SINGLE_BOARD_FLAGS) -DTHIS_BOARD_ID=0 \
+		-I$(CORE_DIR) -I$(BOARD_DIR) -I$(LAPTOP_DIR) -I$(TOOLS_DIR)/harness_stubs \
+		-o $(SINGLE_BOARD_HARNESS_BIN) $(TOOLS_DIR)/single_board_dk_harness.c \
+		$(BOARD_DIR)/mission_link_task.c $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c \
+		$(CORE_SOURCES) -lm
+	@./$(SINGLE_BOARD_HARNESS_BIN)
+	@echo "check-single-board-dk-harness: 10 local teams + vbus + consensus + mission link passed, zero relay sends"
 
 
 # =============================================================================

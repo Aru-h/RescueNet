@@ -157,6 +157,7 @@ def test_all_ready_only_after_both_out_of_order():
     not after the first - for both possible arrival orders."""
     for order in ([1, 0], [0, 1]):
         coord = HandshakeCoordinator()
+        coord.NUM_BOARDS = 2  # this test is specifically about a peer board
         coord.start()
 
         assert coord.all_ready is False
@@ -189,6 +190,7 @@ def test_feed_drives_coordinator_out_of_order():
     note_reply() shortcut, so the codec and the aggregation logic are
     proven together, not just each in isolation."""
     coord = HandshakeCoordinator()
+    coord.NUM_BOARDS = 2  # this test is specifically about a peer board
     coord.start()
 
     leftover1 = coord.feed(encode_reply(board_id=1, protocol_version=1, ready=True))
@@ -205,6 +207,7 @@ def test_feed_drives_coordinator_out_of_order():
 
 def test_dk_only_synthetic_reply_does_not_flip_all_ready():
     coord = HandshakeCoordinator()
+    coord.NUM_BOARDS = 2  # this test is specifically about a peer board
     coord.start()
     coord.note_reply(0, MISSION_LINK_PROTOCOL_VERSION, ready=True)
 
@@ -226,7 +229,10 @@ def test_dk_only_synthetic_reply_does_not_flip_all_ready():
 def test_multi_peer_independence():
     """Proves the generalization itself, not just that a single peer
     still works through the renamed methods (the two tests above
-    already prove that much, against NUM_BOARDS' default of 2). With
+    already prove that much, with NUM_BOARDS explicitly set to 2 - see
+    those tests' own coord.NUM_BOARDS = 2 line; NUM_BOARDS' default is
+    1, the single-board submission target - see
+    test_single_board_default_unblocks_on_board0_alone below). With
     NUM_BOARDS bumped to 3, peer 2 replying must not affect peer 1's
     own state, request_dk_only_override() must refuse to fire while
     ANY not-yet-timed-out peer is still pending (not just the one
@@ -269,6 +275,7 @@ def test_multi_peer_independence():
 
 def test_dk_only_override_rejected_before_timeout():
     coord = HandshakeCoordinator()
+    coord.NUM_BOARDS = 2  # this test is specifically about a peer board
     coord.start()
     coord.note_reply(0, MISSION_LINK_PROTOCOL_VERSION, ready=True)
 
@@ -345,6 +352,44 @@ def test_consume_newly_ready_tracks_edges_including_reboot():
         "an immediate re-send instead of waiting for MissionFeed's backstop")
 
 
+def test_single_board_default_unblocks_on_board0_alone():
+    """The single-board DK submission target: with NUM_BOARDS at its
+    default (1), there is no peer board to wait for, so can_proceed
+    (and therefore TelemetryBridge.send_start()) must go true as soon
+    as board 0 itself replies ready - no PEER_TIMEOUT_SEC wait, and no
+    request_dk_only_override() call needed. Before this default
+    changed from 2 to 1, this exact sequence left a single-board DK
+    stuck for 30s and then still blocked on an operator action, for a
+    peer board that was never going to exist."""
+    coord = HandshakeCoordinator()
+    assert coord.NUM_BOARDS == 1, "single-board is the default, not an opt-in"
+    coord.start()
+
+    assert coord.can_proceed is False, "board 0 has not replied yet"
+    assert list(coord.peer_board_ids) == [], "no peer expected in the single-board default"
+
+    coord.note_reply(0, MISSION_LINK_PROTOCOL_VERSION, ready=True)
+
+    assert coord.all_ready is True
+    assert coord.can_proceed is True, "board 0 alone must be enough - no peer, no timeout, no override"
+    assert coord.dk_only_override is False, "must not need the override path at all in this config"
+
+
+def test_two_board_explicit_still_requires_peer():
+    """The multi-board (DK + NUCLEO) layout is still available, but only
+    once asked for explicitly - today's "wait for every peer" behaviour
+    is otherwise unchanged from before the default flipped."""
+    coord = HandshakeCoordinator()
+    coord.NUM_BOARDS = 2
+    coord.start()
+
+    coord.note_reply(0, MISSION_LINK_PROTOCOL_VERSION, ready=True)
+    assert coord.can_proceed is False, "board 1 has not replied yet - board 0 alone must not be enough"
+
+    coord.note_reply(1, MISSION_LINK_PROTOCOL_VERSION, ready=True)
+    assert coord.can_proceed is True
+
+
 def main():
     tests = [
         test_pack_req,
@@ -357,6 +402,8 @@ def main():
         test_dk_only_override_rejected_before_timeout,
         test_due_for_req_timing,
         test_consume_newly_ready_tracks_edges_including_reboot,
+        test_single_board_default_unblocks_on_board0_alone,
+        test_two_board_explicit_still_requires_peer,
     ]
 
     for test in tests:
