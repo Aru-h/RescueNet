@@ -218,6 +218,16 @@ static uint32_t compute_composite_run_id(uint32_t world_seed)
     return hash;
 }
 
+/* Exposes the composite run_id computed for the current run (decision
+   5) - laptop/tools/feature_pack_dump.c needs this to tag its own
+   per-tick feature dump with the same run_id the training CSV rows for
+   this run carry, so a later comparison can match rows by (run_id,
+   team_id, cycle) without recomputing the hash a second time. */
+uint32_t snapshot_current_run_id(void)
+{
+    return g_run_id;
+}
+
 void snapshot_begin_run(uint32_t seed)
 {
     g_dataset_seed = seed;

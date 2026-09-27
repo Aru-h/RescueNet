@@ -143,6 +143,16 @@ def parse_args():
                           "mirror and report agreement against the CSV's own evidence "
                           "columns. Optional cross-check only (Decision 2) - the result "
                           "is never merged into the training features.")
+    ap.add_argument("--dump-raw-features", metavar="PATH",
+                     help="Write the UNSCALED 74-column feature matrix (plus run_id/"
+                          "team_id/cycle) to PATH and exit before splitting or scaling - "
+                          "for laptop/tools/feature_pack_parity_test.py, which compares "
+                          "this against core/feature_pack.c's own output. Uses the "
+                          "already-committed feature_spec.py's PATH_COST_SENTINEL_"
+                          "REPLACEMENT rather than recomputing it from a fresh train "
+                          "split (see that constant's own definition below), so this is "
+                          "the exact raw feature set the committed scaler was designed "
+                          "for - not a value that depends on this run's random split.")
     return ap.parse_args()
 
 
@@ -454,6 +464,25 @@ print("Leak guard: OK (no name-based or value-based leak found)")
 
 X = df[feature_columns]
 print("Missing values:\n", X.isna().sum().sum(), "total NaNs")
+
+if args.dump_raw_features:
+    # Same path_is_unreachable-then-sentinel-replace order as the normal
+    # path below, but using the already-committed feature_spec.py constant
+    # instead of a fresh train split's mean (see this flag's own --help
+    # text) - there is no train split in this mode at all.
+    from feature_spec import PATH_COST_SENTINEL_REPLACEMENT
+
+    df["twin_remaining_path_cost"] = df["twin_remaining_path_cost"].astype(float)
+    sentinel_mask = df["twin_remaining_path_cost"] == 65535
+    df.loc[sentinel_mask, "twin_remaining_path_cost"] = PATH_COST_SENTINEL_REPLACEMENT
+
+    dump_columns = feature_columns + ["path_is_unreachable"]
+    dump_df = df[["run_id", "team_id", "cycle"] + dump_columns]
+    dump_df.to_csv(args.dump_raw_features, index=False)
+    print(f"\n--dump-raw-features: wrote {len(dump_df)} unscaled rows "
+          f"({len(dump_columns)} features + run_id/team_id/cycle) to "
+          f"{args.dump_raw_features}")
+    sys.exit(0)
 
 # ── Group-based split ────────────────────────────────────────────────
 def group_split(frame, y_balance, group_col="run_id", test_size=0.15, val_size=0.15, seed=42, max_tries=20):

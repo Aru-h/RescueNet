@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-spec-fresh check-feature-spec-leak-guard
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-pack-parity check-feature-spec-fresh check-feature-spec-leak-guard
 
 all: $(TARGET) $(LABELER)
 
@@ -846,6 +846,28 @@ check-zone-refresh:
 		$(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
 	@cd $(ZONE_REFRESH_DIR) && ./zone_refresh_gen frames.txt truth.csv
 	@cd $(ZONE_REFRESH_DIR) && ./zone_refresh_check frames.txt truth.csv
+
+# Feature-pack C-vs-Python parity (FEATURE_CONTRACT_DESIGN.md section 5:
+# "C vs Python feature parity: <=1e-5 scaled"): a real 5-seed run through
+# feature_pack_dump (core/feature_pack.c's own feature_pack_build_
+# vector(), same tick/same state snapshot.c just recorded from) compared
+# against data_prep.py's --dump-raw-features reconstruction of the same
+# rows from the training CSV it wrote, both scaled with the same
+# committed feature_spec.py constants. See feature_pack_dump.c's and
+# feature_pack_parity_test.py's own top-of-file comments.
+FEATURE_PACK_PARITY_DIR = build/feature-pack-parity
+
+check-feature-pack-parity:
+	@mkdir -p $(FEATURE_PACK_PARITY_DIR)
+	@echo "  CC      $(TOOLS_DIR)/feature_pack_dump.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(FEATURE_PACK_PARITY_DIR)/feature_pack_dump \
+		$(TOOLS_DIR)/feature_pack_dump.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(FEATURE_PACK_PARITY_DIR) && ./feature_pack_dump 5 300 9001 features_c.csv
+	@$(PYTHON) data_prep.py $(FEATURE_PACK_PARITY_DIR)/tron_snapshot_dataset.csv \
+		--dump-raw-features $(FEATURE_PACK_PARITY_DIR)/features_py_raw.csv > /dev/null
+	@$(PYTHON) $(TOOLS_DIR)/feature_pack_parity_test.py \
+		$(FEATURE_PACK_PARITY_DIR)/features_c.csv $(FEATURE_PACK_PARITY_DIR)/features_py_raw.csv
 
 # Peer consensus unit tests (CONSENSUS_DESIGN.md 7.9, 7.11): real vbus,
 # synthetic teams, no simulation. Needs the virtual bus and the test hooks.
