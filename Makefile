@@ -985,6 +985,23 @@ check-two-board-mission-harness:
 check-dashboard-csrf-selftest:
 	@cd $(TOOLS_DIR) && $(PYTHON) dashboard_csrf_selftest.py
 
+# End-to-end smoke test for the Live Ops dashboard rework, driven
+# through a real Chromium via Playwright against a real app.py
+# (SIM_ONLY - no board/serial needed) and a real short `tron --live`
+# run: the map camera, the consensus network view, the detection
+# timeline, the side panels and the theme toggle. Playwright is a
+# DEV/TEST-ONLY dependency - see laptop/tools/requirements-dashboard-
+# dev.txt, never the repo root's requirements.txt - and this target
+# never installs or downloads a browser itself: it prefers a
+# preinstalled /opt/pw-browsers/chromium, else whatever Playwright's
+# own launch() already finds, and SKIPS (exit 0) with a clear message
+# when neither Playwright nor a usable Chromium is available, so a dev
+# box without them doesn't fail the rest of a check-* batch.
+# See laptop/tools/dashboard_e2e_selftest.py.
+.PHONY: check-dashboard-e2e
+check-dashboard-e2e:
+	@cd $(TOOLS_DIR) && $(PYTHON) dashboard_e2e_selftest.py
+
 # ---------------------------------------------------------------------
 # Board-to-board protocol review fixes (H2 H3 H4 H5) - selftests.
 # Each is built twice, plainly and under ASan/UBSan: several of these

@@ -1,0 +1,18 @@
+# Dev/test-only dependency for the Live Ops dashboard's end-to-end
+# check (laptop/tools/dashboard_e2e_selftest.py, `make
+# check-dashboard-e2e`). Deliberately NOT in the repo root's
+# requirements.txt: that file is read by the simulator, dataset and
+# board tooling, none of which touch a browser. Nothing in a normal
+# `make`/build/simulation run needs this file.
+#
+# Usage (from a dev checkout, not CI/build):
+#   pip install -r laptop/tools/requirements-dashboard-dev.txt
+#   python -m playwright install chromium   # one-time browser fetch;
+#                                            # dashboard_e2e_selftest.py
+#                                            # itself never does this -
+#                                            # it only ever looks for an
+#                                            # already-installed browser
+#                                            # (preferring /opt/pw-browsers/
+#                                            # chromium when present) and
+#                                            # skips cleanly if none exists.
+playwright
