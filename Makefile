@@ -854,9 +854,13 @@ check-consensus-airtime:
 
 # Shadow-mode regression (design 7.7): with CONSENSUS_ENFORCE=0 every column
 # the base branch writes must be identical. The base is built from
-# CONSENSUS_BASE_REF in a scratch tree. run_id (start time + seed) is the only
-# column ignored. The base is pinned to e37181a, the last submission commit
-# before consensus was merged: the branch tip now contains consensus itself.
+# CONSENSUS_BASE_REF in a scratch tree. run_id is excluded outright;
+# incident_priority/victim_count are compared after mapping the base's old
+# no-task sentinel (-1) to the candidate's new one (0), so a genuine
+# regression in either still fails (see consensus_shadow_compare.py's
+# EXCLUDED_COLUMNS/REMAPPED_COLUMNS and module docstring). The base is
+# pinned to e37181a, the last submission commit before consensus was
+# merged: the branch tip now contains consensus itself.
 CONSENSUS_BASE_REF ?= e37181a
 SHADOW_DIR = build/consensus-shadow
 

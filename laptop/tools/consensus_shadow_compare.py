@@ -6,10 +6,33 @@ compute may reach the simulation. This runs a baseline `tron` (built from the
 base ref) and a candidate `tron` (this tree, virtual bus on, enforcement off)
 with the same seeds and profiles, and checks that every column the baseline
 has is identical in the candidate, row for row. The candidate's appended
-consensus columns are ignored.
+consensus AND evidence columns (evidence_progress..evidence_timeout,
+confirmed_mobility_impairment - feature-contract Decision 2, added after the
+base ref) are ignored, being past the baseline's own column count.
 
-run_id is the one exception: it is the process start time plus the seed, so it
-differs between any two runs made in different seconds.
+EXCLUDED_COLUMNS lists pre-existing columns dropped from the comparison
+entirely - only run_id: base computes it as process-start-time + seed (the
+old scheme); candidate uses a deterministic composite hash of world_seed/
+fault profile/CONSENSUS_ENFORCE/vbus link loss (feature-contract Decision
+5), with no dependence on wall-clock time. The two schemes necessarily
+disagree even for identical run configuration - this isn't the "different
+process, different second" flakiness the old comment on this line
+described, it's every run, by construction. There is no sentinel mapping
+that would make the two run_id schemes agree, so unlike the columns below
+it is skipped outright rather than normalized.
+
+REMAPPED_COLUMNS lists pre-existing columns compared *after* mapping the
+base's old no-task sentinel to the candidate's new one, so a genuine
+regression in either still fails the check - only the documented,
+intentional difference is absorbed:
+
+  incident_priority,
+  victim_count       feature-contract Decision 4: these now read 0, not -1,
+                     on a row where the team has no incident assigned (base
+                     still writes -1). Mapped as base_value = 0 if base_value
+                     == "-1" else base_value, then compared normally.
+                     incident_req_capability is untouched - it keeps -1 as
+                     its own one-hot "none" category on both sides.
 
 usage: consensus_shadow_compare.py BASE_TRON CANDIDATE_TRON [--seeds N] [--ticks T]
 """
@@ -20,6 +43,10 @@ import sys
 import tempfile
 
 PROFILES = ["none", "combined", "communication"]
+
+# See the module docstring.
+EXCLUDED_COLUMNS = {"run_id"}
+REMAPPED_COLUMNS = {"incident_priority", "victim_count"}
 
 
 def run(binary, workdir, seeds, ticks, profile):
@@ -36,16 +63,20 @@ def compare(base_csv, cand_csv):
         n = len(base_header)
         if cand_header[:n] != base_header:
             return f"candidate header does not start with the baseline header"
+        excluded_idx = {i for i, name in enumerate(base_header) if name in EXCLUDED_COLUMNS}
+        remapped_idx = {i for i, name in enumerate(base_header) if name in REMAPPED_COLUMNS}
         rows = 0
         for line_b, line_c in zip(b, c):
             rows += 1
             fb = line_b.rstrip("\n").split(",")
             fc = line_c.rstrip("\n").split(",")[:n]
-            if fb[1:] != fc[1:]:      # skip run_id (index 0)
-                for i, (x, y) in enumerate(zip(fb, fc)):
-                    if i and x != y:
-                        return f"row {rows}: column {base_header[i]}: base {x} != candidate {y}"
-                return f"row {rows}: differs"
+            for i, (x, y) in enumerate(zip(fb, fc)):
+                if i in excluded_idx:
+                    continue
+                if i in remapped_idx and x == "-1":
+                    x = "0"
+                if x != y:
+                    return f"row {rows}: column {base_header[i]}: base {x} != candidate {y}"
         extra_b = b.readline()
         extra_c = c.readline()
         if extra_b or extra_c:

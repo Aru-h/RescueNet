@@ -2,7 +2,6 @@
 
 #include <stdbool.h>
 #include <stdio.h>
-#include <time.h>
 
 #include "team.h"
 #include "incident.h"
@@ -13,6 +12,7 @@
 #include "mission_link.h"
 #include "environment.h" /* environment_cell_travel_cost() - env_raw_travel_cost column below */
 #include "consensus.h"
+#include "fault_config.h" /* g_fault_config.profile - composite run_id, below */
 
 /*
  * core/cbba.c's cbba_team_is_local() - public, but deliberately not
@@ -171,20 +171,57 @@ static FILE *g_peer_file = NULL;
 static uint8_t g_peer_log_enabled = 0;
 static uint32_t g_dataset_seed = 0;
 static uint32_t g_run_id = 0;
-static uint32_t g_process_epoch = 0;
-static uint8_t g_process_epoch_set = 0;
+
+/*
+ * Composite run_id (feature-contract Decision 5): world_seed, fault
+ * profile, CONSENSUS_ENFORCE and the vbus link-loss setting, hashed into
+ * a single stable uint32_t - identical in tron_snapshot_dataset.csv and
+ * tron_peer_obs.csv (both read g_run_id, set once per run below), so
+ * data_prep can join the two on it. Deliberately NOT derived from
+ * process start time (the old g_process_epoch + seed scheme this
+ * replaces): two dataset-generation processes started in the same
+ * wall-clock second produced colliding run_ids for overlapping seed
+ * ranges - see docs/research/feature_contract_research.md Q7. This
+ * formula is a pure function of run configuration, so the same
+ * (world_seed, profile, enforce, link_loss) always yields the same
+ * run_id, run after run, process after process.
+ */
+static uint32_t compute_composite_run_id(uint32_t world_seed)
+{
+    char buf[64];
+    uint32_t enforce;
+    uint32_t link_loss_ppm;
+    uint32_t hash;
+    size_t i;
+
+#if VIRTUAL_BUS_ENABLED
+    {
+        ConsensusRunInfo_t info = consensus_get_run_info();
+        enforce = (uint32_t)info.enforce;
+        link_loss_ppm = (uint32_t)info.vbus_link_loss_ppm;
+    }
+#else
+    enforce = 0u;
+    link_loss_ppm = 0u;
+#endif
+
+    snprintf(buf, sizeof(buf), "%u:%u:%u:%u",
+        world_seed, (unsigned)g_fault_config.profile, enforce, link_loss_ppm);
+
+    /* FNV-1a, 32-bit. */
+    hash = 2166136261u;
+    for(i = 0; buf[i] != '\0'; i++)
+    {
+        hash ^= (uint8_t)buf[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
 
 void snapshot_begin_run(uint32_t seed)
 {
     g_dataset_seed = seed;
-
-    if(!g_process_epoch_set)
-    {
-        g_process_epoch = (uint32_t)time(NULL);
-        g_process_epoch_set = 1;
-    }
-
-    g_run_id = g_process_epoch + seed;
+    g_run_id = compute_composite_run_id(seed);
 
 #if VIRTUAL_BUS_ENABLED
     if(g_peer_log_enabled && g_peer_file == NULL)
@@ -247,7 +284,10 @@ void snapshot_begin_run(uint32_t seed)
         "peer_abstain_votes_mobility,peer_abstain_votes_communication,"
         "peer_live_voters,peer_dark_voters,"
         "consensus_fast_path_communication,peer_reporters,peer_heard_target,"
-        "beacon_emitted,consensus_capped\n");
+        "beacon_emitted,consensus_capped,"
+        "evidence_progress,evidence_stamina,evidence_communication,"
+        "evidence_operating_state,evidence_path,evidence_assignment,"
+        "evidence_timeout,confirmed_mobility_impairment\n");
 }
 
 /*
@@ -265,7 +305,7 @@ static void write_consensus_columns(uint8_t team_id)
     ConsensusRunInfo_t info = consensus_get_run_info();
 
     fprintf(g_snapshot_file,
-        ",%u,%u,%u,%d,%d,%u,%u,%.3f,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+        ",%u,%u,%u,%d,%d,%u,%u,%.3f,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
         info.enforce, info.vbus_link_loss_ppm, (unsigned)mob.round,
         (int)mob.tier, (int)comm.tier,
         mob.x, comm.x,
@@ -280,9 +320,40 @@ static void write_consensus_columns(uint8_t team_id)
 #else
     (void)team_id;
     fprintf(g_snapshot_file,
-        ",0,0,0,%d,%d,0,0,0.000,0.000,0,0,0,0,0,0,0,0,0,0,0,0,0\n",
+        ",0,0,0,%d,%d,0,0,0.000,0.000,0,0,0,0,0,0,0,0,0,0,0,0,0",
         CONSENSUS_TIER_NOT_BUILT, CONSENSUS_TIER_NOT_BUILT);
 #endif
+}
+
+/*
+ * C watchdog evidence columns (feature-contract Decision 2): the 7
+ * accumulators watchdog_get_evidence_vector() already computes for the
+ * recovery path, plus confirmed_mobility_impairment, emitted directly
+ * from the same watchdog state the board itself sees - not recomputed
+ * from the CSV in Python (evidence_channels.py's reconstruction has
+ * ~99.98% agreement with this, per docs/research/feature_contract_
+ * research.md Q2; emitting the real values removes that residual and
+ * the row-gap forward-fill it otherwise needs). Order matches
+ * WatchdogEvidenceSlot_t exactly (progress, stamina, communication,
+ * operating_state, path, assignment, timeout), which is also
+ * evidence_channels.py's WEIGHTS dict order. Terminates the row.
+ */
+static void write_evidence_columns(uint8_t team_id)
+{
+    float evidence[NUM_WATCHDOG_EVIDENCE_SLOTS];
+    uint8_t confirmed_mobility_impairment = 0u;
+
+    watchdog_get_evidence_vector(team_id, evidence, &confirmed_mobility_impairment);
+
+    fprintf(g_snapshot_file, ",%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%u\n",
+        evidence[WATCHDOG_EVIDENCE_SLOT_PROGRESS],
+        evidence[WATCHDOG_EVIDENCE_SLOT_STAMINA],
+        evidence[WATCHDOG_EVIDENCE_SLOT_COMMUNICATION],
+        evidence[WATCHDOG_EVIDENCE_SLOT_OPERATING_STATE],
+        evidence[WATCHDOG_EVIDENCE_SLOT_PATH],
+        evidence[WATCHDOG_EVIDENCE_SLOT_ASSIGNMENT],
+        evidence[WATCHDOG_EVIDENCE_SLOT_TIMEOUT],
+        (unsigned)confirmed_mobility_impairment);
 }
 
 /*
@@ -447,17 +518,25 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
         building_id);
 
     write_consensus_columns(team_id);
+    write_evidence_columns(team_id);
 }
 
 void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)
 {
     TeamState_t *team;
     int incident_id = -1;
-    int priority = -1;
+    /* Feature-contract Decision 4: numeric incident fields read 0, not
+     * -1, when no incident is assigned - so the model's numerical
+     * feature and its "no task" state are on the same 0-anchored scale
+     * on both the CSV and the board's own feature vector (core/
+     * fault_predictor.c). incident_req_capability is NOT one of these -
+     * it keeps -1 as its own one-hot "none" category (below), which
+     * can never collide with a real capability value of 0. */
+    int priority = 0;
     int capability = -1;
     int ix = -1;
     int iy = -1;
-    int victims = -1;
+    int victims = 0;
     unsigned hazards = 0;
     int selected_team = NO_ASSIGNMENT;
     int support_team = -1;
@@ -518,11 +597,12 @@ void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)
 void snapshot_record_resolved(uint32_t cycle, TaskPool_t pool, const IncidentState_t *task)
 {
     int incident_id = -1;
-    int priority = -1;
+    /* See snapshot_record()'s identical comment on Decision 4. */
+    int priority = 0;
     int capability = -1;
     int ix = -1;
     int iy = -1;
-    int victims = -1;
+    int victims = 0;
     unsigned hazards = 0;
     int selected_team = NO_ASSIGNMENT;
     int support_team = -1;
