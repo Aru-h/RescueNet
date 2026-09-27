@@ -7,6 +7,32 @@ Companion design: [../../FEATURE_CONTRACT_DESIGN.md](../../FEATURE_CONTRACT_DESI
 
 Base: `origin/submission/single-board-dk` @ 45298e2.
 
+## Changelog
+
+**feat/feature-contract, this pass**: headline finding 1 below (and the
+design doc's D1) was wrong about *why* `team_zone_id`/`team_zone_trust`/
+`env_raw_travel_cost` aren't board-computable. They said the board has
+no way to compute a district id or zone trust for a location without
+world storage - true only because no wire frame carried that data yet.
+Two new mission-link frame types (`core/mission_link.h` sections 5e/5f,
+`MissionLinkDistrictRow_t`/`MissionLinkZoneTrust_t`, USART1 only - single-
+board submission, no LoRa/relay wiring) now carry it, the same way the
+existing route map already lets a board answer `env_raw_travel_cost`
+without world storage. All three features are kept as inputs, not
+dropped; a real `check-zone-parity`/`check-zone-refresh` test confirms
+a board fed only these frames computes the exact same answers the
+laptop (world authority) does, including catching up within one refresh
+period if it misses the initial burst. Finding 6 (evidence mirror vs C
+watchdog) was acted on: `laptop/snapshot.c` now writes the C watchdog's
+7-accumulator evidence vector straight to the training CSV, removing
+the train/serve skew this finding flagged - `evidence_channels.py` is
+now an optional cross-check only. The final input count is 74, not the
+72 this doc's Q1 inventory counted - `feature_spec.json`/`core/
+feature_spec.h`/`feature_spec.py` (generated, single source of truth)
+have the exact current list; this doc's Q1 table is not updated to
+match and should be read as a historical snapshot of the research
+phase, not the current contract.
+
 ## 0. Headline findings
 
 1. The trained model's 72 inputs are **not all computable on the board**. Board-computable core (46 features) loses only the `environment` class and `mission`; details in Q1/ablation.
