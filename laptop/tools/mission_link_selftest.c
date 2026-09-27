@@ -75,6 +75,7 @@
 #include "path.h"
 #include "simulation.h"
 #include "incident.h"
+#include "search_zones.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -1052,6 +1053,101 @@ static void test_sites_codec_and_apply(void)
     CHECK(g_num_safe_zones == 2u && g_safezones[0].loc_x == 3);
 }
 
+/* District map and zone trust (mission_link.h sections 5e/5f) - USART1
+   codec only. Single-board submission: no comms_transport/LoRa relay
+   for these two, so no relay-payload round trip to test here (unlike
+   map_row/sites above). */
+static void test_district_row_codec_and_apply(void)
+{
+    MissionLinkDistrictRow_t row;
+    MissionLinkDistrictRow_t parsed;
+    uint8_t wire[MISSION_LINK_DISTRICT_ROW_WIRE_SIZE];
+    uint8_t cell = 0u;
+
+    CHECK(mission_link_district_encode_byte(3u, 9u) == (uint8_t)(3u | (9u << 4)));
+    CHECK(mission_link_district_encode_byte(0u, 0u) == 0u);
+    CHECK(mission_link_district_encode_byte(15u, 15u) == 0xFFu);
+
+    mission_link_district_reset();
+    CHECK(mission_link_district_rows_received() == 0u);
+    CHECK(mission_link_district_cell(5, 5, &cell) == 0u); /* nothing arrived yet */
+
+    memset(&row, 0, sizeof(row));
+    row.row = 5u;
+    row.cells[0] = mission_link_district_encode_byte(2u, 7u);   /* x=0 -> 2, x=1 -> 7 */
+    row.cells[1] = mission_link_district_encode_byte(9u, 0u);   /* x=2 -> 9, x=3 -> 0 */
+
+    CHECK(mission_link_pack_district_row(&row, wire) == MISSION_LINK_DISTRICT_ROW_WIRE_SIZE);
+    CHECK(mission_link_parse_district_row(wire, sizeof(wire), &parsed) == 1);
+    CHECK(memcmp(&parsed, &row, sizeof(row)) == 0);
+    CHECK(mission_link_parse_district_row(wire, sizeof(wire) - 1u, &parsed) == 0);
+    wire[10] ^= 0x40u;
+    CHECK(mission_link_parse_district_row(wire, sizeof(wire), &parsed) == -1);
+    wire[0] ^= 0xFFu; /* wrong magic entirely */
+    CHECK(mission_link_parse_district_row(wire, sizeof(wire), &parsed) == -1);
+
+    CHECK(mission_link_apply_district_row(&row) == 1u);
+    CHECK(mission_link_district_rows_received() == 1u);
+    CHECK(mission_link_district_cell(0, 5, &cell) == 1u && cell == 2u);
+    CHECK(mission_link_district_cell(1, 5, &cell) == 1u && cell == 7u);
+    CHECK(mission_link_district_cell(2, 5, &cell) == 1u && cell == 9u);
+    CHECK(mission_link_district_cell(3, 5, &cell) == 1u && cell == 0u);
+    CHECK(mission_link_district_cell(0, 6, &cell) == 0u);    /* row 6 not here yet */
+    CHECK(mission_link_district_cell(-1, 5, &cell) == 0u &&
+          mission_link_district_cell(36, 5, &cell) == 0u);
+
+    row.row = 200u; /* out of grid: rejected */
+    CHECK(mission_link_apply_district_row(&row) == 0u);
+    CHECK(mission_link_district_rows_received() == 1u);
+
+    mission_link_district_reset();
+    CHECK(mission_link_district_rows_received() == 0u);
+    CHECK(mission_link_district_cell(0, 5, &cell) == 0u); /* reset forgets the map */
+}
+
+static void test_zone_trust_codec_and_apply(void)
+{
+    MissionLinkZoneTrust_t trust;
+    MissionLinkZoneTrust_t parsed;
+    uint8_t wire[MISSION_LINK_ZONE_TRUST_WIRE_SIZE];
+    uint8_t z;
+
+    memset(&trust, 0, sizeof(trust));
+    for (z = 0u; z < MISSION_LINK_NUM_ZONES; z++)
+    {
+        trust.last_swept_tick[z] = 1000u + z;
+        trust.aftershock_hits_since_swept[z] = z;
+    }
+
+    CHECK(mission_link_pack_zone_trust(&trust, wire) == MISSION_LINK_ZONE_TRUST_WIRE_SIZE);
+    CHECK(mission_link_parse_zone_trust(wire, sizeof(wire), &parsed) == 1);
+    CHECK(memcmp(&parsed, &trust, sizeof(trust)) == 0);
+    CHECK(mission_link_parse_zone_trust(wire, sizeof(wire) - 1u, &parsed) == 0);
+    wire[30] ^= 0x40u;
+    CHECK(mission_link_parse_zone_trust(wire, sizeof(wire), &parsed) == -1);
+
+    memset(g_search_zones, 0, sizeof(g_search_zones));
+    CHECK(mission_link_apply_zone_trust(&trust) == 1u);
+    for (z = 0u; z < NUM_SEARCH_ZONES; z++)
+    {
+        CHECK(g_search_zones[z].last_swept_tick == 1000u + z);
+        CHECK(g_search_zones[z].aftershock_hits_since_swept == z);
+    }
+    /* search_zone_trust() runs unchanged, fed only by the frame - no
+       board-specific branch in it to test (core/search_zones.c). */
+    CHECK(search_zone_trust(0u, 1000u) == 100u);          /* just swept, 0 hits */
+    CHECK(search_zone_trust(1u, 1000u) < 100u);            /* 1 aftershock hit since swept */
+
+    /* Everything else in SearchZoneState_t (sweep_count, covered_cells,
+       cycle_started_tick, active_sweep_ticks, reclaimed_at_tick - all
+       laptop-side sweep-cycle bookkeeping) must be left untouched. */
+    g_search_zones[0].sweep_count = 42u;
+    g_search_zones[0].covered_cells = 99u;
+    CHECK(mission_link_apply_zone_trust(&trust) == 1u);
+    CHECK(g_search_zones[0].sweep_count == 42u);
+    CHECK(g_search_zones[0].covered_cells == 99u);
+}
+
 static void test_board_evacuee_leg_waits_for_laptop(void)
 {
     IncidentState_t *inc;
@@ -1148,6 +1244,8 @@ int main(void)
     test_status_reports_position_and_hides_board_system_tasks();
     test_map_row_codec_and_board_routing();
     test_sites_codec_and_apply();
+    test_district_row_codec_and_apply();
+    test_zone_trust_codec_and_apply();
     test_board_evacuee_leg_waits_for_laptop();
     test_roster_sets_equipment_level();
 

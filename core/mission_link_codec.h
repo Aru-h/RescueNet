@@ -45,6 +45,11 @@
 #define MISSION_LINK_MSG_CLOCK    ((uint8_t)4u)
 #define MISSION_LINK_MSG_MAP_ROW  ((uint8_t)5u)
 #define MISSION_LINK_MSG_SITES    ((uint8_t)6u)
+/* No MISSION_LINK_MSG_* sub-type for the district map / zone trust
+   frames (mission_link.h sections 5e/5f): this is a single-board
+   submission (all 10 teams on the one DK), so there is no second board
+   to relay toward over comms_transport/LoRa - USART1 only, magic-byte
+   framing (channel 1 below), same as MissionLinkClock_t. */
 
 /* Wire size of a comms_transport-relayed message: 1 sub-type byte +
    the bare payload (no magic bytes, no checksum byte - lora_frame.h's
@@ -272,5 +277,41 @@ uint8_t mission_link_apply_map_row(const MissionLinkMapRow_t *msg);
    not on the wire). A count above MAX_SAFE_ZONES or a site off the grid
    rejects the whole frame. Returns 1 if applied. */
 uint8_t mission_link_apply_sites(const MissionLinkSites_t *msg);
+
+/* ---------------------------------------------------------------
+ * District map and zone trust (mission_link.h sections 5e/5f)
+ * ---------------------------------------------------------------
+ */
+uint32_t mission_link_pack_district_row(const MissionLinkDistrictRow_t *msg, uint8_t *out_buf);
+int mission_link_parse_district_row(const uint8_t *buf, uint32_t buf_len, MissionLinkDistrictRow_t *out);
+void mission_link_pack_district_row_payload(const MissionLinkDistrictRow_t *msg, uint8_t *out_payload);
+void mission_link_parse_district_row_payload(const uint8_t *payload, MissionLinkDistrictRow_t *out);
+
+uint32_t mission_link_pack_zone_trust(const MissionLinkZoneTrust_t *msg, uint8_t *out_buf);
+int mission_link_parse_zone_trust(const uint8_t *buf, uint32_t buf_len, MissionLinkZoneTrust_t *out);
+void mission_link_pack_zone_trust_payload(const MissionLinkZoneTrust_t *msg, uint8_t *out_payload);
+void mission_link_parse_zone_trust_payload(const uint8_t *payload, MissionLinkZoneTrust_t *out);
+
+/* Packs the 2 district ids covering wire cell index i (x = 2*i low
+   nibble, x = 2*i + 1 high nibble) into one byte. district ids above
+   0xF are truncated to their low 4 bits - callers pass validated
+   district_id values (0..NUM_DISTRICT_TYPES-1 = 0..9), so this never
+   fires in practice; not asserted, since a build without world storage
+   (a board) never calls this encoder at all (it has no district_id to
+   encode - only the laptop, the world authority, builds rows). */
+uint8_t mission_link_district_encode_byte(uint8_t district_lo, uint8_t district_hi);
+
+/* Stores a row for the board's district map. Rows outside the grid are
+   ignored. Returns 1 if applied. */
+uint8_t mission_link_apply_district_row(const MissionLinkDistrictRow_t *msg);
+
+/* Copies last_swept_tick[]/aftershock_hits_since_swept[] into
+   g_search_zones[] for every zone (core/search_zones.c) - the two
+   fields search_zone_trust() actually reads. Nothing else in
+   SearchZoneState_t is touched (sweep_count, covered_cells etc. are
+   laptop-side sweep-cycle bookkeeping a board never runs). Returns 1
+   if applied (always, for a well-formed frame - there is no field to
+   reject a fixed-size, unconditioned array on). */
+uint8_t mission_link_apply_zone_trust(const MissionLinkZoneTrust_t *msg);
 
 #endif /* MISSION_LINK_CODEC_H */

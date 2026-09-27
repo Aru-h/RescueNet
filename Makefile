@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-feature-spec-fresh check-feature-spec-leak-guard
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-feature-spec-fresh check-feature-spec-leak-guard
 
 all: $(TARGET) $(LABELER)
 
@@ -800,6 +800,28 @@ check-fault-predictor-features-selftest:
 		$(TOOLS_DIR)/fault_predictor_features_selftest.c $(CORE_DIR)/fault_predictor_features.c \
 		$(CORE_DIR)/mission_state.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./fault_predictor_features_selftest
+
+# Zone parity (feature-contract Decision D): a board fed only the district-
+# map/zone-trust frames (mission_link.h 5e/5f) must compute the exact same
+# zone_id_for_location()/search_zone_trust() the laptop does. One source
+# file, two binaries - "gen" (normal build, generates ground truth + the
+# frame stream from a real seeded mission) and "check" (built with
+# ENVIRONMENT_HAS_WORLD_STORAGE=0, the real board port, applies only the
+# frames and compares). See zone_parity_test.c's own top-of-file comment.
+ZONE_PARITY_DIR = build/zone-parity
+
+check-zone-parity:
+	@mkdir -p $(ZONE_PARITY_DIR)
+	@echo "  CC      $(TOOLS_DIR)/zone_parity_test.c (gen)"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(ZONE_PARITY_DIR)/zone_parity_gen \
+		$(TOOLS_DIR)/zone_parity_test.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@echo "  CC      $(TOOLS_DIR)/zone_parity_test.c (check, ENVIRONMENT_HAS_WORLD_STORAGE=0)"
+	@$(CC) $(SELFTEST_CFLAGS) -DENVIRONMENT_HAS_WORLD_STORAGE=0 -o $(ZONE_PARITY_DIR)/zone_parity_check \
+		$(TOOLS_DIR)/zone_parity_test.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(ZONE_PARITY_DIR) && ./zone_parity_gen frames.txt truth.csv
+	@cd $(ZONE_PARITY_DIR) && ./zone_parity_check frames.txt truth.csv
 
 # Peer consensus unit tests (CONSENSUS_DESIGN.md 7.9, 7.11): real vbus,
 # synthetic teams, no simulation. Needs the virtual bus and the test hooks.

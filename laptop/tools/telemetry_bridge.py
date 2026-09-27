@@ -654,12 +654,18 @@ MISSION_LINK_FAULT_MAGIC = bytes((0xE7, 0x7E))
 MISSION_LINK_CLOCK_MAGIC = bytes((0xCB, 0xBC))
 MISSION_LINK_MAP_ROW_MAGIC = bytes((0xDA, 0xAD))
 MISSION_LINK_SITES_MAGIC = bytes((0xE5, 0x5E))
+# Feature-contract Decision D (single-board submission): district map and
+# zone trust, USART1 only - see core/mission_link.h sections 5e/5f.
+MISSION_LINK_DISTRICT_ROW_MAGIC = bytes((0xB6, 0x6B))
+MISSION_LINK_ZONE_TRUST_MAGIC = bytes((0xA8, 0x8A))
 MISSION_LINK_ROSTER_WIRE_SIZE = 13
 MISSION_LINK_INCIDENT_WIRE_SIZE = 19
 MISSION_LINK_FAULT_WIRE_SIZE = 14
 MISSION_LINK_CLOCK_WIRE_SIZE = 7
 MISSION_LINK_MAP_ROW_WIRE_SIZE = 40
 MISSION_LINK_SITES_WIRE_SIZE = 36
+MISSION_LINK_DISTRICT_ROW_WIRE_SIZE = 22
+MISSION_LINK_ZONE_TRUST_WIRE_SIZE = 53
 INCIDENT_STATUS_RESOLVED = 3  # IncidentStatus_t INC_RESOLVED
 _INCIDENT_STATUS_WIRE_OFFSET = 2 + 13  # magic + (id 4, loc 4, work 2, priority, type, req)
 
@@ -677,8 +683,9 @@ def tick_delay_ms_for_time_scale(time_scale: float) -> int:
 
 def mission_frame_key(frame: bytes):
     """("roster", team) / ("incident", incident_id) / ("fault", team) /
-    ("clock", 0) / ("map_row", y) / ("sites", 0) for a complete,
-    checksum-valid mission-link wire frame, else None."""
+    ("clock", 0) / ("map_row", y) / ("sites", 0) / ("district_row", y) /
+    ("zone_trust", 0) for a complete, checksum-valid mission-link wire
+    frame, else None."""
     magic = frame[:2]
     sizes = {
         MISSION_LINK_ROSTER_MAGIC: MISSION_LINK_ROSTER_WIRE_SIZE,
@@ -687,6 +694,8 @@ def mission_frame_key(frame: bytes):
         MISSION_LINK_CLOCK_MAGIC: MISSION_LINK_CLOCK_WIRE_SIZE,
         MISSION_LINK_MAP_ROW_MAGIC: MISSION_LINK_MAP_ROW_WIRE_SIZE,
         MISSION_LINK_SITES_MAGIC: MISSION_LINK_SITES_WIRE_SIZE,
+        MISSION_LINK_DISTRICT_ROW_MAGIC: MISSION_LINK_DISTRICT_ROW_WIRE_SIZE,
+        MISSION_LINK_ZONE_TRUST_MAGIC: MISSION_LINK_ZONE_TRUST_WIRE_SIZE,
     }
     size = sizes.get(magic)
     if size is None or len(frame) != size or (sum(frame[2:-1]) & 0xFF) != frame[-1]:
@@ -699,6 +708,10 @@ def mission_frame_key(frame: bytes):
         return ("map_row", frame[2])
     if magic == MISSION_LINK_SITES_MAGIC:
         return ("sites", 0)
+    if magic == MISSION_LINK_DISTRICT_ROW_MAGIC:
+        return ("district_row", frame[2])
+    if magic == MISSION_LINK_ZONE_TRUST_MAGIC:
+        return ("zone_trust", 0)
     return ("roster" if magic == MISSION_LINK_ROSTER_MAGIC else "fault", frame[2])
 
 
@@ -778,6 +791,13 @@ class MissionFeed:
         self._clock_frame = None
         self._sites_frame = None
         self._map_rows = OrderedDict()  # row -> latest frame
+        # District map (mission_link.h 5e): same per-row resend bucket as
+        # _map_rows above - fixed after world-gen, so this backstop is not
+        # expected to ever have anything new to send, but reboot recovery
+        # (force_full_resend()) still needs it. Zone trust (5f) is its own
+        # entry, not a per-row table, since it's one fixed-size frame.
+        self._district_rows = OrderedDict()  # row -> latest frame
+        self._zone_trust_frame = None
         self._next_map_resend = None
         self._next_roster_resend = None
         self._next_incident_refresh = None
@@ -844,6 +864,10 @@ class MissionFeed:
                 self._map_rows[ident] = frame
             elif kind == "sites":
                 self._sites_frame = frame
+            elif kind == "district_row":
+                self._district_rows[ident] = frame
+            elif kind == "zone_trust":
+                self._zone_trust_frame = frame
             self._pending[key] = frame
         return True
 
@@ -893,6 +917,10 @@ class MissionFeed:
             if now >= self._next_map_resend:
                 for row, frame in self._map_rows.items():
                     self._pending.setdefault(("map_row", row), frame)
+                for row, frame in self._district_rows.items():
+                    self._pending.setdefault(("district_row", row), frame)
+                if self._zone_trust_frame is not None:
+                    self._pending.setdefault(("zone_trust", 0), self._zone_trust_frame)
                 self._next_map_resend = now + self.MAP_RESEND_SEC
             if now >= self._next_clock_resend:
                 if self._clock_frame is not None:
@@ -953,6 +981,10 @@ class MissionFeed:
                 self._pending.setdefault(("sites", 0), self._sites_frame)
             for row, frame in self._map_rows.items():
                 self._pending.setdefault(("map_row", row), frame)
+            for row, frame in self._district_rows.items():
+                self._pending.setdefault(("district_row", row), frame)
+            if self._zone_trust_frame is not None:
+                self._pending.setdefault(("zone_trust", 0), self._zone_trust_frame)
 
     def pending_count(self) -> int:
         with self._lock:
@@ -1073,6 +1105,8 @@ class MissionFeed:
                 "reports_forwarded": self.reports_forwarded,
                 "rosters": len(self._rosters),
                 "map_rows": len(self._map_rows),
+                "district_rows": len(self._district_rows),
+                "zone_trust_received": self._zone_trust_frame is not None,
                 "open_incidents": len(self._open_incidents),
                 "resolved_resending": len(self._resolved_incidents),
                 "error": self.error,

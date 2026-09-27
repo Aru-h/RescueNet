@@ -19,6 +19,10 @@
                                  at the end of this file, which reuse
                                  these exact thresholds rather than
                                  inventing separate ones. */
+#include "search_zones.h"    /* g_search_zones[], NUM_SEARCH_ZONES - see
+                                 mission_link_apply_zone_trust() below.
+                                 Safe from a .c file, same reasoning as
+                                 cbba.h above. */
 
 /* MISSION_LINK_HEARTBEAT_INTERVAL_MS (mission_link.h) is defined as an
  * independent literal rather than derived from CBBA_ROUND_TIMEOUT_MS by
@@ -465,6 +469,8 @@ _Static_assert(MISSION_LINK_MAP_WIDTH == GRID_WIDTH && MISSION_LINK_MAP_HEIGHT =
 _Static_assert(MISSION_LINK_MAX_SAFE_ZONES == MAX_SAFE_ZONES &&
                MISSION_LINK_NUM_GATEWAYS == NUM_EVACUATION_GATEWAYS,
                "mission_link.h's site counts must match mission_state.h");
+_Static_assert(MISSION_LINK_NUM_ZONES == NUM_SEARCH_ZONES,
+               "mission_link.h's zone count must match search_zones.h");
 
 void mission_link_pack_map_row_payload(const MissionLinkMapRow_t *msg, uint8_t *out_payload)
 {
@@ -699,6 +705,204 @@ uint8_t mission_link_apply_sites(const MissionLinkSites_t *msg)
     }
 
     g_mission_link_sites_received = 1u;
+    return 1u;
+}
+
+/* ---------------------------------------------------------------
+ * District map and zone trust (mission_link.h sections 5e/5f)
+ * ---------------------------------------------------------------
+ */
+
+void mission_link_pack_district_row_payload(const MissionLinkDistrictRow_t *msg, uint8_t *out_payload)
+{
+    const uint8_t *src = (const uint8_t *)msg;
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_DISTRICT_ROW_PAYLOAD_SIZE; i++)
+    {
+        out_payload[i] = src[i];
+    }
+}
+
+void mission_link_parse_district_row_payload(const uint8_t *payload, MissionLinkDistrictRow_t *out)
+{
+    uint8_t *dst = (uint8_t *)out;
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_DISTRICT_ROW_PAYLOAD_SIZE; i++)
+    {
+        dst[i] = payload[i];
+    }
+}
+
+uint32_t mission_link_pack_district_row(const MissionLinkDistrictRow_t *msg, uint8_t *out_buf)
+{
+    uint8_t *payload_start = &out_buf[2];
+
+    out_buf[0] = MISSION_LINK_DISTRICT_ROW_MAGIC0;
+    out_buf[1] = MISSION_LINK_DISTRICT_ROW_MAGIC1;
+    mission_link_pack_district_row_payload(msg, payload_start);
+    out_buf[2u + MISSION_LINK_DISTRICT_ROW_PAYLOAD_SIZE] =
+        mission_link_checksum(payload_start, MISSION_LINK_DISTRICT_ROW_PAYLOAD_SIZE);
+
+    return MISSION_LINK_DISTRICT_ROW_WIRE_SIZE;
+}
+
+int mission_link_parse_district_row(const uint8_t *buf, uint32_t buf_len, MissionLinkDistrictRow_t *out)
+{
+    if (buf_len < 2u)
+    {
+        return 0;
+    }
+    if (buf[0] != MISSION_LINK_DISTRICT_ROW_MAGIC0 || buf[1] != MISSION_LINK_DISTRICT_ROW_MAGIC1)
+    {
+        return -1;
+    }
+    if (buf_len < MISSION_LINK_DISTRICT_ROW_WIRE_SIZE)
+    {
+        return 0;
+    }
+    if (buf[2u + MISSION_LINK_DISTRICT_ROW_PAYLOAD_SIZE] !=
+        mission_link_checksum(&buf[2], MISSION_LINK_DISTRICT_ROW_PAYLOAD_SIZE))
+    {
+        return -1;
+    }
+    mission_link_parse_district_row_payload(&buf[2], out);
+    return 1;
+}
+
+void mission_link_pack_zone_trust_payload(const MissionLinkZoneTrust_t *msg, uint8_t *out_payload)
+{
+    const uint8_t *src = (const uint8_t *)msg;
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_ZONE_TRUST_PAYLOAD_SIZE; i++)
+    {
+        out_payload[i] = src[i];
+    }
+}
+
+void mission_link_parse_zone_trust_payload(const uint8_t *payload, MissionLinkZoneTrust_t *out)
+{
+    uint8_t *dst = (uint8_t *)out;
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_ZONE_TRUST_PAYLOAD_SIZE; i++)
+    {
+        dst[i] = payload[i];
+    }
+}
+
+uint32_t mission_link_pack_zone_trust(const MissionLinkZoneTrust_t *msg, uint8_t *out_buf)
+{
+    uint8_t *payload_start = &out_buf[2];
+
+    out_buf[0] = MISSION_LINK_ZONE_TRUST_MAGIC0;
+    out_buf[1] = MISSION_LINK_ZONE_TRUST_MAGIC1;
+    mission_link_pack_zone_trust_payload(msg, payload_start);
+    out_buf[2u + MISSION_LINK_ZONE_TRUST_PAYLOAD_SIZE] =
+        mission_link_checksum(payload_start, MISSION_LINK_ZONE_TRUST_PAYLOAD_SIZE);
+
+    return MISSION_LINK_ZONE_TRUST_WIRE_SIZE;
+}
+
+int mission_link_parse_zone_trust(const uint8_t *buf, uint32_t buf_len, MissionLinkZoneTrust_t *out)
+{
+    if (buf_len < 2u)
+    {
+        return 0;
+    }
+    if (buf[0] != MISSION_LINK_ZONE_TRUST_MAGIC0 || buf[1] != MISSION_LINK_ZONE_TRUST_MAGIC1)
+    {
+        return -1;
+    }
+    if (buf_len < MISSION_LINK_ZONE_TRUST_WIRE_SIZE)
+    {
+        return 0;
+    }
+    if (buf[2u + MISSION_LINK_ZONE_TRUST_PAYLOAD_SIZE] !=
+        mission_link_checksum(&buf[2], MISSION_LINK_ZONE_TRUST_PAYLOAD_SIZE))
+    {
+        return -1;
+    }
+    mission_link_parse_zone_trust_payload(&buf[2], out);
+    return 1;
+}
+
+uint8_t mission_link_district_encode_byte(uint8_t district_lo, uint8_t district_hi)
+{
+    return (uint8_t)((district_lo & 0x0Fu) | ((district_hi & 0x0Fu) << 4));
+}
+
+/* The board's copy of the laptop's district map - 648 bytes (36x36 at 4
+   bits/cell), plus which rows have arrived. Same shape as g_mission_
+   link_map above. */
+static uint8_t g_mission_link_district[MISSION_LINK_MAP_WIDTH][MISSION_LINK_MAP_HEIGHT];
+static uint8_t g_mission_link_district_row_known[MISSION_LINK_MAP_HEIGHT];
+static uint32_t g_mission_link_district_rows_received;
+
+uint8_t mission_link_apply_district_row(const MissionLinkDistrictRow_t *msg)
+{
+    uint32_t i;
+
+    if (msg->row >= MISSION_LINK_MAP_HEIGHT)
+    {
+        return 0u;
+    }
+
+    for (i = 0u; i < MISSION_LINK_MAP_WIDTH / 2u; i++)
+    {
+        g_mission_link_district[2u * i][msg->row] = (uint8_t)(msg->cells[i] & 0x0Fu);
+        g_mission_link_district[2u * i + 1u][msg->row] = (uint8_t)((msg->cells[i] >> 4) & 0x0Fu);
+    }
+
+    if (!g_mission_link_district_row_known[msg->row])
+    {
+        g_mission_link_district_row_known[msg->row] = 1u;
+        g_mission_link_district_rows_received++;
+    }
+
+    return 1u;
+}
+
+uint8_t mission_link_district_cell(int x, int y, uint8_t *district_out)
+{
+    if (x < 0 || y < 0 || x >= (int)MISSION_LINK_MAP_WIDTH || y >= (int)MISSION_LINK_MAP_HEIGHT ||
+        !g_mission_link_district_row_known[y])
+    {
+        return 0u;
+    }
+
+    *district_out = g_mission_link_district[x][y];
+    return 1u;
+}
+
+uint32_t mission_link_district_rows_received(void)
+{
+    return g_mission_link_district_rows_received;
+}
+
+void mission_link_district_reset(void)
+{
+    uint32_t y;
+
+    for (y = 0u; y < MISSION_LINK_MAP_HEIGHT; y++)
+    {
+        g_mission_link_district_row_known[y] = 0u;
+    }
+    g_mission_link_district_rows_received = 0u;
+}
+
+uint8_t mission_link_apply_zone_trust(const MissionLinkZoneTrust_t *msg)
+{
+    uint32_t i;
+
+    for (i = 0u; i < MISSION_LINK_NUM_ZONES; i++)
+    {
+        g_search_zones[i].last_swept_tick = msg->last_swept_tick[i];
+        g_search_zones[i].aftershock_hits_since_swept = msg->aftershock_hits_since_swept[i];
+    }
+
     return 1u;
 }
 

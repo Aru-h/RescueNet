@@ -570,6 +570,109 @@ typedef struct __attribute__((packed))
     ((uint32_t)(2u + MISSION_LINK_SITES_PAYLOAD_SIZE + 1u))    /* 36 bytes */
 
 /* ---------------------------------------------------------------
+ * 5e. MissionLinkDistrictRow_t - laptop -> board, the district map
+ * ---------------------------------------------------------------
+ * Feature-contract Decision 1: the trained model keeps team_zone_id and
+ * team_zone_trust as inputs (the earlier research doc's recommendation
+ * to drop them was wrong about why - see docs/research/feature_contract_
+ * research.md's changelog). zone_id_for_location() (core/search_zones.c)
+ * needs district_id per cell to answer team_zone_id on a board, the same
+ * way MissionLinkMapRow_t (section 5c) lets environment_cell_travel_
+ * cost() answer on a board with no world storage of its own.
+ *
+ * District ids are 0..NUM_DISTRICT_TYPES-1 (9, core/environment.h) - 4
+ * bits is enough, so a row packs 2 cells per byte, half the cost of
+ * MissionLinkMapRow_t's one-byte-per-cell. One frame per grid row y:
+ * cells[i] holds x=2*i in its low nibble, x=2*i+1 in its high nibble.
+ * MISSION_LINK_MAP_WIDTH/HEIGHT (section 5c) are reused rather than a
+ * second pair of dimension macros - this is the same 36x36 grid.
+ *
+ * Sent exactly like the route map: every row at mission start and in
+ * mission_feed_tick()'s per-tick pass (laptop/mission_feed.c), though in
+ * practice a row essentially never changes after the first send -
+ * district_id is fixed once world generation finishes (verified against
+ * core/environment.c: every write site is inside generate_environment()'s
+ * own call chain - reset_generation_state()/stage_generate_districts()/
+ * assign_anchor()/place_building_rect() - never from environment_apply_
+ * earthquake() or any hazard-propagation path). The per-tick diff still
+ * runs (same mechanism as the map rows) so a genuinely-changed row would
+ * still be caught, but it is not expected to ever fire in practice.
+ */
+typedef struct __attribute__((packed))
+{
+    uint8_t row;                                       /* grid y */
+    uint8_t cells[MISSION_LINK_MAP_WIDTH / 2u];         /* 4 bits/cell, 2 cells/byte */
+} MissionLinkDistrictRow_t;
+
+#define MISSION_LINK_DISTRICT_ROW_PAYLOAD_SIZE \
+    ((uint32_t)sizeof(MissionLinkDistrictRow_t)) /* 19 bytes */
+
+#define MISSION_LINK_DISTRICT_ROW_MAGIC0 ((uint8_t)0xB6u)
+#define MISSION_LINK_DISTRICT_ROW_MAGIC1 ((uint8_t)0x6Bu)
+
+#define MISSION_LINK_DISTRICT_ROW_WIRE_SIZE \
+    ((uint32_t)(2u + MISSION_LINK_DISTRICT_ROW_PAYLOAD_SIZE + 1u)) /* 22 bytes */
+
+/* ---------------------------------------------------------------
+ * 5f. MissionLinkZoneTrust_t - laptop -> board, search-zone trust inputs
+ * ---------------------------------------------------------------
+ * search_zone_trust() (core/search_zones.c) is a pure function of
+ * SearchZoneState_t.last_swept_tick/.aftershock_hits_since_swept and the
+ * current tick - it runs unchanged on a board once g_search_zones[] holds
+ * real values instead of the zero-initialised defaults search_zones_
+ * init() leaves it at. This carries exactly those two fields, for every
+ * zone, in one fixed-size frame (NUM_SEARCH_ZONES is 10 - core/
+ * search_zones.h - restated here as a literal for the same reason
+ * section 5c restates the grid dimensions: this header cannot include
+ * search_zones.h without risking a cycle through mission_state.h/cbba.h;
+ * core/mission_link.c static-asserts the two stay equal).
+ *
+ * Deliberately NOT a precomputed trust value: trust decays continuously
+ * (1 point per ZONE_TRUST_DECAY_CAP_TICKS/100 ticks) and jumps on a sweep
+ * or an aftershock hit, so a periodically-sent trust NUMBER would already
+ * be stale by the time a board used it, and would disagree with the
+ * training data's own on-the-fly search_zone_trust() calls. Sending the
+ * two raw inputs instead means the board computes the exact same trust
+ * value, at the exact tick it needs it, that the laptop would.
+ *
+ * Sent whenever any zone's last_swept_tick or aftershock_hits_since_swept
+ * changes, plus periodically (MISSION_LINK_ZONE_TRUST_REFRESH_TICKS) so a
+ * rebooted board or a lost frame doesn't wait indefinitely for the next
+ * sweep/aftershock to resync.
+ */
+#define MISSION_LINK_NUM_ZONES 10u
+
+typedef struct __attribute__((packed))
+{
+    uint32_t last_swept_tick[MISSION_LINK_NUM_ZONES];
+    uint8_t  aftershock_hits_since_swept[MISSION_LINK_NUM_ZONES];
+} MissionLinkZoneTrust_t;
+
+#define MISSION_LINK_ZONE_TRUST_PAYLOAD_SIZE \
+    ((uint32_t)sizeof(MissionLinkZoneTrust_t)) /* 50 bytes */
+
+#define MISSION_LINK_ZONE_TRUST_MAGIC0 ((uint8_t)0xA8u)
+#define MISSION_LINK_ZONE_TRUST_MAGIC1 ((uint8_t)0x8Au)
+
+#define MISSION_LINK_ZONE_TRUST_WIRE_SIZE \
+    ((uint32_t)(2u + MISSION_LINK_ZONE_TRUST_PAYLOAD_SIZE + 1u)) /* 53 bytes */
+
+#define MISSION_LINK_ZONE_TRUST_REFRESH_TICKS 100u
+
+/* Board route map (section 5c) equivalent for the district map: returns 1
+   and writes the cell's district id to *district_out if row y has arrived
+   and (x, y) is on the grid, else 0 (caller keeps its "district 0"
+   default - see zone_id_for_location(), core/search_zones.c).
+   core/search_zones.c is the only caller. */
+uint8_t mission_link_district_cell(int x, int y, uint8_t *district_out);
+
+/* Rows received since mission_link_district_reset() (0..MISSION_LINK_MAP_HEIGHT). */
+uint32_t mission_link_district_rows_received(void);
+
+/* Forgets the district map - a board calls this at boot. */
+void mission_link_district_reset(void);
+
+/* ---------------------------------------------------------------
  * 5a. Heartbeat cadence for MissionLinkStatus_t's periodic re-anchor
  * ---------------------------------------------------------------
  * Not derived from CBBA_ROUND_TIMEOUT_MS (core/cbba.h) by #include:
