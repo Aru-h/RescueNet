@@ -588,15 +588,18 @@ typedef struct __attribute__((packed))
  * second pair of dimension macros - this is the same 36x36 grid.
  *
  * Sent exactly like the route map: every row at mission start and in
- * mission_feed_tick()'s per-tick pass (laptop/mission_feed.c), though in
- * practice a row essentially never changes after the first send -
- * district_id is fixed once world generation finishes (verified against
- * core/environment.c: every write site is inside generate_environment()'s
- * own call chain - reset_generation_state()/stage_generate_districts()/
+ * mission_feed_tick()'s per-tick pass (laptop/mission_feed.c). district_id
+ * is fixed once world generation finishes (verified against core/
+ * environment.c: every write site is inside generate_environment()'s own
+ * call chain - reset_generation_state()/stage_generate_districts()/
  * assign_anchor()/place_building_rect() - never from environment_apply_
- * earthquake() or any hazard-propagation path). The per-tick diff still
- * runs (same mechanism as the map rows) so a genuinely-changed row would
- * still be caught, but it is not expected to ever fire in practice.
+ * earthquake() or any hazard-propagation path), so unlike the route map -
+ * whose cells genuinely change from hazard spread etc. - the per-tick
+ * diff alone would never re-fire for a board that missed the mission-
+ * start burst: nothing ever changes to trigger it. mission_feed_tick()
+ * therefore also forces an unconditional full resend of every row every
+ * MISSION_LINK_ZONE_TRUST_REFRESH_TICKS, so that board still converges
+ * within one refresh period - same reasoning as zone trust below.
  */
 typedef struct __attribute__((packed))
 {

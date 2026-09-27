@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-feature-spec-fresh check-feature-spec-leak-guard
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-spec-fresh check-feature-spec-leak-guard
 
 all: $(TARGET) $(LABELER)
 
@@ -822,6 +822,30 @@ check-zone-parity:
 		$(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
 	@cd $(ZONE_PARITY_DIR) && ./zone_parity_gen frames.txt truth.csv
 	@cd $(ZONE_PARITY_DIR) && ./zone_parity_check frames.txt truth.csv
+
+# Zone refresh convergence (feature-contract Decision D follow-up):
+# check-zone-parity only covers the initial district-map/zone-trust burst
+# decoding correctly - it never exercises mission_feed_tick()'s periodic
+# full resend, so that code could be dead and still pass it (it briefly
+# was). This drops every tick-0 frame (simulating a board that missed the
+# burst entirely) and confirms zone_id_for_location()/search_zone_trust()
+# still converge to the laptop's answers within one MISSION_LINK_ZONE_
+# TRUST_REFRESH_TICKS period. Same two-binary design as check-zone-parity;
+# see zone_refresh_test.c's own top-of-file comment.
+ZONE_REFRESH_DIR = build/zone-refresh
+
+check-zone-refresh:
+	@mkdir -p $(ZONE_REFRESH_DIR)
+	@echo "  CC      $(TOOLS_DIR)/zone_refresh_test.c (gen)"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(ZONE_REFRESH_DIR)/zone_refresh_gen \
+		$(TOOLS_DIR)/zone_refresh_test.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LAPTOP_DIR)/mission_feed.c $(LDFLAGS)
+	@echo "  CC      $(TOOLS_DIR)/zone_refresh_test.c (check, ENVIRONMENT_HAS_WORLD_STORAGE=0)"
+	@$(CC) $(SELFTEST_CFLAGS) -DENVIRONMENT_HAS_WORLD_STORAGE=0 -o $(ZONE_REFRESH_DIR)/zone_refresh_check \
+		$(TOOLS_DIR)/zone_refresh_test.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(ZONE_REFRESH_DIR) && ./zone_refresh_gen frames.txt truth.csv
+	@cd $(ZONE_REFRESH_DIR) && ./zone_refresh_check frames.txt truth.csv
 
 # Peer consensus unit tests (CONSENSUS_DESIGN.md 7.9, 7.11): real vbus,
 # synthetic teams, no simulation. Needs the virtual bus and the test hooks.

@@ -27,8 +27,18 @@ static MissionLinkFault_t g_sent_fault[NUM_TEAMS];
 /* Map bytes last sent per cell ([x][y]), so only changed rows go out. */
 static uint8_t g_sent_map[GRID_WIDTH][GRID_HEIGHT];
 /* District ids last sent per cell - same diff mechanism as g_sent_map,
-   for MissionLinkDistrictRow_t (mission_link.h section 5e). */
+   for MissionLinkDistrictRow_t (mission_link.h section 5e). District ids
+   are fixed after world generation (see mission_link.h 5e's own doc), so
+   unlike the route map - whose cells genuinely change from hazard spread
+   etc. - the diff alone gives a board that missed the initial burst no
+   way to ever catch up: nothing will ever differ again to re-trigger it.
+   g_district_last_full_resend_tick tracks a periodic unconditional
+   resend of every row for exactly that reason, reusing MISSION_LINK_
+   ZONE_TRUST_REFRESH_TICKS's cadence - same "static or slow-changing
+   board-side table needs a periodic reassurance, not just a diff"
+   motivation as zone trust below. */
 static uint8_t g_sent_district[GRID_WIDTH][GRID_HEIGHT];
+static uint32_t g_district_last_full_resend_tick;
 /* Last-sent zone trust inputs and when, for the change-or-periodic send
    (mission_link.h section 5f). */
 static MissionLinkZoneTrust_t g_sent_zone_trust;
@@ -251,6 +261,7 @@ void mission_feed_begin(void)
             mission_feed_emit(0u, wire, mission_link_pack_district_row(&drow, wire));
         }
     }
+    g_district_last_full_resend_tick = 0u;
 
     memset(&g_sent_zone_trust, 0xFF, sizeof(g_sent_zone_trust)); /* force the first send below to differ */
     mission_feed_emit_zone_trust(0u);
@@ -411,17 +422,28 @@ void mission_feed_tick(uint32_t tick)
         }
     }
 
-    /* District rows: same diff mechanism as the map rows above. District
-       assignment is static today, so this loop should rarely find a
-       change, but a board that missed the mission_feed_begin() burst
-       (late join, dropped frames) still needs a way to catch up. */
+    /* District rows: same diff mechanism as the map rows above, plus a
+       periodic unconditional full resend (same cadence as zone trust
+       below) - district assignment is static today, so the diff alone
+       would never re-fire for a board that missed the mission_feed_
+       begin() burst (late join, dropped frames): nothing ever changes
+       to trigger it. force_resend makes every row "changed" this pass
+       regardless of g_sent_district, so that board still converges
+       within one refresh period. */
     {
         MissionLinkDistrictRow_t drow;
         uint8_t y;
+        int force_resend =
+            (tick - g_district_last_full_resend_tick >= MISSION_LINK_ZONE_TRUST_REFRESH_TICKS);
+
+        if (force_resend)
+        {
+            g_district_last_full_resend_tick = tick;
+        }
 
         for (y = 0u; y < GRID_HEIGHT; y++)
         {
-            if (mission_feed_build_district_row(y, &drow))
+            if (mission_feed_build_district_row(y, &drow) || force_resend)
             {
                 mission_feed_emit(tick, wire, mission_link_pack_district_row(&drow, wire));
             }
