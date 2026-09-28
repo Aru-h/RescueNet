@@ -167,6 +167,38 @@ void snapshot_close_dataset(void)
 }
 
 /*
+ * Peer-consensus observation log (snapshot.h's own doc: "laptop only
+ * ... Not defined by the board snapshot backends, which never build
+ * the virtual bus"). That was true as long as every board build kept
+ * VIRTUAL_BUS_ENABLED=0 - the single-board DK config is the first
+ * board build that turns it on, so core/simulation.c's
+ * snapshot_record_peer_obs() call (under #if VIRTUAL_BUS_ENABLED) now
+ * reaches this translation unit too, and would otherwise be an
+ * undefined reference at link time.
+ *
+ * Genuine no-op, not a partial port of the laptop's CSV writer: the
+ * laptop implementation's whole purpose is writing a peer-judge
+ * training row per (tick, observer, target) pair to a dataset file
+ * (laptop/snapshot.c), gated behind snapshot_peer_log_enable(1) (the
+ * laptop's --peer-log flag) and defaulting OFF. There is no
+ * filesystem on-device and no dashboard consumer for this data on the
+ * board side, so there is nothing for these two calls to do here -
+ * they exist only so the symbols resolve and consensus_step()'s
+ * per-tick behaviour (which does not depend on this log at all) is
+ * unaffected. snapshot_peer_log_enable() has no effect and
+ * snapshot_record_peer_obs() records nothing.
+ */
+void snapshot_peer_log_enable(uint8_t enable)
+{
+    (void)enable;
+}
+
+void snapshot_record_peer_obs(uint32_t cycle)
+{
+    (void)cycle;
+}
+
+/*
  * Drain pending ring entries out over USART1 as binary, magic-byte-
  * framed wire frames (core/telemetry_frame.h): 2 magic bytes + the
  * packed TelemetryFrame_t payload + a 1-byte additive checksum over

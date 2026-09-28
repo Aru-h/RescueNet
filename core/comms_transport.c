@@ -646,6 +646,25 @@ void comms_transport_dispatch_pending(void)
     uint8_t wire_buf[LORA_FRAME_MAX_WIRE_SIZE];
     uint32_t wire_len;
 
+    /* Single-board config (comms_transport_board_count() == 1, e.g. the
+     * DK_SINGLE_BOARD_FLAGS build): there is no possible peer to dispatch
+     * anything to. comms_transport_send() already loopbacks a same-board
+     * send synchronously, so nothing legitimate ever reaches this
+     * function's queue in that case - but core/lora_crypto.c's session
+     * control (HELLO/CHALLENGE/RESPONSE, below) is queued independently
+     * of any team/board routing decision, and without this check it would
+     * key up the radio for a HELLO broadcast into the void on every boot
+     * (found by the single-board DK harness's lora_spi_transmit() trap -
+     * see laptop/tools/single_board_dk_harness.c). Every OTHER caller
+     * that reaches the radio in this file already gates on board count
+     * this same way (mission_link_task.c's route_or_apply_*, core/cbba.c's
+     * cbba_broadcast_local_teams(), core/fault_comms.c's broadcast
+     * functions); this closes the one place that didn't. */
+    if (comms_transport_board_count() <= 1u)
+    {
+        return;
+    }
+
     if (lora_radio_tx_busy())
     {
         /* Still transmitting whatever was dispatched last time -
