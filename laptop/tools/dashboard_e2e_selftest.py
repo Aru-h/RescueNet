@@ -35,9 +35,11 @@ or `make check-dashboard-e2e`.
 
 import contextlib
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -53,6 +55,21 @@ VENDORED_CHROMIUM_PATH = "/opt/pw-browsers/chromium"
 ONE_SCREEN_VIEWPORTS = [(1470, 830), (1280, 720)]
 
 FAILURES = []
+
+# Chromium logs a failed HTTP request (any 4xx/5xx response) as a
+# console "error"-level message on its own, independent of whatever
+# the page's own JS does with that response - "Failed to load
+# resource: the server responded with a status of 400 ()". Several
+# checks deliberately trigger an EXPECTED failure response (a failed
+# override, a stale pause/resume against an already-ended run) to
+# prove the page handles it gracefully; Chromium logging that expected
+# failure is not itself a bug, so it's excluded here rather than
+# masked by weakening what "no console errors" means everywhere else.
+_EXPECTED_HTTP_FAILURE_NOISE = ("responded with a status of 400", "responded with a status of 409")
+
+
+def real_console_errors(errors):
+    return [e for e in errors if not any(marker in e for marker in _EXPECTED_HTTP_FAILURE_NOISE)]
 
 
 def check(cond, label):
@@ -150,6 +167,113 @@ def _live_run_scrollheight_check(browser, width, height):
               f"{console_errors[:5]})")
     finally:
         page.close()
+
+
+def _run_control_state_check(page, console_errors):
+    """Regression coverage for a real bug report: (a) a failed override
+    must never affect the live run itself - frames keep arriving; (b) a
+    genuine pause actually stops frames, and resume actually resumes
+    them; (c) once the run has ended, no run control (Pause/Resume/
+    Stop) is visible/clickable - covers the case where the client's UI
+    state could otherwise go stale (e.g. showing "paused" forever) if a
+    control's request ever came back non-ok instead of updating state."""
+    page.select_option("#faultProfile", "none")
+    page.fill("#seed", "31")
+    page.fill("#ticks", "45")
+    page.fill("#tickDelay", "150")
+    page.click("#liveBtn")
+    page.wait_for_timeout(1000)
+
+    # (a) A failed override (board not connected in sim-only mode, by
+    # design pre-Part-4) must only show its own error, never touch the
+    # run: frames keep arriving for the next 5 seconds.
+    injected = page.evaluate("""() => {
+      const frame = window._lastFrame;
+      if (!frame) return false;
+      const team = frame.teams[0];
+      pendingOverride = { team, teamIndex: 0, from: {x: team.x, y: team.y}, to: { id: 999999, x: 5, y: 5 } };
+      selectedMarker = { type: 'team', id: team.id };
+      renderInspector();
+      return true;
+    }""")
+    check(injected, "(a) able to stage a pending override on the live run")
+    page.click("#overrideConfirmBtn")
+    page.wait_for_timeout(400)
+    override_failed = page.evaluate("() => document.getElementById('overrideBox').textContent")
+    check(bool(override_failed and ("Failed" in override_failed or "failed" in override_failed)),
+          f"(a) the override shows a failure in its own box (got {override_failed!r})")
+
+    tick_at_failure = page.evaluate("() => window._lastFrame ? window._lastFrame.tick : -1")
+    page.wait_for_timeout(5000)
+    tick_after_5s = page.evaluate("() => window._lastFrame ? window._lastFrame.tick : -1")
+    state_after_5s = page.eval_on_selector("#runStateLabel", "el => el.textContent")
+    check(tick_after_5s > tick_at_failure,
+          f"(a) the live run kept producing frames for 5s after a failed override (tick {tick_at_failure} -> {tick_after_5s})")
+    check(state_after_5s == "running",
+          f"(a) run state is still 'running' 5s after a failed override (got {state_after_5s!r})")
+
+    # (b) A genuine pause actually stops frames; resume actually
+    # resumes them.
+    page.click("#pauseLiveBtn")
+    page.wait_for_timeout(300)
+    state_paused = page.eval_on_selector("#runStateLabel", "el => el.textContent")
+    check(state_paused == "paused", f"(b) Pause switches state to 'paused' (got {state_paused!r})")
+    tick_at_pause = page.evaluate("() => window._lastFrame ? window._lastFrame.tick : -1")
+    page.wait_for_timeout(1500)
+    tick_while_paused = page.evaluate("() => window._lastFrame ? window._lastFrame.tick : -1")
+    check(tick_while_paused == tick_at_pause,
+          f"(b) frames stop arriving while genuinely paused (tick stayed at {tick_at_pause}, got {tick_while_paused})")
+
+    page.click("#resumeLiveBtn")
+    page.wait_for_timeout(300)
+    state_resumed = page.eval_on_selector("#runStateLabel", "el => el.textContent")
+    check(state_resumed == "running", f"(b) Resume switches state back to 'running' (got {state_resumed!r})")
+    page.wait_for_timeout(1500)
+    tick_after_resume = page.evaluate("() => window._lastFrame ? window._lastFrame.tick : -1")
+    check(tick_after_resume > tick_while_paused,
+          f"(b) frames resume arriving after Resume (tick {tick_while_paused} -> {tick_after_resume})")
+
+    # (c) Let the run finish naturally (ticks=45 is short), then
+    # confirm no run control is left visible/clickable - regression for
+    # the bug where a stale "paused" UI state left Resume clickable
+    # forever after the server-side run had already ended, 409-ing on
+    # every click instead of ever resyncing the UI.
+    for _ in range(40):
+        state = page.eval_on_selector("#runStateLabel", "el => el.textContent")
+        if state == "finished":
+            break
+        page.wait_for_timeout(300)
+    else:
+        fail_and_exit("(c) live run did not reach 'finished' within 12s of its natural end")
+        return
+
+    pause_hidden = page.eval_on_selector("#pauseLiveBtn", "el => el.classList.contains('hidden')")
+    resume_hidden = page.eval_on_selector("#resumeLiveBtn", "el => el.classList.contains('hidden')")
+    stop_hidden = page.eval_on_selector("#stopLiveBtn", "el => el.classList.contains('hidden')")
+    check(pause_hidden and resume_hidden and stop_hidden,
+          f"(c) once the run has ended, no run control is visible "
+          f"(pause_hidden={pause_hidden}, resume_hidden={resume_hidden}, stop_hidden={stop_hidden})")
+
+    # Belt-and-suspenders regression for the exact reported symptom: even
+    # if a control were still visible/clicked here, clicking it must
+    # resync the UI to "finished" rather than leaving it stuck - simulate
+    # a stale click directly against the now-dead run.
+    page.evaluate("() => resumeLive()")
+    page.wait_for_timeout(400)
+    state_after_stale_resume = page.eval_on_selector("#runStateLabel", "el => el.textContent")
+    check(state_after_stale_resume == "finished",
+          f"(c) a resume attempt against an already-ended run resyncs the UI to 'finished', not stuck (got {state_after_stale_resume!r})")
+
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0,
+          f"(a)(b)(c) no UNEXPECTED console/page errors during the run-control checks "
+          f"(got {len(real_errors)}, ignoring the deliberately-triggered 400/409 network noise: {real_errors[:5]})")
+
+    # Leave the page clean for whatever runs next (_replay_check): the
+    # deliberate override failure and stale-resume above both leave
+    # overrideStatus set, which would otherwise make renderOverrideBox()
+    # show stale content regardless of pendingOverride/drag state.
+    page.evaluate("() => { overrideStatus = null; pendingOverride = null; selectedMarker = null; renderInspector(); }")
 
 
 def _replay_check(page, console_errors):
@@ -282,8 +406,10 @@ def _replay_check(page, console_errors):
     else:
         print("INFO: no eligible (team, incident) pair found at tick 0 of this recording to drag-test - skipped that one assertion")
 
-    check(len(console_errors) == 0,
-          f"no console/page errors during the replay checks (got {len(console_errors)}: {console_errors[:5]})")
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0,
+          f"no UNEXPECTED console/page errors during the replay checks "
+          f"(got {len(real_errors)}, ignoring earlier deliberately-triggered 400/409 network noise: {real_errors[:5]})")
 
     # Back to Live mode - leaves the page in a clean state for anything after this.
     page.select_option("#modeSelect", "live")
@@ -305,9 +431,14 @@ def main():
 
     app_proc = None
     we_started_it = False
+    # Recordings this test's own live run(s) produce go to a throwaway
+    # temp directory, not laptop/tools/recordings/ - that folder holds
+    # exactly one curated demo file tracked in git, and this test would
+    # otherwise litter it with a fresh recording on every run.
+    recordings_tmpdir = tempfile.mkdtemp(prefix="dashboard_e2e_recordings_")
     if not _port_open(HOST, PORT):
         we_started_it = True
-        env = dict(os.environ, SIM_ONLY="1")
+        env = dict(os.environ, SIM_ONLY="1", DASHBOARD_RECORDINGS_DIR=recordings_tmpdir)
         app_proc = subprocess.Popen(
             [sys.executable, "app.py"], cwd=TOOLS_DIR, env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -538,6 +669,15 @@ def main():
                   f"no browser console errors / page errors during the run (got {len(console_errors)}: "
                   f"{console_errors[:5]})")
 
+            # Regression coverage for the failed-override/stale-run-control
+            # bug report: a failed override must never affect the run, a
+            # genuine pause/resume must actually stop/resume frames, and no
+            # run control may be left clickable once the run has ended.
+            if page.query_selector("#stopLiveBtn") and page.is_visible("#stopLiveBtn"):
+                page.click("#stopLiveBtn")
+                page.wait_for_timeout(200)
+            _run_control_state_check(page, console_errors)
+
             # Part 2: replay of a recorded live run.
             _replay_check(page, console_errors)
 
@@ -555,6 +695,7 @@ def main():
                 app_proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 app_proc.kill()
+        shutil.rmtree(recordings_tmpdir, ignore_errors=True)
 
     if FAILURES:
         print(f"\n{len(FAILURES)} FAILURE(S):")

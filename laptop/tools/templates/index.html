@@ -2008,12 +2008,25 @@ function setDashboardMode(mode) {
   }
 }
 
+// Bug fix: pause/resume used to only ever update run-state on SUCCESS,
+// silently doing nothing on failure. If the server-side run had
+// already ended for any reason (natural completion, a crash, the
+// subprocess dying) before the button was clicked, the client stayed
+// on whatever stale state it last had (e.g. "paused") forever - Resume
+// stayed visible/clickable and every click just 409'd again, since
+// nothing ever told the UI the run was actually gone. Both functions
+// now resync the UI to "finished" on ANY failure (409 specifically
+// means "no live run in progress" - see _live_signal() in app.py - but
+// any other non-ok response gets the same treatment: the button state
+// must always follow the server's real state, never keep showing a
+// control for a run that isn't there).
 async function pauseLive() {
   try {
     const r = await fetch("/api/run-live/pause", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     const body = await r.json();
     if (body.ok) setRunState("paused");
-  } catch (e) { console.error("pause failed:", e); }
+    else setRunState("finished");
+  } catch (e) { console.error("pause failed:", e); setRunState("finished"); }
 }
 
 async function resumeLive() {
@@ -2021,7 +2034,8 @@ async function resumeLive() {
     const r = await fetch("/api/run-live/resume", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     const body = await r.json();
     if (body.ok) setRunState("running");
-  } catch (e) { console.error("resume failed:", e); }
+    else setRunState("finished");
+  } catch (e) { console.error("resume failed:", e); setRunState("finished"); }
 }
 
 async function runLive() {
