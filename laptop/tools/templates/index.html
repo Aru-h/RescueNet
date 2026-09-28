@@ -44,7 +44,7 @@
   .map-tooltip {
     position: absolute; pointer-events: none; background: #0d1117; color: #e6edf3;
     border: 1px solid #30363d; border-radius: 6px; padding: 6px 10px; font-size: 12px;
-    line-height: 1.5; max-width: 240px; z-index: 20; display: none; box-shadow: 0 6px 16px rgba(0,0,0,.4);
+    line-height: 1.5; max-width: 320px; white-space: pre-line; z-index: 20; display: none; box-shadow: 0 6px 16px rgba(0,0,0,.4);
   }
   .map-toolbar-btn {
     background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px;
@@ -481,12 +481,25 @@
               </div>
             </div>
             <div class="live-map-legend">
-              <span style="display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span> critical
-              <span style="margin-left:8px;display:inline-block;width:9px;height:9px;background:#8b98a5;vertical-align:-1px;"></span> lower priority
-              <span style="margin-left:8px;">ring = status</span>
-              <span style="margin-left:8px;"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;vertical-align:-1px;"></span> safe zone</span>
+              <span style="display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span> P1
+              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;background:#d29922;vertical-align:-1px;"></span> P2
+              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;background:#39c5cf;vertical-align:-1px;"></span> P3
+              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;background:#8b98a5;vertical-align:-1px;"></span> P4
               <span style="margin-left:8px;">🔥 fire · ☢ gas</span>
-              <span style="margin-left:8px;">- - epicenter</span>
+              <span style="margin-left:8px;">label "6 👤 · fl 1" = victims · floor · badge = incidents sharing a building, click/hover for detail</span>
+              <span style="margin-left:10px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(63,185,80,0.9);border-radius:50%;vertical-align:-1px;"></span> available
+              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(88,166,255,0.9);border-radius:50%;vertical-align:-1px;"></span> en route
+              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(210,153,34,0.9);border-radius:50%;vertical-align:-1px;"></span> on scene
+              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px dashed rgba(139,152,165,0.9);border-radius:50%;vertical-align:-1px;"></span> resting
+              <span style="margin-left:6px;display:inline-block;width:6px;height:6px;background:#f85149;border-radius:50%;vertical-align:0px;"></span> fault
+              <span style="margin-left:8px;"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;vertical-align:-1px;"></span> safe zone</span>
+              <span style="margin-left:8px;display:inline-block;width:12px;height:9px;background:rgba(139,152,165,0.15);border:1px solid rgba(139,152,165,0.22);vertical-align:-1px;"></span> building (darker+hatch = damage)
+              <span style="margin-left:8px;display:inline-block;width:12px;height:9px;background:rgba(158,178,207,0.7);vertical-align:-1px;"></span> road (brighter = arterial)
+              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(6,9,13,0.9),rgba(6,9,13,0.9) 2px,rgba(230,237,243,0.4) 2px,rgba(230,237,243,0.4) 3px);vertical-align:-1px;"></span> blocked/rubble
+              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(210,153,34,0.15),rgba(210,153,34,0.15) 2px,rgba(210,153,34,0.5) 2px,rgba(210,153,34,0.5) 3px);vertical-align:-1px;"></span> hazard
+              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:rgba(56,139,253,0.5);vertical-align:-1px;"></span> flood
+              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;border-left:1px solid rgba(230,237,243,0.5);vertical-align:-1px;"></span> district border
+              <span style="margin-left:8px;">- - <span style="color:#a371f7;">epicenter</span></span>
               <span style="margin-left:8px;" id="dragHintText">drag to pan · wheel to zoom · drag a team onto an incident to reassign</span>
             </div>
           </div>
@@ -1466,6 +1479,19 @@ function voteLine(label, triplet) {
   return `${label} ${triplet[0]} fault · ${triplet[1]} clear · ${triplet[2]} abstain`;
 }
 
+// One incident's summary line, shared by the tooltip and the inspector
+// card - both for a single incident and for each member of a grouped
+// "N incidents in this building" marker (map-labels feedback: overlap
+// avoidance groups same-building incidents onto one marker, so their
+// individual detail has to live somewhere - here, and in the tooltip).
+function incidentSummaryLine(inc) {
+  const assignedText = (inc.assigned_team === undefined || inc.assigned_team === 255)
+    ? "unassigned"
+    : `assigned to ${SPEC_NAMES[inc.assigned_team % SPEC_NAMES.length] || "team"} #${inc.assigned_team}`;
+  const floorText = (inc.building_id !== undefined && inc.building_id >= 0) ? `, floor ${inc.floor}` : "";
+  return `Incident ${inc.id} — ${inc.victims} victims${floorText}, P${inc.priority}, ${assignedText}`;
+}
+
 function renderTeamCard() {
   const el = document.getElementById("mapInspector");
 
@@ -1503,12 +1529,24 @@ function renderTeamCard() {
         &nbsp; ${voteLine("Mob", pv && pv.mob)} &nbsp;&nbsp; ${voteLine("Comm", pv && pv.comm)}
       </div>`;
   } else if (hit.type === "incident") {
-    const statusName = INCIDENT_STATUS_NAMES[d.status] || d.status;
-    const assignedText = d.assigned_team === 255 ? "unassigned" : `${SPEC_NAMES[d.assigned_team % SPEC_NAMES.length] || "team"} #${d.assigned_team}`;
-    const supportText = d.support_team !== undefined && d.support_team !== 255 ? `${SPEC_NAMES[d.support_team % SPEC_NAMES.length] || "team"} #${d.support_team}` : "none";
-    el.innerHTML = `<b>Incident #${d.id}</b> &nbsp; <span class="pill ${d.status === 0 ? 'bad' : 'good'}">${statusName}</span> &nbsp; Priority P${d.priority}<br>
-      Position: (${d.x}, ${d.y}) &nbsp; Victims: ${d.victims} &nbsp; Work remaining: ${d.work_remaining ?? "–"}${d.building_id !== undefined && d.building_id >= 0 ? ` &nbsp; Building #${d.building_id}, floor ${d.floor}` : ""}<br>
-      Needs: ${SPEC_NAMES[d.req_capability % SPEC_NAMES.length] || d.req_capability} &nbsp; Assigned: ${assignedText} &nbsp; Support: ${supportText}`;
+    if (d.groupIncidents && d.groupIncidents.length > 1) {
+      // Grouped marker (map-labels feedback): one marker per building
+      // with more than one incident, so every member's detail has to
+      // be listed here rather than each drawing its own (overlapping)
+      // label on the map.
+      el.innerHTML = `<b>${d.groupIncidents.length} incidents</b>${d.building_id !== undefined && d.building_id >= 0 ? ` in Building #${d.building_id}` : ""}<br>` +
+        d.groupIncidents.map((inc) => {
+          const statusName = INCIDENT_STATUS_NAMES[inc.status] || inc.status;
+          return `<span class="pill ${inc.status === 0 ? 'bad' : 'good'}">${statusName}</span> ${incidentSummaryLine(inc)}`;
+        }).join("<br>");
+    } else {
+      const statusName = INCIDENT_STATUS_NAMES[d.status] || d.status;
+      const assignedText = d.assigned_team === 255 ? "unassigned" : `${SPEC_NAMES[d.assigned_team % SPEC_NAMES.length] || "team"} #${d.assigned_team}`;
+      const supportText = d.support_team !== undefined && d.support_team !== 255 ? `${SPEC_NAMES[d.support_team % SPEC_NAMES.length] || "team"} #${d.support_team}` : "none";
+      el.innerHTML = `<b>Incident #${d.id}</b> &nbsp; <span class="pill ${d.status === 0 ? 'bad' : 'good'}">${statusName}</span> &nbsp; Priority P${d.priority}<br>
+        Position: (${d.x}, ${d.y}) &nbsp; Victims: ${d.victims} &nbsp; Work remaining: ${d.work_remaining ?? "–"}${d.building_id !== undefined && d.building_id >= 0 ? ` &nbsp; Building #${d.building_id}, floor ${d.floor}` : ""}<br>
+        Needs: ${SPEC_NAMES[d.req_capability % SPEC_NAMES.length] || d.req_capability} &nbsp; Assigned: ${assignedText} &nbsp; Support: ${supportText}`;
+    }
   } else if (hit.type === "safezone") {
     el.innerHTML = `<b>Safe Zone #${d.id}</b><br>
       Position: (${d.x}, ${d.y}) &nbsp; Occupancy: ${d.evacuees} / ${d.capacity}`;
@@ -1677,8 +1715,14 @@ function showMapTooltip(hit, clientX, clientY) {
   if (hit.type === "team") {
     text = `${SPEC_NAMES[d.i % SPEC_NAMES.length] || "team"} #${d.i} — ${STATUS_NAMES[d.status] || d.status}, ${d.stamina.toFixed(0)}% stamina`;
   } else if (hit.type === "incident") {
-    text = `Incident #${d.id} — P${d.priority}, ${d.victims} victim(s)` +
-      (d.building_id !== undefined && d.building_id >= 0 ? `, floor ${d.floor}` : "");
+    if (d.groupIncidents && d.groupIncidents.length > 1) {
+      text = `${d.groupIncidents.length} incidents` +
+        (d.building_id !== undefined && d.building_id >= 0 ? ` in Building #${d.building_id}` : "") +
+        "\n" + d.groupIncidents.map(incidentSummaryLine).join("\n");
+    } else {
+      text = `Incident #${d.id} — P${d.priority}, ${d.victims} victim(s)` +
+        (d.building_id !== undefined && d.building_id >= 0 ? `, floor ${d.floor}` : "");
+    }
   } else if (hit.type === "safezone") {
     text = `Safe zone #${d.id} — ${d.evacuees}/${d.capacity} occupied`;
   }

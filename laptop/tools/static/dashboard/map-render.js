@@ -21,7 +21,11 @@
 (function (global) {
   "use strict";
 
-  const PRIORITY_COLORS = { 1: "#f85149", 2: "#d29922", 3: "#58a6ff", 4: "#8b98a5" };
+  // Red is reserved for things that need attention right now - P1 here,
+  // and the team fault dot in drawTeams - so no other priority uses it,
+  // and P3 gets its own hue rather than the blue drawTerrain uses for
+  // flood, so the two don't read as the same thing.
+  const PRIORITY_COLORS = { 1: "#f85149", 2: "#d29922", 3: "#39c5cf", 4: "#8b98a5" };
   const INCIDENT_ICONS = { 6: "☢", 7: "🔥" };
   const STATUS_RING_COLORS = {
     0: "rgba(63,185,80,0.9)",   // AVAILABLE
@@ -35,12 +39,36 @@
   // if_changed() in laptop/debug.c). Each row is `width` cells packed
   // 8 hex chars each: 2 (flags: bit0 navigable, bit1 flood, bits2-4
   // road_class) + 2 (travel_cost) + 4 (district_id).
-  const ROAD_TINT = {
-    1: "rgba(139,152,165,0.10)", // ROAD_SERVICE
-    2: "rgba(139,152,165,0.16)", // ROAD_LOCAL
-    3: "rgba(139,152,165,0.22)", // ROAD_COLLECTOR
-    4: "rgba(139,152,165,0.30)", // ROAD_ARTERIAL
+  // A brighter, distinctly-hued neutral than blocked cells or buildings
+  // (both stay on the rgba(139,152,165,…) grey), so the road network
+  // reads as its own layer instead of blending into "just blocked".
+  const ROAD_COLOR_RGB = "158,178,207"; // light slate-blue
+  const ROAD_STYLE = {
+    1: { alpha: 0.24, widthFrac: 0.26 }, // ROAD_SERVICE - faintest, narrowest lane
+    2: { alpha: 0.38, widthFrac: 0.38 }, // ROAD_LOCAL
+    3: { alpha: 0.52, widthFrac: 0.50 }, // ROAD_COLLECTOR
+    4: { alpha: 0.72, widthFrac: 0.64 }, // ROAD_ARTERIAL - boldest, widest, gets a centre line
   };
+
+  // Diagonal hatch overlay, clipped to a rect - shared by the terrain
+  // layer's blocked/rubble cells, hazard cells and building damage so
+  // "damaged/blocked/hazardous" reads as one consistent visual language
+  // instead of three different ad-hoc treatments.
+  function drawHatch(ctx, x, y, w, h, strokeStyle, step) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.strokeStyle = strokeStyle;
+    ctx.lineWidth = 1;
+    for (let o = -h; o < w + h; o += step) {
+      ctx.beginPath();
+      ctx.moveTo(x + o, y + h);
+      ctx.lineTo(x + o + h, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 
   // Memoized by the STATICMAP object's own identity - it only changes
   // when a new STATICMAP line actually arrives (rare; see debug.c),
@@ -105,18 +133,39 @@
         const p = view.worldToScreen(gx - 0.5, gy - 0.5);
         if (p.x + cellPx < 0 || p.y + cellPx < 0 || p.x > vw || p.y > vh) continue; // offscreen at this pan/zoom
 
-        // Water/flood, then blocked/rubble (STATICMAP has no separate
-        // rubble flag - "not navigable" is this layer's honest proxy
-        // for it), then a road tint by class, else open ground (no fill).
+        // Water/flood (blue), then blocked/rubble (STATICMAP has no
+        // separate rubble flag - "not navigable" is this layer's honest
+        // proxy for it - drawn dark with a diagonal hatch so it never
+        // reads as "just another road"), then a road lane by class, else
+        // open ground (left unfilled).
         if (cell.flood) {
-          octx.fillStyle = "rgba(56,139,253,0.22)";
+          octx.fillStyle = "rgba(56,139,253,0.28)";
           octx.fillRect(p.x, p.y, cellPx, cellPx);
         } else if (!cell.navigable) {
-          octx.fillStyle = "rgba(139,152,165,0.18)";
+          octx.fillStyle = "rgba(6,9,13,0.6)";
           octx.fillRect(p.x, p.y, cellPx, cellPx);
-        } else if (cell.roadClass > 0 && ROAD_TINT[cell.roadClass]) {
-          octx.fillStyle = ROAD_TINT[cell.roadClass];
-          octx.fillRect(p.x, p.y, cellPx, cellPx);
+          drawHatch(octx, p.x, p.y, cellPx, cellPx, "rgba(230,237,243,0.16)", 4);
+        } else if (cell.roadClass > 0 && ROAD_STYLE[cell.roadClass]) {
+          const style = ROAD_STYLE[cell.roadClass];
+          const laneW = cellPx * style.widthFrac;
+          octx.fillStyle = `rgba(${ROAD_COLOR_RGB},${style.alpha})`;
+          // A "+" per cell rather than a full-cell block - adjoining road
+          // cells' crosses overlap into a continuous lane through the
+          // grid instead of a checkerboard of isolated squares.
+          octx.fillRect(p.x, p.y + (cellPx - laneW) / 2, cellPx, laneW);
+          octx.fillRect(p.x + (cellPx - laneW) / 2, p.y, laneW, cellPx);
+          if (cell.roadClass === 4) {
+            octx.strokeStyle = "rgba(255,255,255,0.5)";
+            octx.lineWidth = 1;
+            octx.beginPath();
+            octx.moveTo(p.x, p.y + cellPx / 2);
+            octx.lineTo(p.x + cellPx, p.y + cellPx / 2);
+            octx.stroke();
+            octx.beginPath();
+            octx.moveTo(p.x + cellPx / 2, p.y);
+            octx.lineTo(p.x + cellPx / 2, p.y + cellPx);
+            octx.stroke();
+          }
         }
       }
     }
@@ -197,20 +246,30 @@
       const floorShade = Math.min(1, floors / 10); // taller -> a bit darker/denser fill
       const baseAlpha = 0.05 + floorShade * 0.10;
 
-      ctx.fillStyle = damageFrac > 0.15
-        ? `rgba(248,81,73,${(0.08 + damageFrac * 0.35).toFixed(3)})`
-        : `rgba(139,152,165,${baseAlpha.toFixed(3)})`;
-      ctx.strokeStyle = damageFrac > 0.5 ? "rgba(248,81,73,0.55)" : "rgba(139,152,165,0.22)";
+      // Neutral fill always - red is reserved for P1 incidents and the
+      // team fault dot, so damage here reads as a darker shade plus a
+      // cross-hatch overlay, never a colour swap to red.
+      ctx.fillStyle = `rgba(139,152,165,${(baseAlpha + damageFrac * 0.12).toFixed(3)})`;
+      ctx.strokeStyle = damageFrac > 0.5 ? "rgba(230,237,243,0.4)" : "rgba(139,152,165,0.22)";
       ctx.lineWidth = 1;
       ctx.fillRect(topLeft.x, topLeft.y, size.w, size.h);
       ctx.strokeRect(topLeft.x, topLeft.y, size.w, size.h);
+      if (damageFrac > 0.15) {
+        drawHatch(ctx, topLeft.x, topLeft.y, size.w, size.h, `rgba(13,17,23,${(0.15 + damageFrac * 0.35).toFixed(3)})`, 5);
+      }
 
       if (pxPerUnit >= 10 && size.w >= 16 && size.h >= 12) {
-        ctx.fillStyle = "rgba(230,237,243,0.55)";
+        // Drawn as a small blue chip (not plain text) so it never reads as
+        // an incident label - incident labels are plain text under a marker.
+        const label = `${floors}F`;
         ctx.font = `${Math.max(8, Math.min(11, pxPerUnit * 0.5))}px sans-serif`;
+        const w = ctx.measureText(label).width;
+        ctx.fillStyle = "rgba(13,17,23,0.55)";
+        ctx.fillRect(topLeft.x, topLeft.y, w + 4, 12);
+        ctx.fillStyle = "rgba(88,166,255,0.9)";
         ctx.textAlign = "left";
         ctx.textBaseline = "top";
-        ctx.fillText(`${floors}F`, topLeft.x + 2, topLeft.y + 1);
+        ctx.fillText(label, topLeft.x + 2, topLeft.y + 1);
       }
     });
   }
@@ -223,23 +282,34 @@
     ctx.save();
     ctx.beginPath();
     ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(248,81,73,0.35)";
+    // Purple, not red - red is reserved for P1 incidents and the team
+    // fault dot.
+    ctx.strokeStyle = "rgba(163,113,247,0.5)";
     ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 3]);
     ctx.stroke();
     ctx.restore();
   }
 
+  // Amber throughout, never red - red is reserved for P1 incidents and
+  // the team fault dot. A blocked hazard cell gets a light amber hatch
+  // (same visual language as the terrain layer's dark blocked hatch, at
+  // a lower key so it doesn't compete with it); a plain hazard cell is a
+  // flat amber fill, lighter still where hazard_flags is unset.
   function drawHazardCells(ctx, view, cells) {
     if (!cells) return;
     const px1 = view.worldToScreen(0, 0), px2 = view.worldToScreen(1, 0);
     const cellPx = Math.abs(px2.x - px1.x) || 1;
     cells.forEach((c) => {
-      if (c.blocked) ctx.fillStyle = "rgba(248,81,73,0.28)";
-      else if (c.hazard_flags) ctx.fillStyle = "rgba(210,153,34,0.20)";
-      else ctx.fillStyle = "rgba(210,153,34,0.10)";
       const p = view.worldToScreen(c.x - 0.5, c.y - 0.5);
-      ctx.fillRect(p.x, p.y, cellPx, cellPx);
+      if (c.blocked) {
+        ctx.fillStyle = "rgba(210,153,34,0.14)";
+        ctx.fillRect(p.x, p.y, cellPx, cellPx);
+        drawHatch(ctx, p.x, p.y, cellPx, cellPx, "rgba(210,153,34,0.45)", 4);
+      } else {
+        ctx.fillStyle = c.hazard_flags ? "rgba(210,153,34,0.20)" : "rgba(210,153,34,0.10)";
+        ctx.fillRect(p.x, p.y, cellPx, cellPx);
+      }
     });
   }
 
@@ -258,17 +328,54 @@
     return hits;
   }
 
-  // Incidents sized by priority (P1 largest) and victim count, with a
-  // small floor label when the incident is inside a building.
+  function labelOverlaps(box, drawn) {
+    return drawn.some((b) => !(box.x2 < b.x1 || box.x1 > b.x2 || box.y2 < b.y1 || box.y1 > b.y2));
+  }
+
+  // Incidents sized by priority (P1 largest) and victim count. Incidents
+  // that share a building_id are collapsed into a single marker with a
+  // count badge - their full list is attached to the hit's `groupIncidents`
+  // for the hover tooltip / click inspector (see index.html's
+  // incidentSummaryLine / showMapTooltip / renderTeamCard) rather than
+  // trying to cram every one of them into an on-map label. Labels are
+  // drawn worst-priority-first and a label that would overlap one already
+  // placed is dropped rather than left to overlap it.
   function drawIncidents(ctx, view, list, opts) {
     const hits = [];
     const fogViewMode = opts.fogViewMode;
     const selectedMarker = opts.selectedMarker;
     const priorityScale = { 1: 1.25, 2: 1.05, 3: 0.9, 4: 0.75 };
 
-    (list || []).forEach((inc) => {
-      if (inc.status === 3) return; // resolved
-      if (fogViewMode === "operator" && inc.discovered === 0) return;
+    const visible = (list || []).filter((inc) => {
+      if (inc.status === 3) return false; // resolved
+      if (fogViewMode === "operator" && inc.discovered === 0) return false;
+      return true;
+    });
+
+    const byBuilding = new Map();
+    const clusters = [];
+    visible.forEach((inc) => {
+      if (inc.building_id !== undefined && inc.building_id >= 0) {
+        let cluster = byBuilding.get(inc.building_id);
+        if (!cluster) { cluster = { members: [] }; byBuilding.set(inc.building_id, cluster); clusters.push(cluster); }
+        cluster.members.push(inc);
+      } else {
+        clusters.push({ members: [inc] });
+      }
+    });
+
+    // Representative = worst priority (lowest number) then most victims;
+    // clusters themselves are drawn worst-first so a lower-priority label
+    // is the one that loses the overlap check.
+    clusters.forEach((c) => c.members.sort((a, b) => (a.priority - b.priority) || ((b.victims || 0) - (a.victims || 0))));
+    clusters.sort((a, b) => a.members[0].priority - b.members[0].priority);
+
+    const drawnLabelBoxes = [];
+
+    clusters.forEach((cluster) => {
+      const members = cluster.members;
+      const inc = members[0];
+      const isGroup = members.length > 1;
 
       const color = PRIORITY_COLORS[inc.priority] || "#8b98a5";
       const pScale = priorityScale[inc.priority] || 0.85;
@@ -289,27 +396,58 @@
         ctx.fillText(icon, center.x, center.y - sizePx / 2 - 7);
       }
 
-      // Victims + floor label, only when zoomed in enough to be legible.
+      if (isGroup) {
+        const badgeR = 7;
+        const bx = center.x + sizePx / 2;
+        const by = center.y - sizePx / 2;
+        ctx.beginPath();
+        ctx.arc(bx, by, badgeR, 0, Math.PI * 2);
+        ctx.fillStyle = "#1f6feb";
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 9px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(members.length), bx, by + 0.5);
+      }
+
+      // Label, only when zoomed in enough to be legible: a plain victims/
+      // floor summary for a single incident, an explicit count for a
+      // group (per-incident detail lives in the tooltip/inspector, not
+      // crammed onto the map).
       if (view.state.zoom >= 12) {
-        const bits = [];
-        if (inc.victims) bits.push(`${inc.victims}v`);
-        if (inc.building_id !== undefined && inc.building_id >= 0) bits.push(`F${inc.floor}`);
-        if (bits.length) {
+        const inBuilding = inc.building_id !== undefined && inc.building_id >= 0;
+        const text = isGroup
+          ? `${members.length} incidents`
+          : (inBuilding ? `${inc.victims} \u{1F464} · fl ${inc.floor}` : `${inc.victims} \u{1F464}`);
+
+        ctx.font = "9px sans-serif";
+        const w = ctx.measureText(text).width;
+        const lx = center.x - w / 2;
+        const ly = center.y + sizePx / 2 + 2;
+        const box = { x1: lx - 1, y1: ly - 1, x2: lx + w + 1, y2: ly + 11 };
+
+        if (!labelOverlaps(box, drawnLabelBoxes)) {
           ctx.fillStyle = "rgba(230,237,243,0.75)";
-          ctx.font = "9px sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
-          ctx.fillText(bits.join(" "), center.x, center.y + sizePx / 2 + 2);
+          ctx.fillText(text, center.x, ly);
+          drawnLabelBoxes.push(box);
         }
       }
 
-      if (selectedMarker && selectedMarker.type === "incident" && selectedMarker.id === inc.id) {
+      if (selectedMarker && selectedMarker.type === "incident" &&
+          members.some((m) => m.id === selectedMarker.id)) {
         ctx.strokeStyle = "#fff";
         ctx.lineWidth = 2;
         ctx.strokeRect(center.x - sizePx / 2 - 3, center.y - sizePx / 2 - 3, sizePx + 6, sizePx + 6);
       }
 
-      hits.push({ type: "incident", id: inc.id, wx: inc.x, wy: inc.y, wr: Math.max(worldSize / 2, 0.4), data: inc });
+      const hitData = isGroup ? Object.assign({}, inc, { groupIncidents: members }) : inc;
+      hits.push({ type: "incident", id: inc.id, wx: inc.x, wy: inc.y, wr: Math.max(worldSize / 2, 0.4), data: hitData });
     });
     return hits;
   }
