@@ -3,6 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <title>CONCORD / REMCE — Test Dashboard</title>
+<!-- Empty data URI: tells the browser there is no favicon rather than
+     letting it request /favicon.ico, which 404s in a real browser and
+     would otherwise show up as a spurious console error in any check
+     that asserts "no console errors" (see dashboard_e2e_selftest.py). -->
+<link rel="icon" href="data:,">
 <script src="/static/chart.umd.min.js"></script>
 <style>
   :root {
@@ -10,10 +15,49 @@
     --text: #e6edf3; --muted: #8b98a5; --accent: #3fb950; --warn: #d29922;
     --bad: #f85149; --blue: #58a6ff;
   }
+  /* Light theme: same variable names, so every existing rule below
+     that reads var(--bg) etc. renders correctly under either theme
+     with no other CSS changes. Calm, high-contrast, projector-safe
+     colours (not neon) - see laptop/tools/static/dashboard/theme.js
+     for the toggle that sets this attribute. */
+  :root[data-theme="light"] {
+    --bg: #f5f7f9; --panel: #ffffff; --panel2: #eef1f4; --border: #d7dee5;
+    --text: #1b232c; --muted: #5b6b78; --accent: #1f7a3d; --warn: #8a5a00;
+    --bad: #b3261e; --blue: #1a5fb4;
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
     background: var(--bg); color: var(--text);
+    transition: background-color .15s ease, color .15s ease;
+  }
+  /* --- Tier badges (consensus mobility/communication tiers) --- */
+  .tier-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px;
+    font-weight: 600; letter-spacing: .02em; white-space: nowrap;
+  }
+  .tier-badge.tier-none { background: rgba(139,152,165,.15); color: var(--muted); }
+  .tier-badge.tier-local { background: rgba(210,153,34,.18); color: var(--warn); }
+  .tier-badge.tier-elevated { background: rgba(248,81,73,.18); color: var(--bad); }
+  .tier-badge.tier-na { background: rgba(139,152,165,.08); color: var(--muted); font-style: italic; }
+  /* --- Map tooltip and camera controls --- */
+  .map-tooltip {
+    position: absolute; pointer-events: none; background: #0d1117; color: #e6edf3;
+    border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; font-size: 13px;
+    line-height: 1.4; max-width: 320px; z-index: 20; display: none; box-shadow: 0 6px 16px rgba(0,0,0,.4);
+  }
+  .map-card-header { font-weight: 700; font-size: 13px; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .map-card-row { display: flex; justify-content: space-between; gap: 12px; padding: 1.5px 0; }
+  .map-card-label { color: #8b98a5; flex: 0 0 auto; }
+  .map-card-value { color: #e6edf3; text-align: right; }
+  .map-toolbar-btn {
+    background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px;
+    padding: 5px 10px; font-size: 11.5px; cursor: pointer;
+  }
+  .map-toolbar-btn:hover { background: #262c34; }
+  #themeToggleBtn {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer;
   }
   
   /* --- STARTUP GATE CSS --- */
@@ -23,12 +67,19 @@
   
   #startup-screen {
     min-height: 100vh;
-    display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     padding: 20px;
   }
+  /* Fix (pre-existing, not from this revision): #startup-screen's own ID
+     selector has higher specificity than .app-screen.active, so an
+     unconditional "display: flex" here always beat the active/inactive
+     toggle above and left the startup screen visible (and stacked above
+     the dashboard) even after main-dashboard became active. Scoping the
+     flex layout to when this screen itself is active fixes that without
+     changing the generic .app-screen show/hide rule other screens rely on. */
+  #startup-screen.active { display: flex; }
   .startup-card {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -56,22 +107,21 @@
   .error-msg { color: var(--bad); font-size: 13px; margin-top: 12px; text-align: center; display: none; }
   /* ------------------------ */
 
-  header {
-    padding: 16px 24px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  header .sub { color: var(--muted); font-size: 12px; }
-  .layout { display: flex; min-height: calc(100vh - 57px); }
+  .layout { display: flex; flex: 1 1 auto; min-height: 0; }
+  /* Collapsed icon rail (was a 200px text nav) - the freed width goes
+     to the map/right panel, and dropping the header (below) already
+     recovered the vertical space that mattered more for the one-screen
+     Live Ops layout. */
   nav {
-    width: 200px; border-right: 1px solid var(--border); padding: 16px 0;
-    flex-shrink: 0;
+    width: 60px; border-right: 1px solid var(--border); padding: 10px 0;
+    flex-shrink: 0; display: flex; flex-direction: column; align-items: stretch; gap: 2px;
   }
   nav button {
-    display: block; width: 100%; text-align: left; padding: 10px 20px;
-    background: none; border: none; color: var(--muted); cursor: pointer;
-    font-size: 13px;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    width: 100%; padding: 7px 2px; background: none; border: none; border-left: 2px solid transparent;
+    color: var(--muted); cursor: pointer; font-size: 9px; text-align: center;
   }
+  nav button .nav-icon { font-size: 17px; line-height: 1; }
   nav button.active { color: var(--text); background: var(--panel2); border-left: 2px solid var(--blue); }
   nav button:hover { color: var(--text); }
   main { flex: 1; padding: 20px 28px; overflow-y: auto; }
@@ -79,7 +129,7 @@
     background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
     padding: 18px; margin-bottom: 18px;
   }
-  .panel h2 { margin: 0 0 12px; font-size: 14px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .panel h2 { margin: 0 0 12px; font-size: 15px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
   .run-form { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field label { font-size: 11px; color: var(--muted); }
@@ -95,14 +145,14 @@
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
   .card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
-  .card .value { font-size: 24px; font-weight: 700; margin-top: 4px; }
+  .card .value { font-size: 26px; font-weight: 700; margin-top: 4px; }
   .card.good .value { color: var(--accent); }
   .card.warn .value { color: var(--warn); }
   .card.bad .value { color: var(--bad); }
   .chart-wrap { position: relative; height: 320px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10.5px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11.5px; }
   tr:hover td { background: var(--panel2); }
   .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
   .pill.good { background: rgba(63,185,80,.15); color: var(--accent); }
@@ -143,6 +193,132 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
   @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+
+  /* ===================================================================
+     Live Ops one-screen layout.
+     No magic-number header-height constant: #main-dashboard itself
+     becomes a column flex box filling the viewport (height:100vh),
+     header takes its natural height, and `.layout` (already
+     display:flex from the rule above) gets flex:1 to fill whatever is
+     left - so this keeps working if the header's own height ever
+     changes (it already grew once, from 57px to ~85px, when the theme
+     toggle button was added to it). `main`'s `overflow-y:auto` bounds
+     it to that same height; other tabs with more content than fits
+     scroll inside `main` exactly as before. The Live Ops tab is laid
+     out (topbar + main row + timeline) to sum to exactly that height,
+     so it never needs to.
+     =================================================================== */
+  #main-dashboard.active { display: flex; flex-direction: column; height: 100vh; }
+  main { padding: 12px 20px; display: flex; flex-direction: column; min-height: 0; }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: flex-start; gap: 14px;
+    background: var(--panel); border-bottom: 1px solid var(--border); border-radius: 0;
+    padding: 8px 16px; flex: 0 0 auto;
+    overflow-x: auto; flex-wrap: nowrap;
+  }
+  .topbar-title { display: flex; align-items: baseline; gap: 8px; flex: 0 0 auto; white-space: nowrap; font-size: 14px; }
+  .topbar-title .sub { font-size: 11px; color: var(--muted); }
+  .topbar-group { display: flex; align-items: flex-end; gap: 7px; flex-wrap: nowrap; flex: 0 0 auto; }
+  .topbar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-left: auto; }
+  .tfield { display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; }
+  .tfield label { font-size: 9px; color: var(--muted); text-transform: uppercase; white-space: nowrap; }
+  .tfield input, .tfield select {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 6px; border-radius: 5px; font-size: 12px; width: 54px;
+  }
+  .tfield select { width: 92px; }
+  .topbar-btn {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .topbar-btn:disabled { opacity: .5; cursor: default; }
+  .topbar-stats { display: flex; align-items: center; gap: 14px; flex-wrap: nowrap; flex: 0 0 auto; }
+  .tstat { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.15; white-space: nowrap; }
+  .tstat-label { font-size: 9px; color: var(--muted); text-transform: uppercase; }
+  .tstat-value { font-size: 13px; font-weight: 700; }
+
+  #tab-live.tab-content:not(.hidden) { display: flex; }
+  #tab-live { flex-direction: column; flex: 1 1 auto; min-height: 0; gap: 10px; }
+  .live-main-row { display: flex; gap: 10px; flex: 1 1 auto; min-height: 0; }
+  .live-main-row .panel { margin-bottom: 0; }
+  .live-map-col { flex: 1.15 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 10px 12px; }
+  .live-side-col { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+
+  .live-map-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: nowrap; margin-bottom: 4px; }
+  .live-map-header h2 { margin: 0; font-size: 13px; }
+  .live-map-canvas-area { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  .live-map-square { position: relative; aspect-ratio: 1 / 1; max-width: 100%; max-height: 100%; width: auto; height: 100%; margin: auto; }
+  .live-map-legend { font-size: 10px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow-x: auto; flex: 0 0 auto; }
+
+  .live-side-tabs { display: flex; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+  .side-tab-btn {
+    flex: 1; background: none; border: none; color: var(--muted); cursor: pointer;
+    padding: 8px 6px; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+    border-bottom: 2px solid transparent;
+  }
+  .side-tab-btn.active { color: var(--text); border-bottom-color: var(--blue); }
+  .live-side-content { flex: 1 1 auto; min-height: 0; padding: 8px 12px 10px; overflow-y: auto; }
+  /* Network sub-tab: legend (fixed) + ring (fills whatever is left) +
+     team card (fixed) + override box (fixed, only present while a
+     proposal/ack is pending) - everything must fit with no inner
+     scroll, so this is a column flex box, not just stacked blocks. */
+  #sidetab-network { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+  .network-legend {
+    flex: 0 0 auto; font-size: 10.5px; color: var(--muted);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 2px 0 6px;
+  }
+  .tier-key { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; white-space: nowrap; }
+  .tier-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: -1px; margin-right: 1px; }
+  .network-ring-area { flex: 1 1 auto; min-height: 0; position: relative; }
+  .team-card {
+    flex: 0 0 auto; margin-top: 6px; padding: 6px 8px; background: #0d1117;
+    border: 1px solid #21262d; border-radius: 6px; font-size: 11.5px; line-height: 1.4;
+    /* Deliberately-dark "console" accent regardless of theme (same
+       choice as the map's own dark canvas/toolbar) - fixed text colour
+       to match, since inheriting var(--text) under the light theme put
+       near-black text on this near-black background. */
+    color: #e6edf3;
+  }
+  .team-card b { color: #e6edf3; }
+  .override-box { flex: 0 0 auto; margin-top: 6px; }
+  .live-side-content table { font-size: 11.5px; }
+  .live-side-content th, .live-side-content td { padding: 4px 6px; font-size: 10.5px; }
+  /* The Team/ID column stays put while the rest of a wide row scrolls
+     sideways, so whichever row you're looking at (e.g. its Votes cell,
+     scrolled into view) is still identifiable without scrolling back. */
+  .live-side-content td:first-child, .live-side-content th:first-child {
+    position: sticky; left: 0; background: var(--panel); z-index: 1;
+  }
+  /* A visible (not OS-overlay-invisible) horizontal scrollbar on the
+     Teams/Incidents tables - at narrower viewports these tables are
+     wider than the side panel by design (10+ columns of real data in
+     a ~530px panel; see the layout-rework report for the numbers),
+     and "scrolls inside its own panel, never the page" only reads as
+     a fix, not a new way to lose a column, if the scrollbar is
+     something a person actually notices. */
+  .live-side-content div[style*="overflow-x"] {
+    scrollbar-width: thin;
+    scrollbar-color: var(--muted) var(--panel2);
+  }
+  .live-side-content div[style*="overflow-x"]::-webkit-scrollbar { height: 8px; }
+  .live-side-content div[style*="overflow-x"]::-webkit-scrollbar-track { background: var(--panel2); }
+  .live-side-content div[style*="overflow-x"]::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 4px; }
+  .side-tab-panel.hidden { display: none; }
+  .side-tab-panel h2 { font-size: 12px; }
+
+  .live-timeline-panel {
+    /* 210px (was 176px): merging the header into the topbar freed
+       ~80px of vertical chrome; most of it came here so all 10 rows
+       can have an 11-12px team label (item 10) instead of one that
+       shrinks with the row. */
+    flex: 0 0 210px; min-height: 0; overflow: hidden;
+    display: flex; flex-direction: column; padding: 8px 14px; margin-bottom: 0;
+  }
+  .live-timeline-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: nowrap; }
+  .live-timeline-header h2 { margin: 0; font-size: 13px; }
+  .live-timeline-canvas-wrap { flex: 1 1 auto; min-height: 0; }
 </style>
 </head>
 <body>
@@ -184,116 +360,218 @@
      SCREEN 2: MAIN DASHBOARD
      ========================================== -->
 <div id="main-dashboard" class="app-screen">
-  <header>
-    <div>
-      <h1>CONCORD / REMCE — Local Test Dashboard</h1>
-      <div class="sub" id="statusLine">checking project…</div>
-      <div class="sub hidden" id="boardMissionBar">
-        <span id="boardMissionText">Waiting for board handshake…</span>
-        <select id="boardMissionSpeed" title="Mission pace. Real time is one tick per 36 s, as in a real deployment."
-                style="margin-left:8px;font-size:12px;">
-          <option value="1">Real time (36 s/tick)</option>
-          <option value="10">10× (3.6 s/tick)</option>
-          <option value="60">60× (0.6 s/tick)</option>
+  <!-- One bar: title, run/replay controls (Part 2 will add replay
+       controls in the same spot - the run-state label and button
+       cluster below are already shaped for that), live stats, one
+       theme toggle, Disconnect/Exit. Replaces the old separate
+       <header> (title + filesystem-path status line) and the run
+       panel - folding both saves ~80px of vertical chrome, most of
+       which went to the detection timeline (see timeline.js: row
+       height/label font were fighting for space in the old layout). -->
+  <div class="topbar" id="runTopBar">
+    <div class="topbar-title">
+      <b>CONCORD / REMCE</b>
+      <span class="sub hidden" id="statusLine"></span>
+      <span class="hidden" id="lastRunLine"></span>
+    </div>
+    <div class="tfield">
+      <label>Mode</label>
+      <select id="modeSelect" onchange="setDashboardMode(this.value)">
+        <option value="live" selected>Live</option>
+        <option value="replay">Replay</option>
+      </select>
+    </div>
+    <div class="topbar-group" id="liveControlsGroup">
+      <div class="tfield"><label>Seed</label><input id="seed" type="number" value="1"></div>
+      <div class="tfield"><label>Seeds</label><input id="seedCount" type="number" value="1"></div>
+      <div class="tfield"><label>Ticks</label><input id="ticks" type="number" value="2000"></div>
+      <div class="tfield">
+        <label>Faults</label>
+        <select id="faultProfile">
+          <option value="none">none</option>
+          <option value="mobility">mobility</option>
+          <option value="communication">communication</option>
+          <option value="resource">resource</option>
+          <option value="combined">combined</option>
+          <option value="random" selected>random</option>
         </select>
-        <button type="button" id="startMissionBtn" onclick="startBoardMission()" disabled
-                title="Sends START, then runs the mission: the laptop sends the world and the clock, the boards run the teams, and Live Ops shows what the boards report (uses the Seed, Ticks and Fault profile fields below)"
-                style="margin-left:8px;padding:2px 10px;font-size:12px;">Start board mission</button>
       </div>
+      <div class="tfield"><label>Delay ms</label><input id="tickDelay" type="number" value="150"></div>
+      <div class="tfield"><label title="Per-link loss probability on the virtual peer bus (--vbus-loss). Blank uses the simulator's own default.">Link loss</label><input id="linkLoss" type="number" step="0.01" min="0" max="1" placeholder="default"></div>
+      <button type="button" id="liveBtn" class="topbar-btn" onclick="runLive()" title="Start a live, tick-by-tick simulator run">▶ Live</button>
+      <button type="button" id="pauseLiveBtn" onclick="pauseLive()" class="topbar-btn hidden" title="Pause the live run (SIGSTOP - world state is frozen, not lost)">⏸ Pause</button>
+      <button type="button" id="resumeLiveBtn" onclick="resumeLive()" class="topbar-btn hidden" title="Resume the paused run">▶ Resume</button>
+      <button type="button" id="stopLiveBtn" onclick="stopLive()" class="topbar-btn hidden" style="background:var(--bad);color:#fff;">■ Stop</button>
+      <span class="tstat hidden" id="runStateWrap"><span class="tstat-label">State</span><span class="tstat-value" id="runStateLabel">–</span></span>
+      <button type="button" id="runBtn" class="topbar-btn" onclick="runSimulation()" style="background:var(--accent);color:#04150a;border:none;font-weight:600;">Batch</button>
     </div>
-    <div style="text-align: right;">
-      <div class="sub" id="lastRunLine"></div>
-      <button type="button" onclick="exitDashboard()" style="background: none; border: none; color: var(--bad); cursor: pointer; font-size: 12px; margin-top: 4px; padding: 0;">Disconnect / Exit</button>
+    <div class="topbar-group hidden" id="replayControlsGroup">
+      <div class="tfield">
+        <label>Recording</label>
+        <select id="replaySelect" style="min-width:260px;"></select>
+      </div>
+      <button type="button" id="replayLoadBtn" class="topbar-btn" onclick="Replay.loadSelected()">Load</button>
+      <button type="button" id="replayRefreshBtn" class="topbar-btn" onclick="Replay.refreshList()" title="Refresh the recordings list">↻</button>
+      <button type="button" id="replayPlayBtn" class="topbar-btn hidden" onclick="Replay.togglePlay()">▶ Play</button>
+      <div class="tfield hidden" id="replaySpeedField">
+        <label>Speed</label>
+        <select id="replaySpeed" onchange="Replay.setSpeed(parseFloat(this.value))">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+          <option value="8">8×</option>
+        </select>
+      </div>
+      <button type="button" id="replayJumpBtn" class="topbar-btn hidden" onclick="Replay.jumpToNextDetection()" title="Jump to the next tick where any team goes ELEVATED or degraded">⏭ Next detection</button>
+      <span class="tstat hidden" id="replayStateWrap"><span class="tstat-label">State</span><span class="tstat-value" id="replayStateLabel">–</span></span>
     </div>
-  </header>
+    <div class="topbar-stats">
+      <span class="tstat"><span class="tstat-label">Tick</span><span class="tstat-value" id="topbarTick">–</span></span>
+      <span class="tstat"><span class="tstat-label">Resolved</span><span class="tstat-value" id="topbarResolved">–</span></span>
+      <span class="tstat" title="Per-receiver loss: dropped / (delivered + dropped), from vbus_get_stats()"><span class="tstat-label">Radio loss</span><span class="tstat-value" id="topbarLoss">–</span></span>
+    </div>
+    <div class="topbar-actions">
+      <button type="button" id="themeToggleBtn" class="topbar-btn" onclick="DashboardTheme.toggle()">☀️ Light</button>
+      <button type="button" onclick="exitDashboard()" class="topbar-btn" style="background:none;border:none;color:var(--bad);">Disconnect / Exit</button>
+    </div>
+  </div>
+  <div class="sub hidden" id="replayScrubBar" style="padding:4px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+    <span id="replayTickLabel" style="font-size:11px;color:var(--muted);white-space:nowrap;">tick 0 / 0</span>
+    <input type="range" id="replayScrubber" min="0" max="0" value="0" style="flex:1;" oninput="Replay.seekToIndex(parseInt(this.value, 10))">
+    <span style="font-size:11px;color:var(--muted);white-space:nowrap;">Replay — switch to Live to reassign tasks</span>
+  </div>
+  <div class="sub hidden" id="boardMissionBar" style="padding:4px 20px;border-bottom:1px solid var(--border);">
+    <span id="boardMissionText">Waiting for board handshake…</span>
+    <select id="boardMissionSpeed" title="Mission pace. Real time is one tick per 36 s, as in a real deployment."
+            style="margin-left:8px;font-size:12px;">
+      <option value="1">Real time (36 s/tick)</option>
+      <option value="10">10× (3.6 s/tick)</option>
+      <option value="60">60× (0.6 s/tick)</option>
+    </select>
+    <button type="button" id="startMissionBtn" onclick="startBoardMission()" disabled
+            title="Sends START, then runs the mission: the laptop sends the world and the clock, the boards run the teams, and Live Ops shows what the boards report (uses the Seed, Ticks and Fault profile fields below)"
+            style="margin-left:8px;padding:2px 10px;font-size:12px;">Start board mission</button>
+  </div>
 
   <div class="layout">
     <nav>
-      <button type="button" class="tab-btn active" data-tab="live">Live Ops</button>
-      <button type="button" class="tab-btn" data-tab="overview">Overview</button>
-      <button type="button" class="tab-btn" data-tab="journal">Incident Journal</button>
-      <button type="button" class="tab-btn" data-tab="recovery">Recovery / Rest</button>
-      <button type="button" class="tab-btn" data-tab="telemetry">Telemetry</button>
-      <button type="button" class="tab-btn" data-tab="raw">Raw Output</button>
-      <button type="button" class="tab-btn" data-tab="history">Run History</button>
+      <button type="button" class="tab-btn active" data-tab="live" title="Live Ops"><span class="nav-icon">📡</span><span>Live</span></button>
+      <button type="button" class="tab-btn" data-tab="overview" title="Overview"><span class="nav-icon">📊</span><span>Overview</span></button>
+      <button type="button" class="tab-btn" data-tab="journal" title="Incident Journal"><span class="nav-icon">📓</span><span>Journal</span></button>
+      <button type="button" class="tab-btn" data-tab="recovery" title="Recovery / Rest"><span class="nav-icon">🛌</span><span>Rest</span></button>
+      <button type="button" class="tab-btn" data-tab="telemetry" title="Telemetry"><span class="nav-icon">📈</span><span>Telem</span></button>
+      <button type="button" class="tab-btn" data-tab="raw" title="Raw Output"><span class="nav-icon">🧾</span><span>Raw</span></button>
+      <button type="button" class="tab-btn" data-tab="history" title="Run History"><span class="nav-icon">🕘</span><span>History</span></button>
     </nav>
 
     <main>
-      <div class="panel">
-        <h2>Run Simulation</h2>
-        <div class="run-form">
-          <div class="field"><label>Seed</label><input id="seed" type="number" value="1"></div>
-          <div class="field"><label>Seed count</label><input id="seedCount" type="number" value="1"></div>
-          <div class="field"><label>Ticks</label><input id="ticks" type="number" value="2000"></div>
-          <div class="field">
-            <label>Fault profile</label>
-            <select id="faultProfile">
-              <option value="none">none</option>
-              <option value="mobility">mobility</option>
-              <option value="communication">communication</option>
-              <option value="resource">resource</option>
-              <option value="combined">combined</option>
-              <option value="random">random</option>
-            </select>
-          </div>
-          <div class="field"><label>Tick delay (ms)</label><input id="tickDelay" type="number" value="150"></div>
-          <button type="button" id="liveBtn" onclick="runLive()">Start Live</button>
-          <button type="button" id="runBtn" onclick="runSimulation()" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);">Run Full Speed (batch)</button>
-          <button type="button" id="stopLiveBtn" onclick="stopLive()" class="hidden" style="background:var(--bad);color:#fff;">Stop</button>
-        </div>
-      </div>
 
       <!-- LIVE OPS TAB -->
       <div class="tab-content" id="tab-live">
-        <div class="grid2" style="align-items:start;">
-          <div class="panel">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-              <h2 style="margin:0;">Region Map (36×36)</h2>
-              <button type="button" id="fogToggleBtn" onclick="toggleFogView()"
-                      style="background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:5px 10px;font-size:11.5px;cursor:pointer;">
-                🔍 God mode (all tasks visible)
-              </button>
+        <div class="live-main-row">
+          <div class="panel live-map-col">
+            <div class="live-map-header">
+              <h2>Region Map (36×36) <span id="liveTickLabel" style="color:var(--muted);font-weight:400;text-transform:none;font-size:11px;">no run yet</span></h2>
+              <div style="display:flex;gap:6px;flex-wrap:nowrap;">
+                <button type="button" id="resetViewBtn" class="map-toolbar-btn" title="Recenter and re-fit the pan/zoom">↺</button>
+                <button type="button" id="fogToggleBtn" onclick="toggleFogView()" class="map-toolbar-btn" title="Toggle god mode / operator (fog-of-war) view">🔍 God mode</button>
+              </div>
             </div>
-            <div id="liveTickLabel" class="sub" style="color:var(--muted);font-size:12px;margin-bottom:8px;">no run yet</div>
-            <canvas id="mapCanvas" width="560" height="560" style="width:100%;max-width:560px;background:#05080c;border-radius:6px;cursor:pointer;"></canvas>
-            <div id="mapInspector" style="margin-top:10px;padding:10px 12px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-size:12.5px;line-height:1.7;min-height:20px;">
-              <span style="color:var(--muted);">click a marker to inspect it</span>
+            <div class="live-map-canvas-area">
+              <div class="live-map-square">
+                <canvas id="mapCanvas" style="width:100%;height:100%;display:block;background:#05080c;border-radius:6px;cursor:grab;"></canvas>
+                <div id="mapTooltip" class="map-tooltip"></div>
+              </div>
             </div>
-            <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--muted);">
-              <span><span style="display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span> Critical incident</span>
-              <span><span style="display:inline-block;width:9px;height:9px;background:#8b98a5;vertical-align:-1px;"></span> Lower priority</span>
-              <span style="margin-left:10px;">◎ ring = resting</span>
-              <span style="margin-left:10px;"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;vertical-align:-1px;"></span> Safe zone</span>
-              <span style="margin-left:10px;">🔥 fire &nbsp; ☢ gas leak</span>
-              <span style="margin-left:10px;"><span style="display:inline-block;width:9px;height:9px;background:rgba(248,81,73,.3);vertical-align:-1px;"></span> damaged building</span>
-              <span style="margin-left:10px;"><span style="display:inline-block;width:9px;height:9px;background:rgba(248,81,73,.28);vertical-align:-1px;"></span> blocked road</span>
-              <span style="margin-left:10px;">- - epicenter</span>
-              <span style="margin-left:10px;">click a team or incident marker for details, drag a team onto an incident to propose reassignment</span>
+            <div class="live-map-legend">
+              <span>Incidents (colour=priority, size=victims):</span>
+              <span style="margin-left:5px;display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span> P1
+              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;background:#d29922;vertical-align:-1px;"></span> P2
+              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;background:#39c5cf;vertical-align:-1px;"></span> P3
+              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;background:#8b98a5;vertical-align:-1px;"></span> P4
+              <span style="margin-left:6px;display:inline-flex;align-items:center;justify-content:center;width:11px;height:11px;background:#1f6feb;color:#fff;border-radius:50%;font-size:8px;vertical-align:-2px;">2</span> shared building
+              <span style="margin-left:6px;display:inline-flex;align-items:center;justify-content:center;width:11px;height:11px;background:#0d1117;border-radius:50%;font-size:8px;vertical-align:-2px;">🔥</span> hazard (click/hover any marker for detail)
+              <span style="margin-left:10px;display:inline-block;width:6px;height:6px;background:rgba(139,152,165,0.7);border-radius:50%;vertical-align:0px;"></span> building (outline on hover/click or zoomed in)
+              <span style="margin-left:10px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(63,185,80,0.9);border-radius:50%;vertical-align:-1px;"></span> available
+              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(88,166,255,0.9);border-radius:50%;vertical-align:-1px;"></span> en route
+              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(210,153,34,0.9);border-radius:50%;vertical-align:-1px;"></span> on scene
+              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px dashed rgba(139,152,165,0.9);border-radius:50%;vertical-align:-1px;"></span> resting
+              <span style="margin-left:6px;display:inline-block;width:6px;height:6px;background:#f85149;border-radius:50%;vertical-align:0px;"></span> fault
+              <span style="margin-left:6px;display:inline-block;width:7px;height:7px;background:#a371f7;transform:rotate(45deg);vertical-align:0px;"></span> manual override
+              <span style="margin-left:8px;"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;vertical-align:-1px;"></span> safe zone</span>
+              <span style="margin-left:8px;display:inline-block;width:12px;height:9px;background:rgba(158,178,207,0.7);vertical-align:-1px;"></span> road (brighter = arterial)
+              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(6,9,13,0.9),rgba(6,9,13,0.9) 2px,rgba(230,237,243,0.4) 2px,rgba(230,237,243,0.4) 3px);vertical-align:-1px;"></span> blocked/rubble
+              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;border:1px dashed rgba(248,81,73,0.75);vertical-align:-1px;position:relative;">&#10005;</span> road blocked
+              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(210,153,34,0.15),rgba(210,153,34,0.15) 2px,rgba(210,153,34,0.5) 2px,rgba(210,153,34,0.5) 3px);vertical-align:-1px;"></span> hazard zone
+              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:rgba(56,139,253,0.5);vertical-align:-1px;"></span> flood/water
+              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;border-left:1px solid rgba(230,237,243,0.5);vertical-align:-1px;"></span> district border
+              <span style="margin-left:8px;">- - <span style="color:#a371f7;">epicenter</span></span>
+              <span style="margin-left:8px;" id="dragHintText">drag to pan · wheel to zoom · drag a team onto an incident to reassign</span>
             </div>
           </div>
-          <div class="panel">
-            <h2>Team Status</h2>
-            <table id="liveTeamTable">
-              <thead><tr><th>Team</th><th>Status</th><th>Stamina</th><th>Pos</th><th>Fault</th><th>Hours</th><th title="Ticks since status last changed">PAR</th></tr></thead>
-              <tbody></tbody>
-            </table>
-            <h2 style="margin-top:18px;">Active Incidents (<span id="liveIncidentCount">0</span>)</h2>
-            <div style="max-height:260px;overflow-y:auto;">
-              <table id="liveIncidentTable">
-                <thead><tr><th>ID</th><th>Priority</th><th>Pos</th><th>Status</th><th>Assigned</th><th>Victims</th></tr></thead>
-                <tbody></tbody>
-              </table>
+          <div class="panel live-side-col">
+            <div class="live-side-tabs">
+              <button type="button" class="side-tab-btn active" data-sidetab="network">Network</button>
+              <button type="button" class="side-tab-btn" data-sidetab="teams">Teams</button>
+              <button type="button" class="side-tab-btn" data-sidetab="incidents">Incidents</button>
             </div>
-            <div id="liveStatsRow" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);"></div>
+            <div class="live-side-content">
+              <div class="side-tab-panel" id="sidetab-network">
+                <div class="network-legend">
+                  9 peers judge each team from its radio beacons; ELEVATED needs 3 or more to agree.
+                  <span class="tier-key">
+                    <span class="tier-dot" style="background:#8b98a5;"></span>NONE
+                    <span class="tier-dot" style="background:#d29922;"></span>LOCAL
+                    <span class="tier-dot" style="background:#f85149;"></span>ELEVATED
+                    <span>⚡ fast-path</span>
+                  </span>
+                </div>
+                <div class="network-ring-area">
+                  <canvas id="consensusCanvas" style="width:100%;height:100%;display:block;"></canvas>
+                </div>
+                <!-- Selected-team/incident/safezone card. Still called
+                     #mapInspector (unchanged id - see renderInspector()
+                     in the inline script) so every existing click/drag
+                     handler that already targets it keeps working; only
+                     its position (now inside the Network tab, not a
+                     shared strip above all three tabs) and its team-
+                     specific markup changed. -->
+                <div id="mapInspector" class="team-card">
+                  <span style="color:#8b98a5;">click a marker to inspect it</span>
+                </div>
+                <div id="overrideBox" class="override-box hidden"></div>
+              </div>
+              <div class="side-tab-panel hidden" id="sidetab-teams">
+                <table id="liveTeamTable">
+                  <thead><tr><th>Team</th><th>Status</th><th>Stamina</th><th>Fault<br><span style="font-weight:400;text-transform:none;font-size:9px;">(injected)</span></th><th title="Ticks since status last changed">PAR</th><th>Mob</th><th>Comm</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="side-tab-panel hidden" id="sidetab-incidents">
+                <div style="margin-bottom:6px;font-size:11px;color:var(--muted);">Active Incidents (<span id="liveIncidentCount">0</span>)</div>
+                <div style="overflow-x:auto;">
+                  <table id="liveIncidentTable" style="min-width:0;white-space:nowrap;">
+                    <thead><tr><th>ID</th><th>Priority</th><th>Pos</th><th>Status</th><th>Assigned</th><th>Victims</th><th>Floor</th></tr></thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-        <div class="panel" style="margin-top:14px;">
-          <h2>Live Throughput (updates as the run happens — cumulative, sim-authoritative counters)</h2>
-          <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
-            Streamed from every tick, not the end-of-run summary. Reconciled against the final
-            diagnostics when the run completes — a mismatch there is shown, not hidden.
-          </p>
-          <div class="chart-wrap"><canvas id="liveThroughputChart"></canvas></div>
+
+        <div class="panel live-timeline-panel">
+          <div class="live-timeline-header">
+            <h2>Detection Timeline</h2>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div id="timelineLegend" style="font-size:9.5px;color:var(--muted);"></div>
+              <span id="timelineRange" style="font-size:9.5px;color:var(--muted);white-space:nowrap;"></span>
+            </div>
+          </div>
+          <div class="live-timeline-canvas-wrap">
+            <canvas id="timelineCanvas" style="width:100%;height:100%;display:block;cursor:pointer;"></canvas>
+          </div>
         </div>
       </div>
 
@@ -308,6 +586,25 @@
             collapse before Medical takes over) — use this one to see who's actually doing work.
           </p>
           <div class="chart-wrap"><canvas id="throughputChart"></canvas></div>
+        </div>
+        <div class="panel">
+          <h2>Live Throughput (updates as the run happens — cumulative, sim-authoritative counters)</h2>
+          <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
+            Streamed from every tick, not the end-of-run summary. Reconciled against the final
+            diagnostics when the run completes — a mismatch there is shown, not hidden. Moved here
+            from the Live Ops tab so that tab fits on one screen; still updates live while a run streams.
+          </p>
+          <div class="chart-wrap"><canvas id="liveThroughputChart"></canvas></div>
+        </div>
+        <div class="panel">
+          <h2>Radio (virtual peer bus)</h2>
+          <p class="sub" style="color:var(--muted);font-size:12px;margin-top:-6px;">
+            Cumulative counters from vbus_get_stats(), reported once per tick. Moved here from Live Ops,
+            which only needs the per-receiver loss % (shown in its topbar) - full stats live here where
+            there's room. "Channel busy %" is the average share of each tick's 36s of mission time the
+            radio spent transmitting, over the whole run so far - not an instantaneous reading.
+          </p>
+          <div id="overviewRadioPanelBody"><span style="color:var(--muted);">no run yet</span></div>
         </div>
       </div>
 
@@ -326,6 +623,7 @@
               <option value="all">All events</option>
               <option value="status">Status changes only</option>
               <option value="rest">Rest cycles only</option>
+              <option value="override">Manual overrides only</option>
             </select>
             <span id="journalCount" style="font-size:11px;color:var(--muted);margin-left:auto;"></span>
           </div>
@@ -399,6 +697,19 @@
   </div>
 </div>
 
+<!-- Dashboard rework (Part 1): plain scripts, no build step, no CDN -
+     vendored under static/dashboard/ alongside chart.umd.min.js above.
+     Loaded before the inline script below so every DashboardX global
+     they define exists by the time that script's functions run. -->
+<script src="/static/dashboard/camera.js"></script>
+<script src="/static/dashboard/selection.js"></script>
+<script src="/static/dashboard/map-render.js"></script>
+<script src="/static/dashboard/consensus-network.js"></script>
+<script src="/static/dashboard/timeline.js"></script>
+<script src="/static/dashboard/panels.js"></script>
+<script src="/static/dashboard/theme.js"></script>
+<script src="/static/dashboard/replay.js"></script>
+
 <script>
 /* --- STARTUP GATE LOGIC --- */
 function showScreen(screenId) {
@@ -430,6 +741,7 @@ async function connectHardware() {
       showScreen('main-dashboard');
       checkStatus().catch(console.error);
       loadHistory().catch(console.error);
+      resizeMapCanvas();
       drawGrid();
     } else {
       err.innerText = data.message || "Connection failed. Check USB port.";
@@ -449,6 +761,7 @@ function enterSimulationMode() {
     showScreen('main-dashboard');
     checkStatus().catch(console.error);
     loadHistory().catch(console.error);
+    resizeMapCanvas();
     drawGrid();
   } catch(e) {
     console.error("Failed transitioning to dashboard:", e);
@@ -533,9 +846,13 @@ let boardMissionAbort = null;
 async function followBoardMission() {
   if (boardMissionAbort) boardMissionAbort.abort();
   boardMissionAbort = new AbortController();
+  liveRunMode = "board";
   showTab("live");
+  resizeMapCanvas();
   drawGrid();
   telemetryReset();
+  ConsensusNetwork.reset();
+  DetectionTimeline.reset();
   let lastChartRenderMs = 0;
   try {
     const resp = await fetch('/api/board/mission/stream', { signal: boardMissionAbort.signal });
@@ -557,6 +874,8 @@ async function followBoardMission() {
           const accepted = telemetryProcessFrame(msg.frame);
           drawFrame(msg.frame);
           updateLiveTables(msg.frame);
+          ConsensusNetwork.update(msg.frame);
+          DetectionTimeline.update(msg.frame);
           if (accepted && performance.now() - lastChartRenderMs >= 75) {
             renderLiveCharts();
             lastChartRenderMs = performance.now();
@@ -650,11 +969,123 @@ function createSimulationTelemetry() {
 
 let simTelemetry = createSimulationTelemetry();
 
+// Same reason as setReplayStaticEnvironment() above: replay.js can't
+// reach the `let simTelemetry` binding directly. Unlike the live SSE
+// path's telemetryProcessFrame() (which only ever moves forward one
+// tick at a time), replay.js recomputes both of these fresh for
+// whatever frame index it just rendered - forward OR backward - from
+// the full recording it already has in memory, so this setter only
+// ever needs to merge in already-correct values, never derive them.
+function replaySyncTelemetry(cumulativePatch, lastChangeTickPatch) {
+  Object.assign(simTelemetry.cumulative, cumulativePatch || {});
+  Object.assign(simTelemetry.par.lastChangeTick, lastChangeTickPatch || {});
+}
+
 function telemetryReset() {
   simTelemetry = createSimulationTelemetry();
   simTelemetry.running = true;
   staticEnvironment = null;
+  terrainMap = null;
+  liveOverrideEvents = [];
+  window._overridePhase = {};
   destroyChart("liveThroughputChart");
+}
+
+// Part 4: every sim-mode override sent/applied/rejected/cleared, tick-
+// stamped and merged into the Incident Journal (renderJournalTab()
+// below seeds from this too, so nothing collected mid-run is lost once
+// the run ends and that function rebuilds window._journalEvents from
+// the final diag dump). Kept as its own array rather than pushed
+// straight into window._journalEvents because that variable doesn't
+// exist yet the first time an override can happen (renderJournalTab()
+// only runs once, at the end of the run).
+let liveOverrideEvents = [];
+
+function logOverrideEvent(tick, teamId, kind, pillCls, label, detail) {
+  const evt = { tick, team: teamId, kind, pillCls, label, detail };
+  liveOverrideEvents.push(evt);
+  window._journalEvents = (window._journalEvents || []).concat([evt]).sort((a, b) => a.tick - b.tick);
+  const filterEl = document.getElementById("journalFilter");
+  if (filterEl) renderJournalRows();
+}
+
+// Part 4: the override row shown in a team's card (side panel or map
+// hover/click card, both call this with their own release-button id).
+// Reads window._overridePhase (updateOverridePhases() below) rather
+// than the raw LIVEFRAME override flag directly, since "pending" and
+// "committed" render differently: pending still has something to
+// release (a Release button); committed has nothing left to do but
+// wait for resolved/interrupted, so no button.
+function overrideRowHTML(teamId, releaseBtnId) {
+  const phase = window._overridePhase && window._overridePhase[teamId];
+  if (!phase) return "";
+  if (phase.kind === "pending") {
+    return `<div style="margin-top:4px;display:flex;align-items:center;justify-content:space-between;">
+        <span style="color:#a371f7;">◆ Override (pending) → Incident #${phase.incidentId}</span>
+        <button id="${releaseBtnId}" data-team-id="${teamId}" class="override-btn cancel" style="font-size:11px;padding:2px 8px;">Release</button>
+      </div>`;
+  }
+  return `<div style="margin-top:4px;">
+      <span style="color:#a371f7;">◇ Override → committed (Incident #${phase.incidentId})</span>
+    </div>`;
+}
+
+// Part 4: tracks each team's manual-override lifecycle across ticks -
+// pinned -> committed -> resolved (or interrupted) - see core/debug.h's
+// protocol doc for the same lifecycle from the sim's side. No new wire
+// state: this is entirely derived, client-side, from fields LIVEFRAME
+// already carries every tick (team.override/override_incident_id/
+// has_dest/dest_id, and the matching incident's own status/
+// assigned_team). window._overridePhase[teamId] is {kind: "pending" |
+// "committed", incidentId}, or absent once there's nothing to show.
+// Read by MapRender.drawTeams() (the map badge: filled while pending,
+// outline once committed) and by renderTeamCard()/buildTeamCardHTML()
+// (the team card row) - both just read the current phase, this
+// function is the only thing that ever writes it or logs its
+// transitions to the journal.
+function updateOverridePhases(frame) {
+  window._overridePhase = window._overridePhase || {};
+  for (const t of frame.teams) {
+    const phase = window._overridePhase[t.id];
+    const specName = SPEC_NAMES[t.id % SPEC_NAMES.length] || "team";
+
+    if (t.override === 1) {
+      window._overridePhase[t.id] = { kind: "pending", incidentId: t.override_incident_id };
+      continue;
+    }
+
+    if (!phase) continue;
+
+    if (phase.kind === "pending") {
+      if (t.has_dest === 1 && t.dest_id === phase.incidentId) {
+        window._overridePhase[t.id] = { kind: "committed", incidentId: phase.incidentId };
+        logOverrideEvent(frame.tick, t.id, "override", "good", "Override committed",
+          `${specName} #${t.id} committed to Incident ${phase.incidentId}`);
+      } else {
+        // The pin cleared without ever committing to the incident it
+        // was pinned to (unexpected given cbba_apply_override_pin()'s
+        // own contract) - drop the phase rather than show a stale
+        // "pending" badge forever.
+        delete window._overridePhase[t.id];
+      }
+      continue;
+    }
+
+    // phase.kind === "committed": still on the same incident, or done.
+    if (t.has_dest === 1 && t.dest_id === phase.incidentId) continue;
+
+    const inc = frame.incidents.find((i) => i.id === phase.incidentId);
+    const resolved = !inc || inc.status === 3;
+    delete window._overridePhase[t.id];
+    if (resolved) {
+      logOverrideEvent(frame.tick, t.id, "override", "good", "Incident resolved",
+        `Incident ${phase.incidentId} resolved (${specName} #${t.id} had been committed to it)`);
+    } else {
+      logOverrideEvent(frame.tick, t.id, "override", "bad", "Interrupted (resting) — incident reopened",
+        `${specName} #${t.id} was pulled off Incident ${phase.incidentId}. The override is over - `
+        + "drag again to re-pin.");
+    }
+  }
 }
 
 function telemetryProcessFrame(frame) {
@@ -735,16 +1166,32 @@ function showTab(name) {
 }
 document.querySelectorAll(".tab-btn").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
 
+// Live Ops right panel's own Network/Teams/Incidents sub-tabs (layout
+// rework: these used to be three always-visible panels stacked below
+// the map; a team/incident selection opens its compact inspector in
+// the space above these, inside the same right-hand column). Hiding a
+// sub-panel is a plain classList toggle, same pattern as showTab()
+// above - the consensus network and detection timeline canvases each
+// already watch their own size with a ResizeObserver (see
+// static/dashboard/consensus-network.js / timeline.js), so switching
+// back to "network" after it was display:none picks up the right
+// size on its own; no extra resize call needed here.
+function showSideTab(name) {
+  document.querySelectorAll(".side-tab-panel").forEach(el => el.classList.add("hidden"));
+  document.getElementById("sidetab-" + name).classList.remove("hidden");
+  document.querySelectorAll(".side-tab-btn").forEach(b => b.classList.toggle("active", b.dataset.sidetab === name));
+}
+document.querySelectorAll(".side-tab-btn").forEach(b => b.addEventListener("click", () => showSideTab(b.dataset.sidetab)));
+
 async function checkStatus() {
+  // Used to also print "<project dir> · Makefile: found · binary: built"
+  // into #statusLine - dropped per the UI pass that folded the header
+  // into the topbar (that line was the one the project owner asked to
+  // remove). The request itself is kept (cheap backend reachability
+  // check + still available for anything that wants d.binary_exists
+  // etc. later) but no longer writes the filesystem path anywhere.
   try {
-    const r = await fetch("/api/status");
-    const d = await r.json();
-    let currentStatus = document.getElementById("statusLine").innerHTML;
-    // Don't overwrite the connection status if we are hardware connected
-    if (!currentStatus.includes("Connected to")) {
-      document.getElementById("statusLine").textContent =
-        `${d.project_dir}  ·  Makefile: ${d.makefile_found ? "found" : "NOT FOUND"}  ·  binary: ${d.binary_exists ? "built" : "not built yet"}`;
-    }
+    await fetch("/api/status");
   } catch (e) {
     console.error("Backend check failed.");
   }
@@ -770,7 +1217,8 @@ function renderHistory(rows) {
     tbody.appendChild(tr);
   });
   if (rows.length) {
-    document.getElementById("lastRunLine").textContent = `last run: ${rows[0].timestamp}`;
+    const el = document.getElementById("lastRunLine");
+    if (el) el.textContent = `last run: ${rows[0].timestamp}`;
   }
 }
 
@@ -925,8 +1373,11 @@ function renderJournalTab(diag) {
     });
   });
 
-  events.sort((a, b) => a.tick - b.tick);
-  window._journalEvents = events;
+  // Merged with liveOverrideEvents (Part 4) rather than replaced by
+  // `events` alone - those were collected DURING the run, before this
+  // function (which only runs once, at the end, off the final diag
+  // dump) ever existed to hold them.
+  window._journalEvents = events.concat(liveOverrideEvents).sort((a, b) => a.tick - b.tick);
 
   document.getElementById("journalFilter").onchange = () => renderJournalRows();
   renderJournalRows();
@@ -944,7 +1395,7 @@ function renderJournalRows() {
   filtered.forEach(e => {
     const tr = document.createElement("tr");
     const specName = SPEC_NAMES[e.team % SPEC_NAMES.length] || "team";
-    const pillCls = e.kind === "rest" ? "good" : "";
+    const pillCls = e.pillCls !== undefined ? e.pillCls : (e.kind === "rest" ? "good" : "");
     tr.innerHTML = `
       <td>${e.tick}</td>
       <td><span style="color:${TEAM_COLORS[e.team % TEAM_COLORS.length]}">●</span> ${specName} #${e.team}</td>
@@ -1047,171 +1498,231 @@ function renderTelemetryTab(telemetry) {
 // ---------- Live Ops ----------
 const GRID_N = 36;
 const mapCanvas = document.getElementById("mapCanvas");
-const mapCtx = mapCanvas.getContext("2d");
-const CELL = 560 / GRID_N; 
 let liveAbortController = null;
 let liveIncidentsById = {};
 
 const STATUS_NAMES = ["AVAILABLE", "EN_ROUTE", "ON_SCENE", "RESTING"];
 const SPEC_NAMES = ["Search", "Medical", "Extraction", "Perimeter", "Support"];
-const PRIORITY_COLORS = { 1: "#f85149", 2: "#d29922", 3: "#58a6ff", 4: "#8b98a5" };
+// Kept in sync with map-render.js's own PRIORITY_COLORS (this file can't
+// reach into that module's closure to share the constant directly) - red
+// stays reserved for P1, and P3 gets its own teal rather than the blue
+// the map uses for flood cells.
+const PRIORITY_COLORS = { 1: "#f85149", 2: "#d29922", 3: "#39c5cf", 4: "#8b98a5" };
 const INCIDENT_STATUS_NAMES = ["OPEN", "ASSIGNED", "IN_PROGRESS", "RESOLVED"];
+// Mirrors core/mission_state.h's incident_type enum order.
+const INCIDENT_TYPE_NAMES = [
+  "Structural collapse", "Confined space", "Mass casualty", "Chemical exposure",
+  "Unsearched sector", "Survivor signal", "Gas leak", "Active fire",
+  "Equipment cache", "Return to safe zone", "Evacuee offboard",
+];
 
-function drawGrid() {
-  if(!mapCtx) return;
-  mapCtx.strokeStyle = "#182028";
-  mapCtx.lineWidth = 1;
-  for (let i = 0; i <= GRID_N; i++) {
-    mapCtx.beginPath(); mapCtx.moveTo(i * CELL, 0); mapCtx.lineTo(i * CELL, 560); mapCtx.stroke();
-    mapCtx.beginPath(); mapCtx.moveTo(0, i * CELL); mapCtx.lineTo(560, i * CELL); mapCtx.stroke();
-  }
+// The camera owns every world<->screen conversion for the map (see
+// static/dashboard/camera.js) - pan, zoom-to-cursor and a "reset view"
+// all just mutate this one object, and every draw/hit-test call below
+// reads it instead of a fixed pixels-per-cell constant. Rotation is
+// fixed at 0 for now; the camera is built so adding it later doesn't
+// touch this file (see camera.js's header comment).
+const mapCamera = DashboardCamera.createCamera(GRID_N, GRID_N);
+let mapCtx = null;
+
+function resizeMapCanvas() {
+  const dims = DashboardCamera.resizeCanvasForDPI(mapCanvas);
+  mapCtx = dims.ctx;
+  mapCamera.setViewSize(dims.width, dims.height);
+}
+resizeMapCanvas();
+if (window.ResizeObserver) {
+  new ResizeObserver(() => {
+    resizeMapCanvas();
+    if (window._lastFrame) drawFrame(window._lastFrame, true);
+  }).observe(mapCanvas);
 }
 
-let mapHitTargets = []; 
-let selectedMarker = null; 
-let staticEnvironment = null; 
+function drawGrid() {
+  if (!mapCtx) return;
+  MapRender.drawGrid(mapCtx, mapCamera, GRID_N);
+}
+
+let mapHitTargets = [];
+let selectedMarker = null;
+let staticEnvironment = null;
+let terrainMap = null; // Part 3: latest STATICMAP payload, or null before one has arrived
+
+// replay.js is a separate script file, so it can't assign this `let`
+// binding directly - a top-level let/const in a classic script creates
+// a binding in the script's own scope, not a `window.staticEnvironment`
+// property the way a var/function declaration would (function
+// declarations, like this one, DO become window properties, which is
+// exactly why this setter works as the bridge).
+function setReplayStaticEnvironment(env) { staticEnvironment = env; }
+function setReplayTerrainMap(map) { terrainMap = map; }
 
 function drawFrame(frame, skipInspector) {
-  window._lastFrame = frame; 
-  mapCtx.clearRect(0, 0, 560, 560);
+  window._lastFrame = frame;
+  updateOverridePhases(frame);
+  if (!mapCtx) return;
+  mapCtx.clearRect(0, 0, mapCamera.state.viewW, mapCamera.state.viewH);
+  MapRender.drawTerrain(mapCtx, mapCamera, terrainMap);
   drawGrid();
   mapHitTargets = [];
 
-  if (staticEnvironment && staticEnvironment.buildings) {
-    staticEnvironment.buildings.forEach(b => {
-      const w = Math.max(1, b.w) * CELL * 0.9;
-      const h = Math.max(1, b.h) * CELL * 0.9;
-      const damageFrac = Math.min(1, b.damage / 255);
-      mapCtx.fillStyle = damageFrac > 0.15 ? `rgba(248,81,73,${0.08 + damageFrac * 0.35})` : "rgba(139,152,165,0.06)";
-      mapCtx.strokeStyle = damageFrac > 0.5 ? "rgba(248,81,73,0.55)" : "rgba(139,152,165,0.18)";
-      mapCtx.lineWidth = 1;
-      mapCtx.fillRect(b.x * CELL - w / 2, b.y * CELL - h / 2, w, h);
-      mapCtx.strokeRect(b.x * CELL - w / 2, b.y * CELL - h / 2, w, h);
-    });
-    if (staticEnvironment.epicenter && staticEnvironment.epicenter.active) {
-      const ep = staticEnvironment.epicenter;
-      mapCtx.beginPath();
-      mapCtx.arc(ep.x * CELL, ep.y * CELL, CELL * 1.2, 0, Math.PI * 2);
-      mapCtx.strokeStyle = "rgba(248,81,73,0.35)";
-      mapCtx.lineWidth = 1.5;
-      mapCtx.setLineDash([4, 3]);
-      mapCtx.stroke();
-      mapCtx.setLineDash([]);
-    }
+  // An incident card open on the map (see mapCardBuildingId/showMapCard)
+  // forces that one building's footprint outline open too, regardless of
+  // zoom - drawBuildings() itself decides everything else about when a
+  // footprint shows.
+  MapRender.drawBuildings(mapCtx, mapCamera, staticEnvironment, { outlineBuildingId: mapCardBuildingId });
+  MapRender.drawEpicenter(mapCtx, mapCamera, staticEnvironment);
+  MapRender.drawHazardCells(mapCtx, mapCamera, frame.hazard_cells || []);
+  mapHitTargets.push(...MapRender.drawSafezones(mapCtx, mapCamera, frame.safezones));
+  // Operator view: hide anything the system itself hasn't discovered
+  // yet (mirrors team_can_accept_incident()'s fog-of-war gate in the
+  // allocator - an operator watching this board in real life would
+  // have no way to see a task before some team's sweep/on-scene radius
+  // reveals it). "discovered" defaults to 1 for tasks that were never
+  // part of fog-of-war (system tasks), so this only ever hides real
+  // undiscovered incidents.
+  mapHitTargets.push(...MapRender.drawIncidents(mapCtx, mapCamera, frame.incidents, { fogViewMode, selectedMarker, buildings: (staticEnvironment && staticEnvironment.buildings) || [] }));
+  mapHitTargets.push(...MapRender.drawTeams(mapCtx, mapCamera, frame.teams, { teamColors: TEAM_COLORS, selectedMarker }));
+
+  // Keep an open card's content (and position, for a moving team) live
+  // as new frames arrive, and close it if the marker it names is gone
+  // from this frame (e.g. a resolved incident) - see mapCardMarker's
+  // own comment.
+  if (mapCardMarker) {
+    const stillThere = mapHitTargets.find((h) => h.type === mapCardMarker.type && h.data.id === mapCardMarker.id);
+    if (stillThere) showMapCard(stillThere); else hideMapCard();
   }
-
-  (frame.hazard_cells || []).forEach(c => {
-    if (c.blocked) {
-      mapCtx.fillStyle = "rgba(248,81,73,0.28)";
-    } else if (c.hazard_flags) {
-      mapCtx.fillStyle = "rgba(210,153,34,0.20)";
-    } else {
-      mapCtx.fillStyle = "rgba(210,153,34,0.10)";
-    }
-    mapCtx.fillRect(c.x * CELL - CELL / 2, c.y * CELL - CELL / 2, CELL, CELL);
-  });
-
-  (frame.safezones || []).forEach(sz => {
-    if (sz.capacity === 0) return; 
-    const half = CELL * 0.42;
-    mapCtx.strokeStyle = "#3fb950";
-    mapCtx.lineWidth = 1.5;
-    mapCtx.strokeRect(sz.x * CELL - half, sz.y * CELL - half, half * 2, half * 2);
-    mapHitTargets.push({ type: "safezone", x: sz.x, y: sz.y, r: CELL * 0.5, data: sz });
-  });
-
-  const INCIDENT_ICONS = { 6: "\u2622", 7: "\uD83D\uDD25" }; 
-  frame.incidents.forEach(inc => {
-    if (inc.status === 3) return; 
-    // Operator view: hide anything the system itself hasn't discovered
-    // yet (mirrors team_can_accept_incident()'s fog-of-war gate in the
-    // allocator - an operator watching this board in real life would
-    // have no way to see a task before some team's sweep/on-scene radius
-    // reveals it). "discovered" defaults to 1 for tasks that were never
-    // part of fog-of-war (system tasks), so this only ever hides real
-    // undiscovered incidents.
-    if (fogViewMode === "operator" && inc.discovered === 0) return;
-    const color = PRIORITY_COLORS[inc.priority] || "#8b98a5";
-    const size = Math.min(CELL * 0.8, CELL * 0.35 + inc.victims * 0.8);
-    mapCtx.fillStyle = color;
-    mapCtx.globalAlpha = inc.status === 0 ? 1 : 0.55; 
-    mapCtx.fillRect(inc.x * CELL - size / 2, inc.y * CELL - size / 2, size, size);
-    mapCtx.globalAlpha = 1;
-    const icon = INCIDENT_ICONS[inc.type];
-    if (icon) {
-      mapCtx.font = `${Math.max(10, size * 0.9)}px sans-serif`;
-      mapCtx.textAlign = "center";
-      mapCtx.textBaseline = "middle";
-      mapCtx.fillText(icon, inc.x * CELL, inc.y * CELL - size / 2 - 7);
-    }
-    if (selectedMarker && selectedMarker.type === "incident" && selectedMarker.id === inc.id) {
-      mapCtx.strokeStyle = "#fff";
-      mapCtx.lineWidth = 2;
-      mapCtx.strokeRect(inc.x * CELL - size / 2 - 3, inc.y * CELL - size / 2 - 3, size + 6, size + 6);
-    }
-    mapHitTargets.push({ type: "incident", x: inc.x, y: inc.y, r: Math.max(size / 2, CELL * 0.4), data: inc });
-  });
-
-  frame.teams.forEach((t, i) => {
-    const color = TEAM_COLORS[i % TEAM_COLORS.length];
-    if (t.has_dest && (t.dest_x !== t.x || t.dest_y !== t.y)) {
-      mapCtx.beginPath();
-      mapCtx.moveTo(t.x * CELL, t.y * CELL);
-      mapCtx.lineTo(t.dest_x * CELL, t.dest_y * CELL);
-      mapCtx.strokeStyle = color;
-      mapCtx.globalAlpha = 0.35;
-      mapCtx.lineWidth = 1;
-      mapCtx.setLineDash([3, 3]);
-      mapCtx.stroke();
-      mapCtx.setLineDash([]);
-      mapCtx.globalAlpha = 1;
-    }
-    mapCtx.beginPath();
-    mapCtx.arc(t.x * CELL, t.y * CELL, CELL * 0.32, 0, Math.PI * 2);
-    mapCtx.fillStyle = color;
-    mapCtx.fill();
-    if (t.status === 3) { 
-      mapCtx.beginPath();
-      mapCtx.arc(t.x * CELL, t.y * CELL, CELL * 0.55, 0, Math.PI * 2);
-      mapCtx.strokeStyle = color;
-      mapCtx.lineWidth = 1.5;
-      mapCtx.stroke();
-    }
-    if (t.fault_mask) { 
-      mapCtx.beginPath();
-      mapCtx.arc(t.x * CELL + CELL * 0.35, t.y * CELL - CELL * 0.35, 3, 0, Math.PI * 2);
-      mapCtx.fillStyle = "#f85149";
-      mapCtx.fill();
-    }
-    if (selectedMarker && selectedMarker.type === "team" && selectedMarker.id === t.id) {
-      mapCtx.beginPath();
-      mapCtx.arc(t.x * CELL, t.y * CELL, CELL * 0.45, 0, Math.PI * 2);
-      mapCtx.strokeStyle = "#fff";
-      mapCtx.lineWidth = 2;
-      mapCtx.stroke();
-    }
-    mapHitTargets.push({ type: "team", x: t.x, y: t.y, r: CELL * 0.5, data: { ...t, i } });
-  });
 
   if (!skipInspector) renderInspector();
 }
 
+// Split in two (UI pass: the override box moved out of the shared
+// inspector into its own element, below the team card, in the space
+// the Radio panel used to occupy - see #overrideBox in index.html):
+// renderTeamCard() always shows whatever is selected (or a
+// placeholder); renderOverrideBox() shows only while a proposal or its
+// ack is in flight, independent of selection. renderInspector() is
+// kept as the one call site every existing handler already uses.
 function renderInspector() {
+  renderTeamCard();
+  renderOverrideBox();
+}
+
+function voteLine(label, triplet) {
+  if (!triplet) return `${label} n/a`;
+  return `${label} ${triplet[0]} fault · ${triplet[1]} clear · ${triplet[2]} abstain`;
+}
+
+// One incident's summary line, shared by the tooltip and the inspector
+// card - both for a single incident and for each member of a grouped
+// "N incidents in this building" marker (map-labels feedback: overlap
+// avoidance groups same-building incidents onto one marker, so their
+// individual detail has to live somewhere - here, and in the tooltip).
+function incidentSummaryLine(inc) {
+  const assignedText = (inc.assigned_team === undefined || inc.assigned_team === 255)
+    ? "unassigned"
+    : `assigned to ${SPEC_NAMES[inc.assigned_team % SPEC_NAMES.length] || "team"} #${inc.assigned_team}`;
+  const floorText = (inc.building_id !== undefined && inc.building_id >= 0) ? `, floor ${inc.floor}` : "";
+  const hazardText = INCIDENT_TYPE_NAMES[inc.type] ? `, ${INCIDENT_TYPE_NAMES[inc.type]}` : "";
+  return `Incident ${inc.id} — ${inc.victims} victims${floorText}${hazardText}, P${inc.priority}, ${assignedText}`;
+}
+
+function renderTeamCard() {
   const el = document.getElementById("mapInspector");
 
-  // An override result or in-progress status outranks the preview card:
-  // map redraws while waiting for the board's ack must not replace it.
+  if (!selectedMarker) { el.innerHTML = '<span style="color:#8b98a5;">click a marker to inspect it, or drag a team onto an incident to propose a reassignment</span>'; return; }
+  const hit = mapHitTargets.find(h => h.type === selectedMarker.type && h.data.id === selectedMarker.id);
+  if (!hit) { el.innerHTML = '<span style="color:#8b98a5;">marker no longer present this tick</span>'; return; }
+  const d = hit.data;
+
+  if (hit.type === "team") {
+    // Compact 2-row card (UI pass item 8): row 1 is identity + tier
+    // pills + live/dark counts, right-aligned; row 2 is the vote
+    // breakdown spelled out. Status/stamina/position/heading-to (the
+    // old richer text) aren't dropped information - they're on the
+    // map marker itself, its tooltip, and the Teams table - just not
+    // duplicated a third time here, which is what bought back the
+    // "~2 rows tall" card the override box needs room to sit under.
+    const tier = d.consensus_tier;
+    const mobBadge = DashboardPanels.tierBadge(tier ? tier[0] : undefined, "Mobility tier");
+    const commBadge = DashboardPanels.tierBadge(tier ? tier[1] : undefined, "Communication tier");
+    const pv = d.peer_votes;
+    const liveDark = pv ? `${pv.live} live · ${pv.dark} dark` : "n/a";
+    const taskText = d.has_dest
+      ? (d.dest_id !== undefined && d.dest_id !== 255 ? `heading to Incident #${d.dest_id}` : `heading to (${d.dest_x}, ${d.dest_y})`)
+      : "no active task";
+    // Colours are hardcoded (not var(--text)/var(--muted)) inside this
+    // card on purpose: it's a fixed dark "console" surface in both
+    // themes (see .team-card's own comment), and the CSS variables
+    // flip to light-theme values that go near-invisible on it.
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;">
+        <b>Team ${d.i}</b>
+        <span class="pill">${STATUS_NAMES[d.status] || d.status}</span>
+        ${mobBadge}
+        ${commBadge}
+        <span style="margin-left:auto;color:#8b98a5;font-size:11px;white-space:nowrap;">${liveDark}</span>
+      </div>
+      <div style="margin-top:4px;color:#8b98a5;">
+        Stamina ${d.stamina.toFixed(0)}% &nbsp; ${taskText}
+      </div>
+      <div style="margin-top:4px;color:#8b98a5;">
+        <b style="color:#e6edf3;">Votes</b>
+        &nbsp; ${voteLine("Mob", pv && pv.mob)} &nbsp;&nbsp; ${voteLine("Comm", pv && pv.comm)}
+      </div>
+      ${overrideRowHTML(d.i, "sidePanelOverrideReleaseBtn")}`;
+    if (window._overridePhase && window._overridePhase[d.i] && window._overridePhase[d.i].kind === "pending") {
+      const btn = document.getElementById("sidePanelOverrideReleaseBtn");
+      if (btn) btn.addEventListener("click", () => releaseLiveOverride(parseInt(btn.dataset.teamId, 10)));
+    }
+  } else if (hit.type === "incident") {
+    if (d.groupIncidents && d.groupIncidents.length > 1) {
+      // Grouped marker (map-labels feedback): one marker per building
+      // with more than one incident, so every member's detail has to
+      // be listed here rather than each drawing its own (overlapping)
+      // label on the map.
+      el.innerHTML = `<b>${d.groupIncidents.length} incidents</b>${d.building_id !== undefined && d.building_id >= 0 ? ` in Building #${d.building_id}` : ""}<br>` +
+        d.groupIncidents.map((inc) => {
+          const statusName = INCIDENT_STATUS_NAMES[inc.status] || inc.status;
+          return `<span class="pill ${inc.status === 0 ? 'bad' : 'good'}">${statusName}</span> ${incidentSummaryLine(inc)}`;
+        }).join("<br>");
+    } else {
+      const statusName = INCIDENT_STATUS_NAMES[d.status] || d.status;
+      const assignedText = d.assigned_team === 255 ? "unassigned" : `${SPEC_NAMES[d.assigned_team % SPEC_NAMES.length] || "team"} #${d.assigned_team}`;
+      const supportText = d.support_team !== undefined && d.support_team !== 255 ? `${SPEC_NAMES[d.support_team % SPEC_NAMES.length] || "team"} #${d.support_team}` : "none";
+      el.innerHTML = `<b>Incident #${d.id}</b> &nbsp; <span class="pill ${d.status === 0 ? 'bad' : 'good'}">${statusName}</span> &nbsp; Priority P${d.priority}<br>
+        Position: (${d.x}, ${d.y}) &nbsp; Victims: ${d.victims} &nbsp; Work remaining: ${d.work_remaining ?? "–"}${d.building_id !== undefined && d.building_id >= 0 ? ` &nbsp; Building #${d.building_id}, floor ${d.floor}` : ""}<br>
+        Hazard: ${INCIDENT_TYPE_NAMES[d.type] || d.type} &nbsp; Needs: ${SPEC_NAMES[d.req_capability % SPEC_NAMES.length] || d.req_capability} &nbsp; Assigned: ${assignedText} &nbsp; Support: ${supportText}`;
+    }
+  } else if (hit.type === "safezone") {
+    el.innerHTML = `<b>Safe Zone #${d.id}</b><br>
+      Position: (${d.x}, ${d.y}) &nbsp; Occupancy: ${d.evacuees} / ${d.capacity}`;
+  }
+}
+
+function renderOverrideBox() {
+  const box = document.getElementById("overrideBox");
+
+  // An override result or in-progress status outranks the preview card.
   if (overrideStatus) {
-    drawOverrideStatus(el);
+    box.classList.remove("hidden");
+    drawOverrideStatus(box);
     return;
   }
 
   if (pendingOverride) {
+    box.classList.remove("hidden");
     const p = pendingOverride;
     const specName = SPEC_NAMES[p.teamIndex % SPEC_NAMES.length] || "team";
-    el.innerHTML = `
+    // liveRunMode decides both the label AND, in confirmPendingOverride()
+    // below, which route this actually reaches (Part 4): "sim" posts to
+    // /api/run-live/override (laptop/debug.c's stdin-fed OVERRIDE line),
+    // "board" to /api/board/override (a real USART1 frame) - two
+    // independent paths, not one route with two labels.
+    const destText = liveRunMode === "board" ? "Sent to the board (USART1)." : "Applied in the simulator.";
+    box.innerHTML = `
       <div class="override-card">
-        <div class="override-title">⚠ Proposed Override — Preview Only</div>
+        <div class="override-title">⚠ Proposed Override</div>
         <div class="override-route">
           <span class="team-chip">${specName} #${p.teamIndex}</span>
           <span class="arrow">→</span>
@@ -1220,7 +1731,7 @@ function renderInspector() {
         <div style="font-size:11.5px;color:var(--muted);">
           (${p.from.x}, ${p.from.y}) &nbsp;→&nbsp; (${p.to.x}, ${p.to.y})
         </div>
-        <div class="override-note">Requires a connected, ready board (USART1) - confirming sends this straight to the board's mission-link layer.</div>
+        <div class="override-note">${destText}</div>
         <div class="override-actions">
           <button id="overrideConfirmBtn" class="override-btn confirm">Confirm</button>
           <button id="overrideCancelBtn" class="override-btn cancel">Cancel</button>
@@ -1231,102 +1742,107 @@ function renderInspector() {
     return;
   }
 
-  if (!selectedMarker) { el.innerHTML = '<span style="color:var(--muted);">click a marker to inspect it, or drag a team onto an incident to propose a reassignment</span>'; return; }
-  const hit = mapHitTargets.find(h => h.type === selectedMarker.type &&
-    (selectedMarker.type === "team" ? h.data.id === selectedMarker.id : h.data.id === selectedMarker.id));
-  if (!hit) { el.innerHTML = '<span style="color:var(--muted);">marker no longer present this tick</span>'; return; }
-  const d = hit.data;
-  if (hit.type === "team") {
-    const specName = SPEC_NAMES[d.i % SPEC_NAMES.length] || "team";
-    const statusName = STATUS_NAMES[d.status] || d.status;
-    const destText = d.has_dest
-      ? (d.dest_x === d.x && d.dest_y === d.y ? "on scene" : `(${d.dest_x}, ${d.dest_y}) — incident #${d.dest_id}`)
-      : "none (available)";
-    el.innerHTML = `<b>${specName} #${d.i}</b> &nbsp; <span class="pill ${d.status === 3 ? 'bad' : 'good'}">${statusName}</span><br>
-      Position: (${d.x}, ${d.y}) &nbsp; Stamina: ${d.stamina.toFixed(1)}% &nbsp; Hours worked: ${d.hours}<br>
-      Heading to: ${destText}<br>
-      Fault: ${d.fault_mask ? '<span class="pill bad">active (mask ' + d.fault_mask + ')</span>' : 'none'}
-      &nbsp; Degraded: ${d.degraded ? 'yes' : 'no'}<br>
-      <span style="color:var(--muted);font-size:11px;">drag this marker onto an incident to propose reassigning it</span>`;
-  } else if (hit.type === "incident") {
-    const statusName = INCIDENT_STATUS_NAMES[d.status] || d.status;
-    const assignedText = d.assigned_team === 255 ? "unassigned" : `${SPEC_NAMES[d.assigned_team % SPEC_NAMES.length] || "team"} #${d.assigned_team}`;
-    const supportText = d.support_team !== undefined && d.support_team !== 255 ? `${SPEC_NAMES[d.support_team % SPEC_NAMES.length] || "team"} #${d.support_team}` : "none";
-    el.innerHTML = `<b>Incident #${d.id}</b> &nbsp; <span class="pill ${d.status === 0 ? 'bad' : 'good'}">${statusName}</span> &nbsp; Priority P${d.priority}<br>
-      Position: (${d.x}, ${d.y}) &nbsp; Victims: ${d.victims} &nbsp; Work remaining: ${d.work_remaining ?? "–"}${d.building_id !== undefined && d.building_id >= 0 ? ` &nbsp; Building #${d.building_id}, floor ${d.floor}` : ""}<br>
-      Needs: ${SPEC_NAMES[d.req_capability % SPEC_NAMES.length] || d.req_capability} &nbsp; Assigned: ${assignedText} &nbsp; Support: ${supportText}`;
-  } else if (hit.type === "safezone") {
-    el.innerHTML = `<b>Safe Zone #${d.id}</b><br>
-      Position: (${d.x}, ${d.y}) &nbsp; Occupancy: ${d.evacuees} / ${d.capacity}`;
-  }
+  box.classList.add("hidden");
+  box.innerHTML = "";
+}
+
+// Screen point (CSS px, relative to the canvas box) for a mouse event -
+// the one place mouse events get converted before anything touches the
+// camera, so every handler below works in the same coordinate space
+// the camera's screenToWorld()/worldToScreen() use.
+function screenPointFromEvent(evt) {
+  const rect = mapCanvas.getBoundingClientRect();
+  return { sx: evt.clientX - rect.left, sy: evt.clientY - rect.top };
+}
+
+function hitTestAt(sx, sy, typeFilter) {
+  return MapRender.hitTestWorld(mapCamera, mapHitTargets, sx, sy, typeFilter);
 }
 
 function handleMapClick(evt) {
-  const rect = mapCanvas.getBoundingClientRect();
-  const scaleX = 560 / rect.width;
-  const scaleY = 560 / rect.height;
-  const px = (evt.clientX - rect.left) * scaleX;
-  const py = (evt.clientY - rect.top) * scaleY;
-  let best = null, bestDist = Infinity;
-  for (const hit of mapHitTargets) {
-    const dx = hit.x * CELL - px, dy = hit.y * CELL - py;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist <= hit.r && dist < bestDist) { best = hit; bestDist = dist; }
-  }
-  if (best) {
-    selectedMarker = { type: best.type, id: best.data.id };
-  } else {
-    selectedMarker = null;
-  }
+  if (suppressNextClick) { suppressNextClick = false; return; }
+  const { sx, sy } = screenPointFromEvent(evt);
+  const best = hitTestAt(sx, sy);
+  selectedMarker = best ? { type: best.type, id: best.data.id } : null;
+  if (window.DashboardSelection) DashboardSelection.set(selectedMarker);
   renderInspector();
+  // A click on a marker pins its card open the same as a hover would;
+  // a click on empty space is the one thing that actually closes it.
+  if (best) showMapCard(best); else hideMapCard();
+  if (window._lastFrame) drawFrame(window._lastFrame, true);
 }
 
-let dragState = null; 
-let pendingOverride = null; 
+let dragState = null; // {mode:"team"|"pan", ...} while a mouse-down drag is in progress
+let pendingOverride = null;
 let overrideStatus = null; // {title, detail, withOk} while an override status card is showing
-
-function mapCanvasCoords(evt) {
-  const rect = mapCanvas.getBoundingClientRect();
-  return {
-    px: (evt.clientX - rect.left) * (560 / rect.width),
-    py: (evt.clientY - rect.top) * (560 / rect.height),
-  };
-}
-
-function hitTestAt(px, py, typeFilter) {
-  let best = null, bestDist = Infinity;
-  for (const hit of mapHitTargets) {
-    if (typeFilter && hit.type !== typeFilter) continue;
-    const dx = hit.x * CELL - px, dy = hit.y * CELL - py;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist <= hit.r && dist < bestDist) { best = hit; bestDist = dist; }
-  }
-  return best;
-}
+let suppressNextClick = false; // set when a pan drag just ended, so the trailing click doesn't clear the selection
 
 function handleMapMouseDown(evt) {
-  const { px, py } = mapCanvasCoords(evt);
-  const hit = hitTestAt(px, py, "team");
-  if (!hit) return; 
-  dragState = { teamHit: hit, startPx: px, startPy: py, curPx: px, curPy: py };
+  const { sx, sy } = screenPointFromEvent(evt);
+  // Replay mode (Part 2): team markers aren't draggable - dragging one
+  // pans the camera instead, same as dragging empty space. Selection
+  // (click, not drag) is untouched, and Replay itself uses the same
+  // core code no reassignment would ever reach in this mode.
+  const replayBlocksTeamDrag = window.Replay && window.Replay.isActive();
+  const teamHit = replayBlocksTeamDrag ? null : hitTestAt(sx, sy, "team");
+  if (teamHit) {
+    dragState = { mode: "team", teamHit, startSx: sx, startSy: sy, curSx: sx, curSy: sy };
+  } else {
+    // Empty space (or a non-team marker): drag pans the camera rather
+    // than proposing a reassignment.
+    dragState = { mode: "pan", startSx: sx, startSy: sy, curSx: sx, curSy: sy, moved: false };
+  }
   mapCanvas.style.cursor = "grabbing";
 }
 
 function handleMapMouseMove(evt) {
-  if (!dragState) return;
-  const { px, py } = mapCanvasCoords(evt);
-  dragState.curPx = px;
-  dragState.curPy = py;
-  drawDragOverlay();
+  const { sx, sy } = screenPointFromEvent(evt);
+  if (dragState) {
+    if (dragState.mode === "pan") {
+      mapCamera.pan(sx - dragState.curSx, sy - dragState.curSy);
+      if (Math.hypot(sx - dragState.startSx, sy - dragState.startSy) > 3) dragState.moved = true;
+      dragState.curSx = sx; dragState.curSy = sy;
+      if (window._lastFrame) drawFrame(window._lastFrame, true);
+    } else {
+      dragState.curSx = sx; dragState.curSy = sy;
+      drawDragOverlay();
+    }
+    hideMapCard();
+    return;
+  }
+  const hit = hitTestAt(sx, sy);
+  // Only shows on an actual hit - moving onto empty space does NOT hide
+  // whatever card is already open (see mapCardMarker's own comment);
+  // only a click on empty space or the marker itself disappearing does.
+  if (hit) showMapCard(hit);
+}
+
+// System tasks (pool 1 - sector sweeps, equipment runs, etc.) are not
+// valid manual-override targets: core/cbba.c's own pin-validation
+// (cbba_apply_override_pin(), shared by both the board and sim
+// override paths) only ever looks in g_incidents, so a team pinned to
+// one would silently self-clear a tick later if it were ever applied.
+// laptop/debug.c's sim-mode validation already rejects this with
+// reason "system_task" as a backstop, but the drag-drop UI shouldn't
+// offer or highlight one as a droppable target in the first place.
+function isValidOverrideDropTarget(hit) {
+  return !!(hit && hit.data && hit.data.pool !== 1);
 }
 
 function handleMapMouseUp(evt) {
   if (!dragState) return;
-  const { px, py } = mapCanvasCoords(evt);
-  const dropHit = hitTestAt(px, py, "incident");
-  const movedFarEnough = Math.hypot(px - dragState.startPx, py - dragState.startPy) > CELL * 0.6;
+  const { sx, sy } = screenPointFromEvent(evt);
+  if (dragState.mode === "pan") {
+    if (dragState.moved) suppressNextClick = true;
+    dragState = null;
+    mapCanvas.style.cursor = "grab";
+    return;
+  }
 
-  if (dropHit && movedFarEnough && dropHit.data.id !== dragState.teamHit.data.dest_id) {
+  const dropHit = hitTestAt(sx, sy, "incident");
+  const movedFarEnough = mapCamera.pxToWorldLength(Math.hypot(sx - dragState.startSx, sy - dragState.startSy)) > 0.5;
+
+  if (isValidOverrideDropTarget(dropHit) && movedFarEnough && dropHit.data.id !== dragState.teamHit.data.dest_id) {
     pendingOverride = {
       team: dragState.teamHit.data,
       teamIndex: dragState.teamHit.data.i,
@@ -1334,33 +1850,224 @@ function handleMapMouseUp(evt) {
       to: dropHit.data,
     };
     selectedMarker = { type: "team", id: dragState.teamHit.data.id };
+    // The override box only lives in the Network sub-tab - switch to
+    // it so a proposal made while looking at Teams/Incidents is
+    // actually seen, not silently built on a hidden tab.
+    const activeSideTab = document.querySelector(".side-tab-btn.active");
+    if (activeSideTab && activeSideTab.dataset.sidetab !== "network") showSideTab("network");
   }
   dragState = null;
-  mapCanvas.style.cursor = "default";
+  mapCanvas.style.cursor = "grab";
   renderInspector();
+}
+
+function handleMapWheel(evt) {
+  evt.preventDefault();
+  const { sx, sy } = screenPointFromEvent(evt);
+  const factor = evt.deltaY < 0 ? 1.12 : 1 / 1.12;
+  mapCamera.zoomAt(sx, sy, factor);
+  if (window._lastFrame) drawFrame(window._lastFrame, true);
+}
+
+const INCIDENT_ICONS_LOCAL = { 6: "☢", 7: "🔥" }; // mirrors map-render.js's INCIDENT_ICONS - that file's module scope isn't reachable from here
+
+function mapCardRow(label, value) {
+  return `<div class="map-card-row"><span class="map-card-label">${label}</span><span class="map-card-value">${value}</span></div>`;
+}
+
+function staminaBarHTML(stamina) {
+  const pct = Math.max(0, Math.min(100, stamina));
+  const color = pct > 50 ? "#3fb950" : pct > 20 ? "#d29922" : "#f85149";
+  return `<span style="display:inline-flex;align-items:center;gap:6px;">` +
+    `<span style="width:46px;height:6px;background:rgba(139,152,165,0.25);border-radius:3px;overflow:hidden;display:inline-block;">` +
+    `<span style="display:block;width:${pct.toFixed(0)}%;height:100%;background:${color};"></span></span>${pct.toFixed(0)}%</span>`;
+}
+
+function buildTeamCardHTML(d) {
+  const specName = SPEC_NAMES[d.i % SPEC_NAMES.length] || "team";
+  const teamColor = TEAM_COLORS[d.i % TEAM_COLORS.length] || "#8b98a5";
+  const tierName = (v) => ({ "-1": "n/a", 0: "NONE", 1: "LOCAL", 2: "ELEVATED" })[String(v)] || "n/a";
+  const tier = d.consensus_tier || [-1, -1];
+  const taskText = d.has_dest
+    ? (d.dest_id !== undefined && d.dest_id !== 255 ? `Incident #${d.dest_id}` : `(${d.dest_x}, ${d.dest_y})`)
+    : "none";
+  const FAULT_CLASSES_LOCAL = [
+    { bit: 0, name: "Mobility" }, { bit: 1, name: "Communication" }, { bit: 2, name: "Resource" },
+    { bit: 3, name: "Environment" }, { bit: 4, name: "Mission" },
+  ];
+  const activeFaults = FAULT_CLASSES_LOCAL.filter((c) => (d.fault_mask || 0) & (1 << c.bit)).map((c) => c.name);
+  let html = `<div class="map-card-header" style="color:${teamColor};">${specName} #${d.i}</div>` +
+    mapCardRow("Status", STATUS_NAMES[d.status] || d.status) +
+    mapCardRow("Stamina", staminaBarHTML(d.stamina)) +
+    mapCardRow("Task", taskText) +
+    mapCardRow("Mobility tier", tierName(tier[0])) +
+    mapCardRow("Comm tier", tierName(tier[1]));
+  if (activeFaults.length) html += mapCardRow("Injected fault (ground truth)", activeFaults.join(", "));
+  const overridePhase = window._overridePhase && window._overridePhase[d.i];
+  if (overridePhase && overridePhase.kind === "pending") {
+    html += mapCardRow("Override (pending)", `→ Incident #${overridePhase.incidentId}`);
+    // pointer-events:auto overrides .map-tooltip's own pointer-events:none
+    // (that's there so the card never blocks clicking the canvas under a
+    // hover-only card) - a real button inside it needs to stay clickable.
+    html += `<div style="margin-top:6px;text-align:right;">
+      <button id="liveOverrideReleaseBtn" data-team-id="${d.i}" class="override-btn cancel" style="font-size:11px;padding:3px 8px;pointer-events:auto;">Release</button>
+    </div>`;
+  } else if (overridePhase && overridePhase.kind === "committed") {
+    html += mapCardRow("Override → committed", `Incident #${overridePhase.incidentId}`);
+  }
+  return html;
+}
+
+function buildIncidentCardHTML(d) {
+  const priorityColor = PRIORITY_COLORS[d.priority] || "#8b98a5";
+  const priorityLabel = { 1: "critical", 2: "high", 3: "moderate", 4: "low" }[d.priority] || "";
+  const hazardIcon = INCIDENT_ICONS_LOCAL[d.type] || "";
+  const hazardName = INCIDENT_TYPE_NAMES[d.type] || `type ${d.type}`;
+  const assignedText = (d.assigned_team === undefined || d.assigned_team === 255) ? "unassigned" : `${SPEC_NAMES[d.assigned_team % SPEC_NAMES.length] || "team"} #${d.assigned_team}`;
+  const supportText = (d.support_team === undefined || d.support_team === 255) ? "none" : `${SPEC_NAMES[d.support_team % SPEC_NAMES.length] || "team"} #${d.support_team}`;
+  return `<div class="map-card-header" style="color:${priorityColor};">Incident ${d.id} · P${d.priority} ${priorityLabel}</div>` +
+    mapCardRow("Victims", d.victims) +
+    mapCardRow("Building", (d.building_id !== undefined && d.building_id >= 0) ? `#${d.building_id}, floor ${d.floor}` : "none") +
+    mapCardRow("Hazard", `${hazardIcon} ${hazardName}`.trim()) +
+    mapCardRow("Status", INCIDENT_STATUS_NAMES[d.status] || d.status) +
+    mapCardRow("Assigned", assignedText) +
+    mapCardRow("Support", supportText) +
+    mapCardRow("Work remaining", d.work_remaining ?? "–") +
+    mapCardRow("Discovered", d.discovered ? "yes" : "no");
+}
+
+function buildIncidentGroupCardHTML(d) {
+  // Members are already sorted worst-priority-first by map-render.js's
+  // drawIncidents() clustering, so this list is too - no re-sort needed.
+  const rows = d.groupIncidents.map((inc) => {
+    const pColor = PRIORITY_COLORS[inc.priority] || "#8b98a5";
+    const assignedText = (inc.assigned_team === undefined || inc.assigned_team === 255) ? "unassigned" : `${SPEC_NAMES[inc.assigned_team % SPEC_NAMES.length] || "team"} #${inc.assigned_team}`;
+    return `<div class="map-card-row">` +
+      `<span class="map-card-label" style="color:${pColor};font-weight:600;">P${inc.priority}</span>` +
+      `<span class="map-card-value">#${inc.id} · ${inc.victims}v · fl ${inc.floor} · ${assignedText}</span></div>`;
+  }).join("");
+  return `<div class="map-card-header">Building #${d.building_id} · ${d.groupIncidents.length} incidents</div>${rows}`;
+}
+
+function buildSafezoneCardHTML(d) {
+  return `<div class="map-card-header">Safe Zone #${d.id}</div>${mapCardRow("Occupancy", `${d.evacuees} / ${d.capacity}`)}`;
+}
+
+function buildMapCardHTML(hit) {
+  const d = hit.data;
+  if (hit.type === "team") return buildTeamCardHTML(d);
+  if (hit.type === "incident") return (d.groupIncidents && d.groupIncidents.length > 1) ? buildIncidentGroupCardHTML(d) : buildIncidentCardHTML(d);
+  if (hit.type === "safezone") return buildSafezoneCardHTML(d);
+  return "";
+}
+
+// Positioned off the marker's own screen point (not the raw cursor, so
+// a click - which has no meaningful drag position - anchors exactly
+// like a hover does), grown away from whichever quadrant of the map
+// the marker sits in so the card doesn't cover it, then clamped inside
+// the map's own box so it never runs off the edge.
+function positionMapCard(card, screenPt) {
+  const wrap = mapCanvas.parentElement.getBoundingClientRect();
+  const gap = 14;
+  const cardW = card.offsetWidth, cardH = card.offsetHeight;
+  let left = screenPt.x < wrap.width / 2 ? screenPt.x + gap : screenPt.x - gap - cardW;
+  let top = screenPt.y < wrap.height / 2 ? screenPt.y + gap : screenPt.y - gap - cardH;
+  left = Math.max(4, Math.min(left, wrap.width - cardW - 4));
+  top = Math.max(4, Math.min(top, wrap.height - cardH - 4));
+  card.style.left = `${Math.round(left)}px`;
+  card.style.top = `${Math.round(top)}px`;
+}
+
+// The marker currently shown in the floating card (hover OR click), if
+// any - drawFrame() re-shows it every tick so the card's content (team
+// stamina, incident status, ...) stays live while it's open, and hides
+// it once the marker it names is no longer in the current frame (e.g.
+// a resolved incident). Trackpad-friendly by design: showing a card
+// this way does NOT get cleared just because the mouse later hovers
+// empty space - only a click elsewhere (handleMapClick) or the marker
+// disappearing closes it (see file header discussion this was written
+// in response to).
+let mapCardMarker = null;
+// Set alongside mapCardMarker whenever the open card is a building-
+// linked incident, so drawFrame() can force that one building's
+// footprint outline open for as long as the card stays up (map
+// simplification's item 8: "outline the footprint while the card is
+// open").
+let mapCardBuildingId = null;
+
+function showMapCard(hit) {
+  const card = document.getElementById("mapTooltip");
+  if (!card || !hit) return;
+  card.innerHTML = buildMapCardHTML(hit);
+  card.style.display = "block";
+  positionMapCard(card, mapCamera.worldToScreen(hit.wx, hit.wy));
+  mapCardMarker = { type: hit.type, id: hit.data.id };
+  const d = hit.data;
+  mapCardBuildingId = (hit.type === "incident" && d.building_id !== undefined && d.building_id >= 0) ? d.building_id : null;
+  const releaseBtn = document.getElementById("liveOverrideReleaseBtn");
+  if (releaseBtn) {
+    releaseBtn.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      releaseLiveOverride(parseInt(releaseBtn.dataset.teamId, 10));
+    });
+  }
+}
+
+function hideMapCard() {
+  const card = document.getElementById("mapTooltip");
+  if (card) card.style.display = "none";
+  mapCardMarker = null;
+  mapCardBuildingId = null;
 }
 
 mapCanvas.addEventListener("click", handleMapClick);
 mapCanvas.addEventListener("mousedown", handleMapMouseDown);
 mapCanvas.addEventListener("mousemove", handleMapMouseMove);
-window.addEventListener("mouseup", handleMapMouseUp); 
+mapCanvas.addEventListener("wheel", handleMapWheel, { passive: false });
+window.addEventListener("mouseup", handleMapMouseUp);
+
+const resetViewBtnEl = document.getElementById("resetViewBtn");
+if (resetViewBtnEl) {
+  resetViewBtnEl.addEventListener("click", () => {
+    mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH);
+    if (window._lastFrame) drawFrame(window._lastFrame, true);
+  });
+}
+
+// Cross-panel selection: the consensus network ring and the detection
+// timeline both broadcast through DashboardSelection when clicked, so
+// the map (whose selectedMarker stays the source of truth for its own
+// click/drag code above) picks the change up here instead of each new
+// panel reaching into the map's internals directly.
+if (window.DashboardSelection) {
+  DashboardSelection.subscribe((sel) => {
+    const same = selectedMarker && sel && selectedMarker.type === sel.type && selectedMarker.id === sel.id;
+    const bothNull = !selectedMarker && !sel;
+    if (same || bothNull) return;
+    selectedMarker = sel;
+    renderInspector();
+    if (window._lastFrame) drawFrame(window._lastFrame, true);
+  });
+}
 
 function drawDragOverlay() {
-  if (!window._lastFrame || !dragState) return;
+  if (!window._lastFrame || !dragState || dragState.mode !== "team") return;
   drawFrame(window._lastFrame, true);
 
   mapCtx.beginPath();
-  mapCtx.moveTo(dragState.startPx, dragState.startPy);
-  mapCtx.lineTo(dragState.curPx, dragState.curPy);
-  mapCtx.strokeStyle = "#d29922"; 
+  mapCtx.moveTo(dragState.startSx, dragState.startSy);
+  mapCtx.lineTo(dragState.curSx, dragState.curSy);
+  mapCtx.strokeStyle = "#d29922";
   mapCtx.lineWidth = 2;
   mapCtx.setLineDash([5, 4]);
   mapCtx.stroke();
   mapCtx.setLineDash([]);
-  const dropHit = hitTestAt(dragState.curPx, dragState.curPy, "incident");
-  if (dropHit) {
+  const dropHit = hitTestAt(dragState.curSx, dragState.curSy, "incident");
+  if (isValidOverrideDropTarget(dropHit)) {
+    const center = mapCamera.worldToScreen(dropHit.wx, dropHit.wy);
+    const r = dropHit.wr * mapCamera.state.zoom;
     mapCtx.beginPath();
-    mapCtx.arc(dropHit.x * CELL, dropHit.y * CELL, dropHit.r + 5, 0, Math.PI * 2);
+    mapCtx.arc(center.x, center.y, r + 5, 0, Math.PI * 2);
     mapCtx.strokeStyle = "#d29922";
     mapCtx.lineWidth = 2;
     mapCtx.stroke();
@@ -1402,7 +2109,9 @@ function drawOverrideStatus(el) {
 
 function showOverrideResult(title, detail, withOk) {
   overrideStatus = { title, detail, withOk };
-  drawOverrideStatus(document.getElementById("mapInspector"));
+  const box = document.getElementById("overrideBox");
+  box.classList.remove("hidden");
+  drawOverrideStatus(box);
 }
 
 function pollOverrideAck(teamId, incidentId) {
@@ -1426,8 +2135,105 @@ function pollOverrideAck(teamId, incidentId) {
     .catch((err) => showOverrideResult("⚠ Override Status Unknown", `Request error: ${err}`, true));
 }
 
+// Part 4: the sim-mode override this UI has in flight, if any - set
+// right before the POST, cleared once its matching `override_ack` SSE
+// event arrives (see handleLiveOverrideAck()). Matched by team_id only
+// (not incident_id too): a "Release" click's OVERRIDE_CLEAR ack echoes
+// back incident_id 0, which would never match a pending assign's real
+// incident id, and this UI only ever has one request in flight per
+// team at a time anyway (confirm/Release are themselves button clicks,
+// serialized by the user).
+window._pendingLiveOverride = null; // {teamId, kind: "assign" | "clear"}
+
+const LIVE_OVERRIDE_REASON_TEXT = {
+  bad_team: "The simulator doesn't recognize that team id.",
+  unknown_incident: "That incident no longer exists in the simulator.",
+  system_task: "That's a system task (a sector sweep, equipment run, etc.), not an incident a team can be manually pinned to.",
+  incident_finished: "That incident has already been resolved.",
+  team_unavailable: "The system currently has that team flagged (degraded, or a peer-consensus ELEVATED tier) - reassignment is blocked until that clears.",
+  stale_tick: "This request was built against a tick the simulator has already moved well past.",
+  future_tick: "This request's tick is ahead of the simulator's own current tick.",
+};
+
+function liveOverrideReasonText(reason) {
+  return LIVE_OVERRIDE_REASON_TEXT[reason] || reason || "Unknown reason";
+}
+
+// Belt-and-suspenders against the box being stuck on "Sent..."/"Sending..."
+// forever if an override_ack never arrives or never gets processed for any
+// reason (dropped SSE event, a client-side exception elsewhere, the sim
+// process dying mid-tick, ...): whatever the cause, the UI must recover on
+// its own rather than needing a page reload.
+function scheduleLiveOverrideFallback(teamId, kind) {
+  setTimeout(() => {
+    const pending = window._pendingLiveOverride;
+    if (pending && pending.teamId === teamId && pending.kind === kind) {
+      window._pendingLiveOverride = null;
+      showOverrideResult("⚠ No Response",
+        `Team ${teamId}: no response from the simulator - try again.`, true);
+    }
+  }, 3000);
+}
+
+// Handles an `override_ack` SSE event (laptop/debug.c's OVERRIDEACK
+// line, forwarded by app.py - see core/debug.h's doc for the full
+// reason list). Always logged to the Incident Journal regardless of
+// whether it matches something this UI is currently waiting on (a
+// stale retry, or an override sent before a page reload, is still
+// worth a record); the override box itself only updates for a match.
+function handleLiveOverrideAck(msg) {
+  const specName = SPEC_NAMES[msg.team_id % SPEC_NAMES.length] || "team";
+  const pending = window._pendingLiveOverride;
+  const isClear = !!(pending && pending.teamId === msg.team_id && pending.kind === "clear");
+  const applied = msg.result === "applied";
+
+  logOverrideEvent(msg.effective_tick, msg.team_id, "override", applied ? "good" : "bad",
+    applied
+      ? (isClear ? "Manual override released" : "Manual override applied")
+      : `Manual ${isClear ? "release" : "override"} rejected`,
+    applied
+      ? (isClear ? `${specName} #${msg.team_id} released from its pinned incident` : `${specName} #${msg.team_id} → Incident ${msg.incident_id}`)
+      : `${specName} #${msg.team_id} → Incident ${msg.incident_id}: ${liveOverrideReasonText(msg.reason)}`);
+
+  if (!pending || pending.teamId !== msg.team_id) return;
+  window._pendingLiveOverride = null;
+  if (applied) {
+    showOverrideResult(isClear ? "✓ Override Released" : "✓ Override Applied",
+      isClear ? `${specName} #${msg.team_id} released.` : `${specName} #${msg.team_id} → Incident ${msg.incident_id}: applied in the simulator.`,
+      true);
+  } else {
+    showOverrideResult("⚠ Override Rejected", `${specName} #${msg.team_id} → Incident ${msg.incident_id}: ${liveOverrideReasonText(msg.reason)}`, true);
+  }
+}
+
+// The "Release" button on an overridden team's card (map card and side
+// panel both call this - see buildTeamCardHTML()/renderTeamCard()).
+function releaseLiveOverride(teamId) {
+  window._pendingLiveOverride = { teamId, kind: "clear" };
+  scheduleLiveOverrideFallback(teamId, "clear");
+  fetch("/api/run-live/override/clear", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ team_id: teamId }),
+  })
+    .then((resp) => resp.json().then((body) => ({ ok: resp.ok, body })))
+    .then(({ ok, body }) => {
+      if (!ok) {
+        window._pendingLiveOverride = null;
+        showOverrideResult("⚠ Release Failed", (body && body.message) || "Unknown error", true);
+      }
+      // On success, nothing to show yet - the override_ack SSE event
+      // (handleLiveOverrideAck()) reports the real outcome.
+    })
+    .catch((err) => {
+      window._pendingLiveOverride = null;
+      showOverrideResult("⚠ Release Failed", `Request error: ${err}`, true);
+    });
+}
+
 function confirmPendingOverride() {
-  const el = document.getElementById("mapInspector");
+  const el = document.getElementById("overrideBox");
+  el.classList.remove("hidden");
   const p = pendingOverride;
   if (!p) return;
 
@@ -1439,12 +2245,51 @@ function confirmPendingOverride() {
   // message is exactly what this replaces: a real POST to the route
   // core/mission_link_override.h's pipeline doc describes (step 1-2),
   // which packs a MissionLinkOverride_t and writes it to the board's
-  // USART1 line - see tools/app.py's /api/board/override.
+  // USART1 line - see tools/app.py's /api/board/override. Part 4 adds
+  // a second, completely independent route for sim-live mode
+  // (/api/run-live/override, laptop/debug.c's stdin-fed OVERRIDE
+  // line) - liveRunMode decides which one this actually reaches, set
+  // by runLive() ("sim") vs the board-mission startup path ("board").
   el.innerHTML = `
     <div class="override-card">
       <div class="override-title">Sending override…</div>
       <div style="font-size:12.5px;color:var(--muted);">Team ${teamId} → Incident ${incidentId}</div>
     </div>`;
+
+  if (liveRunMode === "sim") {
+    window._pendingLiveOverride = { teamId, kind: "assign" };
+    scheduleLiveOverrideFallback(teamId, "assign");
+    fetch("/api/run-live/override", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ team_id: teamId, incident_id: incidentId }),
+    })
+      .then((resp) => resp.json().then((body) => ({ ok: resp.ok, body })))
+      .then(({ ok, body }) => {
+        if (!ok) {
+          window._pendingLiveOverride = null;
+          showOverrideResult("⚠ Override Failed", (body && body.message) || "Unknown error", true);
+          return;
+        }
+        // The POST only means the line was written to the simulator's
+        // stdin - wait for its own OVERRIDEACK (handleLiveOverrideAck()).
+        // Guarded on _pendingLiveOverride still being set for this team:
+        // that SSE event and this fetch's own success callback are two
+        // independent async chains with no ordering guarantee between
+        // them, so the ack can legitimately arrive and already resolve
+        // this (clearing _pendingLiveOverride) before this callback
+        // runs - showing "waiting" after the real outcome already
+        // landed would silently clobber it back to a stale state.
+        if (window._pendingLiveOverride && window._pendingLiveOverride.teamId === teamId) {
+          showOverrideResult("Sent to the simulator…", `Team ${teamId} → Incident ${incidentId}: waiting for the simulator to process it.`, false);
+        }
+      })
+      .catch((err) => {
+        window._pendingLiveOverride = null;
+        showOverrideResult("⚠ Override Failed", `Request error: ${err}`, true);
+      });
+    return;
+  }
 
   fetch("/api/board/override", {
     method: "POST",
@@ -1483,13 +2328,35 @@ function cancelPendingOverride() {
   renderInspector();
 }
 
+// Esc cancels a pending (not-yet-confirmed) override proposal - a fast
+// way out of an accidental drag-drop without hunting for the Cancel
+// button. Does nothing once a real request is in flight (overrideStatus
+// set): that has its own OK-button-gated acknowledgement flow instead,
+// since a request already sent to the board shouldn't look cancel-able.
+window.addEventListener("keydown", (evt) => {
+  if (evt.key === "Escape" && pendingOverride && !overrideStatus) {
+    cancelPendingOverride();
+  }
+});
+
+// Which run is currently feeding Live Ops - decides the override box's
+// destination sentence (see renderOverrideBox()) and nothing else;
+// board mission mode and simulator-only live runs already render
+// through the same drawFrame()/updateLiveTables() pipeline regardless
+// of this flag.
+let liveRunMode = "sim";
+
 function updateLiveTables(frame) {
   document.getElementById("liveTickLabel").textContent = `tick ${frame.tick}`;
+  DashboardPanels.updateTopBarStats("topbarTick", "topbarResolved", "topbarLoss", frame, simTelemetry);
 
   const tbody = document.querySelector("#liveTeamTable tbody");
   tbody.innerHTML = "";
+  const sel = window.DashboardSelection ? DashboardSelection.get() : selectedMarker;
   frame.teams.forEach((t, i) => {
     const tr = document.createElement("tr");
+    if (sel && sel.type === "team" && sel.id === t.id) tr.style.background = "var(--panel2)";
+    tr.style.cursor = "pointer";
     const statusName = STATUS_NAMES[t.status] || t.status;
     const lastChange = simTelemetry.par.lastChangeTick[i];
     const ticksSince = lastChange !== undefined ? frame.tick - lastChange : 0;
@@ -1497,14 +2364,26 @@ function updateLiveTables(frame) {
     const parCell = isStale
       ? `<span class="pill bad" title="No status change in ${ticksSince} ticks">⚠ ${ticksSince}t</span>`
       : `<span style="color:var(--muted);">${ticksSince}t</span>`;
+    const cc = DashboardPanels.teamConsensusCells(t);
+    // Pos, Hours and Votes were dropped from this table (UI pass item
+    // 6, "no horizontal scrolling"): position is already on the map,
+    // hours worked wasn't essential here, and the vote breakdown is
+    // spelled out in full in the selected-team card (Network tab)
+    // instead of duplicated in cramped monospace here.
     tr.innerHTML = `
       <td><span style="color:${TEAM_COLORS[i % TEAM_COLORS.length]}">●</span> ${SPEC_NAMES[i % SPEC_NAMES.length] || "team" + i} #${i}</td>
       <td><span class="pill ${t.status === 3 ? 'bad' : 'good'}">${statusName}</span></td>
       <td>${t.stamina.toFixed(1)}%</td>
-      <td>(${t.x}, ${t.y})</td>
       <td>${t.fault_mask ? '<span class="pill bad">FAULT</span>' : '–'}</td>
-      <td>${t.hours}</td>
-      <td>${parCell}</td>`;
+      <td>${parCell}</td>
+      <td>${cc.mobBadge}</td>
+      <td>${cc.commBadge}</td>`;
+    tr.addEventListener("click", () => {
+      selectedMarker = { type: "team", id: t.id };
+      if (window.DashboardSelection) DashboardSelection.set(selectedMarker);
+      renderInspector();
+      if (window._lastFrame) drawFrame(window._lastFrame, true);
+    });
     tbody.appendChild(tr);
   });
 
@@ -1518,20 +2397,121 @@ function updateLiveTables(frame) {
     .slice(0, 40)
     .forEach(inc => {
       const tr = document.createElement("tr");
+      tr.style.cursor = "pointer";
+      const floorText = (inc.building_id !== undefined && inc.building_id >= 0) ? inc.floor : "–";
       tr.innerHTML = `<td>${inc.id}</td><td>${PRIORITY_COLORS[inc.priority] ? `<span style="color:${PRIORITY_COLORS[inc.priority]}">P${inc.priority}</span>` : inc.priority}</td>
         <td>(${inc.x}, ${inc.y})</td><td>${INCIDENT_STATUS_NAMES[inc.status] || inc.status}</td>
-        <td>${inc.assigned_team === 255 ? "–" : (SPEC_NAMES[inc.assigned_team % SPEC_NAMES.length] || inc.assigned_team) + " #" + inc.assigned_team}</td><td>${inc.victims}</td>`;
+        <td>${inc.assigned_team === 255 ? "–" : (SPEC_NAMES[inc.assigned_team % SPEC_NAMES.length] || inc.assigned_team) + " #" + inc.assigned_team}</td><td>${inc.victims}</td><td>${floorText}</td>`;
+      tr.addEventListener("click", () => {
+        selectedMarker = { type: "incident", id: inc.id };
+        if (window.DashboardSelection) DashboardSelection.set(selectedMarker);
+        renderInspector();
+        if (window._lastFrame) drawFrame(window._lastFrame, true);
+      });
       itbody.appendChild(tr);
     });
+
+  // Radio panel moved to the Overview tab (UI pass item 5) - the
+  // per-receiver loss % in the topbar is what Live Ops itself needs;
+  // full stats (sent/delivered/dropped/channel-busy%) live where
+  // there's room to show them without a projector squinting.
+  DashboardPanels.updateRadioPanel("overviewRadioPanelBody", frame);
+}
+
+// Run state shown in the topbar (running / paused / finished) and the
+// Pause/Resume/Stop button visibility that goes with it. Kept as one
+// function so every place that changes the run's lifecycle (start,
+// pause, resume, done, stopped, errored) goes through the same rules
+// instead of each toggling buttons by hand - and so Part 2's replay
+// controls, which share this same topbar spot, have one clear place
+// to plug into rather than duplicating this logic.
+function setRunState(state) {
+  const wrap = document.getElementById("runStateWrap");
+  const label = document.getElementById("runStateLabel");
+  const pauseBtn = document.getElementById("pauseLiveBtn");
+  const resumeBtn = document.getElementById("resumeLiveBtn");
+  const stopBtn = document.getElementById("stopLiveBtn");
+  const liveBtn = document.getElementById("liveBtn");
+  label.textContent = state;
+  label.style.color = state === "paused" ? "var(--warn)" : state === "running" ? "var(--accent)" : "var(--muted)";
+  if (state === "idle") {
+    wrap.classList.add("hidden");
+    pauseBtn.classList.add("hidden");
+    resumeBtn.classList.add("hidden");
+    stopBtn.classList.add("hidden");
+    liveBtn.disabled = false;
+    return;
+  }
+  wrap.classList.remove("hidden");
+  pauseBtn.classList.toggle("hidden", state !== "running");
+  resumeBtn.classList.toggle("hidden", state !== "paused");
+  stopBtn.classList.toggle("hidden", state === "finished");
+  liveBtn.disabled = state === "running" || state === "paused";
+}
+
+// Live vs Replay (Part 2). Switching modes stops whichever one isn't
+// being switched to, so only one data source ever drives drawFrame()/
+// updateLiveTables() at a time - runLive()'s SSE loop and Replay's
+// playback loop are otherwise completely independent of each other.
+let dashboardMode = "live";
+function setDashboardMode(mode) {
+  dashboardMode = mode;
+  document.getElementById("liveControlsGroup").classList.toggle("hidden", mode === "replay");
+  document.getElementById("replayControlsGroup").classList.toggle("hidden", mode !== "replay");
+  const hint = document.getElementById("dragHintText");
+  if (hint) {
+    hint.textContent = mode === "replay"
+      ? "drag to pan · wheel to zoom · Replay — switch to Live to reassign tasks"
+      : "drag to pan · wheel to zoom · drag a team onto an incident to reassign";
+  }
+  if (mode === "replay") {
+    if (liveAbortController) stopLive();
+    Replay.refreshList();
+  } else {
+    Replay.stop();
+    document.getElementById("replayScrubBar").classList.add("hidden");
+  }
+}
+
+// Bug fix: pause/resume used to only ever update run-state on SUCCESS,
+// silently doing nothing on failure. If the server-side run had
+// already ended for any reason (natural completion, a crash, the
+// subprocess dying) before the button was clicked, the client stayed
+// on whatever stale state it last had (e.g. "paused") forever - Resume
+// stayed visible/clickable and every click just 409'd again, since
+// nothing ever told the UI the run was actually gone. Both functions
+// now resync the UI to "finished" on ANY failure (409 specifically
+// means "no live run in progress" - see _live_signal() in app.py - but
+// any other non-ok response gets the same treatment: the button state
+// must always follow the server's real state, never keep showing a
+// control for a run that isn't there).
+async function pauseLive() {
+  try {
+    const r = await fetch("/api/run-live/pause", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const body = await r.json();
+    if (body.ok) setRunState("paused");
+    else setRunState("finished");
+  } catch (e) { console.error("pause failed:", e); setRunState("finished"); }
+}
+
+async function resumeLive() {
+  try {
+    const r = await fetch("/api/run-live/resume", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const body = await r.json();
+    if (body.ok) setRunState("running");
+    else setRunState("finished");
+  } catch (e) { console.error("resume failed:", e); setRunState("finished"); }
 }
 
 async function runLive() {
-  const liveBtn = document.getElementById("liveBtn");
-  const stopBtn = document.getElementById("stopLiveBtn");
-  liveBtn.disabled = true;
-  stopBtn.classList.remove("hidden");
+  let liveEndedCleanly = false;
+  liveRunMode = "sim";
+  setRunState("running");
   showTab("live");
+  resizeMapCanvas();
   drawGrid();
+  ConsensusNetwork.reset();
+  DetectionTimeline.reset();
 
   const body = {
     seed: parseInt(document.getElementById("seed").value || "1"),
@@ -1564,50 +2544,76 @@ async function runLive() {
       buffer = parts.pop();
       for (const part of parts) {
         if (!part.startsWith("data: ")) continue;
-        const msg = JSON.parse(part.slice(6));
-        if (msg.type === "static_env") {
-          staticEnvironment = msg.env;
-        } else if (msg.type === "frame") {
-          const accepted = telemetryProcessFrame(msg.frame);
-          drawFrame(msg.frame); 
-          updateLiveTables(msg.frame);
-          if (accepted) {
-            const now = performance.now();
-            if (now - lastChartRenderMs >= CHART_RENDER_INTERVAL_MS) {
-              renderLiveCharts();
-              lastChartRenderMs = now;
+        // One malformed/unexpected SSE event must never kill this loop -
+        // that would silently stop ALL further frame/ack processing for
+        // the rest of the run (the tab would just look frozen, with
+        // nothing in the console since the exception is swallowed by
+        // this catch instead of propagating). Each event is handled in
+        // isolation; a bad one is logged and skipped.
+        try {
+          const msg = JSON.parse(part.slice(6));
+          if (msg.type === "static_env") {
+            staticEnvironment = msg.env;
+          } else if (msg.type === "static_map") {
+            terrainMap = msg.map;
+          } else if (msg.type === "frame") {
+            const accepted = telemetryProcessFrame(msg.frame);
+            drawFrame(msg.frame);
+            updateLiveTables(msg.frame);
+            ConsensusNetwork.update(msg.frame);
+            DetectionTimeline.update(msg.frame);
+            if (accepted) {
+              const now = performance.now();
+              if (now - lastChartRenderMs >= CHART_RENDER_INTERVAL_MS) {
+                renderLiveCharts();
+                lastChartRenderMs = now;
+              }
             }
+          } else if (msg.type === "done") {
+            liveEndedCleanly = true;
+            setRunState("finished");
+            renderLiveCharts();
+            const mismatches = telemetryFinalize(msg.diag);
+            renderRun({
+              elapsed_seconds: msg.elapsed_seconds, returncode: 0,
+              stdout_tail: "(live run — see tick-by-tick data in Live Ops tab)",
+              stderr_tail: "(live run — diag lines streamed during run)",
+              diag: msg.diag, telemetry: msg.telemetry,
+            });
+            renderHistory(msg.history);
+            let label = "  ·  run complete";
+            if (simTelemetry.gapCount > 0) label += `  ·  ${simTelemetry.gapCount} tick(s) dropped in transit`;
+            if (mismatches.length > 0) label += `  ·  reconciliation mismatch: ${mismatches.join(", ")}`;
+            document.getElementById("liveTickLabel").textContent += label;
+          } else if (msg.type === "override_ack") {
+            handleLiveOverrideAck(msg);
+          } else if (msg.type === "error") {
+            alert("Live run failed: " + msg.message + "\n" + (msg.log || ""));
           }
-        } else if (msg.type === "done") {
-          renderLiveCharts(); 
-          const mismatches = telemetryFinalize(msg.diag);
-          renderRun({
-            elapsed_seconds: msg.elapsed_seconds, returncode: 0,
-            stdout_tail: "(live run — see tick-by-tick data in Live Ops tab)",
-            stderr_tail: "(live run — diag lines streamed during run)",
-            diag: msg.diag, telemetry: msg.telemetry,
-          });
-          renderHistory(msg.history);
-          let label = "  ·  run complete";
-          if (simTelemetry.gapCount > 0) label += `  ·  ${simTelemetry.gapCount} tick(s) dropped in transit`;
-          if (mismatches.length > 0) label += `  ·  reconciliation mismatch: ${mismatches.join(", ")}`;
-          document.getElementById("liveTickLabel").textContent += label;
-        } else if (msg.type === "error") {
-          alert("Live run failed: " + msg.message + "\n" + (msg.log || ""));
+        } catch (evErr) {
+          console.error("runLive: failed to process one SSE event, skipping it and continuing", evErr, part);
         }
       }
     }
   } catch (e) {
     if (e.name !== "AbortError") alert("Live run error: " + e);
   } finally {
-    liveBtn.disabled = false;
-    stopBtn.classList.add("hidden");
+    if (!liveEndedCleanly) setRunState("idle");
   }
 }
 
 function stopLive() {
   if (liveAbortController) liveAbortController.abort();
 }
+
+// ---------- Dashboard panel wiring (Part 1: map camera, consensus
+// network, detection timeline, theme toggle) ----------
+DashboardTheme.init();
+// No detail element passed: the vote-breakdown-on-click now renders
+// into the shared team card (#mapInspector, see renderTeamCard()) via
+// the existing cross-panel DashboardSelection, not a panel of its own.
+ConsensusNetwork.init(document.getElementById("consensusCanvas"));
+DetectionTimeline.init(document.getElementById("timelineCanvas"), document.getElementById("timelineLegend"), TEAM_COLORS, SPEC_NAMES, document.getElementById("timelineRange"));
 </script>
 </body>
 </html>

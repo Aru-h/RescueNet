@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-pack-parity check-feature-spec-fresh check-feature-spec-leak-guard check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-single-board-dk-harness
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-pack-parity check-feature-spec-fresh check-feature-spec-leak-guard check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-single-board-dk-harness check-live-override-selftest check-live-override-noop-regression
 
 all: $(TARGET) $(LABELER)
 
@@ -847,8 +847,21 @@ check-selftests: check-handshake-selftest check-lora-frame-selftest \
 	check-cbba-board-selftest check-sx1262-rx-selftest-dk \
 	check-sx126x-rx-selftest-pico check-comms-transport-selftest \
 	check-mission-link-roster-selftest check-mission-mirror-selftest \
-	check-soft-spi-selftest check-sx1262-setup-selftest
-	@echo "check-selftests: all twelve laptop/tools selftests passed"
+	check-soft-spi-selftest check-sx1262-setup-selftest \
+	check-live-override-selftest
+	@echo "check-selftests: all thirteen laptop/tools selftests passed"
+
+# Part 4: drives a real `tron --live` subprocess over its actual
+# stdin/stdout (laptop/tools/live_override_selftest.py's own docstring
+# has the full case list - valid/bad-team/unknown-incident/garbage/
+# stale-tick/future-tick/multi-line-in-one-write, plus opportunistic
+# team_unavailable/incident_finished checks). Not a standalone C
+# compile+link like this section's other selftests - it needs the real
+# $(TARGET) binary and real simulated world state, not an isolated
+# function under test.
+check-live-override-selftest: $(TARGET)
+	@echo "  PY      $(TOOLS_DIR)/live_override_selftest.py"
+	@$(PYTHON) $(TOOLS_DIR)/live_override_selftest.py
 
 check-handshake-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)
@@ -1062,6 +1075,32 @@ check-consensus-shadow-regression:
 		-o $(SHADOW_DIR)/tron_shadow $(LAPTOP_SOURCES) $(LDFLAGS)
 	@$(PYTHON) $(TOOLS_DIR)/consensus_shadow_compare.py $(SHADOW_DIR)/base/$(TARGET) $(SHADOW_DIR)/tron_shadow
 
+# Part 4 (sim-mode manual override): with nothing ever sent on stdin,
+# the batch/dataset-generation path (this target's own invocation below,
+# same one tron_snapshot_dataset.csv's own rule uses: seed 1, 5 seeds,
+# 3000 ticks, combined faults) must produce byte-identical output to
+# LIVE_OVERRIDE_BASE_REF, the commit immediately before Part 4 landed -
+# not just "two runs of the current binary agree with each other" (that
+# only proves determinism, not that nothing actually changed - see the
+# review discussion that asked for this specific comparison instead).
+# Same baseline-checkout mechanism as check-consensus-shadow-regression
+# above (git archive into a scratch tree, build there, diff the
+# outputs), simpler because there's no cross-version float-format or
+# column-set drift to reconcile here - a real difference would be an
+# actual bug, so this is a byte-for-byte diff, not one with a tolerance.
+LIVE_OVERRIDE_BASE_REF ?= d5cb1cf
+LIVE_OVERRIDE_DIR = build/live-override-noop
+
+check-live-override-noop-regression: $(TARGET)
+	@rm -rf $(LIVE_OVERRIDE_DIR)
+	@mkdir -p $(LIVE_OVERRIDE_DIR)/base $(LIVE_OVERRIDE_DIR)/candidate
+	@git archive $(LIVE_OVERRIDE_BASE_REF) | tar -x -C $(LIVE_OVERRIDE_DIR)/base
+	@$(MAKE) --no-print-directory -C $(LIVE_OVERRIDE_DIR)/base tron >/dev/null
+	@cd $(LIVE_OVERRIDE_DIR)/base && ./$(TARGET) 1 5 3000 --fault-profile=combined >/dev/null
+	@cd $(LIVE_OVERRIDE_DIR)/candidate && ../../../$(TARGET) 1 5 3000 --fault-profile=combined >/dev/null
+	@diff -q $(LIVE_OVERRIDE_DIR)/base/tron_snapshot_dataset.csv $(LIVE_OVERRIDE_DIR)/candidate/tron_snapshot_dataset.csv
+	@echo "check-live-override-noop-regression: dataset CSV is byte-identical to $(LIVE_OVERRIDE_BASE_REF) (Part 4 is a true no-op with nothing on stdin)"
+
 # Multi-board builds must contain none of the virtual bus or consensus code
 # (design 7.8): the board, Pico and two-board targets build and pass as
 # before, and no consensus_* / vbus_* symbol appears in any board object.
@@ -1232,6 +1271,23 @@ check-single-board-dk-harness:
 .PHONY: check-dashboard-csrf-selftest
 check-dashboard-csrf-selftest:
 	@cd $(TOOLS_DIR) && $(PYTHON) dashboard_csrf_selftest.py
+
+# End-to-end smoke test for the Live Ops dashboard rework, driven
+# through a real Chromium via Playwright against a real app.py
+# (SIM_ONLY - no board/serial needed) and a real short `tron --live`
+# run: the map camera, the consensus network view, the detection
+# timeline, the side panels and the theme toggle. Playwright is a
+# DEV/TEST-ONLY dependency - see laptop/tools/requirements-dashboard-
+# dev.txt, never the repo root's requirements.txt - and this target
+# never installs or downloads a browser itself: it prefers a
+# preinstalled /opt/pw-browsers/chromium, else whatever Playwright's
+# own launch() already finds, and SKIPS (exit 0) with a clear message
+# when neither Playwright nor a usable Chromium is available, so a dev
+# box without them doesn't fail the rest of a check-* batch.
+# See laptop/tools/dashboard_e2e_selftest.py.
+.PHONY: check-dashboard-e2e
+check-dashboard-e2e:
+	@cd $(TOOLS_DIR) && $(PYTHON) dashboard_e2e_selftest.py
 
 # ---------------------------------------------------------------------
 # Board-to-board protocol review fixes (H2 H3 H4 H5) - selftests.

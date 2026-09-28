@@ -28,6 +28,111 @@ void debug_emit_static_environment(void);
 void debug_emit_live_frame(uint32_t tick);
 
 /*
+ * Per-cell terrain (travel cost, navigable, flood, road class,
+ * road_blocked, district id) as a one-shot STATICMAP JSON line on
+ * stdout, compact rows of hex (see laptop/debug.c). Terrain is normally
+ * static once generated, so this only actually re-prints when a cell's
+ * value differs from what was last emitted (flood and road_blocked are
+ * the fields that can change mid-run, same idea as debug_emit_static_
+ * environment()'s aftershock re-emit). Desktop test tooling only (used
+ * by the live dashboard) - not part of the firmware port surface, so no
+ * platform.h wrapping. Board code never calls this. This printing path
+ * only - the CSV terrain export is untouched.
+ */
+void debug_emit_static_map_if_changed(void);
+
+/*
+ * Part 4: sim-mode manual override, reachable ONLY via --live's own
+ * stdin - never the board's USART1 path (laptop/tools/app.py's
+ * /api/run-live/override route writes lines here, a completely
+ * separate channel from /api/board/override's binary
+ * MissionLinkOverride_t frame over a real serial link; the live board
+ * path is untouched by this feature). Plain text lines, not the
+ * binary wire format: this is a trusted local pipe between app.py and
+ * this process, not a noisy serial link that needs magic-byte resync
+ * and a checksum.
+ *
+ *   OVERRIDE <requested_tick> <team_id> <incident_id>\n
+ *   OVERRIDE_CLEAR <requested_tick> <team_id>\n
+ *
+ * debug_live_override_init() resets the line-assembly buffer and must
+ * be called once before the tick loop starts, live_mode only.
+ * debug_live_override_poll(tick) does one non-blocking read of
+ * whatever is currently available on stdin - it never blocks the tick
+ * loop, and a closed/EOF stdin just means no further overrides are
+ * possible, never an error (same policy laptop/main.c's existing
+ * --mission-feed stdin handling already uses) - assembles complete
+ * lines, validates and applies each one, and prints one OVERRIDEACK
+ * JSON line per non-empty line read - every line gets exactly one
+ * reply, applied or rejected with a reason (see laptop/debug.c:
+ * bad_team, unknown_incident, system_task, incident_finished,
+ * team_unavailable, stale_tick, future_tick, bad_format,
+ * unknown_command). An empty line is the one exception - ignored
+ * silently, not a request at all. bad_format is a recognized command
+ * word (OVERRIDE/OVERRIDE_CLEAR) whose arguments don't parse cleanly -
+ * wrong field count, a non-numeric field, a field too large for its
+ * type, trailing junk after the last field, or a line longer than the
+ * line-assembly buffer (discarded up to its '\n', one ack for the
+ * whole line, no desync into the next one). unknown_command is
+ * anything else. Both acks report team_id/incident_id as JSON null
+ * (the line's own shape never established real ones) and
+ * requested_tick as null too unless that much of the line did parse.
+ * system_task means the id is real (it exists in g_system_tasks, and
+ * shows up on the dashboard map like any other marker) but core/
+ * cbba.c's own pin-validation (cbba_apply_override_pin(), called
+ * every tick from cbba_build_bundle()) only ever looks in g_incidents
+ * - pinning a team to a system task's id would validate here, ack
+ * "applied", and then self-clear on the very next tick with no
+ * further signal, exactly the "silently dropped" failure mode
+ * overrides must never have, so it is rejected up front instead.
+ * Rejection reasons
+ * deliberately never reveal ground-truth fault state (core/fault_
+ * config.h's TeamFaultState_t.active_mask) - only what the system
+ * itself has already concluded (the recovery manager's degraded flag,
+ * peer consensus ELEVATED tier) is used to reject a team as
+ * unavailable, the same ground-truth-vs-observed distinction
+ * CONSENSUS_DESIGN.md draws everywhere else in this project.
+ *
+ * Lifecycle once applied - three states, visible live off LIVEFRAME's
+ * per-team override/override_incident_id/has_dest/dest_id and the
+ * matching incident's own status/assigned_team (no extra state added
+ * for this - all of it already exists for other reasons):
+ *
+ *   1. pinned    - override=1. cbba_apply_override_pin() (core/cbba.c)
+ *                  is force-injecting the incident into this team's
+ *                  bundle every tick until CBBA converges on it.
+ *   2. committed - override=0 again, but has_dest=1 with dest_id still
+ *                  the pinned incident: CBBA has converged (the
+ *                  incident left INC_OPEN, typically just a few ticks
+ *                  after the pin - see cbba_apply_override_pin()'s own
+ *                  doc, "no longer actionable"), and normal sim state
+ *                  (team->assigned_task_pool/slot, incident->
+ *                  assigned_team) is now carrying the assignment, not
+ *                  the override. The pin's job is done here - it only
+ *                  ever guarantees this initial commitment, nothing
+ *                  past it.
+ *   3. an ending, one of two - and the override has no say in which:
+ *        - resolved: the incident finishes normally (status becomes
+ *          INC_RESOLVED, and in practice its slot is freed around the
+ *          same tick, so it simply stops appearing in the incidents
+ *          array).
+ *        - interrupted: the sim's OWN normal stamina/rest handling
+ *          (core/incident.c, core/team.c - nothing override-specific,
+ *          the exact same thing that can happen to any assignment,
+ *          overridden or not) pulls the team off before it finishes -
+ *          has_dest drops, the incident's status resets to INC_OPEN
+ *          and assigned_team resets to NO_ASSIGNMENT for a future
+ *          round to pick back up, possibly by a different team. This
+ *          is not a bug and not an override failure: the override
+ *          never promised anything past commitment. Once this
+ *          happens the override is simply over - nothing re-pins the
+ *          team automatically, so a fresh OVERRIDE is needed to force
+ *          the same (or now-reopened) incident again.
+ */
+void debug_live_override_init(void);
+void debug_live_override_poll(uint32_t tick);
+
+/*
  * Priority 1 repro/verification harness: deterministically reproduces
  * "path lost mid-route" for a team on an active TASK_POOL_INCIDENT/
  * TASK_POOL_SYSTEM task (the move_team() branch that historically had

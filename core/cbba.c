@@ -725,6 +725,18 @@ void cbba_init(void)
  * team's normal bid can beat once it propagates through consensus
  * (see the #define's own comment above).
  *
+ * NOTE: a pin onto a system task (g_system_tasks - sector sweeps,
+ * equipment runs, etc., not g_incidents) is not supported by either
+ * override path (board USART1 or the laptop's own --live stdin
+ * channel): cbba_find_incident_slot_by_id() below only ever searches
+ * g_incidents, so such a pin would silently self-clear (case 1 below)
+ * on the very next tick. The laptop-only sim path (laptop/debug.c's
+ * debug_live_override_poll()) rejects this up front with reason
+ * "system_task" instead of letting it silently fail; the board path
+ * has no equivalent check and is left as-is - not fixed here, since
+ * this function's own search scope is shared, working infrastructure
+ * this note is flagging, not changing.
+ *
  * Called at the very top of cbba_build_bundle(), which cbba_run()'s
  * round loop invokes many times per tick for the same team_id (see
  * that loop's own comment) - idempotent across those repeat calls:
