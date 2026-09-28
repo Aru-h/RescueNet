@@ -68,6 +68,12 @@ typedef RecoverySignal_t (*RecoveryEvaluatorFn)(
 static RecoveryManagerTeamState_t g_recovery_state[NUM_TEAMS];
 static RecoveryDispatchState_t g_recovery_dispatch_state[NUM_TEAMS];
 static RecoveryMetricsTeamState_t g_recovery_metrics_state[NUM_TEAMS];
+/* Per-evaluator verdicts for the tick just computed by recovery_manager_
+ * step() - see recovery_manager.h's recovery_manager_get_evaluator_verdict()
+ * doc. Fixed RECOVERY_MANAGER_EVAL_SLOT_COUNT width regardless of
+ * CONSENSUS_ENFORCE, unlike RECOVERY_MANAGER_EVALUATOR_COUNT (6 or 7) which
+ * only sizes the evaluators[]/signals[] arrays below. */
+static RecoveryEvaluatorVerdict_t g_evaluator_verdicts[NUM_TEAMS][RECOVERY_MANAGER_EVAL_SLOT_COUNT];
 static RecoveryMetrics_t g_recovery_metrics;
 /* M5: tick on which REQUEST_TASK_REALLOCATION last ran
  * allocate_all_incidents(), shared by ALL teams. This used to be a
@@ -1595,6 +1601,13 @@ void recovery_manager_init(void)
         g_recovery_state[team_id].last_assigned_task_slot = g_teams[team_id].assigned_task_slot;
         g_recovery_state[team_id].last_status = g_teams[team_id].status;
         g_recovery_dispatch_state[team_id] = (RecoveryDispatchState_t){0};
+
+        for(uint8_t slot = 0; slot < RECOVERY_MANAGER_EVAL_SLOT_COUNT; slot++)
+        {
+            g_evaluator_verdicts[team_id][slot].reason = RECOVERY_REASON_NONE;
+            g_evaluator_verdicts[team_id][slot].confidence =
+                (slot == RECOVERY_MANAGER_EVAL_PEER_CONSENSUS && !CONSENSUS_ENFORCE) ? -1.0f : 0.0f;
+        }
     }
     g_realloc_done_tick = UINT32_MAX;
 }
@@ -1726,6 +1739,23 @@ void recovery_manager_step(void)
 
         for(size_t i = 0; i < RECOVERY_MANAGER_EVALUATOR_COUNT; i++)
             signals[i] = evaluators[i](team, twin, &watchdog);
+
+        /* Snapshot each evaluator's own, unfused verdict for this tick
+         * BEFORE any consensus cap below can rewrite signals[MOBILITY]/
+         * signals[COMMUNICATION] in place - these must stay each
+         * evaluator's real opinion, not what a cap reduced it to. Indices
+         * 0..RECOVERY_MANAGER_EVALUATOR_COUNT-1 match RECOVERY_MANAGER_
+         * EVAL_PROGRESS..EVAL_FAULT_PREDICTOR[,EVAL_PEER_CONSENSUS] by
+         * construction (evaluators[] above is built in that exact order). */
+        for(size_t i = 0; i < RECOVERY_MANAGER_EVALUATOR_COUNT; i++)
+        {
+            g_evaluator_verdicts[team_id][i].reason = signals[i].reason;
+            g_evaluator_verdicts[team_id][i].confidence = signals[i].confidence;
+        }
+#if !CONSENSUS_ENFORCE
+        g_evaluator_verdicts[team_id][RECOVERY_MANAGER_EVAL_PEER_CONSENSUS].reason = RECOVERY_REASON_NONE;
+        g_evaluator_verdicts[team_id][RECOVERY_MANAGER_EVAL_PEER_CONSENSUS].confidence = -1.0f;
+#endif
 
 #if CONSENSUS_ENFORCE
         g_consensus_capped_now[team_id] = 0u;
@@ -1905,4 +1935,19 @@ RecoveryStatus_t recovery_manager_get_status(uint8_t team_id)
 RecoveryMetrics_t recovery_manager_get_metrics(void)
 {
     return g_recovery_metrics;
+}
+
+RecoveryEvaluatorVerdict_t recovery_manager_get_evaluator_verdict(
+    uint8_t team_id, uint8_t evaluator_slot)
+{
+    if(team_id >= NUM_TEAMS || evaluator_slot >= RECOVERY_MANAGER_EVAL_SLOT_COUNT)
+    {
+        RecoveryEvaluatorVerdict_t verdict;
+
+        verdict.reason = RECOVERY_REASON_NONE;
+        verdict.confidence = 0.0f;
+        return verdict;
+    }
+
+    return g_evaluator_verdicts[team_id][evaluator_slot];
 }

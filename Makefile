@@ -1262,3 +1262,44 @@ check-cbba-wire-validation:
 	@$(CC) $(SELFTEST_CFLAGS) $(AGENT_B_SANITIZE) -o $(SELFTEST_BIN_DIR)/cbba_board_selftest_asan \
 		$(TOOLS_DIR)/cbba_board_selftest.c $(CBBA_BOARD_SELFTEST_CORE_SOURCES) $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./cbba_board_selftest_asan
+
+# ---------------------------------------------------------------------
+# Consensus/AI evaluation harness (docs/evaluation/README.md). Measures
+# whether peer consensus (and later the AI fault predictor) actually
+# improves fault detection and mission outcome over a rules-only baseline,
+# on the real ./tron simulator - see laptop/tools/evaluate.py and
+# laptop/tools/eval_metrics.py's module docstrings for the full
+# methodology, metric definitions, and known limitations.
+# ---------------------------------------------------------------------
+.PHONY: evaluate check-evaluate-determinism check-eval-metrics-unittest
+
+# Full evaluation: exam/benchmark seeds 1001-1020, 3000 ticks each,
+# rules-only vs. rules+consensus, fault-profile=random. Override any of
+# EVAL_* to sweep other seeds/ticks/profiles/variants; see evaluate.py
+# --help for the rest of the flags (e.g. --profiles random,combined).
+EVAL_VARIANTS ?= rules,rules+consensus
+EVAL_SEEDS_START ?= 1001
+EVAL_SEEDS_COUNT ?= 20
+EVAL_TICKS ?= 3000
+EVAL_PROFILES ?= random
+EVAL_OUT_DIR ?= build/evaluate
+
+evaluate:
+	@$(PYTHON) $(TOOLS_DIR)/evaluate.py \
+		--variants $(EVAL_VARIANTS) \
+		--seeds-start $(EVAL_SEEDS_START) --seeds-count $(EVAL_SEEDS_COUNT) \
+		--ticks $(EVAL_TICKS) --profiles $(EVAL_PROFILES) \
+		--out-dir $(EVAL_OUT_DIR)
+
+# Metric-computation unit tests (hand-built ground-truth/detection
+# sequences with known answers) - no simulator invocation, runs in
+# milliseconds. See laptop/tools/test_eval_metrics.py.
+check-eval-metrics-unittest:
+	@$(PYTHON) $(TOOLS_DIR)/test_eval_metrics.py -v
+
+# Tiny (2 seeds x 300 ticks) evaluate.py run executed once with
+# --workers 1 and once with --workers 4, asserting byte-identical
+# summary_metrics.csv/paired_diff.csv/report.md - see
+# laptop/tools/check-evaluate-determinism.sh.
+check-evaluate-determinism:
+	@PYTHON=$(PYTHON) $(TOOLS_DIR)/check-evaluate-determinism.sh

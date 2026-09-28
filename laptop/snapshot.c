@@ -309,7 +309,14 @@ void snapshot_begin_run(uint32_t seed)
         "beacon_emitted,consensus_capped,"
         "evidence_progress,evidence_stamina,evidence_communication,"
         "evidence_operating_state,evidence_path,evidence_assignment,"
-        "evidence_timeout,confirmed_mobility_impairment\n");
+        "evidence_timeout,confirmed_mobility_impairment,"
+        "eval_progress_reason,eval_progress_confidence,"
+        "eval_stamina_reason,eval_stamina_confidence,"
+        "eval_mobility_reason,eval_mobility_confidence,"
+        "eval_communication_reason,eval_communication_confidence,"
+        "eval_equipment_reason,eval_equipment_confidence,"
+        "eval_fault_predictor_reason,eval_fault_predictor_confidence,"
+        "eval_peer_consensus_reason,eval_peer_consensus_confidence\n");
 }
 
 /*
@@ -367,7 +374,7 @@ static void write_evidence_columns(uint8_t team_id)
 
     watchdog_get_evidence_vector(team_id, evidence, &confirmed_mobility_impairment);
 
-    fprintf(g_snapshot_file, ",%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u\n",
+    fprintf(g_snapshot_file, ",%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u",
         evidence[WATCHDOG_EVIDENCE_SLOT_PROGRESS],
         evidence[WATCHDOG_EVIDENCE_SLOT_STAMINA],
         evidence[WATCHDOG_EVIDENCE_SLOT_COMMUNICATION],
@@ -376,6 +383,32 @@ static void write_evidence_columns(uint8_t team_id)
         evidence[WATCHDOG_EVIDENCE_SLOT_ASSIGNMENT],
         evidence[WATCHDOG_EVIDENCE_SLOT_TIMEOUT],
         (unsigned)confirmed_mobility_impairment);
+}
+
+/*
+ * Per-evaluator verdict columns (evaluation harness support - docs/
+ * evaluation/README.md, recovery_manager.h's recovery_manager_get_
+ * evaluator_verdict() doc). Pure logging: reads recovery_manager_step()'s
+ * already-computed per-evaluator signals for this tick; writing this row
+ * has no effect on recovery_manager_step()'s or recovery_dispatch()'s own
+ * decisions. Same header in every build (RECOVERY_MANAGER_EVAL_SLOT_COUNT
+ * is fixed regardless of CONSENSUS_ENFORCE) - a build without consensus
+ * reads back {reason=0, confidence=-1} for eval_peer_consensus_*, the
+ * same "not built in this binary" convention consensus_tier_* already
+ * uses. Terminates the row.
+ */
+static void write_evaluator_verdict_columns(uint8_t team_id)
+{
+    uint8_t slot;
+
+    for(slot = 0; slot < RECOVERY_MANAGER_EVAL_SLOT_COUNT; slot++)
+    {
+        RecoveryEvaluatorVerdict_t verdict = recovery_manager_get_evaluator_verdict(team_id, slot);
+
+        fprintf(g_snapshot_file, ",%u,%.9g", (unsigned)verdict.reason, verdict.confidence);
+    }
+
+    fprintf(g_snapshot_file, "\n");
 }
 
 /*
@@ -541,6 +574,7 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
 
     write_consensus_columns(team_id);
     write_evidence_columns(team_id);
+    write_evaluator_verdict_columns(team_id);
 }
 
 void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)
