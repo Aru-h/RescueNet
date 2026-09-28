@@ -30,6 +30,137 @@
     3: "rgba(139,152,165,0.9)", // RESTING
   };
 
+  // Part 3: terrain, the bottom map layer, from a STATICMAP payload
+  // ({width, height, rows: [hex, ...]} - see debug_emit_static_map_
+  // if_changed() in laptop/debug.c). Each row is `width` cells packed
+  // 8 hex chars each: 2 (flags: bit0 navigable, bit1 flood, bits2-4
+  // road_class) + 2 (travel_cost) + 4 (district_id).
+  const ROAD_TINT = {
+    1: "rgba(139,152,165,0.10)", // ROAD_SERVICE
+    2: "rgba(139,152,165,0.16)", // ROAD_LOCAL
+    3: "rgba(139,152,165,0.22)", // ROAD_COLLECTOR
+    4: "rgba(139,152,165,0.30)", // ROAD_ARTERIAL
+  };
+
+  // Memoized by the STATICMAP object's own identity - it only changes
+  // when a new STATICMAP line actually arrives (rare; see debug.c),
+  // not every tick, so this never re-parses 1296 cells on a frame
+  // where terrain didn't change.
+  let _terrainParsed = null; // { source, width, height, cells: Array<{navigable,flood,roadClass,travelCost,districtId}> }
+
+  function parseTerrain(map) {
+    if (!map || !map.rows) return null;
+    if (_terrainParsed && _terrainParsed.source === map) return _terrainParsed;
+    const { width, height, rows } = map;
+    const cells = new Array(width * height);
+    for (let gy = 0; gy < height; gy++) {
+      const row = rows[gy] || "";
+      for (let gx = 0; gx < width; gx++) {
+        const off = gx * 8;
+        const flags = parseInt(row.substr(off, 2), 16) || 0;
+        const cost = parseInt(row.substr(off + 2, 2), 16) || 0;
+        const district = parseInt(row.substr(off + 4, 4), 16) || 0;
+        cells[gy * width + gx] = {
+          navigable: !!(flags & 0x01),
+          flood: !!(flags & 0x02),
+          roadClass: (flags >> 2) & 0x07,
+          travelCost: cost,
+          districtId: district,
+        };
+      }
+    }
+    _terrainParsed = { source: map, width, height, cells };
+    return _terrainParsed;
+  }
+
+  // The actual per-cell fill + district-border drawing is expensive
+  // (up to ~1296 fillRects plus border segments) to redo every single
+  // tick at a 0ms tick delay, but the terrain and the camera view both
+  // change far less often than that - so this renders into an
+  // offscreen bitmap ONCE per (terrain, camera position/zoom/size)
+  // combination and just blits it every other tick. A pan/zoom still
+  // re-renders on every step of the drag (the cache key includes the
+  // camera position), same cost as today's existing full redraw on
+  // every mousemove while panning - just not paid on every LIVEFRAME
+  // tick when the camera hasn't moved.
+  let _terrainBitmap = null;
+  let _terrainBitmapKey = null;
+  let _terrainBitmapSource = null; // the STATICMAP object identity the cached bitmap was rendered from
+
+  function renderTerrainBitmap(view, t) {
+    const dpr = window.devicePixelRatio || 1;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(view.state.viewW * dpr));
+    canvas.height = Math.max(1, Math.round(view.state.viewH * dpr));
+    const octx = canvas.getContext("2d");
+    octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const px1 = view.worldToScreen(0, 0), px2 = view.worldToScreen(1, 0);
+    const cellPx = Math.abs(px2.x - px1.x) || 1;
+    const vw = view.state.viewW, vh = view.state.viewH;
+
+    for (let gy = 0; gy < t.height; gy++) {
+      for (let gx = 0; gx < t.width; gx++) {
+        const cell = t.cells[gy * t.width + gx];
+        const p = view.worldToScreen(gx - 0.5, gy - 0.5);
+        if (p.x + cellPx < 0 || p.y + cellPx < 0 || p.x > vw || p.y > vh) continue; // offscreen at this pan/zoom
+
+        // Water/flood, then blocked/rubble (STATICMAP has no separate
+        // rubble flag - "not navigable" is this layer's honest proxy
+        // for it), then a road tint by class, else open ground (no fill).
+        if (cell.flood) {
+          octx.fillStyle = "rgba(56,139,253,0.22)";
+          octx.fillRect(p.x, p.y, cellPx, cellPx);
+        } else if (!cell.navigable) {
+          octx.fillStyle = "rgba(139,152,165,0.18)";
+          octx.fillRect(p.x, p.y, cellPx, cellPx);
+        } else if (cell.roadClass > 0 && ROAD_TINT[cell.roadClass]) {
+          octx.fillStyle = ROAD_TINT[cell.roadClass];
+          octx.fillRect(p.x, p.y, cellPx, cellPx);
+        }
+      }
+    }
+
+    // District borders: a thin line wherever a cell's district differs
+    // from its right/bottom neighbor - no separate polygon extraction
+    // needed, and it reads fine at any zoom level.
+    octx.save();
+    octx.strokeStyle = "rgba(230,237,243,0.10)";
+    octx.lineWidth = 1;
+    for (let gy = 0; gy < t.height; gy++) {
+      for (let gx = 0; gx < t.width; gx++) {
+        const cell = t.cells[gy * t.width + gx];
+        const right = gx + 1 < t.width ? t.cells[gy * t.width + gx + 1] : null;
+        const below = gy + 1 < t.height ? t.cells[(gy + 1) * t.width + gx] : null;
+        if (right && right.districtId !== cell.districtId) {
+          const a = view.worldToScreen(gx + 0.5, gy - 0.5);
+          const b = view.worldToScreen(gx + 0.5, gy + 0.5);
+          octx.beginPath(); octx.moveTo(a.x, a.y); octx.lineTo(b.x, b.y); octx.stroke();
+        }
+        if (below && below.districtId !== cell.districtId) {
+          const a = view.worldToScreen(gx - 0.5, gy + 0.5);
+          const b = view.worldToScreen(gx + 0.5, gy + 0.5);
+          octx.beginPath(); octx.moveTo(a.x, a.y); octx.lineTo(b.x, b.y); octx.stroke();
+        }
+      }
+    }
+    octx.restore();
+    return canvas;
+  }
+
+  function drawTerrain(ctx, view, terrainMap) {
+    const t = parseTerrain(terrainMap);
+    if (!t) return;
+    const s = view.state;
+    const key = `${s.x}|${s.y}|${s.zoom}|${s.viewW}|${s.viewH}`;
+    if (_terrainBitmapSource !== t.source || _terrainBitmapKey !== key || !_terrainBitmap) {
+      _terrainBitmap = renderTerrainBitmap(view, t);
+      _terrainBitmapKey = key;
+      _terrainBitmapSource = t.source;
+    }
+    ctx.drawImage(_terrainBitmap, 0, 0, s.viewW, s.viewH);
+  }
+
   function drawGrid(ctx, view, gridN) {
     const w = view.state.viewW, h = view.state.viewH;
     ctx.save();
@@ -272,7 +403,7 @@
   }
 
   global.MapRender = {
-    drawGrid, drawBuildings, drawEpicenter, drawHazardCells,
+    drawGrid, drawTerrain, drawBuildings, drawEpicenter, drawHazardCells,
     drawSafezones, drawIncidents, drawTeams, hitTestWorld,
   };
 })(window);

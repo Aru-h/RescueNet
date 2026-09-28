@@ -964,6 +964,7 @@ function telemetryReset() {
   simTelemetry = createSimulationTelemetry();
   simTelemetry.running = true;
   staticEnvironment = null;
+  terrainMap = null;
   destroyChart("liveThroughputChart");
 }
 
@@ -1412,6 +1413,7 @@ function drawGrid() {
 let mapHitTargets = [];
 let selectedMarker = null;
 let staticEnvironment = null;
+let terrainMap = null; // Part 3: latest STATICMAP payload, or null before one has arrived
 
 // replay.js is a separate script file, so it can't assign this `let`
 // binding directly - a top-level let/const in a classic script creates
@@ -1420,11 +1422,13 @@ let staticEnvironment = null;
 // declarations, like this one, DO become window properties, which is
 // exactly why this setter works as the bridge).
 function setReplayStaticEnvironment(env) { staticEnvironment = env; }
+function setReplayTerrainMap(map) { terrainMap = map; }
 
 function drawFrame(frame, skipInspector) {
   window._lastFrame = frame;
   if (!mapCtx) return;
   mapCtx.clearRect(0, 0, mapCamera.state.viewW, mapCamera.state.viewH);
+  MapRender.drawTerrain(mapCtx, mapCamera, terrainMap);
   drawGrid();
   mapHitTargets = [];
 
@@ -2082,6 +2086,8 @@ async function runLive() {
         const msg = JSON.parse(part.slice(6));
         if (msg.type === "static_env") {
           staticEnvironment = msg.env;
+        } else if (msg.type === "static_map") {
+          terrainMap = msg.map;
         } else if (msg.type === "frame") {
           const accepted = telemetryProcessFrame(msg.frame);
           drawFrame(msg.frame);

@@ -3,31 +3,34 @@
  *
  * The consensus network panel: the 10 teams drawn as a ring of nodes,
  * each showing its mobility/communication tier and fast-path flag,
- * with spokes to a center hub whose brightness follows how much of
- * that team's peer bus traffic is currently getting through.
+ * with a real 10x10 mesh of edges between every pair, pulsed for a
+ * delivered beacon and faded for a missed one.
  *
- * Honesty note (see the task's "anything you couldn't show honestly"
- * requirement): LIVEFRAME's peer_votes gives each team's aggregate
- * live/dark/fast counts (how many of the 9 peers currently have an
- * opinion), not which SPECIFIC peer-to-peer beacons were delivered
- * this tick. There is no "team A's beacon to team B arrived" bit
- * anywhere in the frame, so this view cannot honestly draw individual
- * A-to-B edges - a full 10-node mesh with invented per-edge state
- * would be showing data that doesn't exist. What it draws instead is
- * one spoke per team (hub-and-spoke, not mesh), pulsed/faded by that
- * team's OWN live fraction (live / (live + dark)) - real aggregate
- * data, honestly labeled. See CONSENSUS_DESIGN.md 2.6 for the
- * heard-matrix (per-reporter heard_bits) computed on the board side;
- * exposing that per team in LIVEFRAME (or the raw delivered-pairs list
- * behind vbus's per-tick delivery) is exactly the field that would let
- * a future revision draw real per-edge A-to-B state instead of this
- * aggregate proxy - flagged for Part 2+ review, not invented here.
+ * Part 1 originally built this as a hub-and-spoke proxy (one spoke per
+ * team, pulsed by that team's own live/dark fraction) because LIVEFRAME
+ * only carried each team's AGGREGATE live/dark/fast counts, not which
+ * specific peer-to-peer beacons were delivered - see CONSENSUS_
+ * DESIGN.md 2.6's heard-matrix note. Part 3 added exactly that field:
+ * each team's LIVEFRAME entry now carries `heard`, a 10-bit mask (bit j
+ * set = this team, as observer, received target j's beacon on time
+ * this tick - PeerObservation_t.rx_on_time via consensus_get_peer_
+ * observation(), laptop/debug.c). This file now draws the real mesh
+ * from that field instead of the old aggregate proxy.
+ *
+ * One honesty note that still applies: `heard` is directional (i heard
+ * j is not necessarily the same as j heard i - radio conditions aren't
+ * always symmetric), but drawing 90 directed edges on a 10-node ring
+ * reads as visual noise rather than a clear picture. Each UNDIRECTED
+ * pair (i,j) is drawn as delivered this tick if EITHER direction was
+ * heard (i heard j OR j heard i) - a deliberate simplification of real,
+ * per-tick data, not fabricated data; the per-team vote detail panel
+ * (showDetail() below) still shows the literal numbers.
  *
  * consensus_tier is [-1, -1] (not built) whenever the sim wasn't
- * compiled with VIRTUAL_BUS_ENABLED, and the whole field is absent in
- * board mission mode (CONSENSUS_DESIGN.md 5.3's "Not in v1" note).
- * Both cases render as "n/a", never a crash and never a fabricated
- * NONE/grey tier.
+ * compiled with VIRTUAL_BUS_ENABLED, and the whole field (including
+ * `heard`) is absent in board mission mode (CONSENSUS_DESIGN.md 5.3's
+ * "Not in v1" note). Both cases render as "n/a" / no edges, never a
+ * crash and never a fabricated NONE/grey tier or a fabricated edge.
  */
 (function (global) {
   "use strict";
@@ -40,7 +43,9 @@
     let canvas = null, ctx = null, detailEl = null;
     let nodes = []; // {id, cx, cy, r} in canvas CSS px, set on layout
     let lastFrameTeams = null;
-    let pulse = new Array(10).fill(0); // per-team pulse energy, decays each render
+    // Per-UNDIRECTED-pair pulse energy, keyed "i-j" (i<j) - decays each
+    // render toward 0, same idea as the old per-team pulse array.
+    let edgePulse = {};
     let lastRenderMs = 0;
     let selected = null; // team id or null
     let unsubscribe = null;
@@ -61,7 +66,6 @@
           cx: cx + Math.cos(angle) * ringR,
           cy: cy + Math.sin(angle) * ringR,
           r: Math.max(10, Math.min(w, h) * 0.032),
-          hubCx: cx, hubCy: cy,
         });
       }
       return { w, h, cx, cy };
@@ -80,54 +84,51 @@
       ctx.clearRect(0, 0, w, h);
       if (!nodes.length || nodes.length !== lastFrameTeams.length) layout();
 
-      const hub = nodes[0] ? { x: nodes[0].hubCx, y: nodes[0].hubCy } : { x: w / 2, y: h / 2 };
+      // Real mesh: one line per undirected team pair (i<j), under the
+      // nodes. `heard` is missing entirely (undefined) whenever
+      // consensus isn't built/absent from this frame (see file header) -
+      // that pair draws as a faint dashed "no data" line, same visual
+      // language the old hub-and-spoke proxy used for that case.
+      const n = lastFrameTeams.length;
+      for (let i = 0; i < n; i++) {
+        const teamI = lastFrameTeams[i];
+        const nodeI = nodes[i];
+        if (!nodeI) continue;
+        for (let j = i + 1; j < n; j++) {
+          const teamJ = lastFrameTeams[j];
+          const nodeJ = nodes[j];
+          if (!nodeJ) continue;
+          const key = `${i}-${j}`;
+          const hasData = typeof teamI.heard === "number" && typeof teamJ.heard === "number";
+          const energy = edgePulse[key] || 0;
 
-      // Spokes first (under the nodes).
-      lastFrameTeams.forEach((team, i) => {
-        const node = nodes[i];
-        if (!node) return;
-        const pv = team.peer_votes;
-        const live = pv ? pv.live : 0;
-        const dark = pv ? pv.dark : 0;
-        const total = live + dark;
-        const liveFrac = total > 0 ? live / total : (pv ? 0 : null); // null = no consensus data at all
-        const energy = pulse[i] || 0;
+          if (!hasData) {
+            ctx.save();
+            ctx.strokeStyle = "rgba(139,152,165,0.10)";
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 4]);
+            ctx.beginPath();
+            ctx.moveTo(nodeI.cx, nodeI.cy);
+            ctx.lineTo(nodeJ.cx, nodeJ.cy);
+            ctx.stroke();
+            ctx.restore();
+            continue;
+          }
 
-        if (liveFrac === null) {
+          const delivered = !!((teamI.heard & (1 << j)) || (teamJ.heard & (1 << i)));
+          const baseAlpha = delivered ? 0.16 : 0.04;
+          const alpha = Math.min(1, baseAlpha + energy * 0.6);
           ctx.save();
-          ctx.strokeStyle = "rgba(139,152,165,0.15)";
-          ctx.lineWidth = 1;
-          ctx.setLineDash([2, 4]);
+          ctx.strokeStyle = `rgba(88,166,255,${alpha})`;
+          ctx.lineWidth = 1 + energy * 2.2;
+          if (!delivered) ctx.setLineDash([4, 3]); // fading for a missed pair this tick
           ctx.beginPath();
-          ctx.moveTo(hub.x, hub.y);
-          ctx.lineTo(node.cx, node.cy);
+          ctx.moveTo(nodeI.cx, nodeI.cy);
+          ctx.lineTo(nodeJ.cx, nodeJ.cy);
           ctx.stroke();
           ctx.restore();
-          return;
         }
-
-        const baseAlpha = 0.08 + liveFrac * 0.22;
-        const pulseAlpha = energy * 0.55;
-        const alpha = Math.min(1, baseAlpha + pulseAlpha);
-        const fast = pv && pv.fast;
-        ctx.save();
-        ctx.strokeStyle = fast ? `rgba(248,81,73,${alpha})` : `rgba(88,166,255,${alpha})`;
-        ctx.lineWidth = 1 + energy * 2.5;
-        if (liveFrac < 0.4) ctx.setLineDash([4, 3]); // "fading" for mostly-missed
-        ctx.beginPath();
-        ctx.moveTo(hub.x, hub.y);
-        ctx.lineTo(node.cx, node.cy);
-        ctx.stroke();
-        ctx.restore();
-
-        pulse[i] = energy * 0.82; // decay toward the next real update
-      });
-
-      // Hub.
-      ctx.beginPath();
-      ctx.arc(hub.x, hub.y, 5, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(139,152,165,0.5)";
-      ctx.fill();
+      }
 
       // Nodes.
       lastFrameTeams.forEach((team, i) => {
@@ -246,11 +247,16 @@
     function update(frame) {
       if (!frame || !frame.teams) return;
       lastFrameTeams = frame.teams;
-      lastFrameTeams.forEach((team, i) => {
-        const pv = team.peer_votes;
-        const total = pv ? pv.live + pv.dark : 0;
-        pulse[i] = total > 0 ? Math.max(pulse[i] || 0, pv.live / total) : 0;
-      });
+      const n = lastFrameTeams.length;
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const teamI = lastFrameTeams[i], teamJ = lastFrameTeams[j];
+          const hasData = typeof teamI.heard === "number" && typeof teamJ.heard === "number";
+          const delivered = hasData && !!((teamI.heard & (1 << j)) || (teamJ.heard & (1 << i)));
+          const key = `${i}-${j}`;
+          edgePulse[key] = delivered ? 1 : (edgePulse[key] || 0) * 0.82; // pulse on delivery, decay otherwise
+        }
+      }
       if (selected !== null) showDetail(selected);
       const now = performance.now();
       if (now - lastRenderMs >= RENDER_INTERVAL_MS) {
@@ -261,7 +267,7 @@
 
     function reset() {
       lastFrameTeams = null;
-      pulse = new Array(10).fill(0);
+      edgePulse = {};
       selected = null;
       if (ctx && canvas) ctx.clearRect(0, 0, canvas.getBoundingClientRect().width, canvas.getBoundingClientRect().height);
       showDetail(null);

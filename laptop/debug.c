@@ -140,6 +140,77 @@ void debug_emit_static_environment(void)
     fflush(stdout);
 }
 
+/*
+ * Part 3 (dashboard terrain map): per-cell travel cost, navigable,
+ * flood, road class and district id, as one compact STATICMAP line -
+ * rows of hex, one row per y, each cell packed as 8 hex chars (flags
+ * byte, travel_cost byte, district_id u16). Terrain is normally fixed
+ * at world-gen time (same as debug_emit_static_environment()'s
+ * buildings), so this only actually prints when at least one cell's
+ * value differs from the last emission - laptop/main.c calls it once
+ * before the tick loop (always prints, nothing emitted yet) and again
+ * every tick (usually a no-op; flood is the one field that can change
+ * mid-run). Purely additional stdout output: reads g_environment
+ * through the same accessors/fields debug_emit_live_frame()'s
+ * hazard_cells loop already reads, doesn't touch the CSV path, and has
+ * no effect on simulator behavior.
+ */
+static uint8_t s_static_map_emitted = 0;
+static uint8_t s_static_map_prev_flags[GRID_WIDTH][GRID_HEIGHT];
+static uint8_t s_static_map_prev_cost[GRID_WIDTH][GRID_HEIGHT];
+static uint16_t s_static_map_prev_district[GRID_WIDTH][GRID_HEIGHT];
+
+static uint8_t static_map_cell_flags(uint8_t gx, uint8_t gy)
+{
+    uint8_t nav = environment_cell_is_navigable(gx, gy) ? 1u : 0u;
+    uint8_t flood = environment_cell_is_flood(gx, gy) ? 1u : 0u;
+    uint8_t road_class = (uint8_t)(g_environment[gx][gy].road_class & 0x07u);
+    return (uint8_t)(nav | (uint8_t)(flood << 1) | (uint8_t)(road_class << 2));
+}
+
+void debug_emit_static_map_if_changed(void)
+{
+    uint8_t changed = !s_static_map_emitted;
+    for(uint8_t gx = 0; gx < GRID_WIDTH && !changed; gx++)
+    {
+        for(uint8_t gy = 0; gy < GRID_HEIGHT; gy++)
+        {
+            uint8_t flags = static_map_cell_flags(gx, gy);
+            uint8_t cost = environment_cell_travel_cost(gx, gy);
+            uint16_t district = g_environment[gx][gy].district_id;
+            if(flags != s_static_map_prev_flags[gx][gy] ||
+               cost != s_static_map_prev_cost[gx][gy] ||
+               district != s_static_map_prev_district[gx][gy])
+            {
+                changed = 1;
+                break;
+            }
+        }
+    }
+    if(!changed)
+        return;
+
+    printf("STATICMAP {\"width\":%u,\"height\":%u,\"rows\":[", (unsigned)GRID_WIDTH, (unsigned)GRID_HEIGHT);
+    for(uint8_t gy = 0; gy < GRID_HEIGHT; gy++)
+    {
+        printf("%s\"", gy == 0 ? "" : ",");
+        for(uint8_t gx = 0; gx < GRID_WIDTH; gx++)
+        {
+            uint8_t flags = static_map_cell_flags(gx, gy);
+            uint8_t cost = environment_cell_travel_cost(gx, gy);
+            uint16_t district = g_environment[gx][gy].district_id;
+            printf("%02x%02x%04x", flags, cost, district);
+            s_static_map_prev_flags[gx][gy] = flags;
+            s_static_map_prev_cost[gx][gy] = cost;
+            s_static_map_prev_district[gx][gy] = district;
+        }
+        printf("\"");
+    }
+    printf("]}\n");
+    fflush(stdout);
+    s_static_map_emitted = 1;
+}
+
 /* Emits one line of JSON to stdout describing the full world state for
  * this tick: every team's position/status/stamina/fault info, and every
  * active incident + system task. Desktop test tooling only (used by the
@@ -232,6 +303,13 @@ void debug_emit_live_frame(uint32_t tick)
         int tier_mob = CONSENSUS_TIER_NOT_BUILT, tier_comm = CONSENSUS_TIER_NOT_BUILT;
         unsigned mob_f = 0, mob_c = 0, mob_a = 0, comm_f = 0, comm_c = 0, comm_a = 0;
         unsigned peer_live = 0, peer_dark = 0, peer_fast = 0;
+        /* Part 3 (dashboard consensus mesh): this team AS OBSERVER, bit j
+           set if it heard target j's beacon on time this tick
+           (PeerObservation_t.rx_on_time via consensus_get_peer_observation() -
+           CONSENSUS_DESIGN.md 2.6). Self-bit (j==t) is always 0: a team
+           doesn't beacon itself. Lets the dashboard draw the real 10x10
+           mesh instead of the earlier hub-and-spoke live/dark proxy. */
+        unsigned heard_mask = 0;
 #if VIRTUAL_BUS_ENABLED
         {
             ConsensusResult_t cm = consensus_get_result(t, CONSENSUS_CLASS_MOBILITY);
@@ -244,6 +322,16 @@ void debug_emit_live_frame(uint32_t tick)
             peer_live = cm.n_live;
             peer_dark = cm.n_dark;
             peer_fast = cc.fast_path;
+
+            for(uint8_t target = 0; target < NUM_TEAMS; target++)
+            {
+                if(target == t)
+                    continue;
+                PeerObservation_t obs;
+                consensus_get_peer_observation(t, target, &obs);
+                if(obs.rx_on_time)
+                    heard_mask |= (1u << target);
+            }
         }
 #endif
 
@@ -255,7 +343,8 @@ void debug_emit_live_frame(uint32_t tick)
                "\"ticks_working\":%u,\"ticks_available\":%u,"
                "\"consensus_tier\":[%d,%d],"
                "\"peer_votes\":{\"mob\":[%u,%u,%u],\"comm\":[%u,%u,%u],"
-               "\"live\":%u,\"dark\":%u,\"fast\":%u}}",
+               "\"live\":%u,\"dark\":%u,\"fast\":%u},"
+               "\"heard\":%u}",
                t == 0 ? "" : ",",
                team->team_id, team->loc_x, team->loc_y, team->stamina,
                team->status, team->specialization,
@@ -266,7 +355,7 @@ void debug_emit_live_frame(uint32_t tick)
                g_diag_ticks_resting[t], g_diag_ticks_working[t],
                g_diag_ticks_available[t],
                tier_mob, tier_comm, mob_f, mob_c, mob_a, comm_f, comm_c, comm_a,
-               peer_live, peer_dark, peer_fast);
+               peer_live, peer_dark, peer_fast, heard_mask);
     }
     printf("],\"incidents\":[");
     uint8_t first = 1;

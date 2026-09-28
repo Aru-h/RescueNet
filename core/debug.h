@@ -28,6 +28,19 @@ void debug_emit_static_environment(void);
 void debug_emit_live_frame(uint32_t tick);
 
 /*
+ * Per-cell terrain (travel cost, navigable, flood, road class, district
+ * id) as a one-shot STATICMAP JSON line on stdout, compact rows of hex
+ * (see laptop/debug.c). Terrain is normally static once generated, so
+ * this only actually re-prints when a cell's value differs from what
+ * was last emitted (flood is the one field that can change mid-run,
+ * same idea as debug_emit_static_environment()'s aftershock re-emit).
+ * Desktop test tooling only (used by the live dashboard) - not part of
+ * the firmware port surface, so no platform.h wrapping. Board code
+ * never calls this.
+ */
+void debug_emit_static_map_if_changed(void);
+
+/*
  * Priority 1 repro/verification harness: deterministically reproduces
  * "path lost mid-route" for a team on an active TASK_POOL_INCIDENT/
  * TASK_POOL_SYSTEM task (the move_team() branch that historically had

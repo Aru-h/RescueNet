@@ -308,6 +308,11 @@ int main(int argc, char **argv)
              * re-emits this same static-env payload only on the ticks where
              * that actually happens. */
             debug_emit_static_environment();
+            /* Part 3: per-cell terrain (travel cost/navigable/flood/
+             * road/district), same one-shot-then-only-on-change idea as
+             * the STATICENV line above - see debug_emit_static_map_
+             * if_changed()'s own comment in laptop/debug.c. */
+            debug_emit_static_map_if_changed();
         }
 
         uint64_t next_tick_deadline_ms = monotonic_ms() + tick_delay_ms;
@@ -343,6 +348,10 @@ int main(int argc, char **argv)
                      * the new damage_state/hazard_flags instead of going stale. */
                     debug_emit_static_environment();
                 }
+                /* Cheap every-tick check (1296-cell comparison); only
+                 * actually re-prints the STATICMAP line on the rare tick
+                 * where a cell's terrain genuinely changed. */
+                debug_emit_static_map_if_changed();
             }
 
             if(live_mode && !mission_feed_mode && tick_delay_ms > 0)

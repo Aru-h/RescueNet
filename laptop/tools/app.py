@@ -46,13 +46,18 @@ HISTORY_PATH = PROJECT_DIR / ".dashboard_history.json"
 BINARY = PROJECT_DIR / "tron"
 
 # Part 2 (replay): every line a live run forwards over SSE (STATICENV
-# once, LIVEFRAME every tick - and, once Part 3/4 land, STATICMAP/
-# OVERRIDE/OVERRIDEACK) is also saved here, gzip-compressed, so the
-# dashboard can play a run back later without the simulator or a board
-# in the room. See _RecordingWriter below and /api/recordings*.
+# once, LIVEFRAME every tick, STATICMAP on change, and OVERRIDE/
+# OVERRIDEACK once Part 4 lands) is also saved here, gzip-compressed,
+# so the dashboard can play a run back later without the simulator or a
+# board in the room. See _RecordingWriter below and /api/recordings*.
 # Gitignored except one curated demo file - see .gitignore.
-RECORDINGS_DIR = TOOLS_DIR / "recordings"
-RECORDINGS_DIR.mkdir(exist_ok=True)
+#
+# Overridable via DASHBOARD_RECORDINGS_DIR so dashboard_e2e_selftest.py
+# can point this at a throwaway temp directory instead of littering the
+# real recordings/ folder (and the one curated demo file it holds)
+# with test runs on every check-dashboard-e2e invocation.
+RECORDINGS_DIR = Path(os.environ.get("DASHBOARD_RECORDINGS_DIR", str(TOOLS_DIR / "recordings")))
+RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
 _RECORDING_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.jsonl\.gz$")
 
 # --- Headless / sim-only mode --------------------------------------------
@@ -1086,6 +1091,10 @@ def api_run_live():
                     recorder.write_line(line)
                     env = line[len("STATICENV "):]
                     yield f"data: {json.dumps({'type': 'static_env', 'env': json.loads(env)})}\n\n"
+                elif line.startswith("STATICMAP "):
+                    recorder.write_line(line)
+                    terrain = line[len("STATICMAP "):]
+                    yield f"data: {json.dumps({'type': 'static_map', 'map': json.loads(terrain)})}\n\n"
                 else:
                     stderr_lines.append(line)
                     if line.startswith("[DIAG"):

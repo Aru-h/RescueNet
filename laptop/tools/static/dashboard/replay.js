@@ -82,7 +82,7 @@
 
   function parseRecordingText(text) {
     const outFrames = [];
-    let outHeader = null, outEnv = null;
+    let outHeader = null, outEnv = null, outMap = null;
     const lines = text.split("\n");
     for (const raw of lines) {
       if (!raw) continue;
@@ -90,13 +90,20 @@
         try { outHeader = JSON.parse(raw.slice("RECORDING ".length)); } catch (e) { /* skip malformed line */ }
       } else if (raw.startsWith("STATICENV ")) {
         try { outEnv = JSON.parse(raw.slice("STATICENV ".length)); } catch (e) { /* skip malformed line */ }
+      } else if (raw.startsWith("STATICMAP ")) {
+        // Only the LAST STATICMAP line matters for replay - it can be
+        // re-emitted mid-recording (terrain damage accumulating), and a
+        // scrub/jump doesn't try to show terrain "as of that tick", just
+        // the final/latest terrain, same simplification the live path
+        // makes by only ever holding one `terrainMap` value at a time.
+        try { outMap = JSON.parse(raw.slice("STATICMAP ".length)); } catch (e) { /* skip malformed line */ }
       } else if (raw.startsWith("LIVEFRAME ")) {
         try { outFrames.push(JSON.parse(raw.slice("LIVEFRAME ".length))); } catch (e) { /* skip malformed line */ }
       }
       // OVERRIDE / OVERRIDEACK lines (Part 4+) aren't emitted into a
-      // Part-2 recording yet, so there is nothing to parse for them here.
+      // Part-2/3 recording yet, so there is nothing to parse for them here.
     }
-    return { header: outHeader, env: outEnv, frames: outFrames };
+    return { header: outHeader, env: outEnv, map: outMap, frames: outFrames };
   }
 
   function setButtonsVisible(visible) {
@@ -122,6 +129,7 @@
 
     if (typeof global.telemetryReset === "function") global.telemetryReset();
     if (typeof global.setReplayStaticEnvironment === "function") global.setReplayStaticEnvironment(parsed.env);
+    if (typeof global.setReplayTerrainMap === "function") global.setReplayTerrainMap(parsed.map);
     if (global.ConsensusNetwork) global.ConsensusNetwork.reset();
     if (global.DetectionTimeline) global.DetectionTimeline.reset();
 
