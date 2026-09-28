@@ -17,6 +17,23 @@ def c_ident(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "_", name).upper()
 
 
+def c_float_literal(v: float) -> str:
+    """v formatted as a valid C float literal at 9 significant figures
+    (enough to round-trip a float32 exactly - see this file's own comment
+    above the scaler-array generation for why %.9g, not a fixed decimal-
+    place count). %.9g alone is not always a valid C float literal on its
+    own: for an exact value like 0.0 it produces "0" with no decimal point
+    or exponent, and "0f" is not a floating constant in C (an integer
+    constant "0" cannot take an "f" suffix) - it fails to compile with
+    "invalid digit 'f' in octal constant". Appending ".0" whenever the
+    formatted text has neither a '.' nor an exponent marker keeps every
+    literal unambiguously a floating constant."""
+    s = f"{v:.9g}"
+    if "." not in s and "e" not in s and "E" not in s:
+        s += ".0"
+    return s + "f"
+
+
 def find_vocab_base(inputs, group: str, categories) -> int:
     """Index of the one-hot column for this group's FIRST category value -
     the block's base offset in the 74-input vector. group="team_zone_id",
@@ -78,17 +95,26 @@ def generate_header(spec: dict) -> str:
     lines.append("")
     lines.append("/* Exported scaler mean/std (Decision: never recompute downstream -")
     lines.append(" * see data_prep.py's module docstring). Scaled input i is")
-    lines.append(" * (raw[i] - FEATURE_SPEC_SCALER_MEAN[i]) / FEATURE_SPEC_SCALER_STD[i]. */")
+    lines.append(" * (raw[i] - FEATURE_SPEC_SCALER_MEAN[i]) / FEATURE_SPEC_SCALER_STD[i].")
+    lines.append(" * Formatted %.9g (9 significant figures - enough to round-trip a")
+    lines.append(" * float32 exactly), not a fixed decimal-place count: an earlier")
+    lines.append(" * %.8f here quietly truncated small-magnitude columns like evidence_")
+    lines.append(" * timeout's (mean ~0.0007, std ~0.009) to far fewer significant")
+    lines.append(" * figures than large ones, which a C-vs-Python parity test caught -")
+    lines.append(" * core/feature_pack.c's scaled output disagreed with a from-scratch")
+    lines.append(" * Python scaling using this file's own committed constants, by more")
+    lines.append(" * than the fixed-decimal rounding on exactly those columns. */")
     lines.append(f"static const float FEATURE_SPEC_SCALER_MEAN[FEATURE_SPEC_NUM_INPUTS] = {{")
-    lines.append("    " + ", ".join(f"{v:.8f}f" for v in spec["scaler_mean"]))
+    lines.append("    " + ", ".join(c_float_literal(v) for v in spec["scaler_mean"]))
     lines.append("};")
     lines.append(f"static const float FEATURE_SPEC_SCALER_STD[FEATURE_SPEC_NUM_INPUTS] = {{")
-    lines.append("    " + ", ".join(f"{v:.8f}f" for v in spec["scaler_std"]))
+    lines.append("    " + ", ".join(c_float_literal(v) for v in spec["scaler_std"]))
     lines.append("};")
     lines.append("")
     lines.append("/* twin_remaining_path_cost's unreachable-sentinel (65535) replacement -")
     lines.append(" * the training-set mean of actively-traveling rows (data_prep.py). */")
-    lines.append(f"#define FEATURE_SPEC_PATH_COST_SENTINEL_REPLACEMENT ({spec['path_cost_sentinel_replacement']:.8f}f)")
+    lines.append("#define FEATURE_SPEC_PATH_COST_SENTINEL_REPLACEMENT "
+                 f"({c_float_literal(spec['path_cost_sentinel_replacement'])})")
     lines.append("")
     lines.append("#endif /* FEATURE_SPEC_H */")
     lines.append("")

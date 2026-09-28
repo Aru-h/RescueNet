@@ -27,36 +27,46 @@ data-dependent differs between them.
 Run: python3 feature_pack_parity_test.py <features_c.csv> <features_py_raw.csv>
 (see Makefile's check-feature-pack-parity target for the full pipeline).
 
-KNOWN, ROOT-CAUSED, NON-BUG SOURCES OF DISAGREEMENT (as of this test's
-introduction - this test currently FAILS at the strict 1e-5 threshold
-for exactly these two pre-existing reasons, not a feature-formula bug in
-core/feature_pack.c or data_prep.py):
+Passes all 74 columns within 1e-5 (worst column typically ~5e-8, float32
+epsilon) as of the fixes below - it did not always. Two real, root-caused
+issues surfaced while building this test and were fixed rather than
+tolerated:
 
-1. CSV float precision (~8 continuous columns: stamina, the twin_*
-   progress/stamina fields, evidence_timeout): laptop/snapshot.c writes
-   these with limited decimal precision, so data_prep.py's raw dump -
-   read back from that text CSV - carries rounding noise on the order of
-   1e-4 scaled that feature_pack_build_vector()'s full-precision float
-   read never has. Cosmetic, not a bug.
+1. CSV float precision: laptop/snapshot.c used to write continuous
+   columns (stamina, the twin_* progress/stamina fields, evidence_*) at
+   a fixed decimal-place count (%.2f/%.4f/%.6f), so data_prep.py's raw
+   dump - read back from that text CSV - carried rounding noise the
+   full-precision float read never had. Fixed: every float column is
+   now %.9g (round-trips a float32 exactly). This changes every already-
+   collected dataset's exact byte values - regenerate before comparing
+   an old dataset against a new one.
 
-2. Training snapshots are taken BEFORE recovery_dispatch() runs each
-   tick, a deliberate, pre-existing design in core/simulation.c's
-   simulation_step() (predates this feature contract work - see its own
-   comment: "Pass 1 records every team's snapshot rows for this tick
-   BEFORE any recovery_dispatch() runs... Pass 2 then runs the
-   dispatches"). feature_pack_build_vector(), called after a tick fully
-   completes (matching what a real board can actually observe), reflects
-   state AFTER that tick's dispatch. On the ~9% of team-ticks where
-   dispatch changes something (task abandonment, reassignment, a status
-   change to RESTING), this shows up as a real disagreement on the
-   incident/assignment-derived columns specifically (incident_priority,
-   victim_count, status_*, incident_req_capability_*, has_support,
-   hazard_structural, delta_victim_count) - not a formula bug, but a
-   genuine train/serve timing question: should training snapshots move
-   to post-dispatch to match inference-time observability? That would
-   require regenerating the dataset and is a product decision, not
-   something this test or its two source files should resolve
-   unilaterally.
+2. Training-snapshot timing vs. this test's own sampling point: training
+   rows are deliberately captured BEFORE recovery_dispatch() runs each
+   tick (core/simulation.c's Pass 1/Pass 2 split - a team's own
+   situation, not the recovery system's decisions about it, is what the
+   fault predictor should see). This test used to call feature_pack_
+   build_vector() itself, from outside, after a tick had fully finished
+   (i.e. after dispatch) - a different, unfair sampling point, not a
+   real bug in either production file. Fixed with a real design change,
+   not just a test-methodology fix: core/feature_pack.c now caches the
+   vector at Pass-1 time every tick (feature_pack_cache_tick(), called
+   from core/simulation.c just before recovery_manager_step()), and
+   both core/recovery_manager.c's evaluate_fault_predictor() and this
+   test's own feature_pack_dump.c read that same cached vector
+   (feature_pack_get_cached_vector()) instead of building fresh - see
+   core/feature_pack.h's own doc for the full reasoning.
+
+A third, smaller issue surfaced only once (1) and (2) were fixed and the
+mismatch shrank to one column at ~1.5e-5: generate_feature_spec.py wrote
+core/feature_spec.h's SCALER_MEAN/SCALER_STD arrays at a fixed 8 decimal
+places, which silently lost precision on small-magnitude columns
+(evidence_timeout's mean ~0.0007, std ~0.009) relative to the full-
+precision values feature_spec.py's own SCALER_MEAN/SCALER_STD already
+had. Fixed: both are now %.9g via a small helper that also guards the
+one case %.9g alone gets wrong for a C literal - an exact 0.0 formats as
+bare "0", and "0f" is not a valid C floating constant (appends ".0"
+when the formatted text has neither a decimal point nor an exponent).
 """
 import os
 import sys
@@ -88,9 +98,15 @@ def main():
         return 1
 
     # Scale the raw Python side with the committed constants - never refit.
-    mean = np.asarray(SCALER_MEAN, dtype=np.float64)
-    std = np.asarray(SCALER_STD, dtype=np.float64)
-    py_scaled = (py_df[INPUTS].to_numpy(dtype=np.float64) - mean) / std
+    # float32, not float64: core/feature_pack.c does this division in a
+    # 32-bit float, and FEATURE_SPEC_SCALER_MEAN/STD are themselves
+    # float32 arrays - matching that precision here, not just the
+    # formula, is what closes the gap to bit-level agreement rather than
+    # leaving a ~1e-5 float32-vs-float64 rounding residual on every
+    # column, most visible on the ones with a small std.
+    mean = np.asarray(SCALER_MEAN, dtype=np.float32)
+    std = np.asarray(SCALER_STD, dtype=np.float32)
+    py_scaled = (py_df[INPUTS].to_numpy(dtype=np.float32) - mean) / std
 
     py_scaled_df = py_df[["run_id", "team_id", "cycle"]].copy()
     for i, col in enumerate(c_cols):
