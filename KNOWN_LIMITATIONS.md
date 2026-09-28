@@ -66,3 +66,53 @@ Same audience as the `core/` section above: accepted findings from the board/-sp
 4. **`board_led_pulse`** (board/Raspberry_Pi_Pico/main_board.c) — same reasoning as `board_led_init` above.
 5. **`fmt_fixed3`** (both boards' `dk_debug.c`/`debug.c`) — residual `tmp[12]`/`int32_t scaled` truncation risk for a value/decimals combination outside the stamina/CBBA-score range this function is actually called with today. Not reachable given current callers; same class as several already-accepted `core/` LOW items above.
 6. **`sim_task`** (board/STM32N6570-DK/main_board.c) — two config-fragility issues, neither reachable with shipped defaults: (1) `BOARD_SEED + BOARD_SEED_COUNT` computed as `uint32_t` with no overflow guard — a build config with `BOARD_SEED` near `UINT32_MAX` would wrap the seed loop bound; (2) `tick % BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL` has no zero-guard — a build redefining that macro to `0` divides by zero on the first tick. Both require a non-default build config to trigger (shipped defaults are `1u`/`1u` and `50u`).
+
+---
+
+# Known Limitations — system behaviour, detection, dashboard and demo
+
+Audience: anyone running, presenting or judging the single-board STM32N6570-DK build and the laptop dashboard. These are known behaviours and gaps, not open bugs, unless marked otherwise. Each one says what you will see and why.
+
+## A. Simulation behaviour
+
+1. **Stamina/rest can pull a team off an almost-finished task.** A team whose stamina runs out is sent to rest even if its current incident is nearly done. The incident goes back to `INC_OPEN`, unassigned, and is usually picked up later by a different team. Work already done is partly kept (`work_remaining` stays where it was instead of resetting). Reproducible example: seed 2, `--fault-profile=none`, team 1 on incident 0 is pulled off at tick 80 with `work_remaining = 5` of 137 and rests at tick 98; team 7 takes the incident at tick 92. This is a deliberate strictness of the stamina model, and it applies to every assignment, not only manual overrides. It was left unchanged because changing it would change the training dataset.
+
+2. **All 10 teams run on one board.** The submission build (`DK_SINGLE_BOARD_FLAGS`) puts every team on one STM32N6570-DK, and the handshake coordinator defaults to 1 board. Team-to-team messages go over an in-memory virtual bus, not a radio link. The multi-board LoRa path still exists in the code but is not exercised by this build.
+
+## B. Fault detection
+
+3. **Environment faults cannot be detected from team telemetry.** An environment fault only adds travel cost to one cell on the team's next path, which leaves almost no trace in what a team reports. Rules, consensus and the AI all detect ~0% of them. For that reason, fault-detection scores are reported two ways: macro F1 over all 5 classes and over the 4 detectable classes (excluding environment). Quote both.
+
+4. **Rule-based detection is uneven across fault classes.** Measured with `make evaluate` on training-range seeds at the time of writing: communication ~56%, mobility ~38%, resource ~12%, environment and mission ~0% of faults detected by the rules. Re-run `make evaluate` for current numbers; don't rely on these figures after the code changes.
+
+5. **Peer consensus adds robustness, not accuracy.** In `make evaluate`, consensus is never the first evaluator to flag a fault, and communication detection is slightly lower with consensus on. Consensus is valuable as a cross-check that one team's faulty self-report can't hide (and that a single faulty peer can't fake), not as a way to catch more faults. `CONSENSUS_CAP_LOCAL_EVALUATORS` is 0 (off) in this build. Present the AI as the headline detector and consensus as the safety net.
+
+6. **Mobility faults are only visible while a team is travelling.** (See also the CSV section above.) A mobility fault that starts and ends while the team is stationary leaves no observable stall.
+
+7. **The AI fault predictor is inactive until a trained model is exported.** With `FAULT_MODEL_LOADED` at 0 (the default, and required for dataset generation), `fault_predictor_run()` returns all-zero scores. Turning it on changes team behaviour and so changes the CSV. Dataset builds must keep it at 0, and AI-enabled numbers must come from a separate AI-enabled build.
+
+8. **`eval_*` CSV columns are evaluation output, never model input.** They log what each evaluator concluded. Training on them leaks the answer.
+
+## C. Manual override (dashboard simulation mode)
+
+9. **An override guarantees only the initial commitment.** The pin is released as soon as the incident becomes `INC_ASSIGNED` to the pinned team, usually within a few ticks. From then on the team keeps the task through the simulation's normal state, and the normal rules (for example item 1, stamina/rest) still apply. The dashboard shows this as pending → committed → resolved or interrupted. An interrupted override is not re-pinned automatically; drag again if needed.
+
+10. **Overrides work only in dashboard simulation mode.** They are sent over the `--live` simulator's stdin. They are not available in replay mode or when the dashboard is connected to the real board.
+
+11. **System tasks (sector sweeps, equipment runs) can't be override targets.** The shared pin check in `core/cbba.c` only searches real incidents, so a pin onto a system task would silently clear on the next tick. The simulation path rejects these with reason `system_task`, and the dashboard doesn't offer them as drop targets. **Open gap:** the board's USART1 override path has no such check; a board-side override onto a system task silently clears on the next tick.
+
+12. **Override rejections use only what the system itself knows.** A team is refused as `team_unavailable` only if the system has marked it degraded or peer consensus has raised it to the ELEVATED tier. Hidden (not yet detected) faults are never used, so an override onto a team with an undetected fault is accepted. This is deliberate: the reject reason must not leak ground truth.
+
+13. **Windows stdin support is untested.** The non-blocking stdin reader has a Windows branch (`PeekNamedPipe`), but it is not covered by the test suite. macOS and Linux are the tested platforms.
+
+## D. Dashboard map
+
+14. **Buildings are drawn as dots, not filled footprints.** The world generator lets ~120 building-lot cells overlap road cells, so filled footprints always clash with the road layer. A building is a small dot at its centre, and its footprint outline appears when zoomed in or when its card is open.
+
+15. **Blocked terrain is shown with the closest available flag.** `STATICMAP` has no separate rubble flag, so impassable (not navigable) cells stand in for rubble or blocked terrain. `road_blocked` marks blocked road cells specifically.
+
+16. **The consensus network view is undirected.** Each team records which peers it heard from, which is directional. The network view draws one line per team pair, active if either direction was heard. It simplifies the real data; it does not invent any.
+
+## E. Not yet verified on hardware
+
+17. **The DK build's timing and memory are not yet measured on the board.** Tick duration (DWT counter), stack/heap headroom over a full 3000-tick run, and the AI's inference time on the DK (weights ≈ 74 KB of flash, float32) still have to be measured on the physical board. Until then, treat them as estimates.
