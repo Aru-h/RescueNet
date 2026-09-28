@@ -1,5 +1,17 @@
 #include "snapshot.h"
 
+/*
+ * Every float column in this file is written with %.9g (round-trips a
+ * 32-bit float exactly), not a fixed decimal count - a feature-pack
+ * C-vs-Python parity test (laptop/tools/feature_pack_parity_test.py)
+ * found that the previous %.2f/%.3f/%.4f/%.6f choices introduced real,
+ * if small, rounding noise once data_prep.py read the text back and
+ * scaled it, on stamina, the twin_* progress/stamina fields and
+ * evidence_timeout specifically. This changes every already-collected
+ * dataset's exact byte values (though not what they mean) - any dataset
+ * generated before this change needs regenerating to compare cleanly
+ * against one generated after it.
+ */
 #include <stdbool.h>
 #include <stdio.h>
 
@@ -315,7 +327,7 @@ static void write_consensus_columns(uint8_t team_id)
     ConsensusRunInfo_t info = consensus_get_run_info();
 
     fprintf(g_snapshot_file,
-        ",%u,%u,%u,%d,%d,%u,%u,%.3f,%.3f,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
+        ",%u,%u,%u,%d,%d,%u,%u,%.9g,%.9g,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
         info.enforce, info.vbus_link_loss_ppm, (unsigned)mob.round,
         (int)mob.tier, (int)comm.tier,
         mob.x, comm.x,
@@ -355,7 +367,7 @@ static void write_evidence_columns(uint8_t team_id)
 
     watchdog_get_evidence_vector(team_id, evidence, &confirmed_mobility_impairment);
 
-    fprintf(g_snapshot_file, ",%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%u\n",
+    fprintf(g_snapshot_file, ",%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u\n",
         evidence[WATCHDOG_EVIDENCE_SLOT_PROGRESS],
         evidence[WATCHDOG_EVIDENCE_SLOT_STAMINA],
         evidence[WATCHDOG_EVIDENCE_SLOT_COMMUNICATION],
@@ -431,7 +443,7 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
     env_raw_travel_cost = environment_cell_travel_cost(team->loc_x, team->loc_y);
 
     fprintf(g_snapshot_file,
-        "%u,%u,%u,%u,%d,%d,%.2f,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%d,%d,%u,%.4f,%u,%u,%u,%u,%u,%.4f,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d",
+        "%u,%u,%u,%u,%d,%d,%.9g,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u,%u,%u,%u,%d,%d,%u,%.9g,%u,%u,%u,%u,%u,%.9g,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d",
         g_run_id,
         g_dataset_seed,
         cycle,
@@ -674,7 +686,7 @@ void snapshot_record_peer_obs(uint32_t cycle)
             fprintf(g_peer_file,
                 "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,"
                 "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,"
-                "%u,%.3f,%.3f,%u,%.3f,%.3f,%u,%u,%u,%u,%u,%u\n",
+                "%u,%.9g,%.9g,%u,%.9g,%.9g,%u,%u,%u,%u,%u,%u\n",
                 g_run_id, cycle, o, t,
                 (unsigned)(p.rx_on_time || p.rx_late), p.rx_age_ticks,
                 (unsigned)(p.comm_window_n - p.comm_misses), p.comm_misses, p.mob_stalls,
