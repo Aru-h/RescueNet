@@ -17,6 +17,7 @@ This unified Flask application combines:
 """
 
 import csv
+import gzip
 import json
 import os
 import re
@@ -43,6 +44,16 @@ PROJECT_DIR = TOOLS_DIR.parent.parent
 CSV_PATH = PROJECT_DIR / "tron_snapshot_dataset.csv"
 HISTORY_PATH = PROJECT_DIR / ".dashboard_history.json"
 BINARY = PROJECT_DIR / "tron"
+
+# Part 2 (replay): every line a live run forwards over SSE (STATICENV
+# once, LIVEFRAME every tick - and, once Part 3/4 land, STATICMAP/
+# OVERRIDE/OVERRIDEACK) is also saved here, gzip-compressed, so the
+# dashboard can play a run back later without the simulator or a board
+# in the room. See _RecordingWriter below and /api/recordings*.
+# Gitignored except one curated demo file - see .gitignore.
+RECORDINGS_DIR = TOOLS_DIR / "recordings"
+RECORDINGS_DIR.mkdir(exist_ok=True)
+_RECORDING_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.jsonl\.gz$")
 
 # --- Headless / sim-only mode --------------------------------------------
 # Explicit opt-in only (per this feature's own handoff doc: "don't
@@ -259,6 +270,121 @@ def build_binary():
         return ok, result.stdout + result.stderr
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
+
+
+def _git_commit():
+    """The current commit, for a recording's header (Part 5 will compare
+    this against the commit a recording was made on to warn about a
+    possible divergence on take-over). "unknown" rather than raising if
+    git isn't available or this isn't a checkout - a recording is still
+    useful without it."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=PROJECT_DIR,
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _recording_filename(seed, fault_profile, link_loss):
+    """File name includes seed, profile and link loss (spec) so a
+    directory listing is somewhat readable without opening any file;
+    the timestamp keeps repeated runs with the same parameters from
+    colliding. Sanitized: fault_profile is user-supplied (the fault-
+    profile <select>) and must not be able to escape RECORDINGS_DIR or
+    inject path separators."""
+    safe_profile = re.sub(r"[^A-Za-z0-9]+", "", str(fault_profile) or "none") or "none"
+    loss_str = "default" if link_loss is None else f"{link_loss:g}".replace(".", "p")
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    return f"recording_seed{seed}_{safe_profile}_loss{loss_str}_{ts}.jsonl.gz"
+
+
+class _RecordingWriter:
+    """Saves every line a live run forwards to a gzip file under
+    RECORDINGS_DIR, first line a RECORDING header (seed, fault profile,
+    ticks, link loss, tick of start, git commit) - see CONSENSUS_
+    DESIGN.md's dashboard handoff notes and /api/recordings* below for
+    the read side. A run that errors or is stopped early still leaves a
+    valid (shorter) recording behind: close() is always called from
+    /api/run-live's `finally` block.
+    """
+
+    def __init__(self, seed, fault_profile, ticks, link_loss, start_tick=0):
+        self.path = RECORDINGS_DIR / _recording_filename(seed, fault_profile, link_loss)
+        self._fh = gzip.open(self.path, "wt")
+        header = {
+            "type": "recording_header",
+            "seed": seed,
+            "fault_profile": fault_profile,
+            "ticks": ticks,
+            "link_loss": link_loss,
+            "start_tick": start_tick,
+            "git_commit": _git_commit(),
+            "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        self._fh.write("RECORDING " + json.dumps(header) + "\n")
+
+    def write_line(self, line):
+        self._fh.write(line + "\n")
+
+    def close(self):
+        try:
+            self._fh.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _read_recording_header(path):
+    """Just the first line's parsed JSON - cheap enough to do for every
+    file in a directory listing without decompressing the whole thing."""
+    try:
+        with gzip.open(path, "rt") as f:
+            first = f.readline()
+    except OSError:
+        return {}
+    if not first.startswith("RECORDING "):
+        return {}
+    try:
+        return json.loads(first[len("RECORDING "):])
+    except json.JSONDecodeError:
+        return {}
+
+
+@app.route("/api/recordings")
+def api_recordings():
+    """Lists saved recordings, newest first, with their header fields -
+    what the Replay mode selector in index.html populates itself from."""
+    items = []
+    for path in RECORDINGS_DIR.glob("*.jsonl.gz"):
+        header = _read_recording_header(path)
+        items.append({
+            "filename": path.name,
+            "size_bytes": path.stat().st_size,
+            "mtime": path.stat().st_mtime,
+            **{k: v for k, v in header.items() if k != "type"},
+        })
+    items.sort(key=lambda it: it["mtime"], reverse=True)
+    return jsonify(items)
+
+
+@app.route("/api/recordings/<name>")
+def api_recording_file(name):
+    """The full decompressed recording, for the client to parse ONCE
+    into an in-memory frame array (see static/dashboard/replay.js) -
+    every later scrub/play/jump is then array indexing, not a re-fetch.
+    `name` is checked against a strict allow-list pattern (no `/`, no
+    `..`) before touching the filesystem, so this can't be used to read
+    anything outside RECORDINGS_DIR."""
+    if not _RECORDING_NAME_RE.match(name):
+        return jsonify({"status": "error", "message": "invalid recording name"}), 400
+    path = RECORDINGS_DIR / name
+    if not path.is_file():
+        return jsonify({"status": "error", "message": "recording not found"}), 404
+    with gzip.open(path, "rt") as f:
+        content = f.read()
+    return Response(content, mimetype="text/plain")
 
 
 def parse_diag(stderr_text):
@@ -908,6 +1034,20 @@ def api_run_live():
         return jsonify({"error": "seed, ticks and tick_delay_ms must be integers"}), 400
     fault_profile = payload.get("fault_profile", "none")
 
+    # Per-link loss on the virtual peer bus (core/vbus.c's IID model,
+    # CONSENSUS_DESIGN.md 3.5 decision D4: default 0.05 when this flag
+    # is omitted). Optional - the UI leaves this blank most of the time
+    # and lets the simulator's own default apply; recorded into the
+    # header either way so a replay's provenance is complete.
+    link_loss = payload.get("link_loss")
+    if link_loss is not None:
+        try:
+            link_loss = float(link_loss)
+        except (TypeError, ValueError):
+            return jsonify({"error": "link_loss must be a number"}), 400
+        if not (0.0 <= link_loss <= 1.0):
+            return jsonify({"error": "link_loss must be between 0 and 1"}), 400
+
     build_ok, build_log = build_binary()
     if not build_ok:
         def err_stream():
@@ -918,6 +1058,8 @@ def api_run_live():
             "--live", "--trace", "--diag", f"--tick-delay-ms={tick_delay_ms}"]
     if fault_profile and fault_profile != "none":
         args += ["--fault-profile", fault_profile]
+    if link_loss is not None:
+        args += [f"--vbus-loss={link_loss}"]
 
     def generate():
         global _live_proc, _live_paused
@@ -930,15 +1072,18 @@ def api_run_live():
             _live_paused = False
         stderr_lines = []
         start = time.time()
+        recorder = _RecordingWriter(seed, fault_profile, ticks, link_loss)
         try:
             for line in proc.stdout:
                 line = line.rstrip("\n")
                 if not line:
                     continue
                 if line.startswith("LIVEFRAME "):
+                    recorder.write_line(line)
                     frame = line[len("LIVEFRAME "):]
                     yield f"data: {json.dumps({'type': 'frame', 'frame': json.loads(frame)})}\n\n"
                 elif line.startswith("STATICENV "):
+                    recorder.write_line(line)
                     env = line[len("STATICENV "):]
                     yield f"data: {json.dumps({'type': 'static_env', 'env': json.loads(env)})}\n\n"
                 else:
@@ -956,6 +1101,7 @@ def api_run_live():
                 if _live_proc is proc:
                     _live_proc = None
                     _live_paused = False
+            recorder.close()
 
         elapsed = time.time() - start
         diag = parse_diag("\n".join(stderr_lines))
@@ -974,7 +1120,7 @@ def api_run_live():
         }
         history = save_history(run_record)
 
-        yield f"data: {json.dumps({'type': 'done', 'diag': diag, 'telemetry': telemetry, 'history': history, 'elapsed_seconds': round(elapsed, 2)})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'diag': diag, 'telemetry': telemetry, 'history': history, 'elapsed_seconds': round(elapsed, 2), 'recording': recorder.path.name})}\n\n"
 
     return Response(stream_with_context(generate()), mimetype="text/event-stream",
                      headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

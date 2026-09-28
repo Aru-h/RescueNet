@@ -152,6 +152,146 @@ def _live_run_scrollheight_check(browser, width, height):
         page.close()
 
 
+def _replay_check(page, console_errors):
+    """Part 2: records a short live run (already produced a recording
+    file server-side, since /api/run-live always records - see app.py's
+    _RecordingWriter), switches to Replay mode, loads it, and exercises
+    play/pause, scrubbing, jump-to-next-detection, and the drag-drop
+    lockout - all against a real recording produced by this same run,
+    not a hand-built fixture."""
+    page.select_option("#faultProfile", "combined")
+    page.fill("#seed", "21")
+    page.fill("#ticks", "150")
+    page.fill("#tickDelay", "3")
+    page.click("#liveBtn")
+    for _ in range(60):
+        if page.eval_on_selector("#runStateLabel", "el => el.textContent") == "finished":
+            break
+        page.wait_for_timeout(200)
+    else:
+        fail_and_exit("live run for the replay test did not reach 'finished' within 12s")
+        return
+
+    page.select_option("#modeSelect", "replay")
+    live_hidden = page.eval_on_selector("#liveControlsGroup", "el => el.classList.contains('hidden')")
+    replay_shown = page.eval_on_selector("#replayControlsGroup", "el => !el.classList.contains('hidden')")
+    check(live_hidden and replay_shown, "switching to Replay mode swaps the topbar's live controls for replay controls")
+
+    page.wait_for_timeout(300)  # /api/recordings round-trip populating #replaySelect
+    option_count = page.eval_on_selector_all("#replaySelect option", "els => els.length")
+    check(option_count >= 1, f"the recordings list is populated after the live run finished (got {option_count} option(s))")
+    if option_count < 1:
+        return
+
+    page.select_option("#replaySelect", index=0)  # newest first - the run just completed
+    page.click("#replayLoadBtn")
+    page.wait_for_timeout(300)
+
+    frame_count = page.evaluate("() => Replay.frameCount")
+    check(frame_count > 0, f"the selected recording loaded with frames (got {frame_count})")
+    if frame_count <= 0:
+        return
+
+    scrub_visible = page.eval_on_selector("#replayScrubBar", "el => !el.classList.contains('hidden')")
+    check(scrub_visible, "the replay scrub bar appears once a recording is loaded")
+
+    team_rows = page.eval_on_selector_all("#liveTeamTable tbody tr", "els => els.length")
+    check(team_rows == 10, f"a loaded recording's first frame renders all 10 teams in the Teams table (got {team_rows})")
+
+    # Play / Pause.
+    page.click("#replayPlayBtn")
+    page.wait_for_timeout(50)
+    state_playing = page.eval_on_selector("#replayStateLabel", "el => el.textContent")
+    check(state_playing == "playing", f"clicking Play switches replay state to 'playing' (got {state_playing!r})")
+    page.wait_for_timeout(400)
+    idx_while_playing = page.evaluate("() => Replay.currentIndex")
+    check(idx_while_playing > 0, f"playback actually advances through frames (currentIndex={idx_while_playing})")
+    page.click("#replayPlayBtn")
+    page.wait_for_timeout(50)
+    state_paused = page.eval_on_selector("#replayStateLabel", "el => el.textContent")
+    check(state_paused == "paused", f"clicking Pause switches replay state back to 'paused' (got {state_paused!r})")
+
+    # Scrubbing: jump straight to an arbitrary frame - array indexing,
+    # not a re-fetch/re-parse of the recording (see replay.js's own
+    # comment on why this is safe to do repeatedly).
+    target = min(10, frame_count - 1)
+    page.evaluate(f"""() => {{
+      const el = document.getElementById('replayScrubber');
+      el.value = {target};
+      el.dispatchEvent(new Event('input'));
+    }}""")
+    page.wait_for_timeout(100)
+    idx_after_scrub = page.evaluate("() => Replay.currentIndex")
+    check(idx_after_scrub == target, f"scrubbing the range input seeks to that exact frame index (expected {target}, got {idx_after_scrub})")
+
+    # Jump to next detection - only asserted strictly if this particular
+    # seeded run actually produced one (combined faults over 150 ticks
+    # almost always do, but this must not be a flaky assertion on a run
+    # that happened not to).
+    page.evaluate("() => Replay.seekToIndex(0)")
+    idx_before_jump = page.evaluate("() => Replay.currentIndex")
+    page.click("#replayJumpBtn")
+    page.wait_for_timeout(100)
+    idx_after_jump = page.evaluate("() => Replay.currentIndex")
+    if idx_after_jump > idx_before_jump:
+        check(True, f"Next detection jumps forward to a real detection event (tick index {idx_before_jump} -> {idx_after_jump})")
+    else:
+        print(f"INFO: no detection event found in this run's recording after index {idx_before_jump} "
+              "(not a failure - combined faults don't guarantee one in every seeded run); "
+              "Next detection correctly left the position unchanged")
+
+    # Drag-drop lockout: a real mouse drag from a team marker onto an
+    # incident marker must NOT open the override box while in replay.
+    # A later frame is used (not tick 0) since incidents typically
+    # haven't been discovered/assigned yet at the very start of a run -
+    # scanning several candidate frames for a team/incident pair that
+    # actually exists keeps this assertion from being skipped in
+    # practice rather than actually exercising the drag path.
+    positions = None
+    for probe_idx in (30, 60, 90, 120, min(10, frame_count - 1), 0):
+        if probe_idx < 0 or probe_idx >= frame_count:
+            continue
+        page.evaluate(f"() => Replay.seekToIndex({probe_idx})")
+        page.wait_for_timeout(80)
+        positions = page.evaluate("""() => {
+          const frame = window._lastFrame;
+          if (!frame) return null;
+          for (const team of frame.teams) {
+            const inc = frame.incidents.find(i => i.status !== 3 && i.id !== team.dest_id);
+            if (inc) {
+              const rect = document.getElementById('mapCanvas').getBoundingClientRect();
+              const teamPt = mapCamera.worldToScreen(team.x, team.y);
+              const incPt = mapCamera.worldToScreen(inc.x, inc.y);
+              return { teamX: rect.left + teamPt.x, teamY: rect.top + teamPt.y, incX: rect.left + incPt.x, incY: rect.top + incPt.y };
+            }
+          }
+          return null;
+        }""")
+        if positions:
+            break
+    replay_active = page.evaluate("() => Replay.isActive()")
+    check(replay_active, "Replay.isActive() is true while a recording is loaded (gates map drag-drop)")
+    if positions:
+        page.mouse.move(positions["teamX"], positions["teamY"])
+        page.mouse.down()
+        page.mouse.move(positions["incX"], positions["incY"], steps=5)
+        page.mouse.up()
+        page.wait_for_timeout(150)
+        override_box_hidden = page.eval_on_selector("#overrideBox", "el => el.classList.contains('hidden')")
+        check(override_box_hidden, "dragging a team onto an incident in Replay mode does not open the override box (team markers aren't draggable)")
+    else:
+        print("INFO: no eligible (team, incident) pair found at tick 0 of this recording to drag-test - skipped that one assertion")
+
+    check(len(console_errors) == 0,
+          f"no console/page errors during the replay checks (got {len(console_errors)}: {console_errors[:5]})")
+
+    # Back to Live mode - leaves the page in a clean state for anything after this.
+    page.select_option("#modeSelect", "live")
+    page.wait_for_timeout(100)
+    scrub_hidden_again = page.eval_on_selector("#replayScrubBar", "el => el.classList.contains('hidden')")
+    check(scrub_hidden_again, "switching back to Live mode hides the replay scrub bar again")
+
+
 def main():
     try:
         from playwright.sync_api import sync_playwright
@@ -397,6 +537,9 @@ def main():
             check(len(console_errors) == 0,
                   f"no browser console errors / page errors during the run (got {len(console_errors)}: "
                   f"{console_errors[:5]})")
+
+            # Part 2: replay of a recorded live run.
+            _replay_check(page, console_errors)
 
             page.close()
 

@@ -370,7 +370,14 @@
       <span class="sub hidden" id="statusLine"></span>
       <span class="hidden" id="lastRunLine"></span>
     </div>
-    <div class="topbar-group">
+    <div class="tfield">
+      <label>Mode</label>
+      <select id="modeSelect" onchange="setDashboardMode(this.value)">
+        <option value="live" selected>Live</option>
+        <option value="replay">Replay</option>
+      </select>
+    </div>
+    <div class="topbar-group" id="liveControlsGroup">
       <div class="tfield"><label>Seed</label><input id="seed" type="number" value="1"></div>
       <div class="tfield"><label>Seeds</label><input id="seedCount" type="number" value="1"></div>
       <div class="tfield"><label>Ticks</label><input id="ticks" type="number" value="2000"></div>
@@ -386,12 +393,34 @@
         </select>
       </div>
       <div class="tfield"><label>Delay ms</label><input id="tickDelay" type="number" value="150"></div>
+      <div class="tfield"><label title="Per-link loss probability on the virtual peer bus (--vbus-loss). Blank uses the simulator's own default.">Link loss</label><input id="linkLoss" type="number" step="0.01" min="0" max="1" placeholder="default"></div>
       <button type="button" id="liveBtn" class="topbar-btn" onclick="runLive()" title="Start a live, tick-by-tick simulator run">▶ Live</button>
       <button type="button" id="pauseLiveBtn" onclick="pauseLive()" class="topbar-btn hidden" title="Pause the live run (SIGSTOP - world state is frozen, not lost)">⏸ Pause</button>
       <button type="button" id="resumeLiveBtn" onclick="resumeLive()" class="topbar-btn hidden" title="Resume the paused run">▶ Resume</button>
       <button type="button" id="stopLiveBtn" onclick="stopLive()" class="topbar-btn hidden" style="background:var(--bad);color:#fff;">■ Stop</button>
       <span class="tstat hidden" id="runStateWrap"><span class="tstat-label">State</span><span class="tstat-value" id="runStateLabel">–</span></span>
       <button type="button" id="runBtn" class="topbar-btn" onclick="runSimulation()" style="background:var(--accent);color:#04150a;border:none;font-weight:600;">Batch</button>
+    </div>
+    <div class="topbar-group hidden" id="replayControlsGroup">
+      <div class="tfield">
+        <label>Recording</label>
+        <select id="replaySelect" style="min-width:260px;"></select>
+      </div>
+      <button type="button" id="replayLoadBtn" class="topbar-btn" onclick="Replay.loadSelected()">Load</button>
+      <button type="button" id="replayRefreshBtn" class="topbar-btn" onclick="Replay.refreshList()" title="Refresh the recordings list">↻</button>
+      <button type="button" id="replayPlayBtn" class="topbar-btn hidden" onclick="Replay.togglePlay()">▶ Play</button>
+      <div class="tfield hidden" id="replaySpeedField">
+        <label>Speed</label>
+        <select id="replaySpeed" onchange="Replay.setSpeed(parseFloat(this.value))">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+          <option value="8">8×</option>
+        </select>
+      </div>
+      <button type="button" id="replayJumpBtn" class="topbar-btn hidden" onclick="Replay.jumpToNextDetection()" title="Jump to the next tick where any team goes ELEVATED or degraded">⏭ Next detection</button>
+      <span class="tstat hidden" id="replayStateWrap"><span class="tstat-label">State</span><span class="tstat-value" id="replayStateLabel">–</span></span>
     </div>
     <div class="topbar-stats">
       <span class="tstat"><span class="tstat-label">Tick</span><span class="tstat-value" id="topbarTick">–</span></span>
@@ -402,6 +431,11 @@
       <button type="button" id="themeToggleBtn" class="topbar-btn" onclick="DashboardTheme.toggle()">☀️ Light</button>
       <button type="button" onclick="exitDashboard()" class="topbar-btn" style="background:none;border:none;color:var(--bad);">Disconnect / Exit</button>
     </div>
+  </div>
+  <div class="sub hidden" id="replayScrubBar" style="padding:4px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+    <span id="replayTickLabel" style="font-size:11px;color:var(--muted);white-space:nowrap;">tick 0 / 0</span>
+    <input type="range" id="replayScrubber" min="0" max="0" value="0" style="flex:1;" oninput="Replay.seekToIndex(parseInt(this.value, 10))">
+    <span style="font-size:11px;color:var(--muted);white-space:nowrap;">Replay — switch to Live to reassign tasks</span>
   </div>
   <div class="sub hidden" id="boardMissionBar" style="padding:4px 20px;border-bottom:1px solid var(--border);">
     <span id="boardMissionText">Waiting for board handshake…</span>
@@ -453,7 +487,7 @@
               <span style="margin-left:8px;"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;vertical-align:-1px;"></span> safe zone</span>
               <span style="margin-left:8px;">🔥 fire · ☢ gas</span>
               <span style="margin-left:8px;">- - epicenter</span>
-              <span style="margin-left:8px;">drag to pan · wheel to zoom · drag a team onto an incident to reassign</span>
+              <span style="margin-left:8px;" id="dragHintText">drag to pan · wheel to zoom · drag a team onto an incident to reassign</span>
             </div>
           </div>
           <div class="panel live-side-col">
@@ -653,6 +687,7 @@
 <script src="/static/dashboard/timeline.js"></script>
 <script src="/static/dashboard/panels.js"></script>
 <script src="/static/dashboard/theme.js"></script>
+<script src="/static/dashboard/replay.js"></script>
 
 <script>
 /* --- STARTUP GATE LOGIC --- */
@@ -912,6 +947,18 @@ function createSimulationTelemetry() {
 }
 
 let simTelemetry = createSimulationTelemetry();
+
+// Same reason as setReplayStaticEnvironment() above: replay.js can't
+// reach the `let simTelemetry` binding directly. Unlike the live SSE
+// path's telemetryProcessFrame() (which only ever moves forward one
+// tick at a time), replay.js recomputes both of these fresh for
+// whatever frame index it just rendered - forward OR backward - from
+// the full recording it already has in memory, so this setter only
+// ever needs to merge in already-correct values, never derive them.
+function replaySyncTelemetry(cumulativePatch, lastChangeTickPatch) {
+  Object.assign(simTelemetry.cumulative, cumulativePatch || {});
+  Object.assign(simTelemetry.par.lastChangeTick, lastChangeTickPatch || {});
+}
 
 function telemetryReset() {
   simTelemetry = createSimulationTelemetry();
@@ -1366,6 +1413,14 @@ let mapHitTargets = [];
 let selectedMarker = null;
 let staticEnvironment = null;
 
+// replay.js is a separate script file, so it can't assign this `let`
+// binding directly - a top-level let/const in a classic script creates
+// a binding in the script's own scope, not a `window.staticEnvironment`
+// property the way a var/function declaration would (function
+// declarations, like this one, DO become window properties, which is
+// exactly why this setter works as the bridge).
+function setReplayStaticEnvironment(env) { staticEnvironment = env; }
+
 function drawFrame(frame, skipInspector) {
   window._lastFrame = frame;
   if (!mapCtx) return;
@@ -1533,7 +1588,12 @@ let suppressNextClick = false; // set when a pan drag just ended, so the trailin
 
 function handleMapMouseDown(evt) {
   const { sx, sy } = screenPointFromEvent(evt);
-  const teamHit = hitTestAt(sx, sy, "team");
+  // Replay mode (Part 2): team markers aren't draggable - dragging one
+  // pans the camera instead, same as dragging empty space. Selection
+  // (click, not drag) is untouched, and Replay itself uses the same
+  // core code no reassignment would ever reach in this mode.
+  const replayBlocksTeamDrag = window.Replay && window.Replay.isActive();
+  const teamHit = replayBlocksTeamDrag ? null : hitTestAt(sx, sy, "team");
   if (teamHit) {
     dragState = { mode: "team", teamHit, startSx: sx, startSy: sy, curSx: sx, curSy: sy };
   } else {
@@ -1922,6 +1982,30 @@ function setRunState(state) {
   resumeBtn.classList.toggle("hidden", state !== "paused");
   stopBtn.classList.toggle("hidden", state === "finished");
   liveBtn.disabled = state === "running" || state === "paused";
+}
+
+// Live vs Replay (Part 2). Switching modes stops whichever one isn't
+// being switched to, so only one data source ever drives drawFrame()/
+// updateLiveTables() at a time - runLive()'s SSE loop and Replay's
+// playback loop are otherwise completely independent of each other.
+let dashboardMode = "live";
+function setDashboardMode(mode) {
+  dashboardMode = mode;
+  document.getElementById("liveControlsGroup").classList.toggle("hidden", mode === "replay");
+  document.getElementById("replayControlsGroup").classList.toggle("hidden", mode !== "replay");
+  const hint = document.getElementById("dragHintText");
+  if (hint) {
+    hint.textContent = mode === "replay"
+      ? "drag to pan · wheel to zoom · Replay — switch to Live to reassign tasks"
+      : "drag to pan · wheel to zoom · drag a team onto an incident to reassign";
+  }
+  if (mode === "replay") {
+    if (liveAbortController) stopLive();
+    Replay.refreshList();
+  } else {
+    Replay.stop();
+    document.getElementById("replayScrubBar").classList.add("hidden");
+  }
 }
 
 async function pauseLive() {
