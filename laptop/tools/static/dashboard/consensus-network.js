@@ -3,8 +3,14 @@
  *
  * The consensus network panel: the 10 teams drawn as a ring of nodes,
  * each showing its mobility/communication tier and fast-path flag,
- * with a real 10x10 mesh of edges between every pair, pulsed for a
- * delivered beacon and faded for a missed one.
+ * with a real 10x10 mesh of edges between every pair. Delivered links
+ * stay deliberately faint - up to 45 of them at once reads as a
+ * hairball if they're all solid - while a missed link gets a red
+ * dashed highlight, since that's the thing actually worth noticing.
+ * A pair only flashes (pulses) on a delivered<->missed transition, not
+ * every tick it happens to still be delivered, and selecting a team
+ * fades every other pair into the background so that team's own links
+ * stand out.
  *
  * Part 1 originally built this as a hub-and-spoke proxy (one spoke per
  * team, pulsed by that team's own live/dark fraction) because LIVEFRAME
@@ -46,6 +52,11 @@
     // Per-UNDIRECTED-pair pulse energy, keyed "i-j" (i<j) - decays each
     // render toward 0, same idea as the old per-team pulse array.
     let edgePulse = {};
+    // Last known delivered/missed state per pair, so update() can pulse
+    // only on a CHANGE rather than re-flashing all ~45 pairs every tick
+    // most of them stay delivered on (see draw()'s own comment on why
+    // that read as a hairball).
+    let prevDelivered = {};
     let lastRenderMs = 0;
     let selected = null; // team id or null
     let unsubscribe = null;
@@ -89,6 +100,14 @@
       // consensus isn't built/absent from this frame (see file header) -
       // that pair draws as a faint dashed "no data" line, same visual
       // language the old hub-and-spoke proxy used for that case.
+      //
+      // Deliberately asymmetric by design, not just leftover styling:
+      // delivered links stay very faint even at full pulse energy (up to
+      // 45 of them at once is a hairball if they're all solid), MISSED
+      // links get a real red dashed highlight since that's the one thing
+      // worth drawing the eye to, and edgePulse itself only flashes on a
+      // delivered<->missed transition (see update()) rather than every
+      // tick a pair happens to still be delivered.
       const n = lastFrameTeams.length;
       for (let i = 0; i < n; i++) {
         const teamI = lastFrameTeams[i];
@@ -101,10 +120,15 @@
           const key = `${i}-${j}`;
           const hasData = typeof teamI.heard === "number" && typeof teamJ.heard === "number";
           const energy = edgePulse[key] || 0;
+          // A selected team's own links stay at full strength; every
+          // other pair fades toward the background so one team's links
+          // can actually be picked out of the mesh instead of getting
+          // lost in the other 44.
+          const dim = (selected === null || i === selected || j === selected) ? 1 : 0.12;
 
           if (!hasData) {
             ctx.save();
-            ctx.strokeStyle = "rgba(139,152,165,0.10)";
+            ctx.strokeStyle = `rgba(139,152,165,${(0.10 * dim).toFixed(3)})`;
             ctx.lineWidth = 1;
             ctx.setLineDash([2, 4]);
             ctx.beginPath();
@@ -116,12 +140,17 @@
           }
 
           const delivered = !!((teamI.heard & (1 << j)) || (teamJ.heard & (1 << i)));
-          const baseAlpha = delivered ? 0.16 : 0.04;
-          const alpha = Math.min(1, baseAlpha + energy * 0.6);
           ctx.save();
-          ctx.strokeStyle = `rgba(88,166,255,${alpha})`;
-          ctx.lineWidth = 1 + energy * 2.2;
-          if (!delivered) ctx.setLineDash([4, 3]); // fading for a missed pair this tick
+          if (delivered) {
+            const alpha = Math.min(0.5, 0.05 + energy * 0.35) * dim;
+            ctx.strokeStyle = `rgba(88,166,255,${alpha.toFixed(3)})`;
+            ctx.lineWidth = 1 + energy * 1.5;
+          } else {
+            const alpha = Math.min(1, 0.35 + energy * 0.5) * dim;
+            ctx.strokeStyle = `rgba(248,81,73,${alpha.toFixed(3)})`;
+            ctx.lineWidth = 1 + energy * 1.5;
+            ctx.setLineDash([4, 3]);
+          }
           ctx.beginPath();
           ctx.moveTo(nodeI.cx, nodeI.cy);
           ctx.lineTo(nodeJ.cx, nodeJ.cy);
@@ -254,7 +283,17 @@
           const hasData = typeof teamI.heard === "number" && typeof teamJ.heard === "number";
           const delivered = hasData && !!((teamI.heard & (1 << j)) || (teamJ.heard & (1 << i)));
           const key = `${i}-${j}`;
-          edgePulse[key] = delivered ? 1 : (edgePulse[key] || 0) * 0.82; // pulse on delivery, decay otherwise
+          const prev = prevDelivered[key];
+          // Pulse only on a delivered<->missed transition - most pairs
+          // stay delivered tick after tick under normal conditions, and
+          // re-triggering the flash for all ~45 of them every tick is
+          // what read as constant noise rather than "something changed."
+          if (hasData && prev !== undefined && prev !== delivered) {
+            edgePulse[key] = 1;
+          } else {
+            edgePulse[key] = (edgePulse[key] || 0) * 0.82;
+          }
+          if (hasData) prevDelivered[key] = delivered;
         }
       }
       if (selected !== null) showDetail(selected);
@@ -268,6 +307,7 @@
     function reset() {
       lastFrameTeams = null;
       edgePulse = {};
+      prevDelivered = {};
       selected = null;
       if (ctx && canvas) ctx.clearRect(0, 0, canvas.getBoundingClientRect().width, canvas.getBoundingClientRect().height);
       showDetail(null);

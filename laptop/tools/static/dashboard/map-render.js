@@ -38,7 +38,7 @@
   // ({width, height, rows: [hex, ...]} - see debug_emit_static_map_
   // if_changed() in laptop/debug.c). Each row is `width` cells packed
   // 8 hex chars each: 2 (flags: bit0 navigable, bit1 flood, bits2-4
-  // road_class) + 2 (travel_cost) + 4 (district_id).
+  // road_class, bit5 road_blocked) + 2 (travel_cost) + 4 (district_id).
   // A brighter, distinctly-hued neutral than blocked cells or buildings
   // (both stay on the rgba(139,152,165,…) grey), so the road network
   // reads as its own layer instead of blending into "just blocked".
@@ -92,6 +92,7 @@
           navigable: !!(flags & 0x01),
           flood: !!(flags & 0x02),
           roadClass: (flags >> 2) & 0x07,
+          roadBlocked: !!(flags & 0x20),
           travelCost: cost,
           districtId: district,
         };
@@ -149,22 +150,55 @@
           const style = ROAD_STYLE[cell.roadClass];
           const laneW = cellPx * style.widthFrac;
           octx.fillStyle = `rgba(${ROAD_COLOR_RGB},${style.alpha})`;
-          // A "+" per cell rather than a full-cell block - adjoining road
-          // cells' crosses overlap into a continuous lane through the
-          // grid instead of a checkerboard of isolated squares.
-          octx.fillRect(p.x, p.y + (cellPx - laneW) / 2, cellPx, laneW);
-          octx.fillRect(p.x + (cellPx - laneW) / 2, p.y, laneW, cellPx);
+          const cxp = p.x + cellPx / 2, cyp = p.y + cellPx / 2;
+          const north = gy > 0 ? t.cells[(gy - 1) * t.width + gx] : null;
+          const south = gy + 1 < t.height ? t.cells[(gy + 1) * t.width + gx] : null;
+          const west = gx > 0 ? t.cells[gy * t.width + gx - 1] : null;
+          const east = gx + 1 < t.width ? t.cells[gy * t.width + gx + 1] : null;
+          const isRoad = (c) => !!(c && c.roadClass > 0);
+          const hasN = isRoad(north), hasS = isRoad(south), hasW = isRoad(west), hasE = isRoad(east);
+          // A hub square plus an arm toward each neighbor that's ALSO a
+          // road cell - only real connections get drawn, not a blind
+          // "+" regardless of what's actually next door (which read as
+          // scattered disconnected blobs rather than a road network).
+          octx.fillRect(cxp - laneW / 2, cyp - laneW / 2, laneW, laneW);
+          if (hasN) octx.fillRect(cxp - laneW / 2, p.y, laneW, cellPx / 2 + laneW / 2);
+          if (hasS) octx.fillRect(cxp - laneW / 2, cyp - laneW / 2, laneW, cellPx / 2 + laneW / 2);
+          if (hasW) octx.fillRect(p.x, cyp - laneW / 2, cellPx / 2 + laneW / 2, laneW);
+          if (hasE) octx.fillRect(cxp - laneW / 2, cyp - laneW / 2, cellPx / 2 + laneW / 2, laneW);
           if (cell.roadClass === 4) {
             octx.strokeStyle = "rgba(255,255,255,0.5)";
             octx.lineWidth = 1;
+            if (hasW || hasE) {
+              octx.beginPath();
+              octx.moveTo(hasW ? p.x : cxp, cyp);
+              octx.lineTo(hasE ? p.x + cellPx : cxp, cyp);
+              octx.stroke();
+            }
+            if (hasN || hasS) {
+              octx.beginPath();
+              octx.moveTo(cxp, hasN ? p.y : cyp);
+              octx.lineTo(cxp, hasS ? p.y + cellPx : cyp);
+              octx.stroke();
+            }
+          }
+          if (cell.roadBlocked) {
+            // Still drawn as a road (it's a real segment of the network,
+            // just obstructed right now) but flagged unmistakably: a
+            // dashed outline plus a small X, never the same look as the
+            // terrain layer's "not navigable at all" dark hatch above.
+            octx.save();
+            octx.strokeStyle = "rgba(248,81,73,0.75)";
+            octx.lineWidth = 1;
+            octx.setLineDash([3, 2]);
+            octx.strokeRect(p.x + 1, p.y + 1, cellPx - 2, cellPx - 2);
+            octx.setLineDash([]);
+            const xr = Math.min(cellPx, laneW * 1.4) / 2;
             octx.beginPath();
-            octx.moveTo(p.x, p.y + cellPx / 2);
-            octx.lineTo(p.x + cellPx, p.y + cellPx / 2);
+            octx.moveTo(cxp - xr, cyp - xr); octx.lineTo(cxp + xr, cyp + xr);
+            octx.moveTo(cxp + xr, cyp - xr); octx.lineTo(cxp - xr, cyp + xr);
             octx.stroke();
-            octx.beginPath();
-            octx.moveTo(p.x + cellPx / 2, p.y);
-            octx.lineTo(p.x + cellPx / 2, p.y + cellPx);
-            octx.stroke();
+            octx.restore();
           }
         }
       }
@@ -210,8 +244,18 @@
     ctx.drawImage(_terrainBitmap, 0, 0, s.viewW, s.viewH);
   }
 
+  // fit-to-view zoom, recovered from state.minZoom (= fit*0.4, see
+  // camera.js's createCamera) without either file hardcoding the
+  // other's constant. Several layers below gate on a multiple of this
+  // rather than an absolute zoom number, so "default view" behaves the
+  // same at any viewport size.
+  function fitZoomOf(view) { return view.state.minZoom / 0.4; }
+
+  // Hidden at the default (fit-to-view) zoom - it adds nothing over the
+  // terrain/road layer until zoomed in far enough to actually align
+  // against individual cells.
   function drawGrid(ctx, view, gridN) {
-    const w = view.state.viewW, h = view.state.viewH;
+    if (view.state.zoom < fitZoomOf(view) * 1.6) return;
     ctx.save();
     ctx.strokeStyle = "#182028";
     ctx.lineWidth = 1;
@@ -224,52 +268,74 @@
       ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(d.x, d.y); ctx.stroke();
     }
     ctx.restore();
-    void w; void h;
   }
 
-  // Buildings: shaded by floor count, tinted by damage, with a small
-  // floor-count label when the building is drawn big enough (i.e.
-  // zoomed in enough) to read it.
-  function drawBuildings(ctx, view, env) {
+  // STATICENV's building x/y IS the footprint's centre, not its
+  // top-left (core/environment.c's place_building_rect: loc_x = x +
+  // w/2, w/h are the full footprint - see dashboard_e2e_selftest.py's
+  // building-footprint-centring check for the regression test this
+  // backs). Exported so that test can call it directly rather than
+  // inferring centring from rendered pixels.
+  function buildingFootprintWorldRect(b) {
+    const w = Math.max(1, b.w || 1), h = Math.max(1, b.h || 1);
+    return { x: b.x - w / 2, y: b.y - h / 2, w, h };
+  }
+
+  // Buildings: a small dot at the true centre, sized by floor count,
+  // neutral colour - no filled footprint. Even correctly centred, a
+  // filled footprint fights visually with the road layer (~120
+  // building-lot cells are also road cells in this generator), so the
+  // footprint itself is only an outline, shown for every building once
+  // zoomed in past a threshold, or forced open for one specific
+  // building via opts.outlineBuildingId (index.html sets this to the
+  // building behind an open incident-group hover/click card).
+  function drawBuildings(ctx, view, env, opts) {
     if (!env || !env.buildings) return;
-    const px1 = view.worldToScreen(0, 0), px2 = view.worldToScreen(1, 0);
-    const pxPerUnit = Math.abs(px2.x - px1.x) || 1;
+    opts = opts || {};
+    const outlineBuildingId = opts.outlineBuildingId;
+    const fitZoom = fitZoomOf(view);
+    const showAllFootprints = view.state.zoom >= fitZoom * 2.2;
+    const showLabels = view.state.zoom >= fitZoom * 1.4;
 
     env.buildings.forEach((b) => {
-      const wW = Math.max(1, b.w) * 0.9;
-      const wH = Math.max(1, b.h) * 0.9;
-      const topLeft = view.worldToScreen(b.x - wW / 2, b.y - wH / 2);
-      const size = { w: wW * pxPerUnit, h: wH * pxPerUnit };
-
+      const center = view.worldToScreen(b.x, b.y);
       const damageFrac = Math.min(1, (b.damage || 0) / 255);
       const floors = Math.max(1, b.floors || 1);
-      const floorShade = Math.min(1, floors / 10); // taller -> a bit darker/denser fill
-      const baseAlpha = 0.05 + floorShade * 0.10;
+      const dotR = Math.max(2, Math.min(6, 1.5 + floors * 0.35));
 
-      // Neutral fill always - red is reserved for P1 incidents and the
-      // team fault dot, so damage here reads as a darker shade plus a
-      // cross-hatch overlay, never a colour swap to red.
-      ctx.fillStyle = `rgba(139,152,165,${(baseAlpha + damageFrac * 0.12).toFixed(3)})`;
-      ctx.strokeStyle = damageFrac > 0.5 ? "rgba(230,237,243,0.4)" : "rgba(139,152,165,0.22)";
-      ctx.lineWidth = 1;
-      ctx.fillRect(topLeft.x, topLeft.y, size.w, size.h);
-      ctx.strokeRect(topLeft.x, topLeft.y, size.w, size.h);
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, dotR, 0, Math.PI * 2);
+      // Neutral always - red stays reserved for P1 incidents and the
+      // team fault dot - damage just deepens this same grey.
+      ctx.fillStyle = `rgba(139,152,165,${(0.45 + damageFrac * 0.45).toFixed(3)})`;
+      ctx.fill();
       if (damageFrac > 0.15) {
-        drawHatch(ctx, topLeft.x, topLeft.y, size.w, size.h, `rgba(13,17,23,${(0.15 + damageFrac * 0.35).toFixed(3)})`, 5);
+        ctx.strokeStyle = "rgba(230,237,243,0.5)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
       }
 
-      if (pxPerUnit >= 10 && size.w >= 16 && size.h >= 12) {
-        // Drawn as a small blue chip (not plain text) so it never reads as
-        // an incident label - incident labels are plain text under a marker.
+      if (showAllFootprints || b.id === outlineBuildingId) {
+        const rect = buildingFootprintWorldRect(b);
+        const topLeft = view.worldToScreen(rect.x, rect.y);
+        const bottomRight = view.worldToScreen(rect.x + rect.w, rect.y + rect.h);
+        ctx.strokeStyle = (b.id === outlineBuildingId) ? "rgba(255,255,255,0.6)" : "rgba(139,152,165,0.3)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+      }
+
+      if (showLabels && dotR >= 3) {
+        // Small and deliberately low-contrast - incidents are the thing
+        // that should draw the eye on this map, not the building itself.
         const label = `${floors}F`;
-        ctx.font = `${Math.max(8, Math.min(11, pxPerUnit * 0.5))}px sans-serif`;
+        ctx.font = "8px sans-serif";
         const w = ctx.measureText(label).width;
-        ctx.fillStyle = "rgba(13,17,23,0.55)";
-        ctx.fillRect(topLeft.x, topLeft.y, w + 4, 12);
-        ctx.fillStyle = "rgba(88,166,255,0.9)";
+        ctx.fillStyle = "rgba(13,17,23,0.35)";
+        ctx.fillRect(center.x + dotR + 1, center.y - 5, w + 3, 10);
+        ctx.fillStyle = "rgba(139,152,165,0.6)";
         ctx.textAlign = "left";
         ctx.textBaseline = "top";
-        ctx.fillText(label, topLeft.x + 2, topLeft.y + 1);
+        ctx.fillText(label, center.x + dotR + 2.5, center.y - 4);
       }
     });
   }
@@ -328,22 +394,23 @@
     return hits;
   }
 
-  function labelOverlaps(box, drawn) {
-    return drawn.some((b) => !(box.x2 < b.x1 || box.x1 > b.x2 || box.y2 < b.y1 || box.y1 > b.y2));
-  }
-
-  // Incidents sized by priority (P1 largest) and victim count. Incidents
-  // that share a building_id are collapsed into a single marker with a
-  // count badge - their full list is attached to the hit's `groupIncidents`
-  // for the hover tooltip / click inspector (see index.html's
-  // incidentSummaryLine / showMapTooltip / renderTeamCard) rather than
-  // trying to cram every one of them into an on-map label. Labels are
-  // drawn worst-priority-first and a label that would overlap one already
-  // placed is dropped rather than left to overlap it.
+  // Markers only, no on-map text (map simplification decision after
+  // c68a1f7): colour is priority, size is victim count, a small corner
+  // badge is the hazard type. Incidents that share a building_id are
+  // collapsed into one marker with a count badge - their full list is
+  // attached to the hit's `groupIncidents` for the hover/click card (see
+  // index.html's incidentSummaryLine / showMapCard) rather than either
+  // drawing N overlapping labels or picking one incident to speak for
+  // the rest.
   function drawIncidents(ctx, view, list, opts) {
     const hits = [];
     const fogViewMode = opts.fogViewMode;
     const selectedMarker = opts.selectedMarker;
+    // A building-linked incident is drawn AT its building's own marker
+    // (not its own raw x/y, which can sit slightly off the building's
+    // true centre) so the incident and building markers are the same
+    // dot, not two overlapping ones a pixel or two apart.
+    const buildingsById = new Map((opts.buildings || []).map((b) => [b.id, b]));
     const priorityScale = { 1: 1.25, 2: 1.05, 3: 0.9, 4: 0.75 };
 
     const visible = (list || []).filter((inc) => {
@@ -370,8 +437,6 @@
     clusters.forEach((c) => c.members.sort((a, b) => (a.priority - b.priority) || ((b.victims || 0) - (a.victims || 0))));
     clusters.sort((a, b) => a.members[0].priority - b.members[0].priority);
 
-    const drawnLabelBoxes = [];
-
     clusters.forEach((cluster) => {
       const members = cluster.members;
       const inc = members[0];
@@ -380,7 +445,9 @@
       const color = PRIORITY_COLORS[inc.priority] || "#8b98a5";
       const pScale = priorityScale[inc.priority] || 0.85;
       const worldSize = Math.min(0.9, (0.32 + inc.victims * 0.045)) * pScale;
-      const center = view.worldToScreen(inc.x, inc.y);
+      const building = (inc.building_id !== undefined && inc.building_id >= 0) ? buildingsById.get(inc.building_id) : null;
+      const worldX = building ? building.x : inc.x, worldY = building ? building.y : inc.y;
+      const center = view.worldToScreen(worldX, worldY);
       const sizePx = worldSize * view.state.zoom;
 
       ctx.fillStyle = color;
@@ -388,12 +455,28 @@
       ctx.fillRect(center.x - sizePx / 2, center.y - sizePx / 2, sizePx, sizePx);
       ctx.globalAlpha = 1;
 
+      // No on-map text at all (map simplification decision after
+      // c68a1f7: priority is colour, victim count is marker size, a
+      // shared building is a count badge) - full detail (victims,
+      // floor, hazard, status, assigned/support team, work remaining)
+      // lives in the hover/click card (see showMapCard in index.html),
+      // never on the map itself.
       const icon = INCIDENT_ICONS[inc.type];
-      if (icon && sizePx >= 6) {
-        ctx.font = `${Math.max(10, sizePx * 0.9)}px sans-serif`;
+      if (icon && sizePx >= 8) {
+        // A small corner badge, capped at ~40% of the marker's own size
+        // - never the big centered emoji this used to be, which could
+        // grow past the marker and cover a building or another marker.
+        const badgeD = Math.min(14, sizePx * 0.4);
+        const bx = center.x - sizePx / 2 + badgeD / 2;
+        const by = center.y + sizePx / 2 - badgeD / 2;
+        ctx.beginPath();
+        ctx.arc(bx, by, badgeD / 2, 0, Math.PI * 2);
+        ctx.fillStyle = "#0d1117";
+        ctx.fill();
+        ctx.font = `${Math.max(7, badgeD * 0.85)}px sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(icon, center.x, center.y - sizePx / 2 - 7);
+        ctx.fillText(icon, bx, by + 0.5);
       }
 
       if (isGroup) {
@@ -414,31 +497,6 @@
         ctx.fillText(String(members.length), bx, by + 0.5);
       }
 
-      // Label, only when zoomed in enough to be legible: a plain victims/
-      // floor summary for a single incident, an explicit count for a
-      // group (per-incident detail lives in the tooltip/inspector, not
-      // crammed onto the map).
-      if (view.state.zoom >= 12) {
-        const inBuilding = inc.building_id !== undefined && inc.building_id >= 0;
-        const text = isGroup
-          ? `${members.length} incidents`
-          : (inBuilding ? `${inc.victims} \u{1F464} · fl ${inc.floor}` : `${inc.victims} \u{1F464}`);
-
-        ctx.font = "9px sans-serif";
-        const w = ctx.measureText(text).width;
-        const lx = center.x - w / 2;
-        const ly = center.y + sizePx / 2 + 2;
-        const box = { x1: lx - 1, y1: ly - 1, x2: lx + w + 1, y2: ly + 11 };
-
-        if (!labelOverlaps(box, drawnLabelBoxes)) {
-          ctx.fillStyle = "rgba(230,237,243,0.75)";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "top";
-          ctx.fillText(text, center.x, ly);
-          drawnLabelBoxes.push(box);
-        }
-      }
-
       if (selectedMarker && selectedMarker.type === "incident" &&
           members.some((m) => m.id === selectedMarker.id)) {
         ctx.strokeStyle = "#fff";
@@ -447,7 +505,7 @@
       }
 
       const hitData = isGroup ? Object.assign({}, inc, { groupIncidents: members }) : inc;
-      hits.push({ type: "incident", id: inc.id, wx: inc.x, wy: inc.y, wr: Math.max(worldSize / 2, 0.4), data: hitData });
+      hits.push({ type: "incident", id: inc.id, wx: worldX, wy: worldY, wr: Math.max(worldSize / 2, 0.4), data: hitData });
     });
     return hits;
   }
@@ -462,7 +520,18 @@
 
     (list || []).forEach((t, i) => {
       const color = teamColors[i % teamColors.length];
-      const center = view.worldToScreen(t.x, t.y);
+      const homeCenter = view.worldToScreen(t.x, t.y);
+      const r = markerWorldR * view.state.zoom;
+
+      // ON_SCENE teams sit at the exact incident location, so drawing
+      // there covers the incident marker underneath. Offset the drawn
+      // marker toward the corner instead - the offset (r*0.9 px, i.e.
+      // ~0.9 marker-radius world units) stays well inside the team hit
+      // target's own radius below, so clicking the visible marker still
+      // resolves to this team.
+      const center = (t.status === 2)
+        ? { x: homeCenter.x + r * 0.9, y: homeCenter.y - r * 0.9 }
+        : homeCenter;
 
       if (t.has_dest && (t.dest_x !== t.x || t.dest_y !== t.y)) {
         const dest = view.worldToScreen(t.dest_x, t.dest_y);
@@ -477,8 +546,6 @@
         ctx.setLineDash([]);
         ctx.globalAlpha = 1;
       }
-
-      const r = markerWorldR * view.state.zoom;
 
       // Status ring (always drawn - not just for resting like the old
       // single-status-only ring - so "status ring" reads as a real
@@ -543,5 +610,6 @@
   global.MapRender = {
     drawGrid, drawTerrain, drawBuildings, drawEpicenter, drawHazardCells,
     drawSafezones, drawIncidents, drawTeams, hitTestWorld,
+    buildingFootprintWorldRect,
   };
 })(window);

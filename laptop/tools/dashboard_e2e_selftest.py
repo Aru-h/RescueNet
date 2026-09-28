@@ -512,6 +512,28 @@ def main():
             hit_count = page.evaluate("() => (typeof mapHitTargets !== 'undefined') ? mapHitTargets.length : -1")
             check(hit_count > 0, f"the map produced hit targets for the current frame (got {hit_count})")
 
+            # Regression test for a real bug report: STATICENV's building
+            # x/y is the footprint's CENTRE (core/environment.c's
+            # place_building_rect: loc_x = x + w/2, w/h are the full
+            # footprint), not its top-left - drawBuildings() must derive
+            # the footprint rect by subtracting HALF the footprint from
+            # that centre, or every building renders shifted by half its
+            # own size. Tests the exported pure function directly rather
+            # than inferring centring from rendered pixels.
+            buildings = page.evaluate("() => (staticEnvironment && staticEnvironment.buildings) || []")
+            check(len(buildings) > 0, f"static environment produced at least one building (got {len(buildings)})")
+            if buildings:
+                b = buildings[0]
+                rect = page.evaluate("(b) => MapRender.buildingFootprintWorldRect(b)", b)
+                w = max(1, b["w"] or 1)
+                h = max(1, b["h"] or 1)
+                expected_x, expected_y = b["x"] - w / 2, b["y"] - h / 2
+                centred = abs(rect["x"] - expected_x) < 1e-6 and abs(rect["y"] - expected_y) < 1e-6
+                check(centred,
+                      "building footprint is centred on STATICENV's x/y, not shifted by half its footprint "
+                      f"(building x={b['x']} y={b['y']} w={b['w']} h={b['h']} -> rect {rect!r}, "
+                      f"expected top-left ({expected_x}, {expected_y}))")
+
             cam_zoom = page.evaluate("() => mapCamera.state.zoom")
             cam_min = page.evaluate("() => mapCamera.state.minZoom")
             cam_max = page.evaluate("() => mapCamera.state.maxZoom")

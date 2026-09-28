@@ -43,9 +43,13 @@
   /* --- Map tooltip and camera controls --- */
   .map-tooltip {
     position: absolute; pointer-events: none; background: #0d1117; color: #e6edf3;
-    border: 1px solid #30363d; border-radius: 6px; padding: 6px 10px; font-size: 12px;
-    line-height: 1.5; max-width: 320px; white-space: pre-line; z-index: 20; display: none; box-shadow: 0 6px 16px rgba(0,0,0,.4);
+    border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; font-size: 13px;
+    line-height: 1.4; max-width: 320px; z-index: 20; display: none; box-shadow: 0 6px 16px rgba(0,0,0,.4);
   }
+  .map-card-header { font-weight: 700; font-size: 13px; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .map-card-row { display: flex; justify-content: space-between; gap: 12px; padding: 1.5px 0; }
+  .map-card-label { color: #8b98a5; flex: 0 0 auto; }
+  .map-card-value { color: #e6edf3; text-align: right; }
   .map-toolbar-btn {
     background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px;
     padding: 5px 10px; font-size: 11.5px; cursor: pointer;
@@ -481,23 +485,25 @@
               </div>
             </div>
             <div class="live-map-legend">
-              <span style="display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span> P1
+              <span>Incidents (colour=priority, size=victims):</span>
+              <span style="margin-left:5px;display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span> P1
               <span style="margin-left:6px;display:inline-block;width:9px;height:9px;background:#d29922;vertical-align:-1px;"></span> P2
               <span style="margin-left:6px;display:inline-block;width:9px;height:9px;background:#39c5cf;vertical-align:-1px;"></span> P3
               <span style="margin-left:6px;display:inline-block;width:9px;height:9px;background:#8b98a5;vertical-align:-1px;"></span> P4
-              <span style="margin-left:8px;">🔥 fire · ☢ gas</span>
-              <span style="margin-left:8px;">label "6 👤 · fl 1" = victims · floor · badge = incidents sharing a building, click/hover for detail</span>
+              <span style="margin-left:6px;display:inline-flex;align-items:center;justify-content:center;width:11px;height:11px;background:#1f6feb;color:#fff;border-radius:50%;font-size:8px;vertical-align:-2px;">2</span> shared building
+              <span style="margin-left:6px;display:inline-flex;align-items:center;justify-content:center;width:11px;height:11px;background:#0d1117;border-radius:50%;font-size:8px;vertical-align:-2px;">🔥</span> hazard (click/hover any marker for detail)
+              <span style="margin-left:10px;display:inline-block;width:6px;height:6px;background:rgba(139,152,165,0.7);border-radius:50%;vertical-align:0px;"></span> building (outline on hover/click or zoomed in)
               <span style="margin-left:10px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(63,185,80,0.9);border-radius:50%;vertical-align:-1px;"></span> available
               <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(88,166,255,0.9);border-radius:50%;vertical-align:-1px;"></span> en route
               <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(210,153,34,0.9);border-radius:50%;vertical-align:-1px;"></span> on scene
               <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px dashed rgba(139,152,165,0.9);border-radius:50%;vertical-align:-1px;"></span> resting
               <span style="margin-left:6px;display:inline-block;width:6px;height:6px;background:#f85149;border-radius:50%;vertical-align:0px;"></span> fault
               <span style="margin-left:8px;"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;vertical-align:-1px;"></span> safe zone</span>
-              <span style="margin-left:8px;display:inline-block;width:12px;height:9px;background:rgba(139,152,165,0.15);border:1px solid rgba(139,152,165,0.22);vertical-align:-1px;"></span> building (darker+hatch = damage)
               <span style="margin-left:8px;display:inline-block;width:12px;height:9px;background:rgba(158,178,207,0.7);vertical-align:-1px;"></span> road (brighter = arterial)
               <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(6,9,13,0.9),rgba(6,9,13,0.9) 2px,rgba(230,237,243,0.4) 2px,rgba(230,237,243,0.4) 3px);vertical-align:-1px;"></span> blocked/rubble
-              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(210,153,34,0.15),rgba(210,153,34,0.15) 2px,rgba(210,153,34,0.5) 2px,rgba(210,153,34,0.5) 3px);vertical-align:-1px;"></span> hazard
-              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:rgba(56,139,253,0.5);vertical-align:-1px;"></span> flood
+              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;border:1px dashed rgba(248,81,73,0.75);vertical-align:-1px;position:relative;">&#10005;</span> road blocked
+              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(210,153,34,0.15),rgba(210,153,34,0.15) 2px,rgba(210,153,34,0.5) 2px,rgba(210,153,34,0.5) 3px);vertical-align:-1px;"></span> hazard zone
+              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:rgba(56,139,253,0.5);vertical-align:-1px;"></span> flood/water
               <span style="margin-left:6px;display:inline-block;width:12px;height:9px;border-left:1px solid rgba(230,237,243,0.5);vertical-align:-1px;"></span> district border
               <span style="margin-left:8px;">- - <span style="color:#a371f7;">epicenter</span></span>
               <span style="margin-left:8px;" id="dragHintText">drag to pan · wheel to zoom · drag a team onto an incident to reassign</span>
@@ -1393,8 +1399,18 @@ let liveIncidentsById = {};
 
 const STATUS_NAMES = ["AVAILABLE", "EN_ROUTE", "ON_SCENE", "RESTING"];
 const SPEC_NAMES = ["Search", "Medical", "Extraction", "Perimeter", "Support"];
-const PRIORITY_COLORS = { 1: "#f85149", 2: "#d29922", 3: "#58a6ff", 4: "#8b98a5" };
+// Kept in sync with map-render.js's own PRIORITY_COLORS (this file can't
+// reach into that module's closure to share the constant directly) - red
+// stays reserved for P1, and P3 gets its own teal rather than the blue
+// the map uses for flood cells.
+const PRIORITY_COLORS = { 1: "#f85149", 2: "#d29922", 3: "#39c5cf", 4: "#8b98a5" };
 const INCIDENT_STATUS_NAMES = ["OPEN", "ASSIGNED", "IN_PROGRESS", "RESOLVED"];
+// Mirrors core/mission_state.h's incident_type enum order.
+const INCIDENT_TYPE_NAMES = [
+  "Structural collapse", "Confined space", "Mass casualty", "Chemical exposure",
+  "Unsearched sector", "Survivor signal", "Gas leak", "Active fire",
+  "Equipment cache", "Return to safe zone", "Evacuee offboard",
+];
 
 // The camera owns every world<->screen conversion for the map (see
 // static/dashboard/camera.js) - pan, zoom-to-cursor and a "reset view"
@@ -1445,7 +1461,11 @@ function drawFrame(frame, skipInspector) {
   drawGrid();
   mapHitTargets = [];
 
-  MapRender.drawBuildings(mapCtx, mapCamera, staticEnvironment);
+  // An incident card open on the map (see mapCardBuildingId/showMapCard)
+  // forces that one building's footprint outline open too, regardless of
+  // zoom - drawBuildings() itself decides everything else about when a
+  // footprint shows.
+  MapRender.drawBuildings(mapCtx, mapCamera, staticEnvironment, { outlineBuildingId: mapCardBuildingId });
   MapRender.drawEpicenter(mapCtx, mapCamera, staticEnvironment);
   MapRender.drawHazardCells(mapCtx, mapCamera, frame.hazard_cells || []);
   mapHitTargets.push(...MapRender.drawSafezones(mapCtx, mapCamera, frame.safezones));
@@ -1456,8 +1476,17 @@ function drawFrame(frame, skipInspector) {
   // reveals it). "discovered" defaults to 1 for tasks that were never
   // part of fog-of-war (system tasks), so this only ever hides real
   // undiscovered incidents.
-  mapHitTargets.push(...MapRender.drawIncidents(mapCtx, mapCamera, frame.incidents, { fogViewMode, selectedMarker }));
+  mapHitTargets.push(...MapRender.drawIncidents(mapCtx, mapCamera, frame.incidents, { fogViewMode, selectedMarker, buildings: (staticEnvironment && staticEnvironment.buildings) || [] }));
   mapHitTargets.push(...MapRender.drawTeams(mapCtx, mapCamera, frame.teams, { teamColors: TEAM_COLORS, selectedMarker }));
+
+  // Keep an open card's content (and position, for a moving team) live
+  // as new frames arrive, and close it if the marker it names is gone
+  // from this frame (e.g. a resolved incident) - see mapCardMarker's
+  // own comment.
+  if (mapCardMarker) {
+    const stillThere = mapHitTargets.find((h) => h.type === mapCardMarker.type && h.data.id === mapCardMarker.id);
+    if (stillThere) showMapCard(stillThere); else hideMapCard();
+  }
 
   if (!skipInspector) renderInspector();
 }
@@ -1489,7 +1518,8 @@ function incidentSummaryLine(inc) {
     ? "unassigned"
     : `assigned to ${SPEC_NAMES[inc.assigned_team % SPEC_NAMES.length] || "team"} #${inc.assigned_team}`;
   const floorText = (inc.building_id !== undefined && inc.building_id >= 0) ? `, floor ${inc.floor}` : "";
-  return `Incident ${inc.id} — ${inc.victims} victims${floorText}, P${inc.priority}, ${assignedText}`;
+  const hazardText = INCIDENT_TYPE_NAMES[inc.type] ? `, ${INCIDENT_TYPE_NAMES[inc.type]}` : "";
+  return `Incident ${inc.id} — ${inc.victims} victims${floorText}${hazardText}, P${inc.priority}, ${assignedText}`;
 }
 
 function renderTeamCard() {
@@ -1513,6 +1543,9 @@ function renderTeamCard() {
     const commBadge = DashboardPanels.tierBadge(tier ? tier[1] : undefined, "Communication tier");
     const pv = d.peer_votes;
     const liveDark = pv ? `${pv.live} live · ${pv.dark} dark` : "n/a";
+    const taskText = d.has_dest
+      ? (d.dest_id !== undefined && d.dest_id !== 255 ? `heading to Incident #${d.dest_id}` : `heading to (${d.dest_x}, ${d.dest_y})`)
+      : "no active task";
     // Colours are hardcoded (not var(--text)/var(--muted)) inside this
     // card on purpose: it's a fixed dark "console" surface in both
     // themes (see .team-card's own comment), and the CSS variables
@@ -1520,9 +1553,13 @@ function renderTeamCard() {
     el.innerHTML = `
       <div style="display:flex;align-items:center;gap:8px;">
         <b>Team ${d.i}</b>
+        <span class="pill">${STATUS_NAMES[d.status] || d.status}</span>
         ${mobBadge}
         ${commBadge}
         <span style="margin-left:auto;color:#8b98a5;font-size:11px;white-space:nowrap;">${liveDark}</span>
+      </div>
+      <div style="margin-top:4px;color:#8b98a5;">
+        Stamina ${d.stamina.toFixed(0)}% &nbsp; ${taskText}
       </div>
       <div style="margin-top:4px;color:#8b98a5;">
         <b style="color:#e6edf3;">Votes</b>
@@ -1545,7 +1582,7 @@ function renderTeamCard() {
       const supportText = d.support_team !== undefined && d.support_team !== 255 ? `${SPEC_NAMES[d.support_team % SPEC_NAMES.length] || "team"} #${d.support_team}` : "none";
       el.innerHTML = `<b>Incident #${d.id}</b> &nbsp; <span class="pill ${d.status === 0 ? 'bad' : 'good'}">${statusName}</span> &nbsp; Priority P${d.priority}<br>
         Position: (${d.x}, ${d.y}) &nbsp; Victims: ${d.victims} &nbsp; Work remaining: ${d.work_remaining ?? "–"}${d.building_id !== undefined && d.building_id >= 0 ? ` &nbsp; Building #${d.building_id}, floor ${d.floor}` : ""}<br>
-        Needs: ${SPEC_NAMES[d.req_capability % SPEC_NAMES.length] || d.req_capability} &nbsp; Assigned: ${assignedText} &nbsp; Support: ${supportText}`;
+        Hazard: ${INCIDENT_TYPE_NAMES[d.type] || d.type} &nbsp; Needs: ${SPEC_NAMES[d.req_capability % SPEC_NAMES.length] || d.req_capability} &nbsp; Assigned: ${assignedText} &nbsp; Support: ${supportText}`;
     }
   } else if (hit.type === "safezone") {
     el.innerHTML = `<b>Safe Zone #${d.id}</b><br>
@@ -1620,6 +1657,9 @@ function handleMapClick(evt) {
   selectedMarker = best ? { type: best.type, id: best.data.id } : null;
   if (window.DashboardSelection) DashboardSelection.set(selectedMarker);
   renderInspector();
+  // A click on a marker pins its card open the same as a hover would;
+  // a click on empty space is the one thing that actually closes it.
+  if (best) showMapCard(best); else hideMapCard();
   if (window._lastFrame) drawFrame(window._lastFrame, true);
 }
 
@@ -1658,11 +1698,14 @@ function handleMapMouseMove(evt) {
       dragState.curSx = sx; dragState.curSy = sy;
       drawDragOverlay();
     }
-    hideMapTooltip();
+    hideMapCard();
     return;
   }
   const hit = hitTestAt(sx, sy);
-  showMapTooltip(hit, evt.clientX, evt.clientY);
+  // Only shows on an actual hit - moving onto empty space does NOT hide
+  // whatever card is already open (see mapCardMarker's own comment);
+  // only a click on empty space or the marker itself disappearing does.
+  if (hit) showMapCard(hit);
 }
 
 function handleMapMouseUp(evt) {
@@ -1705,42 +1748,141 @@ function handleMapWheel(evt) {
   if (window._lastFrame) drawFrame(window._lastFrame, true);
 }
 
-function showMapTooltip(hit, clientX, clientY) {
-  const tip = document.getElementById("mapTooltip");
-  if (!tip) return;
-  if (!hit) { tip.style.display = "none"; return; }
-  const wrap = mapCanvas.parentElement.getBoundingClientRect();
-  const d = hit.data;
-  let text = "";
-  if (hit.type === "team") {
-    text = `${SPEC_NAMES[d.i % SPEC_NAMES.length] || "team"} #${d.i} — ${STATUS_NAMES[d.status] || d.status}, ${d.stamina.toFixed(0)}% stamina`;
-  } else if (hit.type === "incident") {
-    if (d.groupIncidents && d.groupIncidents.length > 1) {
-      text = `${d.groupIncidents.length} incidents` +
-        (d.building_id !== undefined && d.building_id >= 0 ? ` in Building #${d.building_id}` : "") +
-        "\n" + d.groupIncidents.map(incidentSummaryLine).join("\n");
-    } else {
-      text = `Incident #${d.id} — P${d.priority}, ${d.victims} victim(s)` +
-        (d.building_id !== undefined && d.building_id >= 0 ? `, floor ${d.floor}` : "");
-    }
-  } else if (hit.type === "safezone") {
-    text = `Safe zone #${d.id} — ${d.evacuees}/${d.capacity} occupied`;
-  }
-  tip.textContent = text;
-  tip.style.left = Math.round(clientX - wrap.left + 14) + "px";
-  tip.style.top = Math.round(clientY - wrap.top + 14) + "px";
-  tip.style.display = "block";
+const INCIDENT_ICONS_LOCAL = { 6: "☢", 7: "🔥" }; // mirrors map-render.js's INCIDENT_ICONS - that file's module scope isn't reachable from here
+
+function mapCardRow(label, value) {
+  return `<div class="map-card-row"><span class="map-card-label">${label}</span><span class="map-card-value">${value}</span></div>`;
 }
 
-function hideMapTooltip() {
-  const tip = document.getElementById("mapTooltip");
-  if (tip) tip.style.display = "none";
+function staminaBarHTML(stamina) {
+  const pct = Math.max(0, Math.min(100, stamina));
+  const color = pct > 50 ? "#3fb950" : pct > 20 ? "#d29922" : "#f85149";
+  return `<span style="display:inline-flex;align-items:center;gap:6px;">` +
+    `<span style="width:46px;height:6px;background:rgba(139,152,165,0.25);border-radius:3px;overflow:hidden;display:inline-block;">` +
+    `<span style="display:block;width:${pct.toFixed(0)}%;height:100%;background:${color};"></span></span>${pct.toFixed(0)}%</span>`;
+}
+
+function buildTeamCardHTML(d) {
+  const specName = SPEC_NAMES[d.i % SPEC_NAMES.length] || "team";
+  const teamColor = TEAM_COLORS[d.i % TEAM_COLORS.length] || "#8b98a5";
+  const tierName = (v) => ({ "-1": "n/a", 0: "NONE", 1: "LOCAL", 2: "ELEVATED" })[String(v)] || "n/a";
+  const tier = d.consensus_tier || [-1, -1];
+  const taskText = d.has_dest
+    ? (d.dest_id !== undefined && d.dest_id !== 255 ? `Incident #${d.dest_id}` : `(${d.dest_x}, ${d.dest_y})`)
+    : "none";
+  const FAULT_CLASSES_LOCAL = [
+    { bit: 0, name: "Mobility" }, { bit: 1, name: "Communication" }, { bit: 2, name: "Resource" },
+    { bit: 3, name: "Environment" }, { bit: 4, name: "Mission" },
+  ];
+  const activeFaults = FAULT_CLASSES_LOCAL.filter((c) => (d.fault_mask || 0) & (1 << c.bit)).map((c) => c.name);
+  let html = `<div class="map-card-header" style="color:${teamColor};">${specName} #${d.i}</div>` +
+    mapCardRow("Status", STATUS_NAMES[d.status] || d.status) +
+    mapCardRow("Stamina", staminaBarHTML(d.stamina)) +
+    mapCardRow("Task", taskText) +
+    mapCardRow("Mobility tier", tierName(tier[0])) +
+    mapCardRow("Comm tier", tierName(tier[1]));
+  if (activeFaults.length) html += mapCardRow("Injected fault (ground truth)", activeFaults.join(", "));
+  return html;
+}
+
+function buildIncidentCardHTML(d) {
+  const priorityColor = PRIORITY_COLORS[d.priority] || "#8b98a5";
+  const priorityLabel = { 1: "critical", 2: "high", 3: "moderate", 4: "low" }[d.priority] || "";
+  const hazardIcon = INCIDENT_ICONS_LOCAL[d.type] || "";
+  const hazardName = INCIDENT_TYPE_NAMES[d.type] || `type ${d.type}`;
+  const assignedText = (d.assigned_team === undefined || d.assigned_team === 255) ? "unassigned" : `${SPEC_NAMES[d.assigned_team % SPEC_NAMES.length] || "team"} #${d.assigned_team}`;
+  const supportText = (d.support_team === undefined || d.support_team === 255) ? "none" : `${SPEC_NAMES[d.support_team % SPEC_NAMES.length] || "team"} #${d.support_team}`;
+  return `<div class="map-card-header" style="color:${priorityColor};">Incident ${d.id} · P${d.priority} ${priorityLabel}</div>` +
+    mapCardRow("Victims", d.victims) +
+    mapCardRow("Building", (d.building_id !== undefined && d.building_id >= 0) ? `#${d.building_id}, floor ${d.floor}` : "none") +
+    mapCardRow("Hazard", `${hazardIcon} ${hazardName}`.trim()) +
+    mapCardRow("Status", INCIDENT_STATUS_NAMES[d.status] || d.status) +
+    mapCardRow("Assigned", assignedText) +
+    mapCardRow("Support", supportText) +
+    mapCardRow("Work remaining", d.work_remaining ?? "–") +
+    mapCardRow("Discovered", d.discovered ? "yes" : "no");
+}
+
+function buildIncidentGroupCardHTML(d) {
+  // Members are already sorted worst-priority-first by map-render.js's
+  // drawIncidents() clustering, so this list is too - no re-sort needed.
+  const rows = d.groupIncidents.map((inc) => {
+    const pColor = PRIORITY_COLORS[inc.priority] || "#8b98a5";
+    const assignedText = (inc.assigned_team === undefined || inc.assigned_team === 255) ? "unassigned" : `${SPEC_NAMES[inc.assigned_team % SPEC_NAMES.length] || "team"} #${inc.assigned_team}`;
+    return `<div class="map-card-row">` +
+      `<span class="map-card-label" style="color:${pColor};font-weight:600;">P${inc.priority}</span>` +
+      `<span class="map-card-value">#${inc.id} · ${inc.victims}v · fl ${inc.floor} · ${assignedText}</span></div>`;
+  }).join("");
+  return `<div class="map-card-header">Building #${d.building_id} · ${d.groupIncidents.length} incidents</div>${rows}`;
+}
+
+function buildSafezoneCardHTML(d) {
+  return `<div class="map-card-header">Safe Zone #${d.id}</div>${mapCardRow("Occupancy", `${d.evacuees} / ${d.capacity}`)}`;
+}
+
+function buildMapCardHTML(hit) {
+  const d = hit.data;
+  if (hit.type === "team") return buildTeamCardHTML(d);
+  if (hit.type === "incident") return (d.groupIncidents && d.groupIncidents.length > 1) ? buildIncidentGroupCardHTML(d) : buildIncidentCardHTML(d);
+  if (hit.type === "safezone") return buildSafezoneCardHTML(d);
+  return "";
+}
+
+// Positioned off the marker's own screen point (not the raw cursor, so
+// a click - which has no meaningful drag position - anchors exactly
+// like a hover does), grown away from whichever quadrant of the map
+// the marker sits in so the card doesn't cover it, then clamped inside
+// the map's own box so it never runs off the edge.
+function positionMapCard(card, screenPt) {
+  const wrap = mapCanvas.parentElement.getBoundingClientRect();
+  const gap = 14;
+  const cardW = card.offsetWidth, cardH = card.offsetHeight;
+  let left = screenPt.x < wrap.width / 2 ? screenPt.x + gap : screenPt.x - gap - cardW;
+  let top = screenPt.y < wrap.height / 2 ? screenPt.y + gap : screenPt.y - gap - cardH;
+  left = Math.max(4, Math.min(left, wrap.width - cardW - 4));
+  top = Math.max(4, Math.min(top, wrap.height - cardH - 4));
+  card.style.left = `${Math.round(left)}px`;
+  card.style.top = `${Math.round(top)}px`;
+}
+
+// The marker currently shown in the floating card (hover OR click), if
+// any - drawFrame() re-shows it every tick so the card's content (team
+// stamina, incident status, ...) stays live while it's open, and hides
+// it once the marker it names is no longer in the current frame (e.g.
+// a resolved incident). Trackpad-friendly by design: showing a card
+// this way does NOT get cleared just because the mouse later hovers
+// empty space - only a click elsewhere (handleMapClick) or the marker
+// disappearing closes it (see file header discussion this was written
+// in response to).
+let mapCardMarker = null;
+// Set alongside mapCardMarker whenever the open card is a building-
+// linked incident, so drawFrame() can force that one building's
+// footprint outline open for as long as the card stays up (map
+// simplification's item 8: "outline the footprint while the card is
+// open").
+let mapCardBuildingId = null;
+
+function showMapCard(hit) {
+  const card = document.getElementById("mapTooltip");
+  if (!card || !hit) return;
+  card.innerHTML = buildMapCardHTML(hit);
+  card.style.display = "block";
+  positionMapCard(card, mapCamera.worldToScreen(hit.wx, hit.wy));
+  mapCardMarker = { type: hit.type, id: hit.data.id };
+  const d = hit.data;
+  mapCardBuildingId = (hit.type === "incident" && d.building_id !== undefined && d.building_id >= 0) ? d.building_id : null;
+}
+
+function hideMapCard() {
+  const card = document.getElementById("mapTooltip");
+  if (card) card.style.display = "none";
+  mapCardMarker = null;
+  mapCardBuildingId = null;
 }
 
 mapCanvas.addEventListener("click", handleMapClick);
 mapCanvas.addEventListener("mousedown", handleMapMouseDown);
 mapCanvas.addEventListener("mousemove", handleMapMouseMove);
-mapCanvas.addEventListener("mouseleave", hideMapTooltip);
 mapCanvas.addEventListener("wheel", handleMapWheel, { passive: false });
 window.addEventListener("mouseup", handleMapMouseUp);
 

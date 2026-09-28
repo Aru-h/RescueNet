@@ -33,7 +33,6 @@
   ];
   const RENDER_INTERVAL_MS = 100;
   const MAX_HISTORY = 600;
-  const PX_PER_TICK = 3;
   const LABEL_W = 92;
 
   function create() {
@@ -96,7 +95,16 @@
 
       const rowH = currentRowH(h);
       const plotW = w - LABEL_W;
-      const visibleTicks = Math.max(1, Math.floor(plotW / PX_PER_TICK));
+      // pxPerTick scales to however many ticks are actually buffered so
+      // far (up to MAX_HISTORY) - a fixed px-per-tick left most of the
+      // width empty early in a run (e.g. only ~1/3 used at tick 105,
+      // since a fixed 3px/tick only needs 315px of a much wider panel).
+      // recordTick() already caps each row at MAX_HISTORY samples via
+      // .shift(), so once a run passes that many ticks this settles into
+      // a fixed-width sliding window exactly like before.
+      const historyLen = Math.max(1, history.reduce((m, row) => Math.max(m, row.length), 0));
+      const pxPerTick = plotW / historyLen;
+      const barW = Math.max(1, pxPerTick + 0.5); // +0.5 covers sub-pixel rounding gaps between adjacent bars
       // Floor of 11px regardless of row height (projector readability -
       // UI pass item 10): the panel is sized (see .live-timeline-panel
       // in index.html) so 10 rows comfortably clear this floor, but the
@@ -121,7 +129,7 @@
         ctx.textBaseline = "middle";
         ctx.fillText(`${(specNames[i % specNames.length] || "team")} #${i}`, 4, y + rowH / 2);
 
-        const visible = row.slice(-visibleTicks);
+        const visible = row; // recordTick() already caps this at MAX_HISTORY - the full buffer IS the visible window
         // Ground-truth strip: top ~55% of the row. Detected strip
         // (3 thin lanes): remaining ~40%, with a hairline gap and the
         // row-separator line eating the last ~5%.
@@ -131,7 +139,7 @@
         const laneH = (rowH * 0.32) / 3;
 
         visible.forEach((sample, idx) => {
-          const x = LABEL_W + idx * PX_PER_TICK;
+          const x = LABEL_W + idx * pxPerTick;
           // Ground-truth strip: most-significant active class wins the
           // pixel column (simultaneous classes are rare and this stays
           // legible at 1px resolution; the legend lists all 5 colors).
@@ -139,31 +147,31 @@
           for (const cls of FAULT_CLASSES) {
             if (sample.fault_mask & (1 << cls.bit)) {
               ctx.fillStyle = cls.color;
-              ctx.fillRect(x, groundY, PX_PER_TICK, groundH);
+              ctx.fillRect(x, groundY, barW, groundH);
               drawn = true;
               break;
             }
           }
           if (!drawn) {
             ctx.fillStyle = "rgba(139,152,165,0.08)";
-            ctx.fillRect(x, groundY, PX_PER_TICK, groundH);
+            ctx.fillRect(x, groundY, barW, groundH);
           }
 
           // Detected strip: three thin lanes (mobility ELEVATED, comm
           // ELEVATED, degraded).
           ctx.fillStyle = "rgba(139,152,165,0.06)";
-          ctx.fillRect(x, detectY, PX_PER_TICK, laneH * 3);
+          ctx.fillRect(x, detectY, barW, laneH * 3);
           if (sample.tierMob === 2) {
             ctx.fillStyle = "#f85149";
-            ctx.fillRect(x, detectY, PX_PER_TICK, laneH);
+            ctx.fillRect(x, detectY, barW, laneH);
           }
           if (sample.tierComm === 2) {
             ctx.fillStyle = "#f85149";
-            ctx.fillRect(x, detectY + laneH, PX_PER_TICK, laneH);
+            ctx.fillRect(x, detectY + laneH, barW, laneH);
           }
           if (sample.degraded) {
             ctx.fillStyle = "#d29922";
-            ctx.fillRect(x, detectY + laneH * 2, PX_PER_TICK, laneH);
+            ctx.fillRect(x, detectY + laneH * 2, barW, laneH);
           }
         });
 

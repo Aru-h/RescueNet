@@ -165,7 +165,8 @@ static uint8_t static_map_cell_flags(uint8_t gx, uint8_t gy)
     uint8_t nav = environment_cell_is_navigable(gx, gy) ? 1u : 0u;
     uint8_t flood = environment_cell_is_flood(gx, gy) ? 1u : 0u;
     uint8_t road_class = (uint8_t)(g_environment[gx][gy].road_class & 0x07u);
-    return (uint8_t)(nav | (uint8_t)(flood << 1) | (uint8_t)(road_class << 2));
+    uint8_t road_blocked = g_environment[gx][gy].road_blocked ? 1u : 0u;
+    return (uint8_t)(nav | (uint8_t)(flood << 1) | (uint8_t)(road_class << 2) | (uint8_t)(road_blocked << 5));
 }
 
 void debug_emit_static_map_if_changed(void)
