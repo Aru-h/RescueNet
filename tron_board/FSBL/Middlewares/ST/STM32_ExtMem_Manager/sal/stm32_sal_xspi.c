@@ -1044,6 +1044,22 @@ HAL_StatusTypeDef SAL_XSPI_EnableMapMode(SAL_XSPI_ObjectTypeDef *SalXspi, uint8_
       (unsigned long)SalXspi->Commandbase.InstructionDTRMode, (unsigned long)SalXspi->Commandbase.AddressDTRMode,
       (unsigned long)SalXspi->Commandbase.DataDTRMode, (unsigned long)SalXspi->Commandbase.InstructionMode,
       (unsigned long)SalXspi->Commandbase.AddressMode, (unsigned long)SalXspi->hxspi->Init.ClockPrescaler);
+    /* Bug fix: snprintf()'s return value is how long the string WOULD be
+       unbounded, which can exceed sizeof(dbg) on truncation - confirmed
+       on real hardware: with DataDTR printing as a 9-digit value
+       (134217728), the untruncated length exceeds 128, dl came back
+       larger than the buffer, and HAL_UART_Transmit(..., dl, ...) sent
+       bytes past the end of dbg[] - stack garbage - producing exactly
+       the corrupted/truncated-looking line seen on the serial console.
+       Clamp to what's actually in the buffer. */
+    if (dl > (int)(sizeof(dbg) - 1u))
+    {
+      dl = (int)(sizeof(dbg) - 1u);
+    }
+    else if (dl < 0)
+    {
+      dl = 0;
+    }
     HAL_UART_Transmit(&huart1, (uint8_t *)dbg, (uint16_t)dl, HAL_MAX_DELAY);
   }
   XSPI_RegularCmdTypeDef s_command = SalXspi->Commandbase;
