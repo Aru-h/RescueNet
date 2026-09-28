@@ -86,17 +86,17 @@ $(LABELER): $(LABELER_SOURCES)
 	$(CC) $(CFLAGS) -I$(CORE_DIR) -o $(LABELER) $(LABELER_SOURCES) $(LDFLAGS)
 
 # Runs from build/smoke so its 200-tick clean-profile snapshot CSV does not
-# overwrite the repo-root tron_snapshot_dataset.csv the Python dataset
-# checks read (see that file's rule below).
+# overwrite the repo-root tron_snapshot_dataset.csv label_dataset's own
+# default INPUT reads (see that target below).
 smoke: $(TARGET)
 	@mkdir -p build/smoke
 	cd build/smoke && ../../$(TARGET) 1 1 200
 
-# The dataset the three Python dataset checks read (persistence-bounded-
-# forgiveness, environment-e2e-stress, env-raw-travel-cost-ablation): a
-# combined-fault-profile run, generated here on demand instead of relying on
-# whatever an earlier target (smoke, an override selftest) left behind or
-# `make clean` deleted.
+# label_dataset's own convenience default - not read by any automated
+# check (each of those generates and reads its own private copy under
+# build/, see the three dataset-analysis targets below) - just whatever
+# `./tron` run happens to be sitting at repo root when label_dataset is
+# run manually.
 tron_snapshot_dataset.csv: $(TARGET)
 	./$(TARGET) 1 5 3000 --fault-profile=combined
 
@@ -643,12 +643,28 @@ check-recovery-manager-persistence:
 # FAULT_PERSISTENCE_TRIP_TICKS=8 (simulator ground truth + evidence_
 # channels.py, no trained model) - see laptop/tools/persistence_
 # bounded_forgiveness_ablation.py's own header doc for the measured
-# verdict. Requires tron_snapshot_dataset.csv with --fault-profile=
-# combined fault injection, same as check-environment-e2e-stress - not
-# run automatically by this target for the same reason (slow dataset
-# regen, analysis script not a pass/fail gate).
-check-persistence-bounded-forgiveness: tron_snapshot_dataset.csv
-	$(PYTHON) $(TOOLS_DIR)/persistence_bounded_forgiveness_ablation.py
+# verdict. Not run automatically by this target for the same reason as
+# check-environment-e2e-stress below (slow dataset regen, analysis
+# script not a pass/fail gate).
+#
+# Each of these three dataset-analysis targets generates and reads its
+# OWN --fault-profile=combined dataset under a private build/ directory,
+# rather than sharing one repo-root tron_snapshot_dataset.csv - three
+# targets racing to generate/read the same shared file (make -j, or one
+# running while another is manually invoked) corrupted it for whichever
+# read it mid-write once. TRON_SNAPSHOT_CSV tells each script which copy
+# to read (laptop/tools/*.py's own CSV_PATH line).
+PERSISTENCE_ABLATION_DIR = build/persistence-bounded-forgiveness
+ENV_STRESS_DIR = build/environment-e2e-stress
+TRAVEL_COST_ABLATION_DIR = build/env-raw-travel-cost-ablation
+
+$(PERSISTENCE_ABLATION_DIR)/tron_snapshot_dataset.csv: $(TARGET)
+	@mkdir -p $(PERSISTENCE_ABLATION_DIR)
+	cd $(PERSISTENCE_ABLATION_DIR) && ../../$(TARGET) 1 5 3000 --fault-profile=combined
+
+check-persistence-bounded-forgiveness: $(PERSISTENCE_ABLATION_DIR)/tron_snapshot_dataset.csv
+	TRON_SNAPSHOT_CSV=$(PERSISTENCE_ABLATION_DIR)/tron_snapshot_dataset.csv \
+		$(PYTHON) $(TOOLS_DIR)/persistence_bounded_forgiveness_ablation.py
 
 # --- Environment-class end-to-end escalation check ---------------------------
 # Python, not C - reuses the Config A sklearn pipeline (same as this
@@ -656,23 +672,29 @@ check-persistence-bounded-forgiveness: tron_snapshot_dataset.csv
 # for real held-out environment-fault onset episodes, then runs each
 # through a faithful port of recovery_manager.c's persistence/hysteresis
 # state machine - laptop/tools/environment_class_e2e_stress.py's own
-# header doc has the full method. Requires tron_snapshot_dataset.csv to
-# exist with --fault-profile=combined fault injection (e.g. `./tron 1 30
-# 400 --fault-profile=combined`) - not run automatically by this target
+# header doc has the full method. Not run automatically by this target
 # since regenerating the dataset is slow and this is an analysis script,
 # not a pass/fail gate.
-check-environment-e2e-stress: tron_snapshot_dataset.csv
-	$(PYTHON) $(TOOLS_DIR)/environment_class_e2e_stress.py
+$(ENV_STRESS_DIR)/tron_snapshot_dataset.csv: $(TARGET)
+	@mkdir -p $(ENV_STRESS_DIR)
+	cd $(ENV_STRESS_DIR) && ../../$(TARGET) 1 5 3000 --fault-profile=combined
+
+check-environment-e2e-stress: $(ENV_STRESS_DIR)/tron_snapshot_dataset.csv
+	TRON_SNAPSHOT_CSV=$(ENV_STRESS_DIR)/tron_snapshot_dataset.csv \
+		$(PYTHON) $(TOOLS_DIR)/environment_class_e2e_stress.py
 
 # --- env_raw_travel_cost before/after ablation --------------------------
 # Environment-class F1 with and without the env_raw_travel_cost CSV
 # column (laptop/snapshot.c; environment_cell_travel_cost() at the team's
-# own cell). Same sklearn pipeline as the other ablations. Requires
-# tron_snapshot_dataset.csv generated with --fault-profile=combined
-# (e.g. `./tron 1 5 3000 --fault-profile=combined`) - not run
+# own cell). Same sklearn pipeline as the other ablations. Not run
 # automatically, same reason as check-environment-e2e-stress.
-check-env-raw-travel-cost-ablation: tron_snapshot_dataset.csv
-	$(PYTHON) $(TOOLS_DIR)/env_raw_travel_cost_ablation.py
+$(TRAVEL_COST_ABLATION_DIR)/tron_snapshot_dataset.csv: $(TARGET)
+	@mkdir -p $(TRAVEL_COST_ABLATION_DIR)
+	cd $(TRAVEL_COST_ABLATION_DIR) && ../../$(TARGET) 1 5 3000 --fault-profile=combined
+
+check-env-raw-travel-cost-ablation: $(TRAVEL_COST_ABLATION_DIR)/tron_snapshot_dataset.csv
+	TRON_SNAPSHOT_CSV=$(TRAVEL_COST_ABLATION_DIR)/tron_snapshot_dataset.csv \
+		$(PYTHON) $(TOOLS_DIR)/env_raw_travel_cost_ablation.py
 
 # Feature contract (single source of truth): core/feature_spec.h and
 # feature_spec.py are GENERATED from the committed feature_spec.json by

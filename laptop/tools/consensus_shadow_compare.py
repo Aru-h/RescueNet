@@ -34,6 +34,17 @@ intentional difference is absorbed:
                      incident_req_capability is untouched - it keeps -1 as
                      its own one-hot "none" category on both sides.
 
+Numeric columns are compared as floats within FLOAT_TOLERANCE, not by
+exact string equality: the candidate now writes every continuous column
+at %.9g (feature-contract parity fix) while the base ref still writes
+its old fixed-decimal-place formats (%.2f/%.3f/%.4f/%.6f), so the same
+underlying value legitimately prints as different text on the two sides.
+0.01 is generous enough to absorb the base's worst-case rounding (2
+decimal places) while still catching a real behavioral difference of
+any size that matters. A column that isn't parseable as a float on
+either side (there are none left in this CSV, but the fallback is kept
+defensive) still needs exact string equality.
+
 usage: consensus_shadow_compare.py BASE_TRON CANDIDATE_TRON [--seeds N] [--ticks T]
 """
 import argparse
@@ -47,6 +58,16 @@ PROFILES = ["none", "combined", "communication"]
 # See the module docstring.
 EXCLUDED_COLUMNS = {"run_id"}
 REMAPPED_COLUMNS = {"incident_priority", "victim_count"}
+FLOAT_TOLERANCE = 0.01
+
+
+def _values_match(x, y):
+    if x == y:
+        return True
+    try:
+        return abs(float(x) - float(y)) <= FLOAT_TOLERANCE
+    except ValueError:
+        return False
 
 
 def run(binary, workdir, seeds, ticks, profile):
@@ -75,7 +96,7 @@ def compare(base_csv, cand_csv):
                     continue
                 if i in remapped_idx and x == "-1":
                     x = "0"
-                if x != y:
+                if not _values_match(x, y):
                     return f"row {rows}: column {base_header[i]}: base {x} != candidate {y}"
         extra_b = b.readline()
         extra_c = c.readline()

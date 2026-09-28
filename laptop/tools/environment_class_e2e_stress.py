@@ -28,7 +28,11 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 
 from evidence_channels import WEIGHTS
 
-CSV_PATH = os.path.join(REPO_ROOT, "tron_snapshot_dataset.csv")
+CSV_PATH = os.environ.get(
+    "TRON_SNAPSHOT_CSV", os.path.join(REPO_ROOT, "tron_snapshot_dataset.csv")
+)  # override so concurrent Makefile checks never share one CSV path
+  # (a race corrupted it for another check mid-sweep once - see the
+  # Makefile targets that set this env var to a private scratch path)
 
 FAULT_CLASS_NAMES = ["mobility", "communication", "resource", "environment", "mission"]
 FAULT_LABEL_COLUMNS = [f"fault_active_{name}" for name in FAULT_CLASS_NAMES]
