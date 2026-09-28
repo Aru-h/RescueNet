@@ -57,9 +57,15 @@ uint8_t environment_cell_travel_cost(int x, int y)
 /* ---- test-controlled fault_predictor stub ---- */
 FaultPredictorScores_t g_test_predictor_scores[NUM_TEAMS];
 
+/* Counts real calls into fault_predictor_run() below - asserted nonzero
+   at the end of the test so a broken/never-reached inference gate ahead
+   of it doesn't let the test pass vacuously on an untaken code path. */
+uint32_t g_fault_predictor_run_calls = 0u;
+
 FaultPredictorScores_t fault_predictor_run(const float evidence[FEATURE_SPEC_NUM_INPUTS])
 {
     (void)evidence;
+    g_fault_predictor_run_calls++;
     /* Matches the real signature exactly: no team_id parameter, so every
        team gets the same score this tick regardless of which team's
        loop iteration is calling it. Harmless for this test - only team
@@ -79,7 +85,13 @@ FaultPredictorScores_t fault_predictor_run(const float evidence[FEATURE_SPEC_NUM
 uint32_t mission_link_map_rows_received(void) { return MISSION_LINK_MAP_HEIGHT; }
 uint32_t mission_link_district_rows_received(void) { return MISSION_LINK_MAP_HEIGHT; }
 
-void feature_pack_build_vector(uint8_t team_id, float out_scaled[FEATURE_SPEC_NUM_INPUTS])
+/* core/recovery_manager.c's evaluate_fault_predictor() reads the Pass-1
+   cache instead of building fresh (feature-contract Decision: pre-dispatch
+   timing) - stubbed the same way the old feature_pack_build_vector() was,
+   since fault_predictor_run() ignores its input entirely here. Nothing
+   calls feature_pack_build_vector() anymore in this test's link, so that
+   stub was removed rather than kept alongside this one. */
+void feature_pack_get_cached_vector(uint8_t team_id, float out_scaled[FEATURE_SPEC_NUM_INPUTS])
 {
     (void)team_id;
     memset(out_scaled, 0, FEATURE_SPEC_NUM_INPUTS * sizeof(float));

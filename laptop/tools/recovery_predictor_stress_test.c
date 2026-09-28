@@ -29,6 +29,7 @@
 
 extern WatchdogStatus_t g_test_watchdog_status[NUM_TEAMS];
 extern FaultPredictorScores_t g_test_predictor_scores[NUM_TEAMS];
+extern uint32_t g_fault_predictor_run_calls;
 
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); g_failures++; } } while (0)
@@ -296,6 +297,13 @@ int main(void)
     scenario_2_streak_reset_evasion();
     scenario_4a_watchdog_always_true();
     scenario_4b_watchdog_always_false();
+
+    /* Proves the inference gate ahead of fault_predictor_run() (core/
+       recovery_manager.c's evaluate_fault_predictor()) actually ran across
+       all five scenarios above, not skipped - without this, a broken gate
+       would still pass every CHECK above since none of them observe
+       whether the predictor path itself executed. */
+    CHECK(g_fault_predictor_run_calls > 0u);
 
     printf("\n%s: %d check(s) failed\n", g_failures == 0 ? "PASS" : "FAIL", g_failures);
     return g_failures == 0 ? 0 : 1;

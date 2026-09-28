@@ -30,6 +30,7 @@
 
 extern WatchdogStatus_t g_test_watchdog_status[NUM_TEAMS];
 extern FaultPredictorScores_t g_test_predictor_scores[NUM_TEAMS];
+extern uint32_t g_fault_predictor_run_calls;
 
 static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); g_failures++; } } while (0)
@@ -168,6 +169,15 @@ int main(void)
         g_system_tasks[0].assigned_team);
     CHECK(g_teams[0].status == 1u); /* this time it DOES get grabbed - proves the harness/test task is real and biddable */
     CHECK(g_system_tasks[0].assigned_team == 0u);
+
+    /* Proves the inference gate ahead of fault_predictor_run() (core/
+       recovery_manager.c's evaluate_fault_predictor()) was actually taken
+       during the 15 recovery_manager_step() ticks above, not skipped -
+       without this, a broken gate (e.g. the map/district rows-received
+       check silently short-circuiting) would still return CHECK(reached
+       == REQUEST_TASK_REALLOCATION) as if the test passed, since nothing
+       else here observes whether the predictor path itself ran. */
+    CHECK(g_fault_predictor_run_calls > 0u);
 
     printf("\n%s: %d check(s) failed\n", g_failures == 0 ? "PASS" : "FAIL", g_failures);
     return g_failures == 0 ? 0 : 1;

@@ -31,6 +31,12 @@ uint8_t g_simulation_trace_enabled = 0u;
 WatchdogStatus_t g_test_watchdog_status[NUM_TEAMS];
 FaultPredictorScores_t g_test_predictor_scores[NUM_TEAMS];
 
+/* Counts real calls into the stubbed fault_predictor_run() below - the
+   test asserts this is nonzero so a broken/never-reached inference gate
+   (e.g. the map/district "fully arrived" check ahead of it) fails loudly
+   instead of the test passing vacuously on an untaken code path. */
+uint32_t g_fault_predictor_run_calls = 0u;
+
 WatchdogStatus_t watchdog_get_status(uint8_t team_id) { return g_test_watchdog_status[team_id]; }
 
 void watchdog_get_evidence_vector(uint8_t team_id, float out_evidence[7],
@@ -57,6 +63,7 @@ uint8_t environment_cell_travel_cost(int x, int y)
 FaultPredictorScores_t fault_predictor_run(const float evidence[FEATURE_SPEC_NUM_INPUTS])
 {
     (void)evidence;
+    g_fault_predictor_run_calls++;
     return g_test_predictor_scores[0];
 }
 
@@ -68,7 +75,13 @@ FaultPredictorScores_t fault_predictor_run(const float evidence[FEATURE_SPEC_NUM
 uint32_t mission_link_map_rows_received(void) { return MISSION_LINK_MAP_HEIGHT; }
 uint32_t mission_link_district_rows_received(void) { return MISSION_LINK_MAP_HEIGHT; }
 
-void feature_pack_build_vector(uint8_t team_id, float out_scaled[FEATURE_SPEC_NUM_INPUTS])
+/* core/recovery_manager.c's evaluate_fault_predictor() reads the Pass-1
+   cache instead of building fresh (feature-contract Decision: pre-dispatch
+   timing) - stubbed the same way the old feature_pack_build_vector() was,
+   since fault_predictor_run() ignores its input entirely here. Nothing
+   calls feature_pack_build_vector() anymore in this test's link, so that
+   stub was removed rather than kept alongside this one. */
+void feature_pack_get_cached_vector(uint8_t team_id, float out_scaled[FEATURE_SPEC_NUM_INPUTS])
 {
     (void)team_id;
     memset(out_scaled, 0, FEATURE_SPEC_NUM_INPUTS * sizeof(float));
