@@ -245,11 +245,18 @@ void debug_emit_static_map_if_changed(void)
 static char s_override_line[LIVE_OVERRIDE_LINE_MAX];
 static uint32_t s_override_line_len;
 static int s_override_stdin_open = 1;
+/* Set once a line exceeds s_override_line's capacity, until the '\n'
+ * that ends it - every further byte of that same overlong line is
+ * discarded (not just the part that didn't fit), so exactly one
+ * bad_format ack is sent for the whole line and normal accumulation
+ * resumes cleanly on the next one, with no desync. */
+static int s_override_line_overflowed;
 
 void debug_live_override_init(void)
 {
     s_override_line_len = 0;
     s_override_stdin_open = 1;
+    s_override_line_overflowed = 0;
 }
 
 /* Finds a REAL incident (g_incidents only - NOT g_system_tasks) by id.
@@ -338,18 +345,61 @@ static void live_override_emit_ack(uint32_t requested_tick, uint32_t effective_t
     fflush(stdout);
 }
 
-/* Parses and applies one already newline-stripped line. An
- * unrecognized line (garbage, a stray blank, anything that isn't
- * OVERRIDE/OVERRIDE_CLEAR) is silently ignored, not an error - same
+/* Ack for a line that never resolved into a real request - a bad_format
+ * (recognized command, malformed arguments) or unknown_command
+ * (unrecognized command word) rejection. Unlike live_override_emit_ack()
+ * above, there's no real team_id/incident_id to report (the line's own
+ * shape never established one), so those come back as JSON null rather
+ * than a fabricated 0 - the UI must never confuse "field is null because
+ * the line was malformed" with "field is legitimately team/incident 0".
+ * requested_tick is echoed only if that much of the line did parse. */
+static void live_override_emit_malformed_ack(uint32_t effective_tick, int tick_known,
+                                               uint32_t requested_tick, const char *reason)
+{
+    printf("OVERRIDEACK {\"team_id\":null,\"incident_id\":null,\"requested_tick\":");
+    if(tick_known)
+        printf("%u", requested_tick);
+    else
+        printf("null");
+    printf(",\"effective_tick\":%u,\"result\":\"rejected\",\"reason\":\"%s\"}\n",
+           effective_tick, reason);
+    fflush(stdout);
+}
+
+/* Parses and applies one already newline-stripped, non-empty line.
+ * Every non-empty line gets exactly one OVERRIDEACK: a recognized
+ * command word (OVERRIDE/OVERRIDE_CLEAR) whose arguments don't parse
+ * cleanly - wrong field count, a non-numeric field, a field too large
+ * for its type, or trailing junk after the last field - is
+ * "bad_format"; anything else is "unknown_command". This mirrors the
  * "don't crash on malformed input" policy laptop/mission_mirror.c's
  * mission_mirror_ingest_line() already uses for its own stdin-line
- * reader. */
+ * reader, but a reply is always owed here (a human or a UI is waiting
+ * on the other end of this one), unlike that fire-and-forget feed. */
 static void live_override_process_line(const char *line, uint32_t tick)
 {
-    unsigned long requested_tick = 0, team_id = 0, incident_id = 0;
-
-    if(sscanf(line, "OVERRIDE_CLEAR %lu %lu", &requested_tick, &team_id) == 2)
+    char cmd[24];
+    size_t cmd_len = 0;
+    while(line[cmd_len] != '\0' && line[cmd_len] != ' ' && cmd_len < sizeof(cmd) - 1u)
     {
+        cmd[cmd_len] = line[cmd_len];
+        cmd_len++;
+    }
+    cmd[cmd_len] = '\0';
+    const char *rest = line + cmd_len;
+
+    if(strcmp(cmd, "OVERRIDE_CLEAR") == 0)
+    {
+        unsigned long requested_tick = 0, team_id = 0;
+        int consumed = -1;
+        int n = sscanf(rest, " %lu %lu %n", &requested_tick, &team_id, &consumed);
+        int tick_overflow = n >= 1 && requested_tick > 0xFFFFFFFFUL;
+        int trailing_junk = consumed >= 0 && rest[consumed] != '\0';
+        if(n != 2 || tick_overflow || (n >= 2 && team_id > 0xFFFFFFFFUL) || trailing_junk)
+        {
+            live_override_emit_malformed_ack(tick, n >= 1 && !tick_overflow, (uint32_t)requested_tick, "bad_format");
+            return;
+        }
         if(team_id >= NUM_TEAMS)
         {
             live_override_emit_ack((uint32_t)requested_tick, tick, (uint8_t)team_id, 0, 0, "bad_team");
@@ -364,8 +414,19 @@ static void live_override_process_line(const char *line, uint32_t tick)
         return;
     }
 
-    if(sscanf(line, "OVERRIDE %lu %lu %lu", &requested_tick, &team_id, &incident_id) == 3)
+    if(strcmp(cmd, "OVERRIDE") == 0)
     {
+        unsigned long requested_tick = 0, team_id = 0, incident_id = 0;
+        int consumed = -1;
+        int n = sscanf(rest, " %lu %lu %lu %n", &requested_tick, &team_id, &incident_id, &consumed);
+        int tick_overflow = n >= 1 && requested_tick > 0xFFFFFFFFUL;
+        int inc_overflow = n >= 3 && incident_id > 0xFFFFFFFFUL;
+        int trailing_junk = consumed >= 0 && rest[consumed] != '\0';
+        if(n != 3 || tick_overflow || (n >= 2 && team_id > 0xFFFFFFFFUL) || inc_overflow || trailing_junk)
+        {
+            live_override_emit_malformed_ack(tick, n >= 1 && !tick_overflow, (uint32_t)requested_tick, "bad_format");
+            return;
+        }
         if(team_id >= NUM_TEAMS)
         {
             live_override_emit_ack((uint32_t)requested_tick, tick, (uint8_t)team_id, (uint32_t)incident_id, 0, "bad_team");
@@ -424,7 +485,8 @@ static void live_override_process_line(const char *line, uint32_t tick)
         return;
     }
 
-    /* Unrecognized line - ignored (the "garbage line" test case). */
+    /* A real line, just not a command word we recognize. */
+    live_override_emit_malformed_ack(tick, 0, 0, "unknown_command");
 }
 
 /* One non-blocking poll of stdin, called once per tick from main.c's
@@ -494,9 +556,26 @@ void debug_live_override_poll(uint32_t tick)
         char c = chunk[i];
         if(c == '\n')
         {
-            s_override_line[s_override_line_len] = '\0';
-            live_override_process_line(s_override_line, tick);
+            if(s_override_line_overflowed)
+            {
+                live_override_emit_malformed_ack(tick, 0, 0, "bad_format");
+                s_override_line_overflowed = 0;
+            }
+            else if(s_override_line_len > 0)
+            {
+                /* An all-whitespace line still counts as non-empty here
+                 * (e.g. a single space) and is handled the same as any
+                 * other line - live_override_process_line() itself
+                 * resolves that to unknown_command, not a silent drop. */
+                s_override_line[s_override_line_len] = '\0';
+                live_override_process_line(s_override_line, tick);
+            }
+            /* else: an empty line - ignored silently, not an error. */
             s_override_line_len = 0;
+        }
+        else if(s_override_line_overflowed)
+        {
+            /* still discarding the remainder of an overlong line */
         }
         else if(s_override_line_len + 1u < LIVE_OVERRIDE_LINE_MAX)
         {
@@ -504,7 +583,8 @@ void debug_live_override_poll(uint32_t tick)
         }
         else
         {
-            s_override_line_len = 0; /* over-long line: not a real request, drop it */
+            s_override_line_overflowed = 1;
+            s_override_line_len = 0;
         }
     }
 }
@@ -646,13 +726,19 @@ void debug_emit_live_frame(uint32_t tick)
                /* Part 4: reuses the pin state cbba_apply_override_pin()
                 * (core/cbba.c) already reads every tick to force-inject
                 * the incident into this team's bundle - no new state,
-                * just exposing what already exists. That function also
-                * clears override_active on its own once the pinned
-                * incident's slot is gone (resolved or otherwise), so
-                * this flips back to 0 automatically the tick after the
-                * incident finishes - the dashboard just has to keep
-                * reading it live, never latch a stale "still overridden"
-                * client-side. */
+                * just exposing what already exists. That function
+                * clears override_active on its own the moment the
+                * pinned incident leaves INC_OPEN - i.e. the moment it's
+                * genuinely committed (INC_ASSIGNED), typically just a
+                * few ticks after the pin, NOT when it finishes: from
+                * that tick on the assignment is carried by the sim's
+                * own normal state (team->assigned_task_pool/slot,
+                * incident->assigned_team), so there's nothing left for
+                * a stale pin to do. See core/debug.h's protocol doc for
+                * the full pinned -> committed -> resolved (or
+                * interrupted) lifecycle - the dashboard just has to
+                * keep reading this live, never latch a stale "still
+                * overridden" client-side. */
                "\"override\":%u,\"override_incident_id\":%u}",
                t == 0 ? "" : ",",
                team->team_id, team->loc_x, team->loc_y, team->stamina,

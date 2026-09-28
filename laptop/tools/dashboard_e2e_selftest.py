@@ -380,6 +380,116 @@ def _live_override_apply_release_check(page, console_errors):
     page.evaluate("() => { overrideStatus = null; pendingOverride = null; selectedMarker = null; renderInspector(); }")
 
 
+def _live_override_lifecycle_check(page, console_errors):
+    """Part 4 follow-up: the override lifecycle has three UI-visible
+    states, not two - pending (a pin still forcing itself in), committed
+    (core/cbba.c's cbba_apply_override_pin() converged and cleared the
+    pin on its own - the badge/card must show "committed", not just
+    vanish), and one of two endings the override itself has no control
+    over: resolved (the incident finishes) or interrupted (the sim's
+    own stamina/rest handling pulls the team off first - core/debug.h's
+    lifecycle doc). Both endings are exercised here with the same two
+    seed/team/incident combinations laptop/tools/live_override_
+    selftest.py's (10a)/(10b) verified deterministically at the C
+    level: seed=8 resolves cleanly, seed=2 gets interrupted at tick 80.
+    fault_profile=none and tick_delay_ms=0 for speed - this only reads
+    window._lastFrame/window._overridePhase/window._journalEvents
+    directly, nothing here depends on human-visible pacing."""
+
+    def run_and_watch(seed, ticks, expect_ending, journal_label_substr):
+        page.select_option("#faultProfile", "none")
+        page.fill("#seed", str(seed))
+        page.fill("#ticks", str(ticks))
+        # Non-zero: at 0ms the whole (short) run can finish server-side
+        # before the browser's own rendering/polling even catches the
+        # brief "team available, incident open" window to send the
+        # override through - the existing apply/release check above
+        # hit the same thing, which is why it also paces at 150ms.
+        page.fill("#tickDelay", "120")
+        page.click("#liveBtn")
+
+        staged = None
+        for _ in range(40):
+            page.wait_for_timeout(200)
+            staged = page.evaluate("""() => {
+              const frame = window._lastFrame;
+              if (!frame) return null;
+              const inc = (frame.incidents || []).find(i => i.id === 0 && i.status !== 3 && i.pool === 0);
+              const team = frame.teams && frame.teams[1];
+              if (!inc || !team || team.status !== 0) return null;
+              return { incidentId: inc.id, teamId: team.id };
+            }""")
+            if staged is not None:
+                break
+        check(staged is not None,
+              f"seed={seed}: team 1 available and incident 0 open showed up in the UI (got {staged})")
+        if staged is None:
+            return
+
+        journal_count_before = page.evaluate("() => (window._journalEvents || []).length")
+        ok = page.evaluate("""(staged) => {
+          return fetch("/api/run-live/override", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({team_id: staged.teamId, incident_id: staged.incidentId}),
+          }).then(r => r.ok);
+        }""", staged)
+        check(ok, f"seed={seed}: the OVERRIDE POST for team {staged['teamId']} -> incident {staged['incidentId']} succeeded")
+
+        # "pending" is checked via the journal, not live polling: per
+        # the earlier C-level finding, cbba_apply_override_pin() can
+        # commit within just 1-3 ticks (as little as ~120-360ms at this
+        # pacing) - short enough that a 200ms poll can legitimately
+        # sample right past it and never catch "pending" live, even
+        # though it genuinely happened. handleLiveOverrideAck() logs an
+        # "applied" journal entry synchronously the moment the ack SSE
+        # event lands, which is unaffected by that race - it's a
+        # permanent record, not a transient state to catch mid-flight.
+        saw_committed = False
+        ending = None
+        for _ in range(150):
+            page.wait_for_timeout(200)
+            phase = page.evaluate("() => (window._overridePhase && window._overridePhase[1]) || null")
+            if phase and phase.get("kind") == "committed":
+                saw_committed = True
+            if saw_committed and phase is None:
+                events = page.evaluate("() => window._journalEvents || []")
+                recent = [e for e in events if e.get("team") == 1 and e.get("kind") == "override"]
+                if any(journal_label_substr in (e.get("label") or "") for e in recent):
+                    ending = expect_ending
+                    break
+        journal_has_applied = page.evaluate("""() => {
+          const events = window._journalEvents || [];
+          return events.some(e => e.team === 1 && e.kind === 'override' && e.pillCls === 'good' && (e.label || '').includes('applied'));
+        }""")
+        check(journal_has_applied, f"seed={seed}: the pending pin was applied - journal shows a matching 'applied' entry")
+        check(saw_committed, f"seed={seed}: the map/card badge shows the 'committed' phase once the pin auto-clears")
+        check(ending == expect_ending,
+              f"seed={seed}: the lifecycle ends in {expect_ending!r} with a matching journal entry "
+              f"(containing {journal_label_substr!r}), got ending={ending!r}")
+
+        journal_grew = page.evaluate(f"() => (window._journalEvents || []).length > {journal_count_before}")
+        check(journal_grew, f"seed={seed}: new journal entries were recorded for this lifecycle")
+
+        stop_btn = page.query_selector("#stopLiveBtn")
+        if stop_btn and stop_btn.is_visible():
+            stop_btn.click()
+            page.wait_for_timeout(300)
+
+    # (a) resolved: seed=8, team 1 -> incident 0 finishes at tick 71
+    # (empirically verified) - generous tick budget for margin.
+    run_and_watch(seed=8, ticks=150, expect_ending="resolved", journal_label_substr="resolved")
+
+    # (b) interrupted: seed=2, team 1 -> incident 0 is pulled off by
+    # stamina/rest at tick 80 (empirically verified).
+    run_and_watch(seed=2, ticks=150, expect_ending="interrupted", journal_label_substr="Interrupted")
+
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0,
+          f"no UNEXPECTED console/page errors during the override lifecycle check (got {len(real_errors)}: {real_errors[:5]})")
+
+    page.evaluate("() => { overrideStatus = null; pendingOverride = null; selectedMarker = null; renderInspector(); }")
+
+
 def _replay_check(page, console_errors):
     """Part 2: records a short live run (already produced a recording
     file server-side, since /api/run-live always records - see app.py's
@@ -806,6 +916,10 @@ def main():
 
             # Part 4: a valid sim-mode override, applied and released.
             _live_override_apply_release_check(page, console_errors)
+
+            # Part 4 follow-up: the full pending -> committed ->
+            # resolved/interrupted lifecycle.
+            _live_override_lifecycle_check(page, console_errors)
 
             # Part 2: replay of a recorded live run.
             _replay_check(page, console_errors)

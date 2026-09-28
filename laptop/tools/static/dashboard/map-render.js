@@ -581,8 +581,18 @@
 
       // Part 4: a manual override pin, opposite corner from the fault
       // dot above so the two never collide - a diamond, not another
-      // dot, so it never reads as "another fault" at a glance.
-      if (t.override) {
+      // dot, so it never reads as "another fault" at a glance. Filled
+      // while pending (t.override===1, the pin is still forcing
+      // itself into this team's CBBA bundle); once core/cbba.c's
+      // cbba_apply_override_pin() commits it (t.override drops back
+      // to 0 on its own, normally within a few ticks - see core/
+      // debug.h's pinned/committed/resolved-or-interrupted doc), the
+      // badge switches to outline-only for as long as
+      // window._overridePhase (index.html's updateOverridePhases())
+      // still tracks this team as "committed" - dropping once that
+      // ends, resolved or interrupted either way.
+      const phase = window._overridePhase && window._overridePhase[t.id];
+      if (t.override || (phase && phase.kind === "committed")) {
         const bx = center.x - r * 1.1, by = center.y + r * 1.1;
         const s = 4;
         ctx.beginPath();
@@ -591,11 +601,17 @@
         ctx.lineTo(bx, by + s);
         ctx.lineTo(bx - s, by);
         ctx.closePath();
-        ctx.fillStyle = "#a371f7";
-        ctx.fill();
-        ctx.strokeStyle = "#fff";
-        ctx.lineWidth = 1;
-        ctx.stroke();
+        if (t.override) {
+          ctx.fillStyle = "#a371f7";
+          ctx.fill();
+          ctx.strokeStyle = "#fff";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        } else {
+          ctx.strokeStyle = "#a371f7";
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
       }
 
       if (selectedMarker && selectedMarker.type === "team" && selectedMarker.id === t.id) {

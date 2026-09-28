@@ -987,6 +987,7 @@ function telemetryReset() {
   staticEnvironment = null;
   terrainMap = null;
   liveOverrideEvents = [];
+  window._overridePhase = {};
   destroyChart("liveThroughputChart");
 }
 
@@ -1006,6 +1007,85 @@ function logOverrideEvent(tick, teamId, kind, pillCls, label, detail) {
   window._journalEvents = (window._journalEvents || []).concat([evt]).sort((a, b) => a.tick - b.tick);
   const filterEl = document.getElementById("journalFilter");
   if (filterEl) renderJournalRows();
+}
+
+// Part 4: the override row shown in a team's card (side panel or map
+// hover/click card, both call this with their own release-button id).
+// Reads window._overridePhase (updateOverridePhases() below) rather
+// than the raw LIVEFRAME override flag directly, since "pending" and
+// "committed" render differently: pending still has something to
+// release (a Release button); committed has nothing left to do but
+// wait for resolved/interrupted, so no button.
+function overrideRowHTML(teamId, releaseBtnId) {
+  const phase = window._overridePhase && window._overridePhase[teamId];
+  if (!phase) return "";
+  if (phase.kind === "pending") {
+    return `<div style="margin-top:4px;display:flex;align-items:center;justify-content:space-between;">
+        <span style="color:#a371f7;">◆ Override (pending) → Incident #${phase.incidentId}</span>
+        <button id="${releaseBtnId}" data-team-id="${teamId}" class="override-btn cancel" style="font-size:11px;padding:2px 8px;">Release</button>
+      </div>`;
+  }
+  return `<div style="margin-top:4px;">
+      <span style="color:#a371f7;">◇ Override → committed (Incident #${phase.incidentId})</span>
+    </div>`;
+}
+
+// Part 4: tracks each team's manual-override lifecycle across ticks -
+// pinned -> committed -> resolved (or interrupted) - see core/debug.h's
+// protocol doc for the same lifecycle from the sim's side. No new wire
+// state: this is entirely derived, client-side, from fields LIVEFRAME
+// already carries every tick (team.override/override_incident_id/
+// has_dest/dest_id, and the matching incident's own status/
+// assigned_team). window._overridePhase[teamId] is {kind: "pending" |
+// "committed", incidentId}, or absent once there's nothing to show.
+// Read by MapRender.drawTeams() (the map badge: filled while pending,
+// outline once committed) and by renderTeamCard()/buildTeamCardHTML()
+// (the team card row) - both just read the current phase, this
+// function is the only thing that ever writes it or logs its
+// transitions to the journal.
+function updateOverridePhases(frame) {
+  window._overridePhase = window._overridePhase || {};
+  for (const t of frame.teams) {
+    const phase = window._overridePhase[t.id];
+    const specName = SPEC_NAMES[t.id % SPEC_NAMES.length] || "team";
+
+    if (t.override === 1) {
+      window._overridePhase[t.id] = { kind: "pending", incidentId: t.override_incident_id };
+      continue;
+    }
+
+    if (!phase) continue;
+
+    if (phase.kind === "pending") {
+      if (t.has_dest === 1 && t.dest_id === phase.incidentId) {
+        window._overridePhase[t.id] = { kind: "committed", incidentId: phase.incidentId };
+        logOverrideEvent(frame.tick, t.id, "override", "good", "Override committed",
+          `${specName} #${t.id} committed to Incident ${phase.incidentId}`);
+      } else {
+        // The pin cleared without ever committing to the incident it
+        // was pinned to (unexpected given cbba_apply_override_pin()'s
+        // own contract) - drop the phase rather than show a stale
+        // "pending" badge forever.
+        delete window._overridePhase[t.id];
+      }
+      continue;
+    }
+
+    // phase.kind === "committed": still on the same incident, or done.
+    if (t.has_dest === 1 && t.dest_id === phase.incidentId) continue;
+
+    const inc = frame.incidents.find((i) => i.id === phase.incidentId);
+    const resolved = !inc || inc.status === 3;
+    delete window._overridePhase[t.id];
+    if (resolved) {
+      logOverrideEvent(frame.tick, t.id, "override", "good", "Incident resolved",
+        `Incident ${phase.incidentId} resolved (${specName} #${t.id} had been committed to it)`);
+    } else {
+      logOverrideEvent(frame.tick, t.id, "override", "bad", "Interrupted (resting) — incident reopened",
+        `${specName} #${t.id} was pulled off Incident ${phase.incidentId}. The override is over - `
+        + "drag again to re-pin.");
+    }
+  }
 }
 
 function telemetryProcessFrame(frame) {
@@ -1479,6 +1559,7 @@ function setReplayTerrainMap(map) { terrainMap = map; }
 
 function drawFrame(frame, skipInspector) {
   window._lastFrame = frame;
+  updateOverridePhases(frame);
   if (!mapCtx) return;
   mapCtx.clearRect(0, 0, mapCamera.state.viewW, mapCamera.state.viewH);
   MapRender.drawTerrain(mapCtx, mapCamera, terrainMap);
@@ -1589,12 +1670,8 @@ function renderTeamCard() {
         <b style="color:#e6edf3;">Votes</b>
         &nbsp; ${voteLine("Mob", pv && pv.mob)} &nbsp;&nbsp; ${voteLine("Comm", pv && pv.comm)}
       </div>
-      ${d.override ? `
-      <div style="margin-top:4px;display:flex;align-items:center;justify-content:space-between;">
-        <span style="color:#a371f7;">◆ Manual override → Incident #${d.override_incident_id}</span>
-        <button id="sidePanelOverrideReleaseBtn" data-team-id="${d.i}" class="override-btn cancel" style="font-size:11px;padding:2px 8px;">Release</button>
-      </div>` : ""}`;
-    if (d.override) {
+      ${overrideRowHTML(d.i, "sidePanelOverrideReleaseBtn")}`;
+    if (window._overridePhase && window._overridePhase[d.i] && window._overridePhase[d.i].kind === "pending") {
       const btn = document.getElementById("sidePanelOverrideReleaseBtn");
       if (btn) btn.addEventListener("click", () => releaseLiveOverride(parseInt(btn.dataset.teamId, 10)));
     }
@@ -1826,14 +1903,17 @@ function buildTeamCardHTML(d) {
     mapCardRow("Mobility tier", tierName(tier[0])) +
     mapCardRow("Comm tier", tierName(tier[1]));
   if (activeFaults.length) html += mapCardRow("Injected fault (ground truth)", activeFaults.join(", "));
-  if (d.override) {
-    html += mapCardRow("Manual override", `→ Incident #${d.override_incident_id}`);
+  const overridePhase = window._overridePhase && window._overridePhase[d.i];
+  if (overridePhase && overridePhase.kind === "pending") {
+    html += mapCardRow("Override (pending)", `→ Incident #${overridePhase.incidentId}`);
     // pointer-events:auto overrides .map-tooltip's own pointer-events:none
     // (that's there so the card never blocks clicking the canvas under a
     // hover-only card) - a real button inside it needs to stay clickable.
     html += `<div style="margin-top:6px;text-align:right;">
       <button id="liveOverrideReleaseBtn" data-team-id="${d.i}" class="override-btn cancel" style="font-size:11px;padding:3px 8px;pointer-events:auto;">Release</button>
     </div>`;
+  } else if (overridePhase && overridePhase.kind === "committed") {
+    html += mapCardRow("Override → committed", `Incident #${overridePhase.incidentId}`);
   }
   return html;
 }
