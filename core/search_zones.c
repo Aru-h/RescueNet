@@ -1,6 +1,8 @@
 #include <stddef.h>
 #include <string.h>
 #include "search_zones.h"
+#include "mission_link.h"  /* mission_link_district_cell() - zone_id_for_location()
+                               on a board with no world storage, below */
 
 SearchZoneState_t g_search_zones[NUM_SEARCH_ZONES];
 uint32_t g_cell_last_covered_tick[GRID_WIDTH][GRID_HEIGHT];
@@ -99,7 +101,20 @@ uint8_t zone_id_for_location(int16_t x, int16_t y)
 #if ENVIRONMENT_HAS_WORLD_STORAGE
     return g_environment[x][y].district_id;
 #else
-    return 0;
+    /* A board: no world of its own, reads the laptop's district map
+     * once that row has arrived (mission_link.h section 5e) - same
+     * "no-map default until the row arrives" shape environment_cell_
+     * is_navigable()/_travel_cost() already use for the route map.
+     * Returns 0 (district 0, DISTRICT_RESCUE_BASE) only for a row not
+     * yet received, matching the map row's own "everything passable"
+     * placeholder default. */
+    {
+        uint8_t district;
+
+        if(mission_link_district_cell(x, y, &district))
+            return district;
+        return 0;
+    }
 #endif
 }
 

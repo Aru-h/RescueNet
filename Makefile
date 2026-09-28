@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-pack-parity check-feature-spec-fresh check-feature-spec-leak-guard check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-single-board-dk-harness
 
 all: $(TARGET) $(LABELER)
 
@@ -79,6 +79,18 @@ all: $(TARGET) $(LABELER)
 CONSENSUS_ENFORCE ?= 1
 LAPTOP_CONSENSUS_FLAGS ?= -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=$(CONSENSUS_ENFORCE)
 
+# Single-board STM32N6570-DK build (the submission target): all 10 teams
+# local to board 0 (COMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS, same override
+# the laptop CFLAGS above already apply unconditionally), plus the same
+# consensus flags LAPTOP_CONSENSUS_FLAGS uses (fast path stays on via
+# consensus_config.h's own default - not repeated here). Deliberately NOT
+# folded into ARM_CFLAGS/PICO_ARM_CFLAGS below: those stay exactly as they
+# are (VIRTUAL_BUS_ENABLED=0, default 5-teams-per-board split) so every
+# existing multi-board board/Pico/two-board-harness target keeps building
+# and testing unchanged - see check-board-single-* targets and
+# check-single-board-dk-harness further down for what actually uses this.
+DK_SINGLE_BOARD_FLAGS ?= -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=$(CONSENSUS_ENFORCE)
+
 $(TARGET): $(LAPTOP_SOURCES)
 	$(CC) $(CFLAGS) $(LAPTOP_CONSENSUS_FLAGS) $(LAPTOP_INCLUDES) -o $(TARGET) $(LAPTOP_SOURCES) $(LDFLAGS)
 
@@ -86,17 +98,17 @@ $(LABELER): $(LABELER_SOURCES)
 	$(CC) $(CFLAGS) -I$(CORE_DIR) -o $(LABELER) $(LABELER_SOURCES) $(LDFLAGS)
 
 # Runs from build/smoke so its 200-tick clean-profile snapshot CSV does not
-# overwrite the repo-root tron_snapshot_dataset.csv the Python dataset
-# checks read (see that file's rule below).
+# overwrite the repo-root tron_snapshot_dataset.csv label_dataset's own
+# default INPUT reads (see that target below).
 smoke: $(TARGET)
 	@mkdir -p build/smoke
 	cd build/smoke && ../../$(TARGET) 1 1 200
 
-# The dataset the three Python dataset checks read (persistence-bounded-
-# forgiveness, environment-e2e-stress, env-raw-travel-cost-ablation): a
-# combined-fault-profile run, generated here on demand instead of relying on
-# whatever an earlier target (smoke, an override selftest) left behind or
-# `make clean` deleted.
+# label_dataset's own convenience default - not read by any automated
+# check (each of those generates and reads its own private copy under
+# build/, see the three dataset-analysis targets below) - just whatever
+# `./tron` run happens to be sitting at repo root when label_dataset is
+# run manually.
 tron_snapshot_dataset.csv: $(TARGET)
 	./$(TARGET) 1 5 3000 --fault-profile=combined
 
@@ -291,9 +303,96 @@ check-board-link: check-board-compile
 	echo "  every undefined reference is accounted for by libc/libm/libgcc or an"; \
 	echo "  IMPORT-declared BSP symbol under $(BSP_DIR); no cross-file interface breaks."
 
+# --- Single-board DK compile/link check --------------------------------
+# Mirrors check-board-compile/check-board-link exactly (same BOARD_SOURCES,
+# same BSP_MODE fallback), just with DK_SINGLE_BOARD_FLAGS added and a
+# separate object directory, so this never touches build/board-check --
+# check-consensus-multiboard-untouched's nm scan of that directory (and of
+# build/pico-check) must keep seeing zero vbus_/consensus_ symbols, and this
+# target's whole point is the opposite assertion (see check-board-single-
+# symbols below). Two independent object sets from the same sources, one
+# with the flag on and one with it off, is what actually proves the flag -
+# not board identity - is what turns the virtual bus on.
+ARM_CFLAGS_DK_SINGLE = $(ARM_CFLAGS) $(DK_SINGLE_BOARD_FLAGS)
+BOARD_OBJ_DIR_SINGLE = build/board-single-check
+
+check-board-single: check-board-ids-distinct check-board-single-compile check-board-single-link check-board-single-symbols
+	@echo "check-board-single: single-board DK compile + link + symbol checks all passed ($(BSP_MODE))"
+
+check-board-single-compile:
+	@echo "check-board-single mode: $(BSP_MODE)"
+	@mkdir -p $(BOARD_OBJ_DIR_SINGLE)
+	@for f in $(BOARD_SOURCES); do \
+		obj=$(BOARD_OBJ_DIR_SINGLE)/$$(basename $$f .c).o; \
+		echo "  ARM-CC  $$f (single-board DK flags)"; \
+		$(ARM_CC) $(ARM_CFLAGS_DK_SINGLE) -c $$f -o $$obj || exit 1; \
+	done
+	@echo "check-board-single-compile: all sources compile clean for Cortex-M55 with vbus+consensus enabled ($(BSP_MODE))"
+
+check-board-single-link: check-board-single-compile
+	@echo "check-board-single-link: partial-linking every $(BOARD_OBJ_DIR_SINGLE)/*.o together to check for undefined cross-file references"
+	@objs="$$(ls $(BOARD_OBJ_DIR_SINGLE)/*.o 2>/dev/null)"; \
+	if [ -z "$$objs" ]; then \
+		echo "check-board-single-link: no objects in $(BOARD_OBJ_DIR_SINGLE) -- check-board-single-compile did not run?"; \
+		exit 1; \
+	fi; \
+	$(ARM_NM) -o $$objs | awk -F'[: \t]+' '$$2=="U" {print $$3}' | sort -u > $(BOARD_OBJ_DIR_SINGLE)/.undefined_syms.txt; \
+	$(ARM_NM) -o $$objs | awk -F'[: \t]+' '$$2!="U" && NF>=4 {print $$4}' | sort -u > $(BOARD_OBJ_DIR_SINGLE)/.defined_syms.txt; \
+	comm -23 $(BOARD_OBJ_DIR_SINGLE)/.undefined_syms.txt $(BOARD_OBJ_DIR_SINGLE)/.defined_syms.txt > $(BOARD_OBJ_DIR_SINGLE)/.unresolved_syms.txt; \
+	libc_a="$$($(ARM_CC) $(ARM_TARGET_FLAGS) -print-file-name=libc.a)"; \
+	libm_a="$$($(ARM_CC) $(ARM_TARGET_FLAGS) -print-file-name=libm.a)"; \
+	libgcc_a="$$($(ARM_CC) $(ARM_TARGET_FLAGS) -print-file-name=libgcc.a)"; \
+	: > $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+	for lib in "$$libc_a" "$$libm_a" "$$libgcc_a"; do \
+		if [ -f "$$lib" ]; then \
+			$(ARM_NM) "$$lib" 2>/dev/null | awk -F'[: \t]+' 'NF>=3 && $$2 ~ /^[A-Za-z]$$/ && $$2!="U" && $$2!="u" {print $$3}' >> $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+		fi; \
+	done; \
+	if [ -d "$(BSP_DIR)" ]; then \
+		grep -rhoE '^[[:space:]]*IMPORT[[:space:]]+[A-Za-z_][A-Za-z0-9_ ]*\*?[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(' $(BSP_DIR) 2>/dev/null \
+			| sed -E 's/^.*[[:space:]\*]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\($$/\1/' \
+			>> $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+	fi; \
+	sort -u $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt -o $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+	comm -23 $(BOARD_OBJ_DIR_SINGLE)/.unresolved_syms.txt $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt > $(BOARD_OBJ_DIR_SINGLE)/.bad_undefined_syms.txt; \
+	if [ -s $(BOARD_OBJ_DIR_SINGLE)/.bad_undefined_syms.txt ]; then \
+		echo ""; \
+		echo "check-board-single-link: FAILED -- undefined reference(s) to symbol(s) that should be"; \
+		echo "defined somewhere in core/*.c or board/STM32N6570-DK/*.c, but aren't in this build:"; \
+		echo ""; \
+		sed 's/^/    /' $(BOARD_OBJ_DIR_SINGLE)/.bad_undefined_syms.txt; \
+		echo ""; \
+		exit 1; \
+	fi; \
+	echo "check-board-single-link: real partial link of $$(echo $$objs | wc -w) objects clean"
+
+# Positive counterpart to check-consensus-multiboard-untouched's negative
+# assertion: the single-board DK build MUST contain vbus_*/consensus_*
+# symbols (that's the entire point of DK_SINGLE_BOARD_FLAGS), so a build
+# that silently loses -DVIRTUAL_BUS_ENABLED=1 (a Makefile edit, a typo in
+# the flag variable, ...) fails loudly here instead of quietly shipping a
+# single-board image with no peer consensus at all. In fallback (no-BSP)
+# mode this only has core/*.o to check (board/*.c isn't compiled at all -
+# same limitation check-board-compile's own comment documents), which is
+# still a real check: core/vbus.c and core/consensus.c only define these
+# symbols when actually compiled with VIRTUAL_BUS_ENABLED=1.
+check-board-single-symbols: check-board-single-compile
+	@objs="$$(ls $(BOARD_OBJ_DIR_SINGLE)/*.o 2>/dev/null)"; \
+	if [ -z "$$objs" ]; then \
+		echo "check-board-single-symbols: no objects in $(BOARD_OBJ_DIR_SINGLE) -- check-board-single-compile did not run?"; \
+		exit 1; \
+	fi; \
+	if $(ARM_NM) $$objs 2>/dev/null | grep -Eq ' [A-Za-z] (vbus_init|vbus_step|consensus_step|consensus_init)'; then \
+		echo "check-board-single-symbols: vbus_init/vbus_step/consensus_init/consensus_step all found defined in $(BOARD_OBJ_DIR_SINGLE) -- single-board DK build carries the virtual bus and consensus"; \
+	else \
+		echo "check-board-single-symbols: FAILED -- no vbus_*/consensus_* symbols defined in $(BOARD_OBJ_DIR_SINGLE)"; \
+		echo "  DK_SINGLE_BOARD_FLAGS's -DVIRTUAL_BUS_ENABLED=1 is not taking effect for this build."; \
+		exit 1; \
+	fi
+
 clean:
 	rm -f $(TARGET) $(LABELER) tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv tron_telemetry.log
-	rm -rf $(BOARD_OBJ_DIR) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
+	rm -rf $(BOARD_OBJ_DIR) $(BOARD_OBJ_DIR_SINGLE) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
 	rm -f $(TWO_BOARD_HARNESS_BIN) $(MISSION_LINK_STATUS_GATE_TEST_BIN) \
 		$(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) \
 		$(RECOVERY_MANAGER_PERSISTENCE_SELFTEST_BIN)
@@ -643,12 +742,28 @@ check-recovery-manager-persistence:
 # FAULT_PERSISTENCE_TRIP_TICKS=8 (simulator ground truth + evidence_
 # channels.py, no trained model) - see laptop/tools/persistence_
 # bounded_forgiveness_ablation.py's own header doc for the measured
-# verdict. Requires tron_snapshot_dataset.csv with --fault-profile=
-# combined fault injection, same as check-environment-e2e-stress - not
-# run automatically by this target for the same reason (slow dataset
-# regen, analysis script not a pass/fail gate).
-check-persistence-bounded-forgiveness: tron_snapshot_dataset.csv
-	$(PYTHON) $(TOOLS_DIR)/persistence_bounded_forgiveness_ablation.py
+# verdict. Not run automatically by this target for the same reason as
+# check-environment-e2e-stress below (slow dataset regen, analysis
+# script not a pass/fail gate).
+#
+# Each of these three dataset-analysis targets generates and reads its
+# OWN --fault-profile=combined dataset under a private build/ directory,
+# rather than sharing one repo-root tron_snapshot_dataset.csv - three
+# targets racing to generate/read the same shared file (make -j, or one
+# running while another is manually invoked) corrupted it for whichever
+# read it mid-write once. TRON_SNAPSHOT_CSV tells each script which copy
+# to read (laptop/tools/*.py's own CSV_PATH line).
+PERSISTENCE_ABLATION_DIR = build/persistence-bounded-forgiveness
+ENV_STRESS_DIR = build/environment-e2e-stress
+TRAVEL_COST_ABLATION_DIR = build/env-raw-travel-cost-ablation
+
+$(PERSISTENCE_ABLATION_DIR)/tron_snapshot_dataset.csv: $(TARGET)
+	@mkdir -p $(PERSISTENCE_ABLATION_DIR)
+	cd $(PERSISTENCE_ABLATION_DIR) && ../../$(TARGET) 1 5 3000 --fault-profile=combined
+
+check-persistence-bounded-forgiveness: $(PERSISTENCE_ABLATION_DIR)/tron_snapshot_dataset.csv
+	TRON_SNAPSHOT_CSV=$(PERSISTENCE_ABLATION_DIR)/tron_snapshot_dataset.csv \
+		$(PYTHON) $(TOOLS_DIR)/persistence_bounded_forgiveness_ablation.py
 
 # --- Environment-class end-to-end escalation check ---------------------------
 # Python, not C - reuses the Config A sklearn pipeline (same as this
@@ -656,23 +771,51 @@ check-persistence-bounded-forgiveness: tron_snapshot_dataset.csv
 # for real held-out environment-fault onset episodes, then runs each
 # through a faithful port of recovery_manager.c's persistence/hysteresis
 # state machine - laptop/tools/environment_class_e2e_stress.py's own
-# header doc has the full method. Requires tron_snapshot_dataset.csv to
-# exist with --fault-profile=combined fault injection (e.g. `./tron 1 30
-# 400 --fault-profile=combined`) - not run automatically by this target
+# header doc has the full method. Not run automatically by this target
 # since regenerating the dataset is slow and this is an analysis script,
 # not a pass/fail gate.
-check-environment-e2e-stress: tron_snapshot_dataset.csv
-	$(PYTHON) $(TOOLS_DIR)/environment_class_e2e_stress.py
+$(ENV_STRESS_DIR)/tron_snapshot_dataset.csv: $(TARGET)
+	@mkdir -p $(ENV_STRESS_DIR)
+	cd $(ENV_STRESS_DIR) && ../../$(TARGET) 1 5 3000 --fault-profile=combined
+
+check-environment-e2e-stress: $(ENV_STRESS_DIR)/tron_snapshot_dataset.csv
+	TRON_SNAPSHOT_CSV=$(ENV_STRESS_DIR)/tron_snapshot_dataset.csv \
+		$(PYTHON) $(TOOLS_DIR)/environment_class_e2e_stress.py
 
 # --- env_raw_travel_cost before/after ablation --------------------------
 # Environment-class F1 with and without the env_raw_travel_cost CSV
 # column (laptop/snapshot.c; environment_cell_travel_cost() at the team's
-# own cell). Same sklearn pipeline as the other ablations. Requires
-# tron_snapshot_dataset.csv generated with --fault-profile=combined
-# (e.g. `./tron 1 5 3000 --fault-profile=combined`) - not run
+# own cell). Same sklearn pipeline as the other ablations. Not run
 # automatically, same reason as check-environment-e2e-stress.
-check-env-raw-travel-cost-ablation: tron_snapshot_dataset.csv
-	$(PYTHON) $(TOOLS_DIR)/env_raw_travel_cost_ablation.py
+$(TRAVEL_COST_ABLATION_DIR)/tron_snapshot_dataset.csv: $(TARGET)
+	@mkdir -p $(TRAVEL_COST_ABLATION_DIR)
+	cd $(TRAVEL_COST_ABLATION_DIR) && ../../$(TARGET) 1 5 3000 --fault-profile=combined
+
+check-env-raw-travel-cost-ablation: $(TRAVEL_COST_ABLATION_DIR)/tron_snapshot_dataset.csv
+	TRON_SNAPSHOT_CSV=$(TRAVEL_COST_ABLATION_DIR)/tron_snapshot_dataset.csv \
+		$(PYTHON) $(TOOLS_DIR)/env_raw_travel_cost_ablation.py
+
+# Feature contract (single source of truth): core/feature_spec.h and
+# feature_spec.py are GENERATED from the committed feature_spec.json by
+# generate_feature_spec.py - never hand-edited. This regenerates both in
+# place and fails if that changes anything relative to what's committed,
+# so a feature_spec.json edit that forgot to re-run the generator (or a
+# hand-edit to either generated file) is caught, not silently merged.
+check-feature-spec-fresh:
+	@test -f feature_spec.json || (echo "check-feature-spec-fresh: feature_spec.json missing - run data_prep.py first" && exit 1)
+	@$(PYTHON) generate_feature_spec.py feature_spec.json
+	@git diff --quiet -- core/feature_spec.h feature_spec.py || \
+		(echo "check-feature-spec-fresh: core/feature_spec.h / feature_spec.py are stale relative to the committed feature_spec.json:" && \
+		 git diff -- core/feature_spec.h feature_spec.py && exit 1)
+	@echo "check-feature-spec-fresh: core/feature_spec.h and feature_spec.py match feature_spec.json"
+
+# Fast leak guard on the committed feature_spec.json alone (no CSV, no
+# simulator run) - data_prep.py asserts the same thing every time it runs;
+# this is the always-cheap version for CI/a plain `make check-feature-
+# spec-leak-guard` with nothing else built.
+check-feature-spec-leak-guard:
+	@test -f feature_spec.json || (echo "check-feature-spec-leak-guard: feature_spec.json missing - run data_prep.py first" && exit 1)
+	@$(PYTHON) $(TOOLS_DIR)/feature_spec_leak_check.py feature_spec.json
 
 # --- Standalone laptop/tools selftests ---------------------------------------
 # These seven selftests existed with no Makefile target at all, so nothing
@@ -768,6 +911,85 @@ check-virtual-bus:
 		$(TOOLS_DIR)/virtual_bus_selftest.c $(CORE_DIR)/vbus.c $(CORE_DIR)/random.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./virtual_bus_selftest
 
+# Fault-predictor history features (stall fractions over the last 5 and
+# 10 ticks, incident priority / victim-count deltas): a hand-worked
+# 17-tick sequence checked against data_prep's rolling/baseline logic.
+check-fault-predictor-features-selftest:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/fault_predictor_features_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/fault_predictor_features_selftest \
+		$(TOOLS_DIR)/fault_predictor_features_selftest.c $(CORE_DIR)/fault_predictor_features.c \
+		$(CORE_DIR)/mission_state.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./fault_predictor_features_selftest
+
+# Zone parity (feature-contract Decision D): a board fed only the district-
+# map/zone-trust frames (mission_link.h 5e/5f) must compute the exact same
+# zone_id_for_location()/search_zone_trust() the laptop does. One source
+# file, two binaries - "gen" (normal build, generates ground truth + the
+# frame stream from a real seeded mission) and "check" (built with
+# ENVIRONMENT_HAS_WORLD_STORAGE=0, the real board port, applies only the
+# frames and compares). See zone_parity_test.c's own top-of-file comment.
+ZONE_PARITY_DIR = build/zone-parity
+
+check-zone-parity:
+	@mkdir -p $(ZONE_PARITY_DIR)
+	@echo "  CC      $(TOOLS_DIR)/zone_parity_test.c (gen)"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(ZONE_PARITY_DIR)/zone_parity_gen \
+		$(TOOLS_DIR)/zone_parity_test.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@echo "  CC      $(TOOLS_DIR)/zone_parity_test.c (check, ENVIRONMENT_HAS_WORLD_STORAGE=0)"
+	@$(CC) $(SELFTEST_CFLAGS) -DENVIRONMENT_HAS_WORLD_STORAGE=0 -o $(ZONE_PARITY_DIR)/zone_parity_check \
+		$(TOOLS_DIR)/zone_parity_test.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(ZONE_PARITY_DIR) && ./zone_parity_gen frames.txt truth.csv
+	@cd $(ZONE_PARITY_DIR) && ./zone_parity_check frames.txt truth.csv
+
+# Zone refresh convergence (feature-contract Decision D follow-up):
+# check-zone-parity only covers the initial district-map/zone-trust burst
+# decoding correctly - it never exercises mission_feed_tick()'s periodic
+# full resend, so that code could be dead and still pass it (it briefly
+# was). This drops every tick-0 frame (simulating a board that missed the
+# burst entirely) and confirms zone_id_for_location()/search_zone_trust()
+# still converge to the laptop's answers within one MISSION_LINK_ZONE_
+# TRUST_REFRESH_TICKS period. Same two-binary design as check-zone-parity;
+# see zone_refresh_test.c's own top-of-file comment.
+ZONE_REFRESH_DIR = build/zone-refresh
+
+check-zone-refresh:
+	@mkdir -p $(ZONE_REFRESH_DIR)
+	@echo "  CC      $(TOOLS_DIR)/zone_refresh_test.c (gen)"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(ZONE_REFRESH_DIR)/zone_refresh_gen \
+		$(TOOLS_DIR)/zone_refresh_test.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LAPTOP_DIR)/mission_feed.c $(LDFLAGS)
+	@echo "  CC      $(TOOLS_DIR)/zone_refresh_test.c (check, ENVIRONMENT_HAS_WORLD_STORAGE=0)"
+	@$(CC) $(SELFTEST_CFLAGS) -DENVIRONMENT_HAS_WORLD_STORAGE=0 -o $(ZONE_REFRESH_DIR)/zone_refresh_check \
+		$(TOOLS_DIR)/zone_refresh_test.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(ZONE_REFRESH_DIR) && ./zone_refresh_gen frames.txt truth.csv
+	@cd $(ZONE_REFRESH_DIR) && ./zone_refresh_check frames.txt truth.csv
+
+# Feature-pack C-vs-Python parity (FEATURE_CONTRACT_DESIGN.md section 5:
+# "C vs Python feature parity: <=1e-5 scaled"): a real 5-seed run through
+# feature_pack_dump (core/feature_pack.c's own feature_pack_build_
+# vector(), same tick/same state snapshot.c just recorded from) compared
+# against data_prep.py's --dump-raw-features reconstruction of the same
+# rows from the training CSV it wrote, both scaled with the same
+# committed feature_spec.py constants. See feature_pack_dump.c's and
+# feature_pack_parity_test.py's own top-of-file comments.
+FEATURE_PACK_PARITY_DIR = build/feature-pack-parity
+
+check-feature-pack-parity:
+	@mkdir -p $(FEATURE_PACK_PARITY_DIR)
+	@echo "  CC      $(TOOLS_DIR)/feature_pack_dump.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(FEATURE_PACK_PARITY_DIR)/feature_pack_dump \
+		$(TOOLS_DIR)/feature_pack_dump.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(FEATURE_PACK_PARITY_DIR) && ./feature_pack_dump 5 300 9001 features_c.csv
+	@$(PYTHON) data_prep.py $(FEATURE_PACK_PARITY_DIR)/tron_snapshot_dataset.csv \
+		--dump-raw-features $(FEATURE_PACK_PARITY_DIR)/features_py_raw.csv > /dev/null
+	@$(PYTHON) $(TOOLS_DIR)/feature_pack_parity_test.py \
+		$(FEATURE_PACK_PARITY_DIR)/features_c.csv $(FEATURE_PACK_PARITY_DIR)/features_py_raw.csv
+
 # Peer consensus unit tests (CONSENSUS_DESIGN.md 7.9, 7.11): real vbus,
 # synthetic teams, no simulation. Needs the virtual bus and the test hooks.
 CONSENSUS_TEST_DEFS = -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_TEST_HOOKS=1
@@ -821,9 +1043,13 @@ check-consensus-airtime:
 
 # Shadow-mode regression (design 7.7): with CONSENSUS_ENFORCE=0 every column
 # the base branch writes must be identical. The base is built from
-# CONSENSUS_BASE_REF in a scratch tree. run_id (start time + seed) is the only
-# column ignored. The base is pinned to e37181a, the last submission commit
-# before consensus was merged: the branch tip now contains consensus itself.
+# CONSENSUS_BASE_REF in a scratch tree. run_id is excluded outright;
+# incident_priority/victim_count are compared after mapping the base's old
+# no-task sentinel (-1) to the candidate's new one (0), so a genuine
+# regression in either still fails (see consensus_shadow_compare.py's
+# EXCLUDED_COLUMNS/REMAPPED_COLUMNS and module docstring). The base is
+# pinned to e37181a, the last submission commit before consensus was
+# merged: the branch tip now contains consensus itself.
 CONSENSUS_BASE_REF ?= e37181a
 SHADOW_DIR = build/consensus-shadow
 
@@ -971,6 +1197,28 @@ check-two-board-mission-harness:
 	done
 	@echo "check-two-board-mission-harness: clock, map, sites and positions crossed both boards"
 
+# --- Single-board DK harness ---------------------------------------------
+# The submission target, proven end to end host-side: real board/STM32N6570-
+# DK/mission_link_task.c + core/*.c (unmodified), built with
+# DK_SINGLE_BOARD_FLAGS (all 10 teams local, vbus + consensus enabled). See
+# laptop/tools/single_board_dk_harness.c's own top comment for exactly what
+# it asserts and why lora_spi_transmit() (not a counter or a mock) is the
+# right seam to prove "no relay send is ever attempted" - unlike every
+# two-board harness, there is deliberately no second process and no socket
+# here, since single-board-dk has no peer board and no radio to simulate.
+SINGLE_BOARD_HARNESS_BIN = build/single_board_dk_harness
+
+check-single-board-dk-harness:
+	@mkdir -p build
+	@echo "  CC      $(TOOLS_DIR)/single_board_dk_harness.c (+ real board/STM32N6570-DK/mission_link_task.c)"
+	@$(CC) -std=gnu11 -Wall -Wextra -Wpedantic $(DK_SINGLE_BOARD_FLAGS) -DTHIS_BOARD_ID=0 \
+		-I$(CORE_DIR) -I$(BOARD_DIR) -I$(LAPTOP_DIR) -I$(TOOLS_DIR)/harness_stubs \
+		-o $(SINGLE_BOARD_HARNESS_BIN) $(TOOLS_DIR)/single_board_dk_harness.c \
+		$(BOARD_DIR)/mission_link_task.c $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c \
+		$(CORE_SOURCES) -lm
+	@./$(SINGLE_BOARD_HARNESS_BIN)
+	@echo "check-single-board-dk-harness: 10 local teams + vbus + consensus + mission link passed, zero relay sends"
+
 
 # =============================================================================
 # Agent C review-fix tests (board code, dashboard and tooling)
@@ -1031,3 +1279,44 @@ check-cbba-wire-validation:
 	@$(CC) $(SELFTEST_CFLAGS) $(AGENT_B_SANITIZE) -o $(SELFTEST_BIN_DIR)/cbba_board_selftest_asan \
 		$(TOOLS_DIR)/cbba_board_selftest.c $(CBBA_BOARD_SELFTEST_CORE_SOURCES) $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./cbba_board_selftest_asan
+
+# ---------------------------------------------------------------------
+# Consensus/AI evaluation harness (docs/evaluation/README.md). Measures
+# whether peer consensus (and later the AI fault predictor) actually
+# improves fault detection and mission outcome over a rules-only baseline,
+# on the real ./tron simulator - see laptop/tools/evaluate.py and
+# laptop/tools/eval_metrics.py's module docstrings for the full
+# methodology, metric definitions, and known limitations.
+# ---------------------------------------------------------------------
+.PHONY: evaluate check-evaluate-determinism check-eval-metrics-unittest
+
+# Full evaluation: exam/benchmark seeds 1001-1020, 3000 ticks each,
+# rules-only vs. rules+consensus, fault-profile=random. Override any of
+# EVAL_* to sweep other seeds/ticks/profiles/variants; see evaluate.py
+# --help for the rest of the flags (e.g. --profiles random,combined).
+EVAL_VARIANTS ?= rules,rules+consensus
+EVAL_SEEDS_START ?= 1001
+EVAL_SEEDS_COUNT ?= 20
+EVAL_TICKS ?= 3000
+EVAL_PROFILES ?= random
+EVAL_OUT_DIR ?= build/evaluate
+
+evaluate:
+	@$(PYTHON) $(TOOLS_DIR)/evaluate.py \
+		--variants $(EVAL_VARIANTS) \
+		--seeds-start $(EVAL_SEEDS_START) --seeds-count $(EVAL_SEEDS_COUNT) \
+		--ticks $(EVAL_TICKS) --profiles $(EVAL_PROFILES) \
+		--out-dir $(EVAL_OUT_DIR)
+
+# Metric-computation unit tests (hand-built ground-truth/detection
+# sequences with known answers) - no simulator invocation, runs in
+# milliseconds. See laptop/tools/test_eval_metrics.py.
+check-eval-metrics-unittest:
+	@$(PYTHON) $(TOOLS_DIR)/test_eval_metrics.py -v
+
+# Tiny (2 seeds x 300 ticks) evaluate.py run executed once with
+# --workers 1 and once with --workers 4, asserting byte-identical
+# summary_metrics.csv/paired_diff.csv/report.md - see
+# laptop/tools/check-evaluate-determinism.sh.
+check-evaluate-determinism:
+	@PYTHON=$(PYTHON) $(TOOLS_DIR)/check-evaluate-determinism.sh

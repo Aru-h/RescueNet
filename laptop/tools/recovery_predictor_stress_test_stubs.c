@@ -20,6 +20,8 @@
 #include "mission_state.h"
 #include "incident.h"
 #include "allocator.h"
+#include "mission_link.h"
+#include "feature_pack.h"
 
 #include <string.h>
 
@@ -55,9 +57,15 @@ uint8_t environment_cell_travel_cost(int x, int y)
 /* ---- test-controlled fault_predictor stub ---- */
 FaultPredictorScores_t g_test_predictor_scores[NUM_TEAMS];
 
-FaultPredictorScores_t fault_predictor_run(const float evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES])
+/* Counts real calls into fault_predictor_run() below - asserted nonzero
+   at the end of the test so a broken/never-reached inference gate ahead
+   of it doesn't let the test pass vacuously on an untaken code path. */
+uint32_t g_fault_predictor_run_calls = 0u;
+
+FaultPredictorScores_t fault_predictor_run(const float evidence[FEATURE_SPEC_NUM_INPUTS])
 {
     (void)evidence;
+    g_fault_predictor_run_calls++;
     /* Matches the real signature exactly: no team_id parameter, so every
        team gets the same score this tick regardless of which team's
        loop iteration is calling it. Harmless for this test - only team
@@ -67,6 +75,26 @@ FaultPredictorScores_t fault_predictor_run(const float evidence[FAULT_BUFFER_REM
        incidentally escalating the same way as team 0 doesn't affect
        team 0's own observed trajectory. */
     return g_test_predictor_scores[0];
+}
+
+/* This test drives fault_predictor_run() directly via g_test_predictor_
+   scores and never touches real mission-link map/district state, so the
+   inference gate ahead of it (core/recovery_manager.c's evaluate_fault_
+   predictor()) needs to see both maps as "fully arrived" without this
+   test having to link and prime the real core/mission_link.c. */
+uint32_t mission_link_map_rows_received(void) { return MISSION_LINK_MAP_HEIGHT; }
+uint32_t mission_link_district_rows_received(void) { return MISSION_LINK_MAP_HEIGHT; }
+
+/* core/recovery_manager.c's evaluate_fault_predictor() reads the Pass-1
+   cache instead of building fresh (feature-contract Decision: pre-dispatch
+   timing) - stubbed the same way the old feature_pack_build_vector() was,
+   since fault_predictor_run() ignores its input entirely here. Nothing
+   calls feature_pack_build_vector() anymore in this test's link, so that
+   stub was removed rather than kept alongside this one. */
+void feature_pack_get_cached_vector(uint8_t team_id, float out_scaled[FEATURE_SPEC_NUM_INPUTS])
+{
+    (void)team_id;
+    memset(out_scaled, 0, FEATURE_SPEC_NUM_INPUTS * sizeof(float));
 }
 
 /* ---- link-satisfying stubs, never exercised (recovery_dispatch() is

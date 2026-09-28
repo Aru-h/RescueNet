@@ -22,6 +22,8 @@
 #include "fault_comms.h"
 #include "mission_execution_twin.h"
 #include "consensus.h"
+#include "fault_predictor_features.h"
+#include "feature_pack.h"
 
 uint8_t g_simulation_trace_enabled = 1;
 static uint8_t g_prev_anomaly_detected[NUM_TEAMS];
@@ -66,6 +68,7 @@ void generate_world(uint32_t seed)   //simulation
 #if VIRTUAL_BUS_ENABLED
     consensus_init(seed);
 #endif
+    fault_predictor_features_init();
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
@@ -126,6 +129,31 @@ void simulation_step(void) //simulation
 #endif
         mission_execution_twin_step();
         watchdog_step();
+
+        /* Track A: history features the fault predictor's input vector
+         * needs (stall_frac_last_5/_10, delta_priority/delta_victim_count -
+         * see fault_predictor_features.h). Must run after movement and
+         * assignment (both already happened earlier this tick - move_
+         * all_teams() above, allocate_all_incidents() in sim_tick() before
+         * simulation_step() was called) and before recovery_manager_step(),
+         * since a fault vector assembled from recovery_manager's evidence
+         * this tick should see this tick's stall/delta values, not last
+         * tick's. */
+        for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+            fault_predictor_features_update_tick(team_id);
+
+        /* Pre-dispatch feature-vector cache (core/feature_pack.h's own
+         * doc on why this exists): must run after the history-feature
+         * loop just above (so the cached vector includes this tick's
+         * stall/delta values) and before recovery_manager_step(), whose
+         * evaluate_fault_predictor() is this cache's reader this same
+         * tick - any later and it would read last tick's cache instead.
+         * Nothing between here and Pass 1's snapshot_record() calls
+         * below mutates team/incident/twin state, so this cached vector
+         * is exactly what that tick's training-CSV row will reflect. */
+        for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+            feature_pack_cache_tick(team_id);
+
         recovery_manager_step();
     }
 

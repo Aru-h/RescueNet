@@ -25,7 +25,11 @@ import numpy as np
 import pandas as pd
 from evidence_channels import reconstruct_full_timeline, recompute_team_timeline
 
-CSV_PATH = os.path.join(REPO_ROOT, "tron_snapshot_dataset.csv")
+CSV_PATH = os.environ.get(
+    "TRON_SNAPSHOT_CSV", os.path.join(REPO_ROOT, "tron_snapshot_dataset.csv")
+)  # override so concurrent Makefile checks never share one CSV path
+  # (a race corrupted it for another check mid-sweep once - see the
+  # Makefile targets that set this env var to a private scratch path)
 FAULT_LABEL_COLUMNS = [f"fault_active_{c}" for c in
                        ["mobility", "communication", "resource", "environment", "mission"]]
 

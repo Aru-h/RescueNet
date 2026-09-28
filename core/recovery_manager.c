@@ -9,8 +9,10 @@
 #include "environment.h"
 #include "fault_buffer.h"
 #include "fault_predictor.h"
+#include "feature_pack.h"
 #include "incident.h"
 #include "mission_execution_twin.h"
+#include "mission_link.h"
 #include "recovery_manager_config.h"
 #include "watchdog.h"
 #include "consensus.h"
@@ -66,6 +68,12 @@ typedef RecoverySignal_t (*RecoveryEvaluatorFn)(
 static RecoveryManagerTeamState_t g_recovery_state[NUM_TEAMS];
 static RecoveryDispatchState_t g_recovery_dispatch_state[NUM_TEAMS];
 static RecoveryMetricsTeamState_t g_recovery_metrics_state[NUM_TEAMS];
+/* Per-evaluator verdicts for the tick just computed by recovery_manager_
+ * step() - see recovery_manager.h's recovery_manager_get_evaluator_verdict()
+ * doc. Fixed RECOVERY_MANAGER_EVAL_SLOT_COUNT width regardless of
+ * CONSENSUS_ENFORCE, unlike RECOVERY_MANAGER_EVALUATOR_COUNT (6 or 7) which
+ * only sizes the evaluators[]/signals[] arrays below. */
+static RecoveryEvaluatorVerdict_t g_evaluator_verdicts[NUM_TEAMS][RECOVERY_MANAGER_EVAL_SLOT_COUNT];
 static RecoveryMetrics_t g_recovery_metrics;
 /* M5: tick on which REQUEST_TASK_REALLOCATION last ran
  * allocate_all_incidents(), shared by ALL teams. This used to be a
@@ -1090,13 +1098,14 @@ static RecoverySignal_t evaluate_peer_consensus(
 
 /*
  * Sixth evaluator: single-team AI fault prediction (v4 architecture doc,
- * Section 4/9). Runs
- * core/fault_predictor.c's model against this team's own live evidence
- * vector - watchdog_get_evidence_vector() for the 7 accumulated_evidence
- * channels + confirmed_mobility_impairment, team->equipment_level/100.0f,
- * plus incident_priority/victim_count and env_raw_travel_cost - the exact
- * same 12-feature shape core/fault_comms.c assembles for FAULT_BROADCAST,
- * so this team's own inference input matches what gets broadcast about it.
+ * Section 4/9; feature contract per FEATURE_CONTRACT_DESIGN.md). Runs
+ * core/fault_predictor.c's model against this team's own 74-input feature
+ * vector - core/feature_pack.c's feature_pack_build_vector(), built from
+ * this team's own observables (never team->fault_state). This is NOT the
+ * same shape core/fault_comms.c assembles for a remote team's received
+ * FAULT_BROADCAST (that stays the older, still-live 12-feature core/
+ * fault_buffer.h vector, unrelated to and unchanged by this feature
+ * contract - see fault_predictor.h's own doc for why the two coexist).
  *
  * fault_predictor_run() returns 5 independent per-class scores (not a
  * softmax - see fault_predictor.h). Per the doc's Section 2 ("collapse 5
@@ -1262,7 +1271,7 @@ static RecoverySignal_t evaluate_fault_predictor(
     const WatchdogStatus_t *watchdog)
 {
     MissionStage_t stage = recovery_stage_for_team(team, twin);
-    float evidence[FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES];
+    float feature_vector[FEATURE_SPEC_NUM_INPUTS];
     FaultPredictorScores_t scores;
     uint8_t best_class = 0u;
     float confidence;
@@ -1271,9 +1280,35 @@ static RecoverySignal_t evaluate_fault_predictor(
 
     (void)twin;
 
-    recovery_manager_build_predictor_evidence(team->team_id, evidence);
-
-    scores = fault_predictor_run(evidence);
+    /* Inference gate (core/feature_pack.h's own doc): before the route
+     * map and district map have both fully arrived, env_raw_travel_cost
+     * and team_zone_id read silently-wrong defaults rather than missing
+     * values. Not yet a behavioural gate on anything - FAULT_MODEL_
+     * LOADED is 0, so fault_predictor_run() ignores its input and always
+     * returns all-zero scores regardless - but the check belongs here,
+     * at the one call site that uses this vector, so it is already in
+     * place for when a real model lands. */
+    if(mission_link_map_rows_received() < MISSION_LINK_MAP_HEIGHT ||
+       mission_link_district_rows_received() < MISSION_LINK_MAP_HEIGHT)
+    {
+        FaultPredictorScores_t no_scores = {0};
+        scores = no_scores;
+    }
+    else
+    {
+        /* Reads core/simulation.c's pre-dispatch cache (feature_pack_
+         * cache_tick(), called just before recovery_manager_step() this
+         * same tick), not a fresh feature_pack_build_vector() call here -
+         * see feature_pack.h's own doc on why: this function runs before
+         * recovery_dispatch(), so building fresh here would already be
+         * pre-dispatch too, but reading the cache instead makes that
+         * invariant explicit and shared with whatever else reads the
+         * same tick's cached vector (laptop/tools/feature_pack_dump.c),
+         * rather than every reader needing its own correctly-timed call
+         * site. */
+        feature_pack_get_cached_vector(team->team_id, feature_vector);
+        scores = fault_predictor_run(feature_vector);
+    }
 
     for(uint8_t fault_class = 1u; fault_class < NUM_OPERATIONAL_FAULT_CLASSES; fault_class++)
     {
@@ -1566,6 +1601,13 @@ void recovery_manager_init(void)
         g_recovery_state[team_id].last_assigned_task_slot = g_teams[team_id].assigned_task_slot;
         g_recovery_state[team_id].last_status = g_teams[team_id].status;
         g_recovery_dispatch_state[team_id] = (RecoveryDispatchState_t){0};
+
+        for(uint8_t slot = 0; slot < RECOVERY_MANAGER_EVAL_SLOT_COUNT; slot++)
+        {
+            g_evaluator_verdicts[team_id][slot].reason = RECOVERY_REASON_NONE;
+            g_evaluator_verdicts[team_id][slot].confidence =
+                (slot == RECOVERY_MANAGER_EVAL_PEER_CONSENSUS && !CONSENSUS_ENFORCE) ? -1.0f : 0.0f;
+        }
     }
     g_realloc_done_tick = UINT32_MAX;
 }
@@ -1697,6 +1739,23 @@ void recovery_manager_step(void)
 
         for(size_t i = 0; i < RECOVERY_MANAGER_EVALUATOR_COUNT; i++)
             signals[i] = evaluators[i](team, twin, &watchdog);
+
+        /* Snapshot each evaluator's own, unfused verdict for this tick
+         * BEFORE any consensus cap below can rewrite signals[MOBILITY]/
+         * signals[COMMUNICATION] in place - these must stay each
+         * evaluator's real opinion, not what a cap reduced it to. Indices
+         * 0..RECOVERY_MANAGER_EVALUATOR_COUNT-1 match RECOVERY_MANAGER_
+         * EVAL_PROGRESS..EVAL_FAULT_PREDICTOR[,EVAL_PEER_CONSENSUS] by
+         * construction (evaluators[] above is built in that exact order). */
+        for(size_t i = 0; i < RECOVERY_MANAGER_EVALUATOR_COUNT; i++)
+        {
+            g_evaluator_verdicts[team_id][i].reason = signals[i].reason;
+            g_evaluator_verdicts[team_id][i].confidence = signals[i].confidence;
+        }
+#if !CONSENSUS_ENFORCE
+        g_evaluator_verdicts[team_id][RECOVERY_MANAGER_EVAL_PEER_CONSENSUS].reason = RECOVERY_REASON_NONE;
+        g_evaluator_verdicts[team_id][RECOVERY_MANAGER_EVAL_PEER_CONSENSUS].confidence = -1.0f;
+#endif
 
 #if CONSENSUS_ENFORCE
         g_consensus_capped_now[team_id] = 0u;
@@ -1876,4 +1935,19 @@ RecoveryStatus_t recovery_manager_get_status(uint8_t team_id)
 RecoveryMetrics_t recovery_manager_get_metrics(void)
 {
     return g_recovery_metrics;
+}
+
+RecoveryEvaluatorVerdict_t recovery_manager_get_evaluator_verdict(
+    uint8_t team_id, uint8_t evaluator_slot)
+{
+    if(team_id >= NUM_TEAMS || evaluator_slot >= RECOVERY_MANAGER_EVAL_SLOT_COUNT)
+    {
+        RecoveryEvaluatorVerdict_t verdict;
+
+        verdict.reason = RECOVERY_REASON_NONE;
+        verdict.confidence = 0.0f;
+        return verdict;
+    }
+
+    return g_evaluator_verdicts[team_id][evaluator_slot];
 }

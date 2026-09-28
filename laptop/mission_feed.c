@@ -6,9 +6,10 @@
 #include "mission_link.h"
 #include "mission_link_codec.h"
 #include "environment.h"
+#include "search_zones.h"
 
-/* Largest mission-link wire frame emitted here (map row, 40 bytes). */
-#define MISSION_FEED_MAX_WIRE 48u
+/* Largest mission-link wire frame emitted here (zone trust, 53 bytes). */
+#define MISSION_FEED_MAX_WIRE 64u
 
 /* Last incident payload emitted per slot, so a frame goes out only when
    something the board sees actually changed. */
@@ -25,6 +26,23 @@ static MissionFeedIncidentCache_t g_sent_sweep[NUM_SYSTEM_TASKS];
 static MissionLinkFault_t g_sent_fault[NUM_TEAMS];
 /* Map bytes last sent per cell ([x][y]), so only changed rows go out. */
 static uint8_t g_sent_map[GRID_WIDTH][GRID_HEIGHT];
+/* District ids last sent per cell - same diff mechanism as g_sent_map,
+   for MissionLinkDistrictRow_t (mission_link.h section 5e). District ids
+   are fixed after world generation (see mission_link.h 5e's own doc), so
+   unlike the route map - whose cells genuinely change from hazard spread
+   etc. - the diff alone gives a board that missed the initial burst no
+   way to ever catch up: nothing will ever differ again to re-trigger it.
+   g_district_last_full_resend_tick tracks a periodic unconditional
+   resend of every row for exactly that reason, reusing MISSION_LINK_
+   ZONE_TRUST_REFRESH_TICKS's cadence - same "static or slow-changing
+   board-side table needs a periodic reassurance, not just a diff"
+   motivation as zone trust below. */
+static uint8_t g_sent_district[GRID_WIDTH][GRID_HEIGHT];
+static uint32_t g_district_last_full_resend_tick;
+/* Last-sent zone trust inputs and when, for the change-or-periodic send
+   (mission_link.h section 5f). */
+static MissionLinkZoneTrust_t g_sent_zone_trust;
+static uint32_t g_zone_trust_last_sent_tick;
 
 static void mission_feed_emit(uint32_t tick, const uint8_t *wire, uint32_t len)
 {
@@ -86,6 +104,77 @@ static int mission_feed_build_map_row(uint8_t y, MissionLinkMapRow_t *row)
         }
     }
     return changed;
+}
+
+/* Builds row y of the district map from the laptop's environment (via
+   zone_id_for_location(), the same lookup snapshot.c uses for the
+   team_zone_id column - see search_zones.c). Returns 1 if it differs
+   from what was last sent. */
+static int mission_feed_build_district_row(uint8_t y, MissionLinkDistrictRow_t *row)
+{
+    int changed = 0;
+    uint8_t x;
+
+    row->row = y;
+    for (x = 0u; x < GRID_WIDTH; x += 2u)
+    {
+        uint8_t d_lo = zone_id_for_location((int16_t)x, (int16_t)y);
+        uint8_t d_hi = (x + 1u < GRID_WIDTH) ?
+            zone_id_for_location((int16_t)(x + 1u), (int16_t)y) : 0u;
+
+        row->cells[x / 2u] = mission_link_district_encode_byte(d_lo, d_hi);
+
+        if (g_sent_district[x][y] != d_lo)
+        {
+            g_sent_district[x][y] = d_lo;
+            changed = 1;
+        }
+        if (x + 1u < GRID_WIDTH && g_sent_district[x + 1u][y] != d_hi)
+        {
+            g_sent_district[x + 1u][y] = d_hi;
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
+/* Builds the current zone trust snapshot from g_search_zones[]. Returns
+   1 if it differs from what was last sent. */
+static int mission_feed_build_zone_trust(MissionLinkZoneTrust_t *out)
+{
+    uint8_t i;
+    int changed;
+
+    for (i = 0u; i < MISSION_LINK_NUM_ZONES && i < NUM_SEARCH_ZONES; i++)
+    {
+        out->last_swept_tick[i] = g_search_zones[i].last_swept_tick;
+        out->aftershock_hits_since_swept[i] = (uint8_t)g_search_zones[i].aftershock_hits_since_swept;
+    }
+
+    changed = (memcmp(out, &g_sent_zone_trust, sizeof(*out)) != 0);
+    return changed;
+}
+
+/* Emits the zone trust frame if any zone's inputs changed, or if
+   MISSION_LINK_ZONE_TRUST_REFRESH_TICKS have passed since the last send
+   (mission_link.h section 5f) - never sending a computed trust value,
+   only the two raw inputs search_zone_trust() itself reads. */
+static void mission_feed_emit_zone_trust(uint32_t tick)
+{
+    uint8_t wire[MISSION_FEED_MAX_WIRE];
+    MissionLinkZoneTrust_t trust;
+    int changed = mission_feed_build_zone_trust(&trust);
+    int due = (tick == 0u) ||
+        (tick - g_zone_trust_last_sent_tick >= MISSION_LINK_ZONE_TRUST_REFRESH_TICKS);
+
+    if (!changed && !due)
+    {
+        return;
+    }
+
+    g_sent_zone_trust = trust;
+    g_zone_trust_last_sent_tick = tick;
+    mission_feed_emit(tick, wire, mission_link_pack_zone_trust(&trust, wire));
 }
 
 static void mission_feed_emit_sites(void)
@@ -161,6 +250,21 @@ void mission_feed_begin(void)
             mission_feed_emit(0u, wire, mission_link_pack_map_row(&row, wire));
         }
     }
+
+    {
+        MissionLinkDistrictRow_t drow;
+        uint8_t y;
+
+        for (y = 0u; y < GRID_HEIGHT; y++)
+        {
+            (void)mission_feed_build_district_row(y, &drow);
+            mission_feed_emit(0u, wire, mission_link_pack_district_row(&drow, wire));
+        }
+    }
+    g_district_last_full_resend_tick = 0u;
+
+    memset(&g_sent_zone_trust, 0xFF, sizeof(g_sent_zone_trust)); /* force the first send below to differ */
+    mission_feed_emit_zone_trust(0u);
 
     mission_feed_emit_clock(0u);
     fflush(stdout);
@@ -317,6 +421,40 @@ void mission_feed_tick(uint32_t tick)
             }
         }
     }
+
+    /* District rows: same diff mechanism as the map rows above, plus a
+       periodic unconditional full resend (same cadence as zone trust
+       below) - district assignment is static today, so the diff alone
+       would never re-fire for a board that missed the mission_feed_
+       begin() burst (late join, dropped frames): nothing ever changes
+       to trigger it. force_resend makes every row "changed" this pass
+       regardless of g_sent_district, so that board still converges
+       within one refresh period. */
+    {
+        MissionLinkDistrictRow_t drow;
+        uint8_t y;
+        int force_resend =
+            (tick - g_district_last_full_resend_tick >= MISSION_LINK_ZONE_TRUST_REFRESH_TICKS);
+
+        if (force_resend)
+        {
+            g_district_last_full_resend_tick = tick;
+        }
+
+        for (y = 0u; y < GRID_HEIGHT; y++)
+        {
+            if (mission_feed_build_district_row(y, &drow) || force_resend)
+            {
+                mission_feed_emit(tick, wire, mission_link_pack_district_row(&drow, wire));
+            }
+        }
+    }
+
+    /* Zone trust: search_zone_trust()'s two raw inputs (last_swept_tick,
+       aftershock_hits_since_swept) change every tick sweeps happen, so
+       this needs the same per-tick check as faults/map rows above, not
+       just the one-shot send in mission_feed_begin(). */
+    mission_feed_emit_zone_trust(tick);
 
     /* Last, so a board has this tick's incidents, faults and map before it
        is allowed to run the tick. */

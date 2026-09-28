@@ -21,6 +21,7 @@ from telemetry_bridge import (
     HANDSHAKE_MAGIC,
     INCIDENT_STATUS_RESOLVED,
     MISSION_LINK_CLOCK_MAGIC,
+    MISSION_LINK_DISTRICT_ROW_MAGIC,
     MISSION_LINK_FAULT_MAGIC,
     MISSION_LINK_INCIDENT_MAGIC,
     MISSION_LINK_MAP_ROW_MAGIC,
@@ -28,6 +29,7 @@ from telemetry_bridge import (
     MISSION_LINK_PROTOCOL_VERSION,
     MISSION_LINK_SITES_MAGIC,
     MISSION_LINK_ROSTER_MAGIC,
+    MISSION_LINK_ZONE_TRUST_MAGIC,
     MissionFeed,
     TelemetryBridge,
     handshake_checksum,
@@ -384,7 +386,8 @@ def frames_in(stream: bytes):
     """Every mission frame found in a byte stream, by key."""
     keys = []
     sizes = {MISSION_LINK_ROSTER_MAGIC: 13, MISSION_LINK_INCIDENT_MAGIC: 19, MISSION_LINK_FAULT_MAGIC: 14,
-             MISSION_LINK_CLOCK_MAGIC: 7, MISSION_LINK_MAP_ROW_MAGIC: 40, MISSION_LINK_SITES_MAGIC: 36}
+             MISSION_LINK_CLOCK_MAGIC: 7, MISSION_LINK_MAP_ROW_MAGIC: 40, MISSION_LINK_SITES_MAGIC: 36,
+             MISSION_LINK_DISTRICT_ROW_MAGIC: 22, MISSION_LINK_ZONE_TRUST_MAGIC: 53}
     i = 0
     while i < len(stream) - 1:
         size = sizes.get(bytes(stream[i:i + 2]))

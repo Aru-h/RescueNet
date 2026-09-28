@@ -1,0 +1,75 @@
+train/val/test rows: 840000 180000 180000  D = 72  pos rate train: [0.235  0.2351 0.2353 0.0563 0.1182]
+seed 0 full-input                   bytes=n/a (D=72 floats) macroF1=0.6805  F1=0.641 0.977 0.848 0.293 0.642
+seed 0 (d) scores-only u8           bytes=5.0    macroF1=0.6804  F1=0.641 0.977 0.848 0.293 0.642
+seed 0 (d) scores-only u4           bytes=2.5    macroF1=0.6813  F1=0.641 0.977 0.850 0.295 0.642
+seed 0 (e) packed evid=8b (model unchanged) bytes=22.6   macroF1=0.6803  F1=0.641 0.977 0.848 0.294 0.641
+seed 0 (e) packed evid=6b (model unchanged) bytes=20.9   macroF1=0.6781  F1=0.633 0.977 0.847 0.295 0.639
+seed 0 (a) split k=4 int8 QAT       bytes=4.0    macroF1=0.6795  F1=0.650 0.977 0.848 0.278 0.644
+seed 0 (a) split k=4 int4 QAT       bytes=2.0    macroF1=0.6702  F1=0.639 0.976 0.842 0.257 0.637
+seed 0 (b) PCA k=4 int8             bytes=4      macroF1=0.4686  F1=0.484 0.761 0.425 0.171 0.503
+seed 0 (c) autoencoder k=4 int8     bytes=4      macroF1=0.4841  F1=0.528 0.901 0.426 0.108 0.458
+seed 0 (a) split k=8 int8 QAT       bytes=8.0    macroF1=0.6783  F1=0.643 0.977 0.846 0.289 0.635
+seed 0 (a) split k=8 int4 QAT       bytes=4.0    macroF1=0.6794  F1=0.649 0.977 0.839 0.295 0.638
+seed 0 (b) PCA k=8 int8             bytes=8      macroF1=0.5106  F1=0.534 0.912 0.441 0.164 0.502
+seed 0 (c) autoencoder k=8 int8     bytes=8      macroF1=0.5160  F1=0.570 0.928 0.446 0.137 0.499
+seed 0 (a) split k=16 int8 QAT      bytes=16.0   macroF1=0.6794  F1=0.644 0.977 0.844 0.289 0.642
+seed 0 (a) split k=16 int4 QAT      bytes=8.0    macroF1=0.6798  F1=0.645 0.977 0.844 0.293 0.640
+seed 0 (b) PCA k=16 int8            bytes=16     macroF1=0.5650  F1=0.621 0.964 0.499 0.212 0.529
+seed 0 (c) autoencoder k=16 int8    bytes=16     macroF1=0.5604  F1=0.617 0.954 0.499 0.206 0.526
+seed 0 done in 106s
+seed 1 full-input                   bytes=n/a (D=72 floats) macroF1=0.6805  F1=0.652 0.977 0.843 0.291 0.639
+seed 1 (d) scores-only u8           bytes=5.0    macroF1=0.6806  F1=0.653 0.977 0.843 0.291 0.640
+seed 1 (d) scores-only u4           bytes=2.5    macroF1=0.6798  F1=0.652 0.977 0.841 0.290 0.639
+seed 1 (e) packed evid=8b (model unchanged) bytes=22.6   macroF1=0.6805  F1=0.652 0.977 0.843 0.292 0.639
+seed 1 (e) packed evid=6b (model unchanged) bytes=20.9   macroF1=0.6788  F1=0.650 0.977 0.839 0.291 0.637
+seed 1 (a) split k=4 int8 QAT       bytes=4.0    macroF1=0.6748  F1=0.640 0.977 0.848 0.265 0.644
+seed 1 (a) split k=4 int4 QAT       bytes=2.0    macroF1=0.6742  F1=0.641 0.977 0.842 0.272 0.639
+seed 1 (b) PCA k=4 int8             bytes=4      macroF1=0.4688  F1=0.479 0.761 0.426 0.173 0.506
+seed 1 (c) autoencoder k=4 int8     bytes=4      macroF1=0.4887  F1=0.525 0.901 0.432 0.112 0.473
+seed 1 (a) split k=8 int8 QAT       bytes=8.0    macroF1=0.6800  F1=0.649 0.978 0.847 0.283 0.643
+seed 1 (a) split k=8 int4 QAT       bytes=4.0    macroF1=0.6735  F1=0.642 0.978 0.844 0.271 0.633
+seed 1 (b) PCA k=8 int8             bytes=8      macroF1=0.5160  F1=0.535 0.918 0.440 0.172 0.515
+seed 1 (c) autoencoder k=8 int8     bytes=8      macroF1=0.5218  F1=0.565 0.943 0.447 0.157 0.497
+seed 1 (a) split k=16 int8 QAT      bytes=16.0   macroF1=0.6796  F1=0.647 0.977 0.846 0.286 0.642
+seed 1 (a) split k=16 int4 QAT      bytes=8.0    macroF1=0.6815  F1=0.655 0.977 0.844 0.299 0.632
+seed 1 (b) PCA k=16 int8            bytes=16     macroF1=0.5637  F1=0.620 0.964 0.493 0.211 0.531
+seed 1 (c) autoencoder k=16 int8    bytes=16     macroF1=0.5564  F1=0.602 0.959 0.492 0.208 0.522
+seed 1 done in 94s
+seed 2 full-input                   bytes=n/a (D=72 floats) macroF1=0.6821  F1=0.653 0.977 0.846 0.292 0.643
+seed 2 (d) scores-only u8           bytes=5.0    macroF1=0.6821  F1=0.654 0.977 0.846 0.292 0.642
+seed 2 (d) scores-only u4           bytes=2.5    macroF1=0.6809  F1=0.651 0.977 0.841 0.293 0.643
+seed 2 (e) packed evid=8b (model unchanged) bytes=22.6   macroF1=0.6814  F1=0.652 0.977 0.846 0.290 0.643
+seed 2 (e) packed evid=6b (model unchanged) bytes=20.9   macroF1=0.6799  F1=0.648 0.977 0.844 0.290 0.641
+seed 2 (a) split k=4 int8 QAT       bytes=4.0    macroF1=0.6692  F1=0.648 0.977 0.845 0.240 0.636
+seed 2 (a) split k=4 int4 QAT       bytes=2.0    macroF1=0.6674  F1=0.641 0.976 0.842 0.245 0.633
+seed 2 (b) PCA k=4 int8             bytes=4      macroF1=0.4723  F1=0.489 0.762 0.426 0.179 0.506
+seed 2 (c) autoencoder k=4 int8     bytes=4      macroF1=0.4896  F1=0.524 0.900 0.434 0.110 0.481
+seed 2 (a) split k=8 int8 QAT       bytes=8.0    macroF1=0.6787  F1=0.652 0.977 0.839 0.283 0.643
+seed 2 (a) split k=8 int4 QAT       bytes=4.0    macroF1=0.6732  F1=0.644 0.977 0.838 0.270 0.636
+seed 2 (b) PCA k=8 int8             bytes=8      macroF1=0.5117  F1=0.535 0.911 0.437 0.168 0.507
+seed 2 (c) autoencoder k=8 int8     bytes=8      macroF1=0.5215  F1=0.557 0.945 0.447 0.169 0.490
+seed 2 (a) split k=16 int8 QAT      bytes=16.0   macroF1=0.6811  F1=0.645 0.977 0.846 0.297 0.640
+seed 2 (a) split k=16 int4 QAT      bytes=8.0    macroF1=0.6793  F1=0.646 0.977 0.847 0.289 0.637
+seed 2 (b) PCA k=16 int8            bytes=16     macroF1=0.5657  F1=0.618 0.965 0.498 0.214 0.533
+seed 2 (c) autoencoder k=16 int8    bytes=16     macroF1=0.5576  F1=0.608 0.959 0.485 0.208 0.529
+seed 2 done in 97s
+
+| option | payload B | mobility | communication | resource | environment | mission | macro |
+|---|---|---|---|---|---|---|---|
+| full-input | n/a (D=72 floats) | 0.649 | 0.977 | 0.846 | 0.292 | 0.641 | 0.681 |
+| (d) scores-only u8 | 5.0 | 0.649 | 0.977 | 0.846 | 0.292 | 0.641 | 0.681 |
+| (d) scores-only u4 | 2.5 | 0.648 | 0.977 | 0.844 | 0.293 | 0.641 | 0.681 |
+| (e) packed evid=8b (model unchanged) | 22.6 | 0.648 | 0.977 | 0.846 | 0.292 | 0.641 | 0.681 |
+| (e) packed evid=6b (model unchanged) | 20.9 | 0.644 | 0.977 | 0.843 | 0.292 | 0.639 | 0.679 |
+| (a) split k=4 int8 QAT | 4.0 | 0.646 | 0.977 | 0.847 | 0.261 | 0.642 | 0.674 |
+| (a) split k=4 int4 QAT | 2.0 | 0.640 | 0.976 | 0.842 | 0.258 | 0.636 | 0.671 |
+| (b) PCA k=4 int8 | 4 | 0.484 | 0.762 | 0.425 | 0.174 | 0.505 | 0.470 |
+| (c) autoencoder k=4 int8 | 4 | 0.526 | 0.901 | 0.431 | 0.110 | 0.470 | 0.487 |
+| (a) split k=8 int8 QAT | 8.0 | 0.648 | 0.977 | 0.844 | 0.285 | 0.640 | 0.679 |
+| (a) split k=8 int4 QAT | 4.0 | 0.645 | 0.977 | 0.840 | 0.279 | 0.636 | 0.675 |
+| (b) PCA k=8 int8 | 8 | 0.534 | 0.914 | 0.439 | 0.168 | 0.508 | 0.513 |
+| (c) autoencoder k=8 int8 | 8 | 0.564 | 0.939 | 0.447 | 0.154 | 0.495 | 0.520 |
+| (a) split k=16 int8 QAT | 16.0 | 0.645 | 0.977 | 0.846 | 0.290 | 0.642 | 0.680 |
+| (a) split k=16 int4 QAT | 8.0 | 0.648 | 0.977 | 0.845 | 0.294 | 0.637 | 0.680 |
+| (b) PCA k=16 int8 | 16 | 0.620 | 0.964 | 0.497 | 0.212 | 0.531 | 0.565 |
+| (c) autoencoder k=16 int8 | 16 | 0.609 | 0.957 | 0.492 | 0.207 | 0.526 | 0.558 |

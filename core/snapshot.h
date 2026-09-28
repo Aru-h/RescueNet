@@ -5,6 +5,11 @@
 #include "mission_state.h"
 
 void snapshot_begin_run(uint32_t seed);
+/* The composite run_id computed for the current run (decision 5) -
+ * for a caller that needs to tag its own side output with the exact
+ * run_id the training CSV rows for this run carry, without recomputing
+ * the hash a second time (laptop/tools/feature_pack_dump.c). */
+uint32_t snapshot_current_run_id(void);
 void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id);
 /*
  * For logging a task's own resolution (complete_task() in incident.c).

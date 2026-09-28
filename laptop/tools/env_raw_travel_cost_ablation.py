@@ -16,16 +16,19 @@ import sys, os
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, REPO_ROOT)
 
-import gc
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import precision_score, recall_score, f1_score
 
-from evidence_channels import reconstruct_full_timeline, recompute_team_timeline, WEIGHTS
+from evidence_channels import WEIGHTS
 
-CSV_PATH = os.path.join(REPO_ROOT, "tron_snapshot_dataset.csv")
+CSV_PATH = os.environ.get(
+    "TRON_SNAPSHOT_CSV", os.path.join(REPO_ROOT, "tron_snapshot_dataset.csv")
+)  # override so concurrent Makefile checks never share one CSV path
+  # (a race corrupted it for another check mid-sweep once - see the
+  # Makefile targets that set this env var to a private scratch path)
 FAULT_CLASS_NAMES = ["mobility", "communication", "resource", "environment", "mission"]
 FAULT_LABEL_COLUMNS = [f"fault_active_{n}" for n in FAULT_CLASS_NAMES]
 EVIDENCE_CHANNEL_NAMES = list(WEIGHTS.keys())
@@ -52,20 +55,15 @@ if "env_raw_travel_cost" not in df.columns:
     raise RuntimeError("env_raw_travel_cost column missing - regenerate the dataset with the "
                         "updated laptop/snapshot.c before running this ablation.")
 
-print("Evidence-channel reconstruction...")
-run_max_cycle = df.groupby("run_id")["cycle"].max().to_dict()
-pieces = []
-for (run_id, team_id), team_rows in df.groupby(["run_id", "team_id"]):
-    full_timeline, _ = reconstruct_full_timeline(team_rows, run_max_cycle[run_id])
-    full_timeline = recompute_team_timeline(full_timeline)
-    full_timeline["run_id"] = run_id
-    full_timeline["team_id"] = team_id
-    pieces.append(full_timeline[["run_id", "team_id", "cycle"] + EVIDENCE_FEATURE_COLUMNS])
-evidence_df = pd.concat(pieces, ignore_index=True)
-del pieces
-df = df.merge(evidence_df, on=["run_id", "team_id", "cycle"], how="left")
-del evidence_df
-gc.collect()
+# Feature-contract Decision 2: evidence columns come straight from the C
+# watchdog now (laptop/snapshot.c), already present in df from read_csv -
+# see environment_class_e2e_stress.py's identical comment for why the old
+# reconstruct_full_timeline()/recompute_team_timeline() merge is gone (it
+# would silently collide with these same-named CSV columns).
+_missing_evidence = [c for c in EVIDENCE_FEATURE_COLUMNS if c not in df.columns]
+if _missing_evidence:
+    raise RuntimeError(f"{CSV_PATH} is missing evidence columns {_missing_evidence} - "
+                        "regenerate with a build that includes feature-contract Decision 2.")
 df = df.drop(columns=["_row_seq"])
 
 equipment_names = ["rope", "spreader", "medical_kit", "boat", "k9", "hazmat_suit", "structural", "generator"]

@@ -1,0 +1,16 @@
+seeds: 8 rows compared: 240000
+anomaly_detected agreement: 0.99977
+  flag progress         agreement 0.99999
+  flag stamina          agreement 0.99978
+  flag communication    agreement 0.99930
+  flag operating_state  agreement 1.00000
+  flag path             agreement 1.00000
+  flag assignment       agreement 0.99917
+  flag timeout          agreement 1.00000
+confidence |mirror - C| : mean 1.34e-04  p99 1.14e-03  max 5.70e-02 ; rows > 5e-5 (print rounding): 6.3304%
+ticks forward-filled (no row logged): 0.033% of 240080
+event_type
+10.0      5758
+11.0      7388
+12.0    226854
+dtype: int64
