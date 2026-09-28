@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-pack-parity check-feature-spec-fresh check-feature-spec-leak-guard check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-single-board-dk-harness check-live-override-selftest check-live-override-noop-regression
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-pack-parity check-feature-spec-fresh check-feature-spec-leak-guard check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-cubeide-single-flags check-single-board-dk-harness check-live-override-selftest check-live-override-noop-regression
 
 all: $(TARGET) $(LABELER)
 
@@ -316,7 +316,7 @@ check-board-link: check-board-compile
 ARM_CFLAGS_DK_SINGLE = $(ARM_CFLAGS) $(DK_SINGLE_BOARD_FLAGS)
 BOARD_OBJ_DIR_SINGLE = build/board-single-check
 
-check-board-single: check-board-ids-distinct check-board-single-compile check-board-single-link check-board-single-symbols
+check-board-single: check-board-ids-distinct check-board-single-compile check-board-single-link check-board-single-symbols check-cubeide-single-flags
 	@echo "check-board-single: single-board DK compile + link + symbol checks all passed ($(BSP_MODE))"
 
 check-board-single-compile:
@@ -389,6 +389,44 @@ check-board-single-symbols: check-board-single-compile
 		echo "  DK_SINGLE_BOARD_FLAGS's -DVIRTUAL_BUS_ENABLED=1 is not taking effect for this build."; \
 		exit 1; \
 	fi
+
+# check-board-single-compile/-link/-symbols above prove DK_SINGLE_BOARD_
+# FLAGS builds and behaves correctly - but that's this Makefile's own
+# compile, not the real firmware image. The actual flash comes from
+# tron_board/Appli/.cproject (STM32CubeIDE), a second, independent place
+# that has to define the exact same three macros with the exact same
+# values, and nothing enforces the two ever agreeing - a Makefile change
+# here silently stops covering what actually gets flashed. This target
+# closes that gap: for every -D in DK_SINGLE_BOARD_FLAGS, require BOTH
+# the Debug and the Release "Define symbols (-D)" list in Appli/.cproject
+# to contain that exact "KEY=VALUE" string. Two configs, not one - Debug
+# is what's normally flashed for bring-up, but a Release flash with the
+# flags missing would be just as wrong and just as silent without this.
+#
+# String match, not a real preprocessor run: .cproject is XML, not C, so
+# this can't detect a macro defined-but-shadowed by a later -U or a typo
+# CubeIDE's UI itself would reject - it only catches the actual failure
+# mode this exists for, DK_SINGLE_BOARD_FLAGS changing here without the
+# same edit landing in Appli/.cproject (or vice versa).
+CUBEIDE_APPLI_CPROJECT = tron_board/Appli/.cproject
+
+check-cubeide-single-flags:
+	@missing=""; \
+	for def in $(subst -D,,$(DK_SINGLE_BOARD_FLAGS)); do \
+		count=$$(grep -c "value=\"$$def\"" $(CUBEIDE_APPLI_CPROJECT) 2>/dev/null); \
+		count=$${count:-0}; \
+		if [ "$$count" -lt 2 ]; then \
+			missing="$$missing $$def(found $$count/2 configs)"; \
+		fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "check-cubeide-single-flags: FAILED -- $(CUBEIDE_APPLI_CPROJECT) is missing, or has the wrong value for, in Debug and/or Release:"; \
+		echo "  $$missing"; \
+		echo "  DK_SINGLE_BOARD_FLAGS = $(DK_SINGLE_BOARD_FLAGS)"; \
+		echo "  Each -DKEY=VALUE above must appear as a Define symbols (-D) entry in BOTH the Debug and Release configs of $(CUBEIDE_APPLI_CPROJECT)."; \
+		exit 1; \
+	fi; \
+	echo "check-cubeide-single-flags: $(CUBEIDE_APPLI_CPROJECT) (Debug + Release) matches DK_SINGLE_BOARD_FLAGS = $(DK_SINGLE_BOARD_FLAGS)"
 
 clean:
 	rm -f $(TARGET) $(LABELER) tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv tron_telemetry.log

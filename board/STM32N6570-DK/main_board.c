@@ -37,10 +37,24 @@
 #include "mission_link_codec.h" /* mission_link_roster_reject_count() -
                                     roster-wait loop's reject diagnostic */
 #include "comms_transport.h" /* g_comms_transport_this_board_id,
-                                 comms_transport_init() - see
-                                 THIS_BOARD_ID below */
+                                 comms_transport_init(), comms_transport_
+                                 board_count() - see THIS_BOARD_ID below
+                                 and the boot CONFIG line in usermain() */
+#include "vbus.h"             /* VIRTUAL_BUS_ENABLED - boot CONFIG line */
+#include "consensus_config.h" /* CONSENSUS_ENFORCE - boot CONFIG line */
+#include "fault_predictor.h"  /* FAULT_MODEL_LOADED - boot CONFIG line */
 #include "stm32n657xx.h"     /* USART1 registers - board_usart1_read_byte();
                                 same CMSIS header sx1262_hal.c uses */
+
+/* Mirrors sx1262_hal.c's own #ifndef/#define default (see that file's
+   top-of-file comment) so this translation unit can print the boot
+   CONFIG line below without needing sx1262_hal.c's internals - both
+   pick up the same value from a single -DBOARD_RADIO_ENABLED=1 on the
+   command line when it's set, and agree on the same default (0,
+   single-board submission: no radio dependency) when it isn't. */
+#ifndef BOARD_RADIO_ENABLED
+#define BOARD_RADIO_ENABLED 0
+#endif
 
 /*
  * THIS_BOARD_ID: closes a gap comms_transport.h's own "Handoff notes"
@@ -1007,6 +1021,28 @@ LOCAL void sim_task(INT stacd, void *exinf)
 EXPORT INT usermain(void)
 {
     tm_com_init(); /* initializes USART1 - must run before any tm_putstring/tm_printf */
+
+    /* One line, once, before anything else runs: makes the actually-
+       running build config visible on the wire instead of assumed.
+       Exists because the CubeIDE project and the Makefile's
+       DK_SINGLE_BOARD_FLAGS are two separate places that both have to
+       agree for a single-board flash to actually behave as single-
+       board (see Makefile's check-cubeide-single-flags, which catches
+       the same drift at build time - this catches it on a board
+       someone forgot to reflash, or flashed from a stale project).
+       teams_per_board is derived from the two public quantities every
+       build already exposes (NUM_TEAMS, comms_transport_board_count())
+       rather than printing COMMS_TRANSPORT_TEAMS_PER_BOARD directly -
+       that macro's default lives in comms_transport.c, private to
+       that file (see its own comment), not something this file should
+       reach into. */
+    tm_printf((UB*)"tron: CONFIG teams_per_board=%u vbus=%u consensus_enforce=%u radio=%u model_loaded=%u\n",
+               (unsigned)(NUM_TEAMS / comms_transport_board_count()),
+               (unsigned)VIRTUAL_BUS_ENABLED,
+               (unsigned)CONSENSUS_ENFORCE,
+               (unsigned)BOARD_RADIO_ENABLED,
+               (unsigned)FAULT_MODEL_LOADED);
+
     tm_putstring((UB*)"tron: starting simulation task\n");
 
     sim_tskid = tk_cre_tsk(&sim_ctsk);
