@@ -843,6 +843,12 @@ def api_board_override():
     written into that silence would have exactly the same "channel
     nothing listens on" problem core/mission_link_handshake.h's own
     top comment was written to fix in the first place.
+
+    Note: overriding a team onto a system task (not a real incident)
+    is not supported on this path - it will ack "applied" and then
+    silently self-clear a tick later (core/cbba.c's cbba_apply_
+    override_pin() own note explains why). Unlike the sim-only --live
+    path (laptop/debug.c), this route has no pre-check for it.
     """
     data = _json_object_body()
     if data is None:
@@ -985,6 +991,17 @@ def api_run():
 _live_lock = threading.Lock()
 _live_proc = None
 _live_paused = False
+# Part 4: the most recent tick this live run's own LIVEFRAME output
+# reported, so /api/run-live/override can stamp a request with "as of
+# what world state" without the browser needing to track and resend
+# it. Not lock-guarded like _live_proc/_live_paused above: it's a
+# single int written once per tick by generate()'s own thread and read
+# by Flask's request threads, which is GIL-atomic enough for this - a
+# few ticks of staleness on a fast read is harmless (laptop/debug.c's
+# own staleness window is 20 ticks), unlike _live_proc/_live_paused,
+# where a torn read/write could apply a pause to a process that's
+# already gone.
+_live_last_tick = 0
 
 
 def _live_signal(action):
@@ -1024,6 +1041,100 @@ def api_run_live_resume():
 def api_run_live_stop():
     body, status = _live_signal("stop")
     return jsonify(body), status
+
+
+def _live_write_line(text):
+    """Writes one line to the live run's own stdin - laptop/debug.c's
+    debug_live_override_poll() on the other end. Returns (ok, error).
+    Distinct from _live_signal() above: this writes to a pipe rather
+    than sending a process signal, but shares its same "no live run in
+    progress" 409 contract so the frontend's existing pause/resume 409-
+    handling code (see index.html's pauseLive()/resumeLive() - a real
+    bug fix from an earlier pass) doesn't need a second code path for
+    this endpoint family."""
+    with _live_lock:
+        proc = _live_proc
+        if proc is None or proc.poll() is not None:
+            return False, "no live run in progress"
+        try:
+            proc.stdin.write(text)
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError) as exc:
+            return False, f"failed to write to the live run's stdin: {exc}"
+    return True, None
+
+
+@app.route("/api/run-live/override", methods=["POST"])
+def api_run_live_override():
+    """Part 4: sim-mode manual override - a team, an incident, sent as a
+    plain text OVERRIDE line over the live run's own stdin (laptop/
+    debug.c's debug_live_override_poll(), see core/debug.h's doc for
+    the line protocol and every rejection reason). Completely separate
+    from /api/board/override above: that route packs a binary
+    MissionLinkOverride_t and writes it to a real serial port for
+    board hardware; this one only ever reaches the simulator this
+    laptop is itself running, and the board path is untouched by it.
+
+    Unlike /api/board/override, "success" here only ever means the
+    line was written - there is no synchronous outcome to report yet.
+    The actual outcome (applied, or rejected with a reason) streams
+    back as an `override_ack` SSE event a moment later; whether the
+    team IS currently overridden is simply read live off every
+    LIVEFRAME's own teams[].override/override_incident_id fields
+    (sourced from the same core/mission_state.h pin the board path
+    already uses), not tracked separately here the way the board
+    path's OverrideTracker has to (LIVEFRAME already carries the
+    live answer every tick, so nothing needs polling)."""
+    data = _json_object_body()
+    if data is None:
+        return _bad_json_body()
+
+    try:
+        team_id = int(data["team_id"])
+        incident_id = int(data["incident_id"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({
+            "status": "error",
+            "message": "Request body must include integer team_id and incident_id",
+        }), 400
+
+    if not (0 <= team_id <= 255):
+        return jsonify({"status": "error", "message": "team_id out of range (0-255)"}), 400
+    if not (0 <= incident_id <= 0xFFFFFFFF):
+        return jsonify({"status": "error", "message": "incident_id out of range (u32)"}), 400
+
+    tick = _live_last_tick
+    ok, error = _live_write_line(f"OVERRIDE {tick} {team_id} {incident_id}\n")
+    if not ok:
+        return jsonify({"status": "error", "message": error}), 409
+    return jsonify({"status": "success", "team_id": team_id, "incident_id": incident_id, "tick": tick})
+
+
+@app.route("/api/run-live/override/clear", methods=["POST"])
+def api_run_live_override_clear():
+    """Releases a team's sim-mode override pin early - the "Release"
+    button on an overridden team's card. Same OVERRIDE_CLEAR line
+    laptop/debug.c already accepts; a pin also clears itself
+    automatically once its incident resolves (core/cbba.c's
+    cbba_apply_override_pin()), which the dashboard sees the same way,
+    live off LIVEFRAME, with no separate code path needed for that
+    case."""
+    data = _json_object_body()
+    if data is None:
+        return _bad_json_body()
+
+    try:
+        team_id = int(data["team_id"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Request body must include integer team_id"}), 400
+    if not (0 <= team_id <= 255):
+        return jsonify({"status": "error", "message": "team_id out of range (0-255)"}), 400
+
+    tick = _live_last_tick
+    ok, error = _live_write_line(f"OVERRIDE_CLEAR {tick} {team_id}\n")
+    if not ok:
+        return jsonify({"status": "error", "message": error}), 409
+    return jsonify({"status": "success", "team_id": team_id, "tick": tick})
 
 
 @app.route("/api/run-live", methods=["POST"])
@@ -1067,14 +1178,24 @@ def api_run_live():
         args += [f"--vbus-loss={link_loss}"]
 
     def generate():
-        global _live_proc, _live_paused
+        global _live_proc, _live_paused, _live_last_tick
         proc = subprocess.Popen(
-            args, cwd=PROJECT_DIR, stdout=subprocess.PIPE,
+            args, cwd=PROJECT_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1,
         )
         with _live_lock:
+            # If a previous run's browser tab disconnected without
+            # clicking Stop (closed/refreshed mid-run), its own
+            # generate() call is still alive on another thread, reading
+            # its own now-orphaned process and racing this one to write
+            # _live_last_tick below - kill it now so only this run's
+            # ticks can reach that global from here on.
+            old_proc = _live_proc
             _live_proc = proc
             _live_paused = False
+        if old_proc is not None and old_proc.poll() is None:
+            old_proc.kill()
+        _live_last_tick = 0
         stderr_lines = []
         start = time.time()
         recorder = _RecordingWriter(seed, fault_profile, ticks, link_loss)
@@ -1085,8 +1206,15 @@ def api_run_live():
                     continue
                 if line.startswith("LIVEFRAME "):
                     recorder.write_line(line)
-                    frame = line[len("LIVEFRAME "):]
-                    yield f"data: {json.dumps({'type': 'frame', 'frame': json.loads(frame)})}\n\n"
+                    frame = json.loads(line[len("LIVEFRAME "):])
+                    # Only this generate() call's own process may update
+                    # the shared tick global - guards against a stray
+                    # write from an orphaned previous run that hasn't
+                    # finished dying yet (see the kill above; poll()
+                    # isn't instant).
+                    if _live_proc is proc:
+                        _live_last_tick = frame.get("tick", _live_last_tick)
+                    yield f"data: {json.dumps({'type': 'frame', 'frame': frame})}\n\n"
                 elif line.startswith("STATICENV "):
                     recorder.write_line(line)
                     env = line[len("STATICENV "):]
@@ -1095,6 +1223,17 @@ def api_run_live():
                     recorder.write_line(line)
                     terrain = line[len("STATICMAP "):]
                     yield f"data: {json.dumps({'type': 'static_map', 'map': json.loads(terrain)})}\n\n"
+                elif line.startswith("OVERRIDEACK "):
+                    # Part 4, sim-mode only - a completely separate channel
+                    # from the board path's binary MissionLinkOverrideAck_t/
+                    # OverrideTracker (laptop/tools/telemetry_bridge.py).
+                    # Not written to the recording: Part 2/3's replay.js
+                    # already anticipated this ("OVERRIDE / OVERRIDEACK
+                    # lines (Part 4+) aren't emitted into a Part-2/3
+                    # recording yet") - left for a future pass, not
+                    # silently dropped by oversight.
+                    ack = line[len("OVERRIDEACK "):]
+                    yield f"data: {json.dumps({'type': 'override_ack', **json.loads(ack)})}\n\n"
                 else:
                     stderr_lines.append(line)
                     if line.startswith("[DIAG"):
@@ -1152,4 +1291,12 @@ if __name__ == "__main__":
               "/api/board/connect opens a real serial port. Start with "
               "SIM_ONLY=1 or --no-hardware for headless/hardware-free mode.")
     print(f"Starting unified dashboard on http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
-    app.run(host=DASHBOARD_HOST, port=DASHBOARD_PORT, debug=False)
+    # threaded=True, made explicit rather than relying on whatever a
+    # given Werkzeug version happens to default to: /api/run-live's own
+    # response is a long-lived SSE stream that stays open for the
+    # entire run, so every other route (pause/resume/stop, and now
+    # Part 4's override/override/clear) already depends on being served
+    # concurrently with it, not queued behind it - _live_lock exists
+    # precisely because those routes run on a different thread than the
+    # streaming generator.
+    app.run(host=DASHBOARD_HOST, port=DASHBOARD_PORT, debug=False, threaded=True)

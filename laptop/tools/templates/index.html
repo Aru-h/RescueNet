@@ -498,6 +498,7 @@
               <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(210,153,34,0.9);border-radius:50%;vertical-align:-1px;"></span> on scene
               <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px dashed rgba(139,152,165,0.9);border-radius:50%;vertical-align:-1px;"></span> resting
               <span style="margin-left:6px;display:inline-block;width:6px;height:6px;background:#f85149;border-radius:50%;vertical-align:0px;"></span> fault
+              <span style="margin-left:6px;display:inline-block;width:7px;height:7px;background:#a371f7;transform:rotate(45deg);vertical-align:0px;"></span> manual override
               <span style="margin-left:8px;"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;vertical-align:-1px;"></span> safe zone</span>
               <span style="margin-left:8px;display:inline-block;width:12px;height:9px;background:rgba(158,178,207,0.7);vertical-align:-1px;"></span> road (brighter = arterial)
               <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(6,9,13,0.9),rgba(6,9,13,0.9) 2px,rgba(230,237,243,0.4) 2px,rgba(230,237,243,0.4) 3px);vertical-align:-1px;"></span> blocked/rubble
@@ -622,6 +623,7 @@
               <option value="all">All events</option>
               <option value="status">Status changes only</option>
               <option value="rest">Rest cycles only</option>
+              <option value="override">Manual overrides only</option>
             </select>
             <span id="journalCount" style="font-size:11px;color:var(--muted);margin-left:auto;"></span>
           </div>
@@ -984,7 +986,26 @@ function telemetryReset() {
   simTelemetry.running = true;
   staticEnvironment = null;
   terrainMap = null;
+  liveOverrideEvents = [];
   destroyChart("liveThroughputChart");
+}
+
+// Part 4: every sim-mode override sent/applied/rejected/cleared, tick-
+// stamped and merged into the Incident Journal (renderJournalTab()
+// below seeds from this too, so nothing collected mid-run is lost once
+// the run ends and that function rebuilds window._journalEvents from
+// the final diag dump). Kept as its own array rather than pushed
+// straight into window._journalEvents because that variable doesn't
+// exist yet the first time an override can happen (renderJournalTab()
+// only runs once, at the end of the run).
+let liveOverrideEvents = [];
+
+function logOverrideEvent(tick, teamId, kind, pillCls, label, detail) {
+  const evt = { tick, team: teamId, kind, pillCls, label, detail };
+  liveOverrideEvents.push(evt);
+  window._journalEvents = (window._journalEvents || []).concat([evt]).sort((a, b) => a.tick - b.tick);
+  const filterEl = document.getElementById("journalFilter");
+  if (filterEl) renderJournalRows();
 }
 
 function telemetryProcessFrame(frame) {
@@ -1272,8 +1293,11 @@ function renderJournalTab(diag) {
     });
   });
 
-  events.sort((a, b) => a.tick - b.tick);
-  window._journalEvents = events;
+  // Merged with liveOverrideEvents (Part 4) rather than replaced by
+  // `events` alone - those were collected DURING the run, before this
+  // function (which only runs once, at the end, off the final diag
+  // dump) ever existed to hold them.
+  window._journalEvents = events.concat(liveOverrideEvents).sort((a, b) => a.tick - b.tick);
 
   document.getElementById("journalFilter").onchange = () => renderJournalRows();
   renderJournalRows();
@@ -1291,7 +1315,7 @@ function renderJournalRows() {
   filtered.forEach(e => {
     const tr = document.createElement("tr");
     const specName = SPEC_NAMES[e.team % SPEC_NAMES.length] || "team";
-    const pillCls = e.kind === "rest" ? "good" : "";
+    const pillCls = e.pillCls !== undefined ? e.pillCls : (e.kind === "rest" ? "good" : "");
     tr.innerHTML = `
       <td>${e.tick}</td>
       <td><span style="color:${TEAM_COLORS[e.team % TEAM_COLORS.length]}">●</span> ${specName} #${e.team}</td>
@@ -1564,7 +1588,16 @@ function renderTeamCard() {
       <div style="margin-top:4px;color:#8b98a5;">
         <b style="color:#e6edf3;">Votes</b>
         &nbsp; ${voteLine("Mob", pv && pv.mob)} &nbsp;&nbsp; ${voteLine("Comm", pv && pv.comm)}
-      </div>`;
+      </div>
+      ${d.override ? `
+      <div style="margin-top:4px;display:flex;align-items:center;justify-content:space-between;">
+        <span style="color:#a371f7;">◆ Manual override → Incident #${d.override_incident_id}</span>
+        <button id="sidePanelOverrideReleaseBtn" data-team-id="${d.i}" class="override-btn cancel" style="font-size:11px;padding:2px 8px;">Release</button>
+      </div>` : ""}`;
+    if (d.override) {
+      const btn = document.getElementById("sidePanelOverrideReleaseBtn");
+      if (btn) btn.addEventListener("click", () => releaseLiveOverride(parseInt(btn.dataset.teamId, 10)));
+    }
   } else if (hit.type === "incident") {
     if (d.groupIncidents && d.groupIncidents.length > 1) {
       // Grouped marker (map-labels feedback): one marker per building
@@ -1604,12 +1637,11 @@ function renderOverrideBox() {
     box.classList.remove("hidden");
     const p = pendingOverride;
     const specName = SPEC_NAMES[p.teamIndex % SPEC_NAMES.length] || "team";
-    // Label only - Part 4 is what actually makes the sim-live path
-    // apply an override; today confirming this in sim-live mode still
-    // reaches the same /api/board/override route as board mode and
-    // gets "Board not connected" back, unchanged from before this UI
-    // pass. liveRunMode just decides which sentence describes what
-    // SHOULD happen once Part 4 lands.
+    // liveRunMode decides both the label AND, in confirmPendingOverride()
+    // below, which route this actually reaches (Part 4): "sim" posts to
+    // /api/run-live/override (laptop/debug.c's stdin-fed OVERRIDE line),
+    // "board" to /api/board/override (a real USART1 frame) - two
+    // independent paths, not one route with two labels.
     const destText = liveRunMode === "board" ? "Sent to the board (USART1)." : "Applied in the simulator.";
     box.innerHTML = `
       <div class="override-card">
@@ -1708,6 +1740,18 @@ function handleMapMouseMove(evt) {
   if (hit) showMapCard(hit);
 }
 
+// System tasks (pool 1 - sector sweeps, equipment runs, etc.) are not
+// valid manual-override targets: core/cbba.c's own pin-validation
+// (cbba_apply_override_pin(), shared by both the board and sim
+// override paths) only ever looks in g_incidents, so a team pinned to
+// one would silently self-clear a tick later if it were ever applied.
+// laptop/debug.c's sim-mode validation already rejects this with
+// reason "system_task" as a backstop, but the drag-drop UI shouldn't
+// offer or highlight one as a droppable target in the first place.
+function isValidOverrideDropTarget(hit) {
+  return !!(hit && hit.data && hit.data.pool !== 1);
+}
+
 function handleMapMouseUp(evt) {
   if (!dragState) return;
   const { sx, sy } = screenPointFromEvent(evt);
@@ -1721,7 +1765,7 @@ function handleMapMouseUp(evt) {
   const dropHit = hitTestAt(sx, sy, "incident");
   const movedFarEnough = mapCamera.pxToWorldLength(Math.hypot(sx - dragState.startSx, sy - dragState.startSy)) > 0.5;
 
-  if (dropHit && movedFarEnough && dropHit.data.id !== dragState.teamHit.data.dest_id) {
+  if (isValidOverrideDropTarget(dropHit) && movedFarEnough && dropHit.data.id !== dragState.teamHit.data.dest_id) {
     pendingOverride = {
       team: dragState.teamHit.data,
       teamIndex: dragState.teamHit.data.i,
@@ -1782,6 +1826,15 @@ function buildTeamCardHTML(d) {
     mapCardRow("Mobility tier", tierName(tier[0])) +
     mapCardRow("Comm tier", tierName(tier[1]));
   if (activeFaults.length) html += mapCardRow("Injected fault (ground truth)", activeFaults.join(", "));
+  if (d.override) {
+    html += mapCardRow("Manual override", `→ Incident #${d.override_incident_id}`);
+    // pointer-events:auto overrides .map-tooltip's own pointer-events:none
+    // (that's there so the card never blocks clicking the canvas under a
+    // hover-only card) - a real button inside it needs to stay clickable.
+    html += `<div style="margin-top:6px;text-align:right;">
+      <button id="liveOverrideReleaseBtn" data-team-id="${d.i}" class="override-btn cancel" style="font-size:11px;padding:3px 8px;pointer-events:auto;">Release</button>
+    </div>`;
+  }
   return html;
 }
 
@@ -1871,6 +1924,13 @@ function showMapCard(hit) {
   mapCardMarker = { type: hit.type, id: hit.data.id };
   const d = hit.data;
   mapCardBuildingId = (hit.type === "incident" && d.building_id !== undefined && d.building_id >= 0) ? d.building_id : null;
+  const releaseBtn = document.getElementById("liveOverrideReleaseBtn");
+  if (releaseBtn) {
+    releaseBtn.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      releaseLiveOverride(parseInt(releaseBtn.dataset.teamId, 10));
+    });
+  }
 }
 
 function hideMapCard() {
@@ -1923,7 +1983,7 @@ function drawDragOverlay() {
   mapCtx.stroke();
   mapCtx.setLineDash([]);
   const dropHit = hitTestAt(dragState.curSx, dragState.curSy, "incident");
-  if (dropHit) {
+  if (isValidOverrideDropTarget(dropHit)) {
     const center = mapCamera.worldToScreen(dropHit.wx, dropHit.wy);
     const r = dropHit.wr * mapCamera.state.zoom;
     mapCtx.beginPath();
@@ -1995,6 +2055,102 @@ function pollOverrideAck(teamId, incidentId) {
     .catch((err) => showOverrideResult("⚠ Override Status Unknown", `Request error: ${err}`, true));
 }
 
+// Part 4: the sim-mode override this UI has in flight, if any - set
+// right before the POST, cleared once its matching `override_ack` SSE
+// event arrives (see handleLiveOverrideAck()). Matched by team_id only
+// (not incident_id too): a "Release" click's OVERRIDE_CLEAR ack echoes
+// back incident_id 0, which would never match a pending assign's real
+// incident id, and this UI only ever has one request in flight per
+// team at a time anyway (confirm/Release are themselves button clicks,
+// serialized by the user).
+window._pendingLiveOverride = null; // {teamId, kind: "assign" | "clear"}
+
+const LIVE_OVERRIDE_REASON_TEXT = {
+  bad_team: "The simulator doesn't recognize that team id.",
+  unknown_incident: "That incident no longer exists in the simulator.",
+  system_task: "That's a system task (a sector sweep, equipment run, etc.), not an incident a team can be manually pinned to.",
+  incident_finished: "That incident has already been resolved.",
+  team_unavailable: "The system currently has that team flagged (degraded, or a peer-consensus ELEVATED tier) - reassignment is blocked until that clears.",
+  stale_tick: "This request was built against a tick the simulator has already moved well past.",
+  future_tick: "This request's tick is ahead of the simulator's own current tick.",
+};
+
+function liveOverrideReasonText(reason) {
+  return LIVE_OVERRIDE_REASON_TEXT[reason] || reason || "Unknown reason";
+}
+
+// Belt-and-suspenders against the box being stuck on "Sent..."/"Sending..."
+// forever if an override_ack never arrives or never gets processed for any
+// reason (dropped SSE event, a client-side exception elsewhere, the sim
+// process dying mid-tick, ...): whatever the cause, the UI must recover on
+// its own rather than needing a page reload.
+function scheduleLiveOverrideFallback(teamId, kind) {
+  setTimeout(() => {
+    const pending = window._pendingLiveOverride;
+    if (pending && pending.teamId === teamId && pending.kind === kind) {
+      window._pendingLiveOverride = null;
+      showOverrideResult("⚠ No Response",
+        `Team ${teamId}: no response from the simulator - try again.`, true);
+    }
+  }, 3000);
+}
+
+// Handles an `override_ack` SSE event (laptop/debug.c's OVERRIDEACK
+// line, forwarded by app.py - see core/debug.h's doc for the full
+// reason list). Always logged to the Incident Journal regardless of
+// whether it matches something this UI is currently waiting on (a
+// stale retry, or an override sent before a page reload, is still
+// worth a record); the override box itself only updates for a match.
+function handleLiveOverrideAck(msg) {
+  const specName = SPEC_NAMES[msg.team_id % SPEC_NAMES.length] || "team";
+  const pending = window._pendingLiveOverride;
+  const isClear = !!(pending && pending.teamId === msg.team_id && pending.kind === "clear");
+  const applied = msg.result === "applied";
+
+  logOverrideEvent(msg.effective_tick, msg.team_id, "override", applied ? "good" : "bad",
+    applied
+      ? (isClear ? "Manual override released" : "Manual override applied")
+      : `Manual ${isClear ? "release" : "override"} rejected`,
+    applied
+      ? (isClear ? `${specName} #${msg.team_id} released from its pinned incident` : `${specName} #${msg.team_id} → Incident ${msg.incident_id}`)
+      : `${specName} #${msg.team_id} → Incident ${msg.incident_id}: ${liveOverrideReasonText(msg.reason)}`);
+
+  if (!pending || pending.teamId !== msg.team_id) return;
+  window._pendingLiveOverride = null;
+  if (applied) {
+    showOverrideResult(isClear ? "✓ Override Released" : "✓ Override Applied",
+      isClear ? `${specName} #${msg.team_id} released.` : `${specName} #${msg.team_id} → Incident ${msg.incident_id}: applied in the simulator.`,
+      true);
+  } else {
+    showOverrideResult("⚠ Override Rejected", `${specName} #${msg.team_id} → Incident ${msg.incident_id}: ${liveOverrideReasonText(msg.reason)}`, true);
+  }
+}
+
+// The "Release" button on an overridden team's card (map card and side
+// panel both call this - see buildTeamCardHTML()/renderTeamCard()).
+function releaseLiveOverride(teamId) {
+  window._pendingLiveOverride = { teamId, kind: "clear" };
+  scheduleLiveOverrideFallback(teamId, "clear");
+  fetch("/api/run-live/override/clear", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ team_id: teamId }),
+  })
+    .then((resp) => resp.json().then((body) => ({ ok: resp.ok, body })))
+    .then(({ ok, body }) => {
+      if (!ok) {
+        window._pendingLiveOverride = null;
+        showOverrideResult("⚠ Release Failed", (body && body.message) || "Unknown error", true);
+      }
+      // On success, nothing to show yet - the override_ack SSE event
+      // (handleLiveOverrideAck()) reports the real outcome.
+    })
+    .catch((err) => {
+      window._pendingLiveOverride = null;
+      showOverrideResult("⚠ Release Failed", `Request error: ${err}`, true);
+    });
+}
+
 function confirmPendingOverride() {
   const el = document.getElementById("overrideBox");
   el.classList.remove("hidden");
@@ -2009,12 +2165,51 @@ function confirmPendingOverride() {
   // message is exactly what this replaces: a real POST to the route
   // core/mission_link_override.h's pipeline doc describes (step 1-2),
   // which packs a MissionLinkOverride_t and writes it to the board's
-  // USART1 line - see tools/app.py's /api/board/override.
+  // USART1 line - see tools/app.py's /api/board/override. Part 4 adds
+  // a second, completely independent route for sim-live mode
+  // (/api/run-live/override, laptop/debug.c's stdin-fed OVERRIDE
+  // line) - liveRunMode decides which one this actually reaches, set
+  // by runLive() ("sim") vs the board-mission startup path ("board").
   el.innerHTML = `
     <div class="override-card">
       <div class="override-title">Sending override…</div>
       <div style="font-size:12.5px;color:var(--muted);">Team ${teamId} → Incident ${incidentId}</div>
     </div>`;
+
+  if (liveRunMode === "sim") {
+    window._pendingLiveOverride = { teamId, kind: "assign" };
+    scheduleLiveOverrideFallback(teamId, "assign");
+    fetch("/api/run-live/override", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ team_id: teamId, incident_id: incidentId }),
+    })
+      .then((resp) => resp.json().then((body) => ({ ok: resp.ok, body })))
+      .then(({ ok, body }) => {
+        if (!ok) {
+          window._pendingLiveOverride = null;
+          showOverrideResult("⚠ Override Failed", (body && body.message) || "Unknown error", true);
+          return;
+        }
+        // The POST only means the line was written to the simulator's
+        // stdin - wait for its own OVERRIDEACK (handleLiveOverrideAck()).
+        // Guarded on _pendingLiveOverride still being set for this team:
+        // that SSE event and this fetch's own success callback are two
+        // independent async chains with no ordering guarantee between
+        // them, so the ack can legitimately arrive and already resolve
+        // this (clearing _pendingLiveOverride) before this callback
+        // runs - showing "waiting" after the real outcome already
+        // landed would silently clobber it back to a stale state.
+        if (window._pendingLiveOverride && window._pendingLiveOverride.teamId === teamId) {
+          showOverrideResult("Sent to the simulator…", `Team ${teamId} → Incident ${incidentId}: waiting for the simulator to process it.`, false);
+        }
+      })
+      .catch((err) => {
+        window._pendingLiveOverride = null;
+        showOverrideResult("⚠ Override Failed", `Request error: ${err}`, true);
+      });
+    return;
+  }
 
   fetch("/api/board/override", {
     method: "POST",
@@ -2269,42 +2464,54 @@ async function runLive() {
       buffer = parts.pop();
       for (const part of parts) {
         if (!part.startsWith("data: ")) continue;
-        const msg = JSON.parse(part.slice(6));
-        if (msg.type === "static_env") {
-          staticEnvironment = msg.env;
-        } else if (msg.type === "static_map") {
-          terrainMap = msg.map;
-        } else if (msg.type === "frame") {
-          const accepted = telemetryProcessFrame(msg.frame);
-          drawFrame(msg.frame);
-          updateLiveTables(msg.frame);
-          ConsensusNetwork.update(msg.frame);
-          DetectionTimeline.update(msg.frame);
-          if (accepted) {
-            const now = performance.now();
-            if (now - lastChartRenderMs >= CHART_RENDER_INTERVAL_MS) {
-              renderLiveCharts();
-              lastChartRenderMs = now;
+        // One malformed/unexpected SSE event must never kill this loop -
+        // that would silently stop ALL further frame/ack processing for
+        // the rest of the run (the tab would just look frozen, with
+        // nothing in the console since the exception is swallowed by
+        // this catch instead of propagating). Each event is handled in
+        // isolation; a bad one is logged and skipped.
+        try {
+          const msg = JSON.parse(part.slice(6));
+          if (msg.type === "static_env") {
+            staticEnvironment = msg.env;
+          } else if (msg.type === "static_map") {
+            terrainMap = msg.map;
+          } else if (msg.type === "frame") {
+            const accepted = telemetryProcessFrame(msg.frame);
+            drawFrame(msg.frame);
+            updateLiveTables(msg.frame);
+            ConsensusNetwork.update(msg.frame);
+            DetectionTimeline.update(msg.frame);
+            if (accepted) {
+              const now = performance.now();
+              if (now - lastChartRenderMs >= CHART_RENDER_INTERVAL_MS) {
+                renderLiveCharts();
+                lastChartRenderMs = now;
+              }
             }
+          } else if (msg.type === "done") {
+            liveEndedCleanly = true;
+            setRunState("finished");
+            renderLiveCharts();
+            const mismatches = telemetryFinalize(msg.diag);
+            renderRun({
+              elapsed_seconds: msg.elapsed_seconds, returncode: 0,
+              stdout_tail: "(live run — see tick-by-tick data in Live Ops tab)",
+              stderr_tail: "(live run — diag lines streamed during run)",
+              diag: msg.diag, telemetry: msg.telemetry,
+            });
+            renderHistory(msg.history);
+            let label = "  ·  run complete";
+            if (simTelemetry.gapCount > 0) label += `  ·  ${simTelemetry.gapCount} tick(s) dropped in transit`;
+            if (mismatches.length > 0) label += `  ·  reconciliation mismatch: ${mismatches.join(", ")}`;
+            document.getElementById("liveTickLabel").textContent += label;
+          } else if (msg.type === "override_ack") {
+            handleLiveOverrideAck(msg);
+          } else if (msg.type === "error") {
+            alert("Live run failed: " + msg.message + "\n" + (msg.log || ""));
           }
-        } else if (msg.type === "done") {
-          liveEndedCleanly = true;
-          setRunState("finished");
-          renderLiveCharts();
-          const mismatches = telemetryFinalize(msg.diag);
-          renderRun({
-            elapsed_seconds: msg.elapsed_seconds, returncode: 0,
-            stdout_tail: "(live run — see tick-by-tick data in Live Ops tab)",
-            stderr_tail: "(live run — diag lines streamed during run)",
-            diag: msg.diag, telemetry: msg.telemetry,
-          });
-          renderHistory(msg.history);
-          let label = "  ·  run complete";
-          if (simTelemetry.gapCount > 0) label += `  ·  ${simTelemetry.gapCount} tick(s) dropped in transit`;
-          if (mismatches.length > 0) label += `  ·  reconciliation mismatch: ${mismatches.join(", ")}`;
-          document.getElementById("liveTickLabel").textContent += label;
-        } else if (msg.type === "error") {
-          alert("Live run failed: " + msg.message + "\n" + (msg.log || ""));
+        } catch (evErr) {
+          console.error("runLive: failed to process one SSE event, skipping it and continuing", evErr, part);
         }
       }
     }

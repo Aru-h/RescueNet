@@ -184,9 +184,13 @@ def _run_control_state_check(page, console_errors):
     page.click("#liveBtn")
     page.wait_for_timeout(1000)
 
-    # (a) A failed override (board not connected in sim-only mode, by
-    # design pre-Part-4) must only show its own error, never touch the
-    # run: frames keep arriving for the next 5 seconds.
+    # (a) An override for a nonexistent incident_id (999999) must only
+    # show its own error, never touch the run: frames keep arriving for
+    # the next 5 seconds. Since Part 4, sim mode actually processes this
+    # request (laptop/debug.c's debug_live_override_poll()) and comes
+    # back "Rejected" with reason unknown_incident, rather than the
+    # pre-Part-4 "Failed" (board not connected) - both are a failure
+    # outcome for this check's purposes, so it accepts either wording.
     injected = page.evaluate("""() => {
       const frame = window._lastFrame;
       if (!frame) return false;
@@ -200,7 +204,7 @@ def _run_control_state_check(page, console_errors):
     page.click("#overrideConfirmBtn")
     page.wait_for_timeout(400)
     override_failed = page.evaluate("() => document.getElementById('overrideBox').textContent")
-    check(bool(override_failed and ("Failed" in override_failed or "failed" in override_failed)),
+    check(bool(override_failed and any(w in override_failed for w in ("Failed", "failed", "Rejected", "rejected"))),
           f"(a) the override shows a failure in its own box (got {override_failed!r})")
 
     tick_at_failure = page.evaluate("() => window._lastFrame ? window._lastFrame.tick : -1")
@@ -273,6 +277,106 @@ def _run_control_state_check(page, console_errors):
     # deliberate override failure and stale-resume above both leave
     # overrideStatus set, which would otherwise make renderOverrideBox()
     # show stale content regardless of pendingOverride/drag state.
+    page.evaluate("() => { overrideStatus = null; pendingOverride = null; selectedMarker = null; renderInspector(); }")
+
+
+def _live_override_apply_release_check(page, console_errors):
+    """Part 4: a VALID sim-mode override (a real open incident) is
+    actually applied, shows up live on LIVEFRAME (which the map/team-
+    card indicators and the Release button all read directly, so this
+    covers them transitively), gets logged to the Incident Journal, and
+    Release actually clears it. Runs its own live run with a generous
+    tick budget - _run_control_state_check's own 45-tick run is sized
+    for its pause/resume/stop lifecycle checks and doesn't leave enough
+    wall-clock headroom for the polling this needs on top of that."""
+    page.select_option("#faultProfile", "none")
+    page.fill("#seed", "31")
+    page.fill("#ticks", "350")
+    page.fill("#tickDelay", "150")
+    page.click("#liveBtn")
+
+    # Polls rather than one fixed wait: incident spawn timing is itself
+    # randomized (fault_profile=none still spawns incidents on its own
+    # schedule), so a single fixed delay was intermittently too short.
+    staged = None
+    for _ in range(20):
+        page.wait_for_timeout(500)
+        staged = page.evaluate("""() => {
+          const frame = window._lastFrame;
+          // pool 0 only (real incidents) - a pool-1 system task is
+          // rejected with reason "system_task" (core/debug.h's doc):
+          // core/cbba.c's own pin-validation only ever looks in
+          // g_incidents, so this checks the same thing a real drag-
+          // drop onto a real incident marker would.
+          const inc = frame && (frame.incidents || []).find(i => i.status !== 3 && i.pool === 0);
+          if (!inc) return null;
+          const team = frame.teams[0];
+          pendingOverride = { team, teamIndex: 0, from: {x: team.x, y: team.y}, to: inc };
+          selectedMarker = { type: 'team', id: team.id };
+          renderInspector();
+          return inc.id;
+        }""")
+        if staged is not None:
+            break
+    check(staged is not None, f"a real open incident was available to override onto (got incident id {staged})")
+    if staged is not None:
+        journal_count_before = page.evaluate("() => (window._journalEvents || []).length")
+        page.click("#overrideConfirmBtn")
+        applied = False
+        box_text = None
+        # Polled together, not as two sequential loops: a short-lived
+        # incident (already nearly done when staged - a real,
+        # observed case, not hypothetical) can have
+        # cbba_apply_override_pin() auto-clear the pin again within a
+        # tick or two of it being set, so checking LIVEFRAME only
+        # AFTER the box-text loop already exited could miss a window
+        # that came and went while that loop was still polling.
+        saw_override_applied = False
+        for _ in range(60):
+            page.wait_for_timeout(200)
+            box_text = page.evaluate("() => document.getElementById('overrideBox').textContent")
+            if box_text and "Applied" in box_text:
+                applied = True
+            team0_state = page.evaluate("""() => ({
+              override: window._lastFrame.teams[0].override,
+              override_incident_id: window._lastFrame.teams[0].override_incident_id,
+            })""")
+            if team0_state["override"] == 1 and team0_state["override_incident_id"] == staged:
+                saw_override_applied = True
+            if applied and saw_override_applied:
+                break
+        check(applied, f"a valid override is applied (got override box text: {box_text!r})")
+        check(saw_override_applied,
+              f"LIVEFRAME showed team 0 overridden to incident {staged} at some point during processing (got {team0_state})")
+
+        journal_has_new_applied = page.evaluate(f"""() => {{
+          const events = window._journalEvents || [];
+          return events.length > {journal_count_before} &&
+                 events.some(e => e.kind === 'override' && e.team === 0 && e.pillCls === 'good' && e.label.includes('applied'));
+        }}""")
+        check(journal_has_new_applied, "the applied override was logged to the Incident Journal as a new entry")
+
+        page.evaluate("() => { overrideStatus = null; pendingOverride = null; selectedMarker = null; renderInspector(); }")
+        page.wait_for_timeout(100)
+
+        page.evaluate("() => releaseLiveOverride(0)")
+        released = False
+        for _ in range(60):
+            page.wait_for_timeout(200)
+            if page.evaluate("() => window._lastFrame.teams[0].override === 0"):
+                released = True
+                break
+        check(released, "Release actually clears the override (LIVEFRAME team 0 override back to 0)")
+
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0,
+          f"no UNEXPECTED console/page errors during the valid-override/release check "
+          f"(got {len(real_errors)}, ignoring the deliberately-triggered 400/409 network noise: {real_errors[:5]})")
+
+    stop_btn = page.query_selector("#stopLiveBtn")
+    if stop_btn and stop_btn.is_visible():
+        stop_btn.click()
+        page.wait_for_timeout(300)
     page.evaluate("() => { overrideStatus = null; pendingOverride = null; selectedMarker = null; renderInspector(); }")
 
 
@@ -699,6 +803,9 @@ def main():
                 page.click("#stopLiveBtn")
                 page.wait_for_timeout(200)
             _run_control_state_check(page, console_errors)
+
+            # Part 4: a valid sim-mode override, applied and released.
+            _live_override_apply_release_check(page, console_errors)
 
             # Part 2: replay of a recorded live run.
             _replay_check(page, console_errors)

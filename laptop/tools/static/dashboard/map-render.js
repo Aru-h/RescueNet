@@ -579,6 +579,25 @@
         ctx.fill();
       }
 
+      // Part 4: a manual override pin, opposite corner from the fault
+      // dot above so the two never collide - a diamond, not another
+      // dot, so it never reads as "another fault" at a glance.
+      if (t.override) {
+        const bx = center.x - r * 1.1, by = center.y + r * 1.1;
+        const s = 4;
+        ctx.beginPath();
+        ctx.moveTo(bx, by - s);
+        ctx.lineTo(bx + s, by);
+        ctx.lineTo(bx, by + s);
+        ctx.lineTo(bx - s, by);
+        ctx.closePath();
+        ctx.fillStyle = "#a371f7";
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
       if (selectedMarker && selectedMarker.type === "team" && selectedMarker.id === t.id) {
         ctx.beginPath();
         ctx.arc(center.x, center.y, r * 1.9, 0, Math.PI * 2);

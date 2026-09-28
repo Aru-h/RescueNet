@@ -42,6 +42,50 @@ void debug_emit_live_frame(uint32_t tick);
 void debug_emit_static_map_if_changed(void);
 
 /*
+ * Part 4: sim-mode manual override, reachable ONLY via --live's own
+ * stdin - never the board's USART1 path (laptop/tools/app.py's
+ * /api/run-live/override route writes lines here, a completely
+ * separate channel from /api/board/override's binary
+ * MissionLinkOverride_t frame over a real serial link; the live board
+ * path is untouched by this feature). Plain text lines, not the
+ * binary wire format: this is a trusted local pipe between app.py and
+ * this process, not a noisy serial link that needs magic-byte resync
+ * and a checksum.
+ *
+ *   OVERRIDE <requested_tick> <team_id> <incident_id>\n
+ *   OVERRIDE_CLEAR <requested_tick> <team_id>\n
+ *
+ * debug_live_override_init() resets the line-assembly buffer and must
+ * be called once before the tick loop starts, live_mode only.
+ * debug_live_override_poll(tick) does one non-blocking read of
+ * whatever is currently available on stdin - it never blocks the tick
+ * loop, and a closed/EOF stdin just means no further overrides are
+ * possible, never an error (same policy laptop/main.c's existing
+ * --mission-feed stdin handling already uses) - assembles complete
+ * lines, validates and applies each one, and prints one OVERRIDEACK
+ * JSON line per request: applied, or rejected with a reason (see
+ * laptop/debug.c: bad_team, unknown_incident, system_task,
+ * incident_finished, team_unavailable, stale_tick, future_tick).
+ * system_task means the id is real (it exists in g_system_tasks, and
+ * shows up on the dashboard map like any other marker) but core/
+ * cbba.c's own pin-validation (cbba_apply_override_pin(), called
+ * every tick from cbba_build_bundle()) only ever looks in g_incidents
+ * - pinning a team to a system task's id would validate here, ack
+ * "applied", and then self-clear on the very next tick with no
+ * further signal, exactly the "silently dropped" failure mode
+ * overrides must never have, so it is rejected up front instead.
+ * Rejection reasons
+ * deliberately never reveal ground-truth fault state (core/fault_
+ * config.h's TeamFaultState_t.active_mask) - only what the system
+ * itself has already concluded (the recovery manager's degraded flag,
+ * peer consensus ELEVATED tier) is used to reject a team as
+ * unavailable, the same ground-truth-vs-observed distinction
+ * CONSENSUS_DESIGN.md draws everywhere else in this project.
+ */
+void debug_live_override_init(void);
+void debug_live_override_poll(uint32_t tick);
+
+/*
  * Priority 1 repro/verification harness: deterministically reproduces
  * "path lost mid-route" for a team on an active TASK_POOL_INCIDENT/
  * TASK_POOL_SYSTEM task (the move_team() branch that historically had

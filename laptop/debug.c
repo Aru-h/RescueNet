@@ -6,12 +6,25 @@
 #include "random.h"
 #include <stdio.h>
 #include <stdarg.h>
+#include <string.h>
 #include "debug.h"
 #include "simulation.h"
 #include "environment.h"
 #include "sim_runner.h"
 #include "fault_config.h"
 #include "path.h"
+#include "mission_link_override.h"
+
+/* Part 4's non-blocking stdin poll (debug_live_override_poll() below) -
+ * desktop test tooling only, same "no platform.h wrapping" precedent
+ * every other laptop-only helper in this file already follows. Neither
+ * branch is used outside that one function. */
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <sys/select.h>
+#endif
 
 /*
  * Laptop implementation of the debug_trace() sink declared in debug.h.
@@ -212,6 +225,290 @@ void debug_emit_static_map_if_changed(void)
     s_static_map_emitted = 1;
 }
 
+/* --- Part 4: sim-mode manual override over --live's own stdin -----------
+ * See core/debug.h's doc comment for the line protocol and the full
+ * rationale (why text lines rather than the board's binary frame, why
+ * rejection reasons never use ground-truth fault state). Everything
+ * below is reachable ONLY when main.c's tick loop is in --live mode -
+ * the board's USART1 override path (core/mission_link_override.c,
+ * laptop/tools/app.py's /api/board/override) is a completely separate
+ * code path, untouched by any of this.
+ */
+#define LIVE_OVERRIDE_LINE_MAX 128u
+/* How many ticks old a request may be before it's rejected as stale -
+ * generous enough to absorb ordinary UI/network round-trip latency
+ * (app.py's SSE loop, the confirm click, the write to this process's
+ * stdin) without accepting a request built against a world state the
+ * sim has long since moved past. */
+#define LIVE_OVERRIDE_STALE_TICKS 20u
+
+static char s_override_line[LIVE_OVERRIDE_LINE_MAX];
+static uint32_t s_override_line_len;
+static int s_override_stdin_open = 1;
+
+void debug_live_override_init(void)
+{
+    s_override_line_len = 0;
+    s_override_stdin_open = 1;
+}
+
+/* Finds a REAL incident (g_incidents only - NOT g_system_tasks) by id.
+ * core/cbba.c's own cbba_find_incident_slot_by_id() (static, not
+ * visible outside that file) is what cbba_apply_override_pin() uses
+ * every tick to keep a pin alive, and it ONLY searches g_incidents -
+ * a pin set on a system-task id would validate here, ack "applied",
+ * and then self-clear on the very next tick with no further signal,
+ * which is exactly the "silently dropped" failure mode overrides must
+ * never have. So this deliberately matches cbba.c's own scope rather
+ * than the wider dual-pool search debug_emit_live_frame() does for
+ * the dashboard's "incidents" JSON array (which merges both pools
+ * purely for map display) - live_override_is_system_task() below is
+ * how a system-task id gets its own clear rejection reason instead of
+ * a misleading "unknown_incident". */
+static const IncidentState_t *live_override_find_incident(uint32_t incident_id)
+{
+    for(uint16_t i = 0; i < NUM_INCIDENTS; i++)
+    {
+        if(g_incidents[i].slot_occupied && g_incidents[i].incident_id == incident_id)
+            return &g_incidents[i];
+    }
+    return NULL;
+}
+
+/* True if incident_id exists, but only as a system task - the id is
+ * real (shows up on the dashboard map, drag-droppable there like any
+ * other marker), it just isn't one cbba_apply_override_pin() can pin
+ * a team to. Distinguishing this from "doesn't exist at all" is what
+ * lets the reject reason be honest instead of just "unknown_incident". */
+static int live_override_is_system_task(uint32_t incident_id)
+{
+    for(uint16_t i = 0; i < NUM_SYSTEM_TASKS; i++)
+    {
+        if(g_system_tasks[i].slot_occupied && g_system_tasks[i].incident_id == incident_id)
+            return 1;
+    }
+    return 0;
+}
+
+/* "Is this team currently unavailable for a manual reassignment", per
+ * ONLY what the system itself has already concluded about it - never
+ * ground-truth fault state (core/fault_config.h's TeamFaultState_t.
+ * active_mask), which would leak a hidden injected fault to the
+ * operator through the reject reason before any detector actually
+ * found it. The recovery manager's own `degraded` flag and peer
+ * consensus's ELEVATED tier are both "the system observed and
+ * concluded this", the same ground-truth-vs-observed line
+ * CONSENSUS_DESIGN.md draws everywhere else in this project (see e.g.
+ * laptop/tools/static/dashboard/timeline.js's top-of-file comment on
+ * the exact same distinction for the Detection Timeline panel). */
+static int live_override_team_unavailable(uint8_t team_id)
+{
+    const TeamState_t *team = &g_teams[team_id];
+
+    if(team->degraded)
+        return 1;
+
+#if VIRTUAL_BUS_ENABLED
+    if(consensus_get_result(team_id, CONSENSUS_CLASS_MOBILITY).tier == CONSENSUS_TIER_ELEVATED)
+        return 1;
+    if(consensus_get_result(team_id, CONSENSUS_CLASS_COMMUNICATION).tier == CONSENSUS_TIER_ELEVATED)
+        return 1;
+#endif
+
+    return 0;
+}
+
+/* One OVERRIDEACK JSON line per request - reason is NULL (prints as
+ * JSON null) on success, one of bad_team/unknown_incident/
+ * system_task/incident_finished/team_unavailable/stale_tick/
+ * future_tick on rejection. effective_tick is always the tick this was actually
+ * processed on (== requested_tick on success in practice, since a
+ * stale/future mismatch is itself a rejection) - laptop/tools/app.py
+ * forwards this line over SSE unparsed, same as every other debug.c
+ * JSON line. */
+static void live_override_emit_ack(uint32_t requested_tick, uint32_t effective_tick,
+                                    uint8_t team_id, uint32_t incident_id,
+                                    int applied, const char *reason)
+{
+    printf("OVERRIDEACK {\"team_id\":%u,\"incident_id\":%u,\"requested_tick\":%u,"
+           "\"effective_tick\":%u,\"result\":\"%s\",\"reason\":%s%s%s}\n",
+           (unsigned)team_id, incident_id, requested_tick, effective_tick,
+           applied ? "applied" : "rejected",
+           reason ? "\"" : "", reason ? reason : "null", reason ? "\"" : "");
+    fflush(stdout);
+}
+
+/* Parses and applies one already newline-stripped line. An
+ * unrecognized line (garbage, a stray blank, anything that isn't
+ * OVERRIDE/OVERRIDE_CLEAR) is silently ignored, not an error - same
+ * "don't crash on malformed input" policy laptop/mission_mirror.c's
+ * mission_mirror_ingest_line() already uses for its own stdin-line
+ * reader. */
+static void live_override_process_line(const char *line, uint32_t tick)
+{
+    unsigned long requested_tick = 0, team_id = 0, incident_id = 0;
+
+    if(sscanf(line, "OVERRIDE_CLEAR %lu %lu", &requested_tick, &team_id) == 2)
+    {
+        if(team_id >= NUM_TEAMS)
+        {
+            live_override_emit_ack((uint32_t)requested_tick, tick, (uint8_t)team_id, 0, 0, "bad_team");
+            return;
+        }
+        /* Reports the incident that was actually pinned (read before
+         * clearing), not 0 - more useful in the ack than an
+         * unconditional zero, and costs nothing extra to capture. */
+        uint32_t cleared_incident_id = g_cbba_agent_state[team_id].override_incident_id;
+        g_cbba_agent_state[team_id].override_active = 0u;
+        live_override_emit_ack((uint32_t)requested_tick, tick, (uint8_t)team_id, cleared_incident_id, 1, NULL);
+        return;
+    }
+
+    if(sscanf(line, "OVERRIDE %lu %lu %lu", &requested_tick, &team_id, &incident_id) == 3)
+    {
+        if(team_id >= NUM_TEAMS)
+        {
+            live_override_emit_ack((uint32_t)requested_tick, tick, (uint8_t)team_id, (uint32_t)incident_id, 0, "bad_team");
+            return;
+        }
+        /* Two distinct staleness directions: a request timestamped
+         * AFTER the tick this process has actually reached is
+         * meaningless (nothing to compare it against yet - could only
+         * happen from a clock/tick mismatch bug on the sender side),
+         * and one timestamped too far BEFORE it was built against a
+         * world state the sim has long since moved past. */
+        if(requested_tick > tick)
+        {
+            live_override_emit_ack((uint32_t)requested_tick, tick, (uint8_t)team_id, (uint32_t)incident_id, 0, "future_tick");
+            return;
+        }
+        if(tick - requested_tick > LIVE_OVERRIDE_STALE_TICKS)
+        {
+            live_override_emit_ack((uint32_t)requested_tick, tick, (uint8_t)team_id, (uint32_t)incident_id, 0, "stale_tick");
+            return;
+        }
+        if(live_override_team_unavailable((uint8_t)team_id))
+        {
+            live_override_emit_ack((uint32_t)requested_tick, tick, (uint8_t)team_id, (uint32_t)incident_id, 0, "team_unavailable");
+            return;
+        }
+
+        const IncidentState_t *inc = live_override_find_incident((uint32_t)incident_id);
+        if(!inc)
+        {
+            if(live_override_is_system_task((uint32_t)incident_id))
+            {
+                live_override_emit_ack((uint32_t)requested_tick, tick, (uint8_t)team_id, (uint32_t)incident_id, 0, "system_task");
+                return;
+            }
+            live_override_emit_ack((uint32_t)requested_tick, tick, (uint8_t)team_id, (uint32_t)incident_id, 0, "unknown_incident");
+            return;
+        }
+        if(inc->status == (uint8_t)INC_RESOLVED)
+        {
+            live_override_emit_ack((uint32_t)requested_tick, tick, (uint8_t)team_id, (uint32_t)incident_id, 0, "incident_finished");
+            return;
+        }
+
+        MissionLinkOverride_t msg;
+        msg.team_id = (uint8_t)team_id;
+        msg.incident_id = (uint32_t)incident_id;
+        /* The exact function the board's own USART1 RX path calls
+         * (core/mission_link_override.h step 4) - in this sim build
+         * COMMS_TRANSPORT_TEAMS_PER_BOARD == NUM_TEAMS (see Makefile),
+         * so comms_transport_board_id_for_team() always resolves to
+         * this same in-process board and this always takes the
+         * local-apply branch, never the relay path. */
+        mission_link_override_route_or_apply(&msg);
+        live_override_emit_ack((uint32_t)requested_tick, tick, (uint8_t)team_id, (uint32_t)incident_id, 1, NULL);
+        return;
+    }
+
+    /* Unrecognized line - ignored (the "garbage line" test case). */
+}
+
+/* One non-blocking poll of stdin, called once per tick from main.c's
+ * --live loop. Never blocks: a zero-timeout select() (POSIX) or a
+ * PeekNamedPipe() size check (Windows) both return immediately
+ * whether or not data is waiting, so a tick with nothing on stdin
+ * costs one cheap syscall, not a stall. EOF/closed stdin sets
+ * s_override_stdin_open = 0 so every later call is a single branch
+ * (no syscall at all) rather than repeatedly probing a channel that's
+ * gone - the sim keeps running exactly as if --live had never gained
+ * this capability. */
+void debug_live_override_poll(uint32_t tick)
+{
+    if(!s_override_stdin_open)
+        return;
+
+    char chunk[256];
+    long n_read = 0;
+
+#if defined(_WIN32)
+    {
+        /* Best-effort: not compiled/tested on this project's toolchain
+         * (no Windows build target exists anywhere in this repo today -
+         * see the Makefile), included per explicit instruction that
+         * override support on Windows must either work or be compiled
+         * out. PeekNamedPipe() is the standard non-blocking-size-check
+         * for a pipe HANDLE, mirroring select()'s zero-timeout role
+         * below; app.py always launches this process with a real pipe
+         * for stdin, so the "not a pipe" case is a defensive fallback,
+         * not the expected shape. */
+        HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+        DWORD available = 0, got = 0;
+        if(h == INVALID_HANDLE_VALUE || h == NULL ||
+           !PeekNamedPipe(h, NULL, 0, NULL, &available, NULL) || available == 0)
+            return;
+        DWORD to_read = available < (DWORD)sizeof(chunk) ? available : (DWORD)sizeof(chunk);
+        if(!ReadFile(h, chunk, to_read, &got, NULL) || got == 0)
+        {
+            s_override_stdin_open = 0;
+            return;
+        }
+        n_read = (long)got;
+    }
+#else
+    {
+        fd_set readable;
+        struct timeval zero_timeout;
+        zero_timeout.tv_sec = 0;
+        zero_timeout.tv_usec = 0;
+        FD_ZERO(&readable);
+        FD_SET(STDIN_FILENO, &readable);
+        if(select(STDIN_FILENO + 1, &readable, NULL, NULL, &zero_timeout) <= 0)
+            return; /* nothing waiting (or select() itself was interrupted) - not an error */
+
+        ssize_t got = read(STDIN_FILENO, chunk, sizeof(chunk));
+        if(got <= 0)
+        {
+            s_override_stdin_open = 0;
+            return;
+        }
+        n_read = (long)got;
+    }
+#endif
+
+    for(long i = 0; i < n_read; i++)
+    {
+        char c = chunk[i];
+        if(c == '\n')
+        {
+            s_override_line[s_override_line_len] = '\0';
+            live_override_process_line(s_override_line, tick);
+            s_override_line_len = 0;
+        }
+        else if(s_override_line_len + 1u < LIVE_OVERRIDE_LINE_MAX)
+        {
+            s_override_line[s_override_line_len++] = (char)c;
+        }
+        else
+        {
+            s_override_line_len = 0; /* over-long line: not a real request, drop it */
+        }
+    }
+}
+
 /* Emits one line of JSON to stdout describing the full world state for
  * this tick: every team's position/status/stamina/fault info, and every
  * active incident + system task. Desktop test tooling only (used by the
@@ -345,7 +642,18 @@ void debug_emit_live_frame(uint32_t tick)
                "\"consensus_tier\":[%d,%d],"
                "\"peer_votes\":{\"mob\":[%u,%u,%u],\"comm\":[%u,%u,%u],"
                "\"live\":%u,\"dark\":%u,\"fast\":%u},"
-               "\"heard\":%u}",
+               "\"heard\":%u,"
+               /* Part 4: reuses the pin state cbba_apply_override_pin()
+                * (core/cbba.c) already reads every tick to force-inject
+                * the incident into this team's bundle - no new state,
+                * just exposing what already exists. That function also
+                * clears override_active on its own once the pinned
+                * incident's slot is gone (resolved or otherwise), so
+                * this flips back to 0 automatically the tick after the
+                * incident finishes - the dashboard just has to keep
+                * reading it live, never latch a stale "still overridden"
+                * client-side. */
+               "\"override\":%u,\"override_incident_id\":%u}",
                t == 0 ? "" : ",",
                team->team_id, team->loc_x, team->loc_y, team->stamina,
                team->status, team->specialization,
@@ -356,7 +664,8 @@ void debug_emit_live_frame(uint32_t tick)
                g_diag_ticks_resting[t], g_diag_ticks_working[t],
                g_diag_ticks_available[t],
                tier_mob, tier_comm, mob_f, mob_c, mob_a, comm_f, comm_c, comm_a,
-               peer_live, peer_dark, peer_fast, heard_mask);
+               peer_live, peer_dark, peer_fast, heard_mask,
+               g_cbba_agent_state[t].override_active, g_cbba_agent_state[t].override_incident_id);
     }
     printf("],\"incidents\":[");
     uint8_t first = 1;

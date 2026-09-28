@@ -313,6 +313,15 @@ int main(int argc, char **argv)
              * the STATICENV line above - see debug_emit_static_map_
              * if_changed()'s own comment in laptop/debug.c. */
             debug_emit_static_map_if_changed();
+
+            /* Part 4: sim-mode manual override, --live only - never
+             * runs under --mission-feed, which owns stdin for its own
+             * board-report reader (mission_wait_for_reports() above);
+             * the two are mutually exclusive by this same guard
+             * everywhere else in this loop (see the nanosleep gate
+             * below). See core/debug.h's doc for the line protocol. */
+            if(!mission_feed_mode)
+                debug_live_override_init();
         }
 
         uint64_t next_tick_deadline_ms = monotonic_ms() + tick_delay_ms;
@@ -352,6 +361,16 @@ int main(int argc, char **argv)
                  * actually re-prints the STATICMAP line on the rare tick
                  * where a cell's terrain genuinely changed. */
                 debug_emit_static_map_if_changed();
+            }
+
+            if(live_mode && !mission_feed_mode)
+            {
+                /* One non-blocking stdin poll for a manual override -
+                 * never blocks this loop (see debug_live_override_
+                 * poll()'s own comment), applied here so it's visible
+                 * to the very next sim_tick()'s cbba_build_bundle()
+                 * pass rather than waiting a full extra tick. */
+                debug_live_override_poll(tick);
             }
 
             if(live_mode && !mission_feed_mode && tick_delay_ms > 0)
