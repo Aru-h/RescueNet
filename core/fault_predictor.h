@@ -12,8 +12,16 @@
  * fault_predictor.c. Left at 0 rather than deleted so recovery_manager.c's
  * evaluate_fault_predictor() has a real, callable function to build
  * against today.
+ *
+ * Overridable (#ifndef) so an out-of-tree build (e.g. laptop/tools/
+ * evaluate.py's rules+consensus+ai variant) can pass -DFAULT_MODEL_LOADED=1
+ * once fault_predictor.c actually has a weights header to consume, without
+ * editing this file again. No behaviour change while nothing defines it
+ * first - default stays 0.
  */
+#ifndef FAULT_MODEL_LOADED
 #define FAULT_MODEL_LOADED 0
+#endif
 
 /*
  * Input shape: FEATURE_SPEC_NUM_INPUTS (74) floats, in core/feature_
