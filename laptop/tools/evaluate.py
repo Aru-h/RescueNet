@@ -79,9 +79,11 @@ ALL_KNOWN_VARIANTS = list(VARIANT_DEFINES) + [AI_VARIANT]
 TRAINING_SEED_MAX = 300
 
 CLASS_KEYS = list(em.FAULT_CLASSES) + ["mobility<=2", "mobility>2", "communication<=2", "communication>2"]
+DETECTION_MODES = ("system", "any")
 
 RATE_METRICS = ["detected_at_all_rate"] + [f"detected_within_{w}_rate" for w in em.DETECTION_WINDOWS]
 SCALAR_METRICS = RATE_METRICS + [
+    "action_taken_rate",
     "latency_median",
     "latency_p90",
     "false_alarms_per_1000_team_ticks",
@@ -90,8 +92,26 @@ SCALAR_METRICS = RATE_METRICS + [
     "episodes_total",
 ]
 MISSION_METRICS = ["incidents_resolved", "stage_completions"]
+RACE_METRICS = [
+    "episodes_total",
+    "both_flagged",
+    "consensus_first_rate",
+    "mean_lead_ticks",
+    "median_lead_ticks",
+    "consensus_only_rate",
+    "local_only_rate",
+    "neither_rate",
+]
 
 BOOTSTRAP_SAMPLES = 10000
+
+
+def class_mode_key(cls: str, mode: str) -> str:
+    return f"{cls}|{mode}"
+
+
+def race_key(cls: str) -> str:
+    return f"race|{cls}"
 
 
 def log(msg: str) -> None:
@@ -159,23 +179,38 @@ def _worker(task: dict) -> dict:
     (run_dir / "diag.log").write_text(result.stderr)
 
     rows = em.parse_tick_rows(str(csv_path))
-    class_metrics = em.compute_run_metrics(rows)
+    class_metrics, race_metrics = em.compute_run_metrics(rows)
     mission = em.parse_mission_outcome(result.stderr)
 
     record: dict = {"variant": task["variant"], "profile": task["profile"], "seed": task["seed"]}
     for cls in CLASS_KEYS:
-        m = class_metrics[cls]
-        record[cls] = {
-            "detected_at_all_rate": m.detected_at_all_rate(),
-            **{f"detected_within_{w}_rate": m.detected_within_rate(w) for w in em.DETECTION_WINDOWS},
-            "latency_median": m.latency_median(),
-            "latency_p90": m.latency_p90(),
-            "false_alarms_per_1000_team_ticks": m.false_alarms_per_1000_team_ticks(),
-            "false_alarm_mean_duration": m.false_alarm_mean_duration(),
-            "wrong_class_per_1000_team_ticks": m.wrong_class_per_1000_team_ticks(),
-            "episodes_total": m.episodes_total,
-        }
+        for mode in DETECTION_MODES:
+            m = class_metrics[(cls, mode)]
+            record[class_mode_key(cls, mode)] = {
+                "detected_at_all_rate": m.detected_at_all_rate(),
+                **{f"detected_within_{w}_rate": m.detected_within_rate(w) for w in em.DETECTION_WINDOWS},
+                "action_taken_rate": m.action_taken_rate(),
+                "latency_median": m.latency_median(),
+                "latency_p90": m.latency_p90(),
+                "false_alarms_per_1000_team_ticks": m.false_alarms_per_1000_team_ticks(),
+                "false_alarm_mean_duration": m.false_alarm_mean_duration(),
+                "wrong_class_per_1000_team_ticks": m.wrong_class_per_1000_team_ticks(),
+                "episodes_total": m.episodes_total,
+            }
     record["mission_outcome"] = mission
+    for cls in ("mobility", "communication"):
+        r = race_metrics[cls]
+        total = r.episodes_total
+        record[race_key(cls)] = {
+            "episodes_total": total,
+            "both_flagged": r.both_flagged,
+            "consensus_first_rate": r.consensus_first_rate(),
+            "mean_lead_ticks": r.mean_lead_ticks(),
+            "median_lead_ticks": r.median_lead_ticks(),
+            "consensus_only_rate": (r.consensus_only / total) if total else None,
+            "local_only_rate": (r.local_only / total) if total else None,
+            "neither_rate": (r.neither / total) if total else None,
+        }
     return record
 
 
@@ -222,18 +257,30 @@ def build_report(
     """Returns (summary_rows, paired_rows, markdown_text). summary_rows and
     paired_rows are lists of dicts written verbatim to CSV, in a fixed
     iteration order so re-runs are byte-identical."""
+    all_keys = (
+        [class_mode_key(cls, mode) for cls in CLASS_KEYS for mode in DETECTION_MODES]
+        + ["mission_outcome"]
+        + [race_key(cls) for cls in ("mobility", "communication")]
+    )
+
+    def metrics_for(key: str) -> list:
+        if key == "mission_outcome":
+            return MISSION_METRICS
+        if key.startswith("race|"):
+            return RACE_METRICS
+        return SCALAR_METRICS
+
     summary_rows = []
     for profile in profiles:
         for variant in variants:
-            for cls in CLASS_KEYS + ["mission_outcome"]:
-                metrics = MISSION_METRICS if cls == "mission_outcome" else SCALAR_METRICS
-                for metric in metrics:
-                    values = [records[(variant, profile, s)][cls][metric] for s in seeds]
+            for key in all_keys:
+                for metric in metrics_for(key):
+                    values = [records[(variant, profile, s)][key][metric] for s in seeds]
                     summary_rows.append(
                         {
                             "profile": profile,
                             "variant": variant,
-                            "fault_class": cls,
+                            "fault_class": key,
                             "metric": metric,
                             "mean": mean_ignoring_none(values),
                             "n_seeds": sum(1 for v in values if v is not None),
@@ -245,16 +292,15 @@ def build_report(
         for variant in variants:
             if variant == baseline:
                 continue
-            for cls in CLASS_KEYS + ["mission_outcome"]:
-                metrics = MISSION_METRICS if cls == "mission_outcome" else SCALAR_METRICS
-                for metric in metrics:
+            for key in all_keys:
+                for metric in metrics_for(key):
                     diffs = []
                     for s in seeds:
-                        a = records[(variant, profile, s)][cls][metric]
-                        b = records[(baseline, profile, s)][cls][metric]
+                        a = records[(variant, profile, s)][key][metric]
+                        b = records[(baseline, profile, s)][key][metric]
                         if a is not None and b is not None:
                             diffs.append(a - b)
-                    mean_diff, lo, hi = bootstrap_ci(diffs, f"{profile}|{variant}|{cls}|{metric}")
+                    mean_diff, lo, hi = bootstrap_ci(diffs, f"{profile}|{variant}|{key}|{metric}")
                     if mean_diff is None:
                         verdict = "no_data"
                     elif lo is not None and hi is not None and (lo > 0) == (hi > 0) and lo != hi:
@@ -266,7 +312,7 @@ def build_report(
                             "profile": profile,
                             "variant": variant,
                             "baseline": baseline,
-                            "fault_class": cls,
+                            "fault_class": key,
                             "metric": metric,
                             "n_seeds_paired": len(diffs),
                             "mean_diff": mean_diff,
@@ -328,14 +374,11 @@ def render_markdown(variants, baseline, profiles, seeds, ticks, summary_rows, pa
     lines.append("")
 
     other_variants = [v for v in variants if v != baseline]
-    for profile in profiles:
-        lines.append(f"## Headline: {baseline} vs. consensus, profile=`{profile}`")
+
+    def headline_table(mode: str, title: str, description: str) -> None:
+        lines.append(f"### {title}, profile=`{profile}`")
         lines.append("")
-        lines.append(
-            "Detection rate = fraction of ground-truth fault episodes the system "
-            "detected at all (any latency), per fault class. Mean difference and "
-            "95% bootstrap CI are paired per-seed (`variant - baseline`)."
-        )
+        lines.append(description)
         lines.append("")
         header = ["fault class", f"{baseline} detected%"]
         for v in other_variants:
@@ -343,15 +386,98 @@ def render_markdown(variants, baseline, profiles, seeds, ticks, summary_rows, pa
         lines.append("| " + " | ".join(header) + " |")
         lines.append("|" + "|".join(["---"] * len(header)) + "|")
         for cls in em.FAULT_CLASSES:
-            base_rate = summary_by_key[(profile, baseline, cls, "detected_at_all_rate")]["mean"]
+            key = class_mode_key(cls, mode)
+            base_rate = summary_by_key[(profile, baseline, key, "detected_at_all_rate")]["mean"]
             row = [cls, fmt(base_rate)]
             for v in other_variants:
-                v_rate = summary_by_key[(profile, v, cls, "detected_at_all_rate")]["mean"]
-                p = paired_by_key[(profile, v, cls, "detected_at_all_rate")]
+                v_rate = summary_by_key[(profile, v, key, "detected_at_all_rate")]["mean"]
+                p = paired_by_key[(profile, v, key, "detected_at_all_rate")]
                 ci = f"[{fmt(p['ci95_low'])}, {fmt(p['ci95_high'])}]" if p["mean_diff"] is not None else "n/a"
                 row += [fmt(v_rate), fmt(p["mean_diff"]), ci, p["verdict"]]
             lines.append("| " + " | ".join(row) + " |")
         lines.append("")
+
+    def action_taken_table() -> None:
+        lines.append(f"### Action taken (of detected episodes), profile=`{profile}`")
+        lines.append("")
+        lines.append(
+            "Of episodes detected under the \"any evaluator flagged\" notion, the "
+            "fraction where the fused `recovery_recommendation` actually reached "
+            "RETURN_TO_SAFE_ZONE or higher at or after the first detection - i.e. "
+            "detection that led to a dispatched action, not just an internal "
+            "verdict."
+        )
+        lines.append("")
+        header = ["fault class"] + variants
+        lines.append("| " + " | ".join(header) + " |")
+        lines.append("|" + "|".join(["---"] * len(header)) + "|")
+        for cls in em.FAULT_CLASSES:
+            key = class_mode_key(cls, "any")
+            row = [cls]
+            for v in variants:
+                row.append(fmt(summary_by_key[(profile, v, key, "action_taken_rate")]["mean"]))
+            lines.append("| " + " | ".join(row) + " |")
+        lines.append("")
+
+    def race_table() -> None:
+        lines.append(f"### Consensus vs. local evaluator: who flags first, profile=`{profile}`")
+        lines.append("")
+        lines.append(
+            "Per ground-truth episode (mobility/communication only - the only two "
+            "classes the peer-consensus evaluator can ever vote on), compares "
+            "evaluate_peer_consensus()'s own first-flagged tick against the "
+            "matching local evaluator's (evaluate_mobility()/evaluate_"
+            "communication()) own first-flagged tick, independent of which one "
+            "won the fused decision. `consensus_first_rate` is of episodes where "
+            "BOTH eventually flagged; `mean/median_lead_ticks` is how many ticks "
+            "earlier consensus was, in those cases. `consensus_only_rate`/`local_"
+            "only_rate` are episodes only one of the two ever flagged at all."
+        )
+        lines.append("")
+        header = ["metric"] + variants
+        for cls in ("mobility", "communication"):
+            lines.append(f"**{cls}**")
+            lines.append("")
+            lines.append("| " + " | ".join(header) + " |")
+            lines.append("|" + "|".join(["---"] * len(header)) + "|")
+            for metric in RACE_METRICS:
+                row = [metric]
+                for v in variants:
+                    row.append(fmt(summary_by_key[(profile, v, race_key(cls), metric)]["mean"]))
+                lines.append("| " + " | ".join(row) + " |")
+            lines.append("")
+
+    for profile in profiles:
+        lines.append(f"## {baseline} vs. consensus, profile=`{profile}`")
+        lines.append("")
+
+        headline_table(
+            "system",
+            "Headline A: \"system decision\" detection",
+            "Detection rate = fraction of ground-truth fault episodes where the "
+            "fused `recovery_reason` (what recovery_dispatch() actually acts on) "
+            "named this class at least once. Mean difference and 95% bootstrap CI "
+            "are paired per-seed (`variant - baseline`). Concurrent faults can "
+            "hide a real detection here - see Headline B.",
+        )
+        headline_table(
+            "any",
+            "Headline B: \"any evaluator flagged\" detection",
+            "Same episodes, but detected if ANY of the 7 evaluators (core/"
+            "recovery_manager.h's per-evaluator verdict columns) flagged this "
+            "class that tick, whether or not it won the tick's fused decision. "
+            "This is the fairer comparison when faults overlap - see docs/"
+            "evaluation/README.md.",
+        )
+        lines.append(
+            "**Note on the communication regression**: cause not yet "
+            "determined; a likely factor is teams resting more often under "
+            "consensus (evaluators are silent while resting)."
+        )
+        lines.append("")
+        action_taken_table()
+        race_table()
+
         lines.append("Mission outcome (mean total per run, all teams/incidents):")
         lines.append("")
         header2 = ["metric", f"{baseline}"]
@@ -373,17 +499,19 @@ def render_markdown(variants, baseline, profiles, seeds, ticks, summary_rows, pa
         lines.append(f"### Detail, profile=`{profile}`")
         lines.append("")
         for cls in CLASS_KEYS:
-            lines.append(f"**{cls}**")
-            lines.append("")
-            header3 = ["metric"] + variants
-            lines.append("| " + " | ".join(header3) + " |")
-            lines.append("|" + "|".join(["---"] * len(header3)) + "|")
-            for metric in SCALAR_METRICS:
-                row = [metric]
-                for v in variants:
-                    row.append(fmt(summary_by_key[(profile, v, cls, metric)]["mean"]))
-                lines.append("| " + " | ".join(row) + " |")
-            lines.append("")
+            for mode in DETECTION_MODES:
+                key = class_mode_key(cls, mode)
+                lines.append(f"**{cls}** (detection mode: {mode})")
+                lines.append("")
+                header3 = ["metric"] + variants
+                lines.append("| " + " | ".join(header3) + " |")
+                lines.append("|" + "|".join(["---"] * len(header3)) + "|")
+                for metric in SCALAR_METRICS:
+                    row = [metric]
+                    for v in variants:
+                        row.append(fmt(summary_by_key[(profile, v, key, metric)]["mean"]))
+                    lines.append("| " + " | ".join(row) + " |")
+                lines.append("")
 
     return "\n".join(lines) + "\n"
 

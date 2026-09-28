@@ -13,7 +13,14 @@ per-seed CSVs, `summary_metrics.csv`, `paired_diff.csv`,
 
 Does not change simulator behaviour: it only builds `tron` with different
 pre-existing compile-time flags (`CONSENSUS_ENFORCE`, `FAULT_MODEL_LOADED`)
-and reads the CSV/`--diag` output `tron` already produces.
+and reads the CSV/`--diag` output `tron` already produces, plus one small
+*pure-logging* addition (`core/recovery_manager.h`'s
+`recovery_manager_get_evaluator_verdict()` and the `eval_<name>_reason`/
+`eval_<name>_confidence` CSV columns it feeds, laptop/snapshot.c) that
+exposes each of the 7 recovery evaluators' own verdict per team per tick -
+see "Two notions of detection" below for why that was necessary. Reading
+these getters has no effect on `recovery_manager_step()`'s or
+`recovery_dispatch()`'s own decisions.
 
 ## Running it
 
@@ -36,44 +43,67 @@ Seeds 1-300 are the training range used elsewhere in this repo
 `--force-training-seeds` for a deliberate methodology experiment - never for
 the real report. The shipped exam/benchmark range is 1001-1020.
 
-## What counts as "a detection", and why
+## Two notions of "detection", and why both are reported
 
 See `laptop/tools/eval_metrics.py`'s module docstring for the full mapping
 and rationale; summary:
 
-The CSV never states "the system decided team X has fault class Y"
-directly - `core/recovery_manager.c` fuses up to 7 evaluators (progress,
-stamina, mobility, communication, equipment, the fault predictor, and,
-under `CONSENSUS_ENFORCE`, peer consensus) into ONE
-`RecoveryStatus_t{recommendation, reason, confidence}` per team per tick.
-We reconstruct a detected fault class from `recovery_reason`
-(`RecoveryReason_t`), plus, when the reason is `CONSENSUS_FAULT`, the
-`consensus_tier_mobility`/`consensus_tier_communication` columns to say
-which of the two classes consensus itself elevated to
-`CONSENSUS_TIER_ELEVATED`.
+`core/recovery_manager.c` fuses up to 7 evaluators (progress, stamina,
+mobility, communication, equipment, the fault predictor, and, under
+`CONSENSUS_ENFORCE`, peer consensus) into ONE
+`RecoveryStatus_t{recommendation, reason, confidence}` per team per tick
+(`recovery_select_primary_signal()` picks one winner). That fused
+`recovery_reason` alone cannot answer "did the communication evaluator see
+this fault" when faults overlap: with two classes active on the same team
+the same tick, one evaluator's signal can occupy the fused slot while
+another evaluator also genuinely fired - reading only the fused reason
+would wrongly score the second one as a miss. (An earlier version of this
+tool made exactly that mistake, and separately guessed a now-corrected
+mechanism - `CONSENSUS_CAP_LOCAL_EVALUATORS` - for an observed regression;
+that flag defaults to 0 and is not compiled in by the shipped `rules+
+consensus` build, so it cannot explain anything measured here. Consensus
+only ever *adds* a signal via `evaluate_peer_consensus()`; it never
+suppresses a local evaluator's own verdict in the current build.)
+
+So every fault class is reported under **two** detection notions:
+
+1. **"system decision"** - the fused `recovery_reason` (what
+   `recovery_dispatch()` actually acts on that tick), plus, when it is
+   `CONSENSUS_FAULT`, `consensus_tier_mobility`/`consensus_tier_
+   communication` to say which class consensus itself elevated.
+2. **"any evaluator flagged"** - `core/recovery_manager.h`'s
+   `recovery_manager_get_evaluator_verdict()` per-evaluator columns
+   (`eval_<name>_reason`, one per evaluator, added specifically to resolve
+   this ambiguity): true whenever *some* evaluator relevant to a class said
+   anything other than CONTINUE_MONITORING/NONE, whether or not it won the
+   fused decision. When consensus has both tiers ELEVATED the same tick,
+   both mobility and communication are credited.
 
 Known, load-bearing limitations of this mapping (not bugs in the tool -
 properties of what `recovery_manager.c` actually logs today):
 
-- **mobility** and **communication** have a clean 1:1 `RecoveryReason_t`
-  each, and are the *only* two classes `core/consensus.c` ever votes on
+- **mobility** and **communication** have a clean 1:1 evaluator each
+  (`evaluate_mobility()`/`evaluate_communication()`), and are the *only*
+  two classes `core/consensus.c` ever votes on
   (`CONSENSUS_NUM_VOTED_CLASSES == 2`). Consensus's measurable contribution
   is therefore structurally limited to these two classes - it can never be
   credited with catching a resource, environment, or mission fault.
-- **resource** is approximated by folding `EQUIPMENT_FAULT` and
-  `LOW_STAMINA` together. `recovery_manager.c` itself documents that
-  neither reason is class-exclusive; treat resource-class numbers as
-  directional, not exact.
-- **environment** has no `RecoveryReason_t` at all - no evaluator ever
-  names it as the reason it acted. We deliberately do not invent a proxy
-  for it (every remaining generic reason, `PROGRESS_DEVIATION` and
-  `TEAM_DEGRADED`, is too broad to attribute specifically). Environment
-  will always show 0% detected in this tool's output. That is a genuine
-  finding about `recovery_manager.c` as it stands, not a limitation of the
-  evaluation tool - closing it means adding an environment-specific
-  `RecoveryReason_t` (or an environment evaluator) to `recovery_manager.c`,
-  which is out of this tool's scope (it changes simulator behaviour).
-- **mission** detections come from `MISSION_DELAY` only.
+- **resource** is approximated by folding `evaluate_stamina()`'s
+  `LOW_STAMINA` and `evaluate_equipment()`'s `EQUIPMENT_FAULT` together.
+  `recovery_manager.c` itself documents that neither reason is
+  class-exclusive; treat resource-class numbers as directional, not exact.
+- **environment and mission have no evaluator at all** - no function in
+  `recovery_manager.c` ever names either as the reason it acted. Mission's
+  only nominal `RecoveryReason_t`, `MISSION_DELAY`, is defined in the enum
+  but never actually returned anywhere in `recovery_manager.c` - it is dead
+  code, not a live detector (an earlier version of this tool wrongly
+  treated it as one; it never fires under either variant). We do not
+  invent a proxy for either class (every remaining generic reason,
+  `PROGRESS_DEVIATION`, is too broad to attribute specifically). Both will
+  always show 0% detected in this tool's output. That is a genuine finding
+  about `recovery_manager.c` as it stands, not a limitation of the
+  evaluation tool - closing it means adding a real evaluator, which changes
+  simulator behaviour and is out of this tool's scope.
 - Ground truth is always the CSV's own `fault_active_<class>` columns,
   never something this tool infers.
 
@@ -83,25 +113,44 @@ snapshot row logged before any recovery dispatch runs that tick. Every
 other event type shares a `(team_id, cycle)` with its team's `EVENT_TICK`
 row and would double-count ticks if included.
 
-## Metrics computed (per variant, per fault class)
+## Metrics computed (per variant, per fault class, per detection mode)
 
 - **fault episodes**: contiguous spans of `fault_active_<class> == 1` per
   team, and the % detected at all / within 5 / 10 / 20 ticks of the
-  episode's start (a detection after the episode has already ended does
-  not count as detecting that episode - it is still tracked as a false
-  alarm, see below).
-- **detection latency**: ticks from episode start to first correct
-  detection, median and p90 (over detected episodes only).
+  episode's start. Episodes are scored **once, by their first flagged
+  tick** - a tick after that first hit is never re-scored as a new miss,
+  including the quiet ticks several evaluators deliberately produce once a
+  team is RESTING/heading_to_rest after being dispatched an action (see
+  `evaluate_mobility()`/`evaluate_stamina()`/`evaluate_communication()`/
+  `evaluate_equipment()`'s own comments on this in `recovery_manager.c`).
+  `test_eval_metrics.py`'s `test_detection_survives_post_action_quiet_
+  period` exercises this directly. A flag after the episode has already
+  ended does not count as detecting that episode - it is still tracked as
+  a false alarm, see below.
+- **detection latency**: ticks from episode start to first flagged tick,
+  median and p90 (over detected episodes only).
+- **action taken**: of detected episodes, the fraction where the fused
+  `recovery_recommendation` actually reached `RETURN_TO_SAFE_ZONE` or
+  higher at or after the first detection - "detected" (some evaluator said
+  something) and "acted on" (the team was actually dispatched somewhere)
+  are different things, both reported.
 - **false alarms**: ticks where the class is detected but not active,
   per 1,000 team-ticks, plus the mean length of contiguous false-alarm
   runs.
 - **wrong-class detections**: ticks where the class is active but the
-  system's detected class(es) are entirely disjoint from it (some other
-  class was blamed instead), per 1,000 team-ticks.
+  detected class(es) are entirely disjoint from it (some other class was
+  blamed instead), per 1,000 team-ticks.
 - **mobility/communication concurrency split**: each episode is bucketed
   by how many teams had that class active at the episode's *start* tick
   (`<=2` vs `>2` concurrently-faulted teams), and every metric above is
   recomputed per bucket.
+- **consensus vs. local evaluator race** (mobility/communication only):
+  per episode, compares `evaluate_peer_consensus()`'s own first-flagged
+  tick against the matching local evaluator's own first-flagged tick -
+  `consensus_first_rate` (of episodes where both eventually flagged),
+  `mean`/`median_lead_ticks` (how many ticks earlier consensus was, in
+  those cases), and `consensus_only_rate`/`local_only_rate` (episodes only
+  one of the two ever flagged at all).
 - **mission outcome**: `incidents_resolved` and `stage_completions`, summed
   across all teams from the run's `--diag` stderr output
   (`[DIAG THROUGHPUT] team=... incidents_resolved=... stage_completions=...`,
@@ -161,14 +210,15 @@ a flat-weights C header), wiring this variant up the rest of the way is:
    -DCONSENSUS_ENFORCE=1 -DFAULT_MODEL_LOADED=1 -include <header>` - no
    further changes to `evaluate.py` should be needed unless the header's
    symbol names need a different include mechanism.
-4. Extend `eval_metrics.py`'s `detected_classes()` to map
-   `RECOVERY_REASON_PREDICTED_FAULT` to the AI's per-class output (today it
-   is deliberately left unmapped, since that reason can never fire while
-   `FAULT_MODEL_LOADED` is 0) - likely by adding a per-class predictor
-   score to the CSV rather than only the single collapsed reason, since
-   `recovery_manager.c`'s comment on `evaluate_fault_predictor()` notes it
-   already discards fault_predictor_run()'s 5 independent per-class scores
-   down to one `(confidence, reason)` pair.
+4. Extend `eval_metrics.py`'s `detected_classes_system()`/`detected_
+   classes_any()` to map `RECOVERY_REASON_PREDICTED_FAULT` (and the
+   `eval_fault_predictor_reason` column, already logged) to the AI's
+   per-class output (today deliberately left unmapped, since that reason
+   can never fire while `FAULT_MODEL_LOADED` is 0) - likely by adding a
+   per-class predictor score to the CSV rather than only the single
+   collapsed reason, since `recovery_manager.c`'s comment on `evaluate_
+   fault_predictor()` notes it already discards `fault_predictor_run()`'s
+   5 independent per-class scores down to one `(confidence, reason)` pair.
 
 ## Reproducibility / determinism
 

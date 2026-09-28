@@ -122,4 +122,52 @@ RecoveryAction_t recovery_manager_get_recommendation(uint8_t team_id);
 RecoveryStatus_t recovery_manager_get_status(uint8_t team_id);
 RecoveryMetrics_t recovery_manager_get_metrics(void);
 
+/*
+ * Per-evaluator verdicts (evaluation harness support - docs/evaluation/
+ * README.md). recovery_manager_step()'s fused RecoveryStatus_t collapses
+ * up to 7 evaluators (recovery_select_primary_signal() picks one) into a
+ * single (reason, confidence) per team per tick - which loses information
+ * a fault-detection evaluation needs: with concurrent faults, one
+ * evaluator's signal can occupy the fused slot while another evaluator
+ * also fired this same tick (e.g. a peer-consensus CONSENSUS_FAULT for
+ * mobility winning the fused slot while evaluate_communication() also
+ * flagged a real communication fault the same tick - the fused reason
+ * alone would make that look like a missed communication detection).
+ * These getters expose each evaluator's own, unfused (reason, confidence)
+ * for the tick just computed by recovery_manager_step(), so a caller can
+ * ask "did evaluator X flag anything" independently of which one won.
+ *
+ * Pure logging: reading these has no effect on recovery_manager_step()'s
+ * or recovery_dispatch()'s own decisions - it does not change simulator
+ * behaviour, only what can be observed about it.
+ *
+ * Slot indices are fixed (RECOVERY_MANAGER_EVAL_SLOT_COUNT total)
+ * regardless of CONSENSUS_ENFORCE, so the CSV schema laptop/snapshot.c
+ * writes is identical across builds: RECOVERY_MANAGER_EVAL_PEER_CONSENSUS
+ * reads back {RECOVERY_REASON_NONE, -1.0f} (confidence -1, matching
+ * CONSENSUS_TIER_NOT_BUILT's existing "not built in this binary"
+ * convention - never a real evaluator's own output) when CONSENSUS_ENFORCE
+ * is 0, since that evaluator does not exist in that build.
+ */
+enum
+{
+    RECOVERY_MANAGER_EVAL_PROGRESS = 0,
+    RECOVERY_MANAGER_EVAL_STAMINA,
+    RECOVERY_MANAGER_EVAL_MOBILITY,
+    RECOVERY_MANAGER_EVAL_COMMUNICATION,
+    RECOVERY_MANAGER_EVAL_EQUIPMENT,
+    RECOVERY_MANAGER_EVAL_FAULT_PREDICTOR,
+    RECOVERY_MANAGER_EVAL_PEER_CONSENSUS,
+    RECOVERY_MANAGER_EVAL_SLOT_COUNT
+};
+
+typedef struct
+{
+    RecoveryReason_t reason;
+    float confidence;
+} RecoveryEvaluatorVerdict_t;
+
+RecoveryEvaluatorVerdict_t recovery_manager_get_evaluator_verdict(
+    uint8_t team_id, uint8_t evaluator_slot);
+
 #endif
