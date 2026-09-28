@@ -23,6 +23,7 @@
 #include "mission_execution_twin.h"
 #include "consensus.h"
 #include "fault_predictor_features.h"
+#include "feature_pack.h"
 
 uint8_t g_simulation_trace_enabled = 1;
 static uint8_t g_prev_anomaly_detected[NUM_TEAMS];
@@ -140,6 +141,18 @@ void simulation_step(void) //simulation
          * tick's. */
         for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
             fault_predictor_features_update_tick(team_id);
+
+        /* Pre-dispatch feature-vector cache (core/feature_pack.h's own
+         * doc on why this exists): must run after the history-feature
+         * loop just above (so the cached vector includes this tick's
+         * stall/delta values) and before recovery_manager_step(), whose
+         * evaluate_fault_predictor() is this cache's reader this same
+         * tick - any later and it would read last tick's cache instead.
+         * Nothing between here and Pass 1's snapshot_record() calls
+         * below mutates team/incident/twin state, so this cached vector
+         * is exactly what that tick's training-CSV row will reflect. */
+        for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+            feature_pack_cache_tick(team_id);
 
         recovery_manager_step();
     }

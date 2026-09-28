@@ -156,3 +156,28 @@ void feature_pack_build_vector(uint8_t team_id, float out_scaled[FEATURE_SPEC_NU
     for(i = 0; i < FEATURE_SPEC_NUM_INPUTS; i++)
         out_scaled[i] = (raw[i] - FEATURE_SPEC_SCALER_MEAN[i]) / FEATURE_SPEC_SCALER_STD[i];
 }
+
+/* Pre-dispatch snapshot cache - see feature_pack.h's own doc on why this
+   exists and exactly where it is filled/read. Zero-initialized, so a
+   read before the first feature_pack_cache_tick() call for a team is an
+   all-zero vector, not garbage. */
+static float g_feature_vector_cache[NUM_TEAMS][FEATURE_SPEC_NUM_INPUTS];
+
+void feature_pack_cache_tick(uint8_t team_id)
+{
+    if(team_id >= NUM_TEAMS)
+        return;
+
+    feature_pack_build_vector(team_id, g_feature_vector_cache[team_id]);
+}
+
+void feature_pack_get_cached_vector(uint8_t team_id, float out_scaled[FEATURE_SPEC_NUM_INPUTS])
+{
+    if(team_id >= NUM_TEAMS)
+    {
+        memset(out_scaled, 0, FEATURE_SPEC_NUM_INPUTS * sizeof(float));
+        return;
+    }
+
+    memcpy(out_scaled, g_feature_vector_cache[team_id], FEATURE_SPEC_NUM_INPUTS * sizeof(float));
+}

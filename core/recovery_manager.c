@@ -1280,8 +1280,8 @@ static RecoverySignal_t evaluate_fault_predictor(
      * values. Not yet a behavioural gate on anything - FAULT_MODEL_
      * LOADED is 0, so fault_predictor_run() ignores its input and always
      * returns all-zero scores regardless - but the check belongs here,
-     * at the one call site that builds and uses this vector, so it is
-     * already in place for when a real model lands. */
+     * at the one call site that uses this vector, so it is already in
+     * place for when a real model lands. */
     if(mission_link_map_rows_received() < MISSION_LINK_MAP_HEIGHT ||
        mission_link_district_rows_received() < MISSION_LINK_MAP_HEIGHT)
     {
@@ -1290,7 +1290,17 @@ static RecoverySignal_t evaluate_fault_predictor(
     }
     else
     {
-        feature_pack_build_vector(team->team_id, feature_vector);
+        /* Reads core/simulation.c's pre-dispatch cache (feature_pack_
+         * cache_tick(), called just before recovery_manager_step() this
+         * same tick), not a fresh feature_pack_build_vector() call here -
+         * see feature_pack.h's own doc on why: this function runs before
+         * recovery_dispatch(), so building fresh here would already be
+         * pre-dispatch too, but reading the cache instead makes that
+         * invariant explicit and shared with whatever else reads the
+         * same tick's cached vector (laptop/tools/feature_pack_dump.c),
+         * rather than every reader needing its own correctly-timed call
+         * site. */
+        feature_pack_get_cached_vector(team->team_id, feature_vector);
         scores = fault_predictor_run(feature_vector);
     }
 

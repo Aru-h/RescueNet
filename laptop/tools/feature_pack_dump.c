@@ -4,9 +4,13 @@
  * random-fault-profile mission through the SAME simulation + snapshot.c
  * pipeline `tron` itself uses - so tron_snapshot_dataset.csv it writes is
  * the real training CSV, not a special-purpose one - and, for every team
- * on every tick, ALSO dumps core/feature_pack.c's feature_pack_build_
- * vector() output - the exact same scaled contract vector a board would
- * compute - to a side CSV keyed by (run_id, team_id, cycle).
+ * on every tick, ALSO dumps core/feature_pack.c's pre-dispatch cached
+ * vector (feature_pack_get_cached_vector() - the same one core/
+ * simulation.c fills every tick before recovery_dispatch() runs and
+ * evaluate_fault_predictor() consumes, NOT a fresh feature_pack_build_
+ * vector() call after the tick has fully finished, which would read
+ * post-dispatch state instead - see core/feature_pack.h's own doc) to a
+ * side CSV keyed by (run_id, team_id, cycle).
  *
  * laptop/tools/feature_pack_parity_test.py compares this dump against
  * data_prep.py's own reconstruction of the same rows from tron_snapshot_
@@ -96,7 +100,12 @@ int main(int argc, char **argv)
             {
                 float feat[FEATURE_SPEC_NUM_INPUTS];
 
-                feature_pack_build_vector(team_id, feat);
+                /* The cache core/simulation.c filled this tick, before
+                   recovery_dispatch() ran - the exact same pre-dispatch
+                   snapshot evaluate_fault_predictor() used this tick, not
+                   a fresh post-dispatch build (see feature_pack.h's own
+                   doc on why those can differ). */
+                feature_pack_get_cached_vector(team_id, feat);
 
                 fprintf(ff, "%u,%u,%u", (unsigned)run_id, (unsigned)team_id, (unsigned)t);
                 for(i = 0u; i < FEATURE_SPEC_NUM_INPUTS; i++)

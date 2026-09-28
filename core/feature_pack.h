@@ -43,4 +43,52 @@
  */
 void feature_pack_build_vector(uint8_t team_id, float out_scaled[FEATURE_SPEC_NUM_INPUTS]);
 
+/*
+ * Builds team_id's current-tick vector (feature_pack_build_vector(),
+ * above) and stores it in a per-team cache, overwriting whatever this
+ * tick's earlier call cached.
+ *
+ * Call site: core/simulation.c's simulation_step(), in the per-team loop
+ * right before recovery_manager_step() is called - the same team/
+ * incident/twin state laptop/snapshot.c's own per-tick row will read a
+ * little later in that same tick's Pass 1 (nothing mutates that state in
+ * between: update_all_incident_work()/update_all_passive_effects() and
+ * this tick's allocate_all_incidents() have already run by this point,
+ * and recovery_dispatch() - Pass 2, the thing that actually changes an
+ * assignment/status in response to a recommendation - has not). Placed
+ * before recovery_manager_step() specifically, not literally inside
+ * Pass 1's own loop, because evaluate_fault_predictor() (called from
+ * inside recovery_manager_step()) is this cache's first reader every
+ * tick - filling it any later would make evaluate_fault_predictor() read
+ * last tick's cached vector instead of this tick's.
+ *
+ * Why cache at all, instead of evaluate_fault_predictor() just calling
+ * feature_pack_build_vector() itself (as it did before this function
+ * existed): a team's assignment/status can still change later the same
+ * tick, in recovery_dispatch() (Pass 2) - task abandonment, a status
+ * change to RESTING, a fresh allocate_all_incidents() call for
+ * reallocation. Those are the recovery system's OWN decisions about a
+ * suspected fault, not the team's independent situation; letting the
+ * fault predictor's input reflect them would be a back-door hint about
+ * the very thing it's trying to predict, and would make it less
+ * independent of the other evaluators feeding the same recommendation.
+ * Caching the pre-dispatch vector keeps the model judging the team's own
+ * situation, matching what the training CSV's row for this tick already
+ * captures (both are Pass-1-timed, by construction, not by coincidence).
+ */
+void feature_pack_cache_tick(uint8_t team_id);
+
+/*
+ * Copies team_id's cached vector (feature_pack_cache_tick(), above) into
+ * out_scaled. Consumers: core/recovery_manager.c's evaluate_fault_
+ * predictor() (the real, on-board consumer) and laptop/tools/feature_
+ * pack_dump.c (the parity-test consumer - reads the exact same pre-
+ * dispatch snapshot evaluate_fault_predictor() would have used that
+ * tick, rather than calling feature_pack_build_vector() itself after a
+ * tick has fully finished, which would read post-dispatch state instead).
+ * Reads all zero if feature_pack_cache_tick() was never called for
+ * team_id (e.g. before the first tick).
+ */
+void feature_pack_get_cached_vector(uint8_t team_id, float out_scaled[FEATURE_SPEC_NUM_INPUTS]);
+
 #endif /* FEATURE_PACK_H */
