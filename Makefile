@@ -342,43 +342,43 @@ check-board-single-link: check-board-single-compile
 		echo "  fallback mode legitimately having no board-side debug sink compiled in. Run this"; \
 		echo "  check with board/STM32N6570-DK/vendor/mtk3_bsp2 present (real-BSP mode) for the"; \
 		echo "  real cross-file link check."; \
-		exit 0; \
-	fi
-	@echo "check-board-single-link: partial-linking every $(BOARD_OBJ_DIR_SINGLE)/*.o together to check for undefined cross-file references"
-	@objs="$$(ls $(BOARD_OBJ_DIR_SINGLE)/*.o 2>/dev/null)"; \
-	if [ -z "$$objs" ]; then \
-		echo "check-board-single-link: no objects in $(BOARD_OBJ_DIR_SINGLE) -- check-board-single-compile did not run?"; \
-		exit 1; \
-	fi; \
-	$(ARM_NM) -o $$objs | awk -F'[: \t]+' '$$2=="U" {print $$3}' | sort -u > $(BOARD_OBJ_DIR_SINGLE)/.undefined_syms.txt; \
-	$(ARM_NM) -o $$objs | awk -F'[: \t]+' '$$2!="U" && NF>=4 {print $$4}' | sort -u > $(BOARD_OBJ_DIR_SINGLE)/.defined_syms.txt; \
-	comm -23 $(BOARD_OBJ_DIR_SINGLE)/.undefined_syms.txt $(BOARD_OBJ_DIR_SINGLE)/.defined_syms.txt > $(BOARD_OBJ_DIR_SINGLE)/.unresolved_syms.txt; \
-	libc_a="$$($(ARM_CC) $(ARM_TARGET_FLAGS) -print-file-name=libc.a)"; \
-	libm_a="$$($(ARM_CC) $(ARM_TARGET_FLAGS) -print-file-name=libm.a)"; \
-	libgcc_a="$$($(ARM_CC) $(ARM_TARGET_FLAGS) -print-file-name=libgcc.a)"; \
-	: > $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
-	for lib in "$$libc_a" "$$libm_a" "$$libgcc_a"; do \
-		if [ -f "$$lib" ]; then \
-			$(ARM_NM) "$$lib" 2>/dev/null | awk -F'[: \t]+' 'NF>=3 && $$2 ~ /^[A-Za-z]$$/ && $$2!="U" && $$2!="u" {print $$3}' >> $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+	else \
+		echo "check-board-single-link: partial-linking every $(BOARD_OBJ_DIR_SINGLE)/*.o together to check for undefined cross-file references"; \
+		objs="$$(ls $(BOARD_OBJ_DIR_SINGLE)/*.o 2>/dev/null)"; \
+		if [ -z "$$objs" ]; then \
+			echo "check-board-single-link: no objects in $(BOARD_OBJ_DIR_SINGLE) -- check-board-single-compile did not run?"; \
+			exit 1; \
 		fi; \
-	done; \
-	if [ -d "$(BSP_DIR)" ]; then \
-		grep -rhoE '^[[:space:]]*IMPORT[[:space:]]+[A-Za-z_][A-Za-z0-9_ ]*\*?[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(' $(BSP_DIR) 2>/dev/null \
-			| sed -E 's/^.*[[:space:]\*]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\($$/\1/' \
-			>> $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
-	fi; \
-	sort -u $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt -o $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
-	comm -23 $(BOARD_OBJ_DIR_SINGLE)/.unresolved_syms.txt $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt > $(BOARD_OBJ_DIR_SINGLE)/.bad_undefined_syms.txt; \
-	if [ -s $(BOARD_OBJ_DIR_SINGLE)/.bad_undefined_syms.txt ]; then \
-		echo ""; \
-		echo "check-board-single-link: FAILED -- undefined reference(s) to symbol(s) that should be"; \
-		echo "defined somewhere in core/*.c or board/STM32N6570-DK/*.c, but aren't in this build:"; \
-		echo ""; \
-		sed 's/^/    /' $(BOARD_OBJ_DIR_SINGLE)/.bad_undefined_syms.txt; \
-		echo ""; \
-		exit 1; \
-	fi; \
-	echo "check-board-single-link: real partial link of $$(echo $$objs | wc -w) objects clean"
+		$(ARM_NM) -o $$objs | awk -F'[: \t]+' '$$2=="U" {print $$3}' | sort -u > $(BOARD_OBJ_DIR_SINGLE)/.undefined_syms.txt; \
+		$(ARM_NM) -o $$objs | awk -F'[: \t]+' '$$2!="U" && NF>=4 {print $$4}' | sort -u > $(BOARD_OBJ_DIR_SINGLE)/.defined_syms.txt; \
+		comm -23 $(BOARD_OBJ_DIR_SINGLE)/.undefined_syms.txt $(BOARD_OBJ_DIR_SINGLE)/.defined_syms.txt > $(BOARD_OBJ_DIR_SINGLE)/.unresolved_syms.txt; \
+		libc_a="$$($(ARM_CC) $(ARM_TARGET_FLAGS) -print-file-name=libc.a)"; \
+		libm_a="$$($(ARM_CC) $(ARM_TARGET_FLAGS) -print-file-name=libm.a)"; \
+		libgcc_a="$$($(ARM_CC) $(ARM_TARGET_FLAGS) -print-file-name=libgcc.a)"; \
+		: > $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+		for lib in "$$libc_a" "$$libm_a" "$$libgcc_a"; do \
+			if [ -f "$$lib" ]; then \
+				$(ARM_NM) "$$lib" 2>/dev/null | awk -F'[: \t]+' 'NF>=3 && $$2 ~ /^[A-Za-z]$$/ && $$2!="U" && $$2!="u" {print $$3}' >> $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+			fi; \
+		done; \
+		if [ -d "$(BSP_DIR)" ]; then \
+			grep -rhoE '^[[:space:]]*IMPORT[[:space:]]+[A-Za-z_][A-Za-z0-9_ ]*\*?[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(' $(BSP_DIR) 2>/dev/null \
+				| sed -E 's/^.*[[:space:]\*]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\($$/\1/' \
+				>> $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+		fi; \
+		sort -u $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt -o $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt; \
+		comm -23 $(BOARD_OBJ_DIR_SINGLE)/.unresolved_syms.txt $(BOARD_OBJ_DIR_SINGLE)/.expected_external.txt > $(BOARD_OBJ_DIR_SINGLE)/.bad_undefined_syms.txt; \
+		if [ -s $(BOARD_OBJ_DIR_SINGLE)/.bad_undefined_syms.txt ]; then \
+			echo ""; \
+			echo "check-board-single-link: FAILED -- undefined reference(s) to symbol(s) that should be"; \
+			echo "defined somewhere in core/*.c or board/STM32N6570-DK/*.c, but aren't in this build:"; \
+			echo ""; \
+			sed 's/^/    /' $(BOARD_OBJ_DIR_SINGLE)/.bad_undefined_syms.txt; \
+			echo ""; \
+			exit 1; \
+		fi; \
+		echo "check-board-single-link: real partial link of $$(echo $$objs | wc -w) objects clean"; \
+	fi
 
 # Positive counterpart to check-consensus-multiboard-untouched's negative
 # assertion: the single-board DK build MUST contain vbus_*/consensus_*
