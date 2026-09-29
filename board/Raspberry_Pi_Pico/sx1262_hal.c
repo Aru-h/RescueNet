@@ -673,7 +673,7 @@ static int sx1262_dio1_is_asserted(void)
  * until ONE reception, then drops to standby RC). Converged onto the
  * DK's approach (board/STM32N6570-DK/sx1262_hal.c's own
  * sx1262_enter_rx()) rather than the other way around - see
- * ARCHITECTURE.md's Open Architectural Questions / CHANGELOG.md for
+ * docs/architecture/ARCHITECTURE.md's Open Architectural Questions / CHANGELOG.md for
  * why this divergence existed and was flagged for reconciliation.
  *
  * Called both to first enter RX (from sx1262_hal_init() below) and to
@@ -838,7 +838,7 @@ void sx1262_rx_poll(void)
  * called from lora_spi_transmit() and its RX poll function instead of
  * from its own sx1262_hal_init(). That lazy/guarded pattern exists on
  * the DK for a reason tangled up with a separate, already-flagged
- * DK-vs-Pico RX re-arm difference (see ARCHITECTURE.md) that's out of
+ * DK-vs-Pico RX re-arm difference (see docs/architecture/ARCHITECTURE.md) that's out of
  * scope here. This board's sx1262_hal_init() is already only ever
  * called once, at bring-up (confirmed in main_board.c), and already
  * unconditionally calls sx1262_enter_rx() at its own end - so the

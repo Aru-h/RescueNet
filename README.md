@@ -1,89 +1,154 @@
-# RESTING<->EN_ROUTE bounce fixes
+# tron — REMCE rescue-coordination system
 
-4 files changed, all in `core/`: `recovery_manager.c`, `mission_execution_twin.c`,
-`team.c`, `allocator.c`. Diffs are the `.diff` files; full fixed sources are
-the `.c` files (drop them into `core/` and rebuild with `make tron`).
+A decentralized, fault-tolerant disaster-response coordination system built
+for the TRON Programming Contest 2026. Ten specialist response teams
+(search, medical, extraction, perimeter, support) are allocated across
+incidents in a procedurally generated city using CBBA (Consensus-Based
+Bundle Algorithm), with no central coordinator: teams reach a shared plan
+by exchanging bids over a peer-to-peer link. A digital-twin watchdog on
+each team compares expected vs. actual behaviour to detect faults
+(communication, mobility, resource, environment, mission), peer consensus
+cross-checks those detections against what other teams observed, and an
+AI fault predictor (in progress on a separate branch) is layered in behind
+a simplex architecture so it can never make a decision unilaterally. The
+same core logic (`core/`) runs identically on a laptop, for development
+and dataset generation, and on a real STM32N6570-DK board running
+µT-Kernel 3.0.
 
-## What each fix addresses
+## Architecture
 
-1. **`recovery_manager.c` - stale escalation surviving reassignment.**
-   The recovery manager's escalation/hysteresis state is deliberately sticky
-   across ticks (anti-flap). But it could survive a team's assignment
-   genuinely changing (a "steal a resting team" reassignment, or a natural
-   RESTING->AVAILABLE promotion) and get blindly re-applied, cancelling a
-   brand-new legitimate assignment. Fix: track each team's last assignment/
-   status and reset escalation to CONTINUE_MONITORING when either changes.
-   This is the fix for the original repro: `./tron 7 1 5000`, team 8,
-   ticks ~126-130.
+- **Single board, 10 teams.** The submission build
+  (`DK_SINGLE_BOARD_FLAGS` in the `Makefile`) runs all 10 teams on one
+  STM32N6570-DK. Team-to-team messages go over an in-memory virtual bus
+  (`core/vbus.c`) rather than a radio link; the multi-board LoRa path
+  (`core/lora_*.c`, `board/STM32N6570-DK/sx1262_hal.c`,
+  `board/Raspberry_Pi_Pico/`) still exists in the code and is exercised by
+  its own two-board harness targets, but is not what this build ships.
+- **Task allocation: CBBA.** `core/cbba.c` implements the Consensus-Based
+  Bundle Algorithm — each team builds a bundle of tasks by bidding and
+  reconciles conflicts with peers, with no central allocator.
+- **Fault injection.** `core/fault_injector.c` and `core/fault_config.c`
+  inject configurable communication/mobility/resource/environment/mission
+  faults into a run, driving both the training dataset and the detection
+  evaluation.
+- **Fault detection, three layers:**
+  - *Rules* — a digital-twin watchdog (`core/mission_execution_twin.c`,
+    `core/watchdog.c`) compares each team's expected vs. actual state and
+    raises evidence across 7 channels.
+  - *Consensus* — `core/consensus.c` lets teams corroborate or contest
+    each other's fault reports from what their own radio hears, adding
+    robustness against a single faulty (or faking) self-report. See
+    [`docs/architecture/CONSENSUS_DESIGN.md`](docs/architecture/CONSENSUS_DESIGN.md).
+  - *AI* — a float32 MLP fault predictor (`core/fault_predictor.c`),
+    gated by the `FAULT_MODEL_LOADED` flag so it stays inert (all-zero
+    scores) until a trained model is exported. Being added on a separate
+    branch; not active in this build.
+- **Evaluation tooling** (`laptop/tools/evaluate.py`, `make evaluate`)
+  measures whether each layer actually improves fault detection and
+  mission outcome over a rules-only baseline, with paired per-seed
+  comparisons and bootstrap confidence intervals.
+- **Laptop dashboard** (`laptop/tools/app.py`) drives and visualizes a run
+  in three modes — live simulation, replay of a recorded run, or connected
+  to the real board — including a drag-and-drop manual override of team
+  assignments in simulation mode.
 
-2. **`mission_execution_twin.c` - one-tick "double advance" on mission reset.**
-   When a team's mission twin resets (new assignment), it correctly syncs
-   `expected` to the team's real position, then *unconditionally* advances
-   the expected position one more step the same tick - permanently putting
-   `expected` one tick ahead of `actual` for the rest of the mission. Invisible
-   noise on long missions, but a large fraction of total mission length on
-   short ones - enough to trip `evaluate_progress()`'s deviation threshold and
-   force a false RETURN_TO_SAFE_ZONE. Fix: skip that extra advance on the
-   exact tick of reset.
+Full technical detail: [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md).
 
-3. **`recovery_manager.c` + `team.c` + `allocator.c` - fault-driven promotion
-   race (only shows up under active fault injection, e.g.
-   `--fault-profile combined`).**
-   - `recovery_manager.c`: `evaluate_mobility`, `evaluate_communication`, and
-     `evaluate_equipment` had no exemption for a team already RESTING/heading
-     to rest, so they kept re-deriving the same "go to safe zone" signal every
-     tick a fault was active, even once redundant.
-   - `team.c` / `allocator.c`: the real bug. `team_set_available()`'s RESTING
-     -> AVAILABLE promotion (and the separate "steal a resting team for a
-     CRITICAL incident" path in `allocator.c`) only ever checked stamina/
-     equipment - both blind to an independent, still-active mobility/
-     communication/resource fault. The moment either path promoted/stole a
-     team, the recovery manager's now-fresh (correct, not stale) recommendation
-     sent it right back, faster than the fault could clear. Fixed by gating
-     both on `recovery_manager_get_recommendation()`, checking for **both**
-     `RETURN_TO_SAFE_ZONE` and `LOCAL_RECOVERY` (the latter gets the identical
-     dispatch treatment once a team reaches AVAILABLE - confirmed by reading
-     `recovery_dispatch()` itself. This took two iterations: the
-     `RETURN_TO_SAFE_ZONE`-only version had **zero measured effect**, because
-     `recovery_manager` downgrades that action to `LOCAL_RECOVERY` for a team
-     still in the RESTING/RECOVERY stage - so the literal value the gate
-     checked for essentially never appears for the population it needed to
-     catch).
+## Repo layout
 
-## How to test
+| Path | What's there |
+|---|---|
+| `core/` | Portable C simulation/coordination core — CBBA, consensus, fault injection/detection, LoRa crypto and framing. Builds identically for the laptop and the board. |
+| `laptop/` | Laptop-only entry point (`main.c`), dataset snapshot writer (`snapshot.c`), and `laptop/tools/` — the dashboard, evaluation harness, and every `make check-*` selftest. |
+| `board/STM32N6570-DK/` | Single-board submission target's board-specific code (mission link task, SX1262 HAL, debug). |
+| `board/Raspberry_Pi_Pico/` | Second-board target for the multi-board LoRa path (not used by the submission build, kept for that path's own harness/tests). |
+| `tron_board/` | The STM32CubeIDE project for the physical board (`.project`/`.cproject`, HAL/CMSIS drivers, FSBL). |
+| `docs/` | Design docs, evaluation results, and research notes — see [`docs/README.md`](docs/README.md) for the index. |
+| `data_prep.py`, `generate_feature_spec.py`, `feature_spec.json` | The 74-input feature contract for the AI fault predictor: dataset preparation and the C/Python feature-spec generation, kept in sync by `make check-feature-spec-fresh`. |
+| `Makefile` | Every build and `make check-*` target for the laptop, board, and Pico builds. |
 
-Bounce-detection approach used throughout this session: run with `--trace`,
-watch for a team's status going `RESTING(3) -> anything -> RESTING(3)` again
-within a handful of ticks. A python sketch (`bounce_check.py` logic, not
-included here) parsed:
+## Quick start
+
+### Laptop simulator + dashboard
 
 ```
-[DIAG] tick=<n> team=<id> status <a>->3
-[DIAG] tick=<n> team=<id> status 3-><a>
+pip install -r requirements.txt
+make tron                              # builds ./tron
+
+# Dashboard, simulation-only (no real board needed):
+SIM_ONLY=1 python laptop/tools/app.py       # macOS/Linux
+python laptop/tools/app.py --no-hardware    # Windows, or as an explicit flag anywhere
 ```
 
-and flagged any team whose RESTING exit and next RESTING re-entry were within
-a small tick window (I used 6). Recommend testing:
+The dashboard supports live simulation, replay of a recorded run, and a
+real-board connection, plus a drag-and-drop manual override of team
+assignments while in simulation mode.
 
-- **No fault profile** (`./tron <seed> 1 <ticks>`), many seeds: should be
-  **zero** bounces after fixes 1+2 alone - this was the original ask and was
-  confirmed clean across 15 seeds / 4000 ticks each in this session.
-- **`--fault-profile combined`**, many seeds/ticks: won't be fully zero (some
-  legitimate fault-driven RESTING<->EN_ROUTE activity is arguably correct
-  behavior while a fault is genuinely unresolved), but should be dramatically
-  lower than the unfixed baseline. In this session: seed 1, 4000 ticks went
-  1340 -> 335 (fixes 1+2) -> 297 (evaluator carve-outs alone, ~no help) -> 115
-  (once the team.c/allocator.c gates correctly checked LOCAL_RECOVERY too).
-  That last number was **not** verified at scale - this is exactly the piece
-  worth testing on more seeds/ticks than I had budget for here.
+### Board bring-up (STM32N6570-DK)
 
-Things worth specifically checking at scale:
-- Does the combined-fault bounce count trend toward zero as tick count grows,
-  or plateau at some nonzero rate? A nonzero plateau might be legitimate
-  (team stuck oscillating while a single long-duration fault persists) or
-  might indicate a fourth variant I didn't find.
-- Any *other* evaluator/dispatch-action combination (not mobility/
-  communication/equipment/LOCAL_RECOVERY/RETURN_TO_SAFE_ZONE) still producing
-  tight bounces - `evaluate_progress` and `evaluate_stamina` weren't touched
-  by fix 3 and could in principle have the same class of gap under fault
-  conditions, though I didn't find evidence of it in the seeds I checked.
+The only currently verified boot path is **DEV boot via the `DevRam`
+STM32CubeIDE debug configuration** (the Application loaded straight into
+SRAM by the debugger). Standalone Flash Boot hangs at the FSBL →
+Application handoff and is open with ST as support case 00269955. See
+[`docs/DK_DEMO_LAUNCH.md`](docs/DK_DEMO_LAUNCH.md) for the full checklist:
+boot switch positions, the `DevRam` debug configuration, and known rough
+edges.
+
+### Evaluation
+
+```
+make evaluate                          # seeds 1001-1020, 3000 ticks, rules vs rules+consensus
+```
+
+Results are written to `build/evaluate/` and copied to
+[`docs/evaluation/RESULTS.md`](docs/evaluation/RESULTS.md). See
+[`docs/evaluation/README.md`](docs/evaluation/README.md) for options and
+what the harness actually measures.
+
+### Dataset generation
+
+```
+make tron_snapshot_dataset.csv         # or: ./tron <seed> <world-count> <ticks> --fault-profile=combined
+python data_prep.py tron_snapshot_dataset.csv
+```
+
+`data_prep.py` builds the 74-input feature matrix used to train the AI
+fault predictor and enforces the ground-truth-leak guards described in
+[`docs/ml/FEATURE_CONTRACT_DESIGN.md`](docs/ml/FEATURE_CONTRACT_DESIGN.md). Read
+[`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) before training on any
+previously generated CSV — several dataset-affecting fixes landed during
+development.
+
+### AI training / export
+
+The AI fault predictor's training and export pipeline is being developed
+on a separate branch; this branch ships with `FAULT_MODEL_LOADED=0` (the
+predictor returns all-zero scores) so dataset generation stays
+unaffected. See [`docs/ml/FEATURE_CONTRACT_DESIGN.md`](docs/ml/FEATURE_CONTRACT_DESIGN.md)
+for the feature contract the model is trained against.
+
+## Test / check commands
+
+```
+make                                        # build ./tron and label_snapshots
+make check-selftests                        # all laptop/tools selftests
+make check-live-override-noop-regression    # dashboard override is a byte-identical no-op on the dataset
+make check-consensus-shadow-regression      # consensus doesn't change pre-existing CSV columns
+make check-single-board-dk-harness          # 10 teams + virtual bus + consensus + mission link, single board
+make check-board-single                     # single-board DK compile/link/symbol flags (needs arm-none-eabi-gcc)
+make check-cubeide-single-flags             # tron_board's CubeIDE project matches DK_SINGLE_BOARD_FLAGS
+make check-dashboard-csrf-selftest          # dashboard API CSRF/content-type hardening
+make check-dashboard-e2e                    # browser end-to-end check (needs Playwright + a browser)
+```
+
+`check-board-single` needs an ARM cross-compiler (`arm-none-eabi-gcc`),
+and `check-dashboard-e2e` needs
+[`laptop/tools/requirements-dashboard-dev.txt`](laptop/tools/requirements-dashboard-dev.txt)'s
+Playwright plus a fetched browser — see that file and each target's
+Makefile comment for setup. Neither runs in every environment.
+
+## Known limitations
+
+See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for known behaviours
+and gaps in the dataset, the core simulation, the board firmware, and the
+dashboard — read this before training on the CSV or judging a live demo.

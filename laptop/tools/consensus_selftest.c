@@ -1,4 +1,4 @@
-/* Unit tests for core/consensus.c (CONSENSUS_DESIGN.md 7.9 and 7.11).
+/* Unit tests for core/consensus.c (docs/architecture/CONSENSUS_DESIGN.md 7.9 and 7.11).
  * Build: make check-consensus-selftest
  *
  * No simulation runs here. The virtual bus is the real one (core/vbus.c);

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measurement driver for peer consensus (CONSENSUS_DESIGN.md 7.2 and D1).
+"""Measurement driver for peer consensus (docs/architecture/CONSENSUS_DESIGN.md 7.2 and D1).
 
 Builds the scenario binary once per compile-time variant and runs the
 `table` and `compare` modes of laptop/tools/consensus_scenario_test.c in

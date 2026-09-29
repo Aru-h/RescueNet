@@ -12,7 +12,7 @@
 #include "recovery_manager_config.h"
 
 /*
- * Peer consensus, see CONSENSUS_DESIGN.md. Section numbers in the comments
+ * Peer consensus, see docs/architecture/CONSENSUS_DESIGN.md. Section numbers in the comments
  * below refer to that document.
  *
  * Hard rule: this file never reads team->fault_state. Its only inputs are

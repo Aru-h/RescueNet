@@ -16,7 +16,7 @@ void move_all_teams(void);
  * without ever reading fault_state itself. */
 uint8_t team_radio_emitted(const TeamState_t *team);
 
-/* Scenario tests only (CONSENSUS_DESIGN.md 7.2): a communication fault of
+/* Scenario tests only (docs/architecture/CONSENSUS_DESIGN.md 7.2): a communication fault of
  * severity s emits with probability 1/(s+1) per tick from a dedicated RNG
  * instead of on every (s+1)-th tick. Compiled out unless
  * TEAM_TEST_RANDOM_EMISSION is nonzero. */

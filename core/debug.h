@@ -91,7 +91,7 @@ void debug_emit_static_map_if_changed(void);
  * itself has already concluded (the recovery manager's degraded flag,
  * peer consensus ELEVATED tier) is used to reject a team as
  * unavailable, the same ground-truth-vs-observed distinction
- * CONSENSUS_DESIGN.md draws everywhere else in this project.
+ * docs/architecture/CONSENSUS_DESIGN.md draws everywhere else in this project.
  *
  * Lifecycle once applied - three states, visible live off LIVEFRAME's
  * per-team override/override_incident_id/has_dest/dest_id and the

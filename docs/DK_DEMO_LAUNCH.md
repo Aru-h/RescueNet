@@ -2,6 +2,8 @@
 
 Audience: whoever is starting the single-board demo on real hardware. This is the **only** supported boot path for the demo right now — standalone Flash Boot hangs at the FSBL→Application handoff (see [Known limitation E.18](../KNOWN_LIMITATIONS.md) and the full diagnosis report). Follow these steps exactly; skipping the loader-init or reset-mode settings below reproduces failures we already hit and fixed once.
 
+Flash Boot is also open with ST as support case **00269955**.
+
 ## 1. Boot switch position
 
 Set **SW1 (BOOT1) = right/ON, SW2 (BOOT0) = left/OFF** (DEV boot). Verify it: press the black NRST button — **LED2 must turn red**. If it doesn't, the board is not actually in DEV boot and nothing below will work (this exact mistake — an invalid switch combination that is neither DEV boot nor Flash Boot — caused unexplained "Target not responding" debugger failures during bring-up).

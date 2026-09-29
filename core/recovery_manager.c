@@ -1033,7 +1033,7 @@ static RecoverySignal_t evaluate_equipment(
 
 #if CONSENSUS_ENFORCE
 /*
- * Peer-consensus evaluator (CONSENSUS_DESIGN.md 4.2(b)), seventh slot under
+ * Peer-consensus evaluator (docs/architecture/CONSENSUS_DESIGN.md 4.2(b)), seventh slot under
  * CONSENSUS_ENFORCE. It replaces the retired evaluate_consensus_fault().
  *
  * It only ever adds a signal, and never ABORT_MISSION: aborting still needs
@@ -1098,7 +1098,7 @@ static RecoverySignal_t evaluate_peer_consensus(
 
 /*
  * Sixth evaluator: single-team AI fault prediction (v4 architecture doc,
- * Section 4/9; feature contract per FEATURE_CONTRACT_DESIGN.md). Runs
+ * Section 4/9; feature contract per docs/ml/FEATURE_CONTRACT_DESIGN.md). Runs
  * core/fault_predictor.c's model against this team's own 74-input feature
  * vector - core/feature_pack.c's feature_pack_build_vector(), built from
  * this team's own observables (never team->fault_state). This is NOT the

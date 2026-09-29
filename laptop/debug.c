@@ -305,7 +305,7 @@ static int live_override_is_system_task(uint32_t incident_id)
  * found it. The recovery manager's own `degraded` flag and peer
  * consensus's ELEVATED tier are both "the system observed and
  * concluded this", the same ground-truth-vs-observed line
- * CONSENSUS_DESIGN.md draws everywhere else in this project (see e.g.
+ * docs/architecture/CONSENSUS_DESIGN.md draws everywhere else in this project (see e.g.
  * laptop/tools/static/dashboard/timeline.js's top-of-file comment on
  * the exact same distinction for the Detection Timeline panel). */
 static int live_override_team_unavailable(uint8_t team_id)
@@ -620,7 +620,7 @@ void debug_emit_live_frame(uint32_t tick)
         total_stage_completions += g_diag_stage_completions[t];
     }
 
-    /* Virtual peer bus counters (CONSENSUS_DESIGN.md 5.3). Always present so
+    /* Virtual peer bus counters (docs/architecture/CONSENSUS_DESIGN.md 5.3). Always present so
        the frame schema does not depend on the build; zeros without the bus. */
     unsigned vbus_sent = 0, vbus_delivered = 0, vbus_dropped = 0, vbus_airtime_ms = 0;
 #if VIRTUAL_BUS_ENABLED
@@ -684,7 +684,7 @@ void debug_emit_live_frame(uint32_t tick)
         /* Part 3 (dashboard consensus mesh): this team AS OBSERVER, bit j
            set if it heard target j's beacon on time this tick
            (PeerObservation_t.rx_on_time via consensus_get_peer_observation() -
-           CONSENSUS_DESIGN.md 2.6). Self-bit (j==t) is always 0: a team
+           docs/architecture/CONSENSUS_DESIGN.md 2.6). Self-bit (j==t) is always 0: a team
            doesn't beacon itself. Lets the dashboard draw the real 10x10
            mesh instead of the earlier hub-and-spoke live/dark proxy. */
         unsigned heard_mask = 0;

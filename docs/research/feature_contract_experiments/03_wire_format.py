@@ -23,7 +23,7 @@ def toa_ms(wire_len, sf=7, bw=125000, cr=1, preamble=8, crc=True, explicit=True,
     d = 4 * (sf - 2 * (1 if ldro else 0))
     npay = 8 + max(math.ceil(n / d) * (cr + 4), 0)
     return (preamble + 4.25) * tsym + npay * tsym
-assert abs(toa_ms(80) - 143.616) < 1e-6, toa_ms(80)   # vbus.h / CONSENSUS_DESIGN.md reference value
+assert abs(toa_ms(80) - 143.616) < 1e-6, toa_ms(80)   # vbus.h / docs/architecture/CONSENSUS_DESIGN.md reference value
 FRAME_OVERHEAD = 7 + 21   # LORA_FRAME_HEADER_SIZE + LORA_FRAME_TRAILER_SIZE (core/lora_frame.h)
 
 # ------------------------------------------------------------------ change rates per feature

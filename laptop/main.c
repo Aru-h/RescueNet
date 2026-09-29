@@ -234,7 +234,7 @@ int main(int argc, char **argv)
         }
 
         /* Per-link loss probability on the virtual peer bus
-         * (CONSENSUS_DESIGN.md 3.5, decision D4: default 0.05). Ignored in a
+         * (docs/architecture/CONSENSUS_DESIGN.md 3.5, decision D4: default 0.05). Ignored in a
          * build without the virtual bus. */
         if(strncmp(argv[i], "--vbus-loss=", 12) == 0)
         {

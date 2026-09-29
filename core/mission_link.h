@@ -15,7 +15,7 @@
  * This link carries the state a board needs to run its own team
  * without holding a full copy of the world, and the state the laptop
  * needs back to keep incident/world data authoritative. See
- * ARCHITECTURE.md's laptop/board split (or the commit that added this
+ * docs/architecture/ARCHITECTURE.md's laptop/board split (or the commit that added this
  * header) for the reasoning behind which fields live on which side -
  * this header only fixes the shape of the bytes, same as
  * telemetry_frame.h does for its frame. No encode/decode logic here;
@@ -43,7 +43,7 @@
  *
  *   MissionLinkFault_t    laptop -> board, ONGOING, sent on any change
  *                          to that team's fault_state. fault_injector_
- *                          step() stays laptop-side (see ARCHITECTURE.md);
+ *                          step() stays laptop-side (see docs/architecture/ARCHITECTURE.md);
  *                          this is what lets the board's team physics
  *                          (move_team(), update_team(), team_effective_
  *                          work_rate()) apply the fault's effect. The
@@ -196,7 +196,7 @@ CommsPrecedence_t mission_link_incident_precedence(const MissionLinkIncident_t *
  * target_x/y[], the original_* pre-fault backup fields, pending_
  * repair[]/repair_confirm_tick[]/immune_until_tick[] - all of that is
  * fault_injector_step()'s own state for running the fault lifecycle,
- * which stays laptop-side per ARCHITECTURE.md; the board only needs
+ * which stays laptop-side per docs/architecture/ARCHITECTURE.md; the board only needs
  * to know what's active right now and how bad it is).
  */
 typedef struct __attribute__((packed))

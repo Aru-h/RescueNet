@@ -18,7 +18,7 @@
 
 /*
  * Virtual bus: a simulated LoRa-like broadcast medium so each team can be
- * its own node on one board (see CONSENSUS_DESIGN.md sections 1.3, 1.4,
+ * its own node on one board (see docs/architecture/CONSENSUS_DESIGN.md sections 1.3, 1.4,
  * 3.5 and 6.2). Compiled only when VIRTUAL_BUS_ENABLED is nonzero (default
  * 0), so multi-board builds contain none of it.
  *

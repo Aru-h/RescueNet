@@ -1151,7 +1151,7 @@ def api_run_live():
     fault_profile = payload.get("fault_profile", "none")
 
     # Per-link loss on the virtual peer bus (core/vbus.c's IID model,
-    # CONSENSUS_DESIGN.md 3.5 decision D4: default 0.05 when this flag
+    # docs/architecture/CONSENSUS_DESIGN.md 3.5 decision D4: default 0.05 when this flag
     # is omitted). Optional - the UI leaves this blank most of the time
     # and lets the simulator's own default apply; recorded into the
     # header either way so a replay's provenance is complete.

@@ -28,7 +28,7 @@
  * spec.h's order, scaled exactly as data_prep.py's SafeStandardScaler
  * scales training data - see core/feature_pack.c's feature_pack_build_
  * vector(), the one function that builds this shape correctly today.
- * This is the feature-contract vector (FEATURE_CONTRACT_DESIGN.md),
+ * This is the feature-contract vector (docs/ml/FEATURE_CONTRACT_DESIGN.md),
  * board-computable via the mission-link zone/map frames (core/mission_
  * link.h sections 5c/5e/5f) - not the older, still-live 12-feature
  * FAULT_BUFFER_REMOTE_EVIDENCE_FEATURES vector core/fault_buffer.h/

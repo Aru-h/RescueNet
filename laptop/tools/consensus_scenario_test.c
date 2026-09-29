@@ -1,4 +1,4 @@
-/* Whole-simulation scenario tests for peer consensus (CONSENSUS_DESIGN.md 7.1
+/* Whole-simulation scenario tests for peer consensus (docs/architecture/CONSENSUS_DESIGN.md 7.1
  * to 7.5, 7.11) and the measurement modes behind the 7.2 table and the D1
  * comparison. Build: make check-consensus-scenarios
  *

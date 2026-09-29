@@ -2,7 +2,7 @@
 # THROWAWAY. Generates the experiment dataset.
 #   40 seeds (1..40) x 3000 ticks, --fault-profile=combined, 4 shards of 10 seeds.
 # Uses a scratch COPY of the tree with one extra CSV column (heartbeat_emitted =
-# team->last_heartbeat_tick == cycle, the same predicate CONSENSUS_DESIGN.md
+# team->last_heartbeat_tick == cycle, the same predicate docs/architecture/CONSENSUS_DESIGN.md
 # calls team_radio_emitted()). No tracked file is modified.
 set -euo pipefail
 REPO=${REPO:-$(cd "$(dirname "$0")/../../.." && pwd)}

@@ -6,7 +6,7 @@
 #include "mission_state.h"
 
 /*
- * Peer consensus on fault state (CONSENSUS_DESIGN.md).
+ * Peer consensus on fault state (docs/architecture/CONSENSUS_DESIGN.md).
  *
  * Every team is one virtual node on the vbus. Each tick a node that
  * physically transmitted (team_radio_emitted()) broadcasts a beacon of raw
