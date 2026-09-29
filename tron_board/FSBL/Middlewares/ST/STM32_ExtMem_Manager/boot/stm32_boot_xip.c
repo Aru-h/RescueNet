@@ -19,10 +19,69 @@
 /* Includes ------------------------------------------------------------------*/
 #include "stm32_boot_xip.h"
 #include "stm32_extmem_conf.h"
-#include <stdio.h>
 
 extern UART_HandleTypeDef huart1;
-#define DBG_PRINT(...) do { char dbg_buf[96]; int dbg_len = snprintf(dbg_buf, sizeof(dbg_buf), __VA_ARGS__); HAL_UART_Transmit(&huart1, (uint8_t *)dbg_buf, (uint16_t)dbg_len, HAL_MAX_DELAY); } while (0)
+
+/* Bug fix: DBG_PRINT used to route every debug line through snprintf()
+   (newlib's reentrant _svfprintf_r/__ssputs_r under the hood - confirmed
+   by a live debugger call stack after a real crash on real hardware
+   inside one of these calls, in JumpToApplication() - see that
+   function's own comment). That machinery isn't reliably safe this
+   early in a bare-metal boot: the JumpToApplication() call landed in
+   unmapped code after a stack/VTOR switch, and a completely separate
+   one - this file's very first DBG_PRINT, before ANY snprintf call had
+   run yet this boot, in BOOT_Application() - was confirmed on real
+   hardware to hang forever in Flash Boot despite working every single
+   time under a debugger-attached Dev_boot session. Replaced every
+   DBG_PRINT call below with these three tiny helpers - direct
+   HAL_UART_Transmit of a literal, or of a manually hex/decimal-
+   formatted value - the exact same mechanism Core/Src/main.c's own
+   FSBL_UART_PUTS() already uses successfully at every earlier boot
+   stage in both boot modes. No snprintf, no newlib reentrancy, nothing
+   routes through libc's stdio subsystem at all. */
+static void dbg_puts(const char *s)
+{
+  uint16_t len = 0u;
+  while (s[len] != '\0')
+  {
+    len++;
+  }
+  HAL_UART_Transmit(&huart1, (uint8_t *)s, len, HAL_MAX_DELAY);
+}
+
+static void dbg_put_hex32(uint32_t v)
+{
+  static const char hexd[16] = "0123456789ABCDEF";
+  char buf[8];
+  int i;
+
+  for (i = 7; i >= 0; i--)
+  {
+    buf[i] = hexd[v & 0xFu];
+    v >>= 4;
+  }
+  HAL_UART_Transmit(&huart1, (uint8_t *)buf, 8u, HAL_MAX_DELAY);
+}
+
+static void dbg_put_dec(int v)
+{
+  char buf[12];
+  int i = (int)sizeof(buf);
+  int neg = (v < 0);
+  unsigned int uv = neg ? (unsigned int)(-v) : (unsigned int)v;
+
+  buf[--i] = '\0';
+  do
+  {
+    buf[--i] = (char)('0' + (uv % 10u));
+    uv /= 10u;
+  } while (uv != 0u);
+  if (neg)
+  {
+    buf[--i] = '-';
+  }
+  dbg_puts(&buf[i]);
+}
 
 /** @addtogroup BOOT
   * @{
@@ -66,9 +125,11 @@ BOOTStatus_TypeDef BOOT_Application(void)
   BOOTStatus_TypeDef retr;
 
   /* Mount the memory */
-  DBG_PRINT("BOOT: calling MapMemory\r\n");
+  dbg_puts("BOOT: calling MapMemory\r\n");
   retr = MapMemory();
-  DBG_PRINT("BOOT: MapMemory returned %d\r\n", (int)retr);
+  dbg_puts("BOOT: MapMemory returned ");
+  dbg_put_dec((int)retr);
+  dbg_puts("\r\n");
   if (BOOT_OK == retr)
   {
     /* Jump on the application */
@@ -98,8 +159,15 @@ BOOTStatus_TypeDef MapMemory(void)
   for (uint8_t index = 0; index < (sizeof(extmem_list_config) / sizeof(EXTMEM_DefinitionTypeDef)); index++)
   {
     EXTMEM_StatusTypeDef mapres = EXTMEM_MemoryMappedMode(index, EXTMEM_ENABLE);
-    DBG_PRINT("BOOT: MemoryMappedMode(%d) = %d, hxspi2.ErrorCode=0x%08lX, State=%d\r\n",
-              (int)index, (int)mapres, (unsigned long)hxspi2.ErrorCode, (int)hxspi2.State);
+    dbg_puts("BOOT: MemoryMappedMode(");
+    dbg_put_dec((int)index);
+    dbg_puts(") = ");
+    dbg_put_dec((int)mapres);
+    dbg_puts(", hxspi2.ErrorCode=0x");
+    dbg_put_hex32((uint32_t)hxspi2.ErrorCode);
+    dbg_puts(", State=");
+    dbg_put_dec((int)hxspi2.State);
+    dbg_puts("\r\n");
     switch (mapres)
     {
       case EXTMEM_ERROR_NOTSUPPORTED :
@@ -133,17 +201,24 @@ BOOTStatus_TypeDef JumpToApplication(void)
   static pFunction JumpToApp;
   uint32_t Application_vector;
 
-  DBG_PRINT("BOOT: entered JumpToApplication\r\n");
+  dbg_puts("BOOT: entered JumpToApplication\r\n");
   if (EXTMEM_OK != EXTMEM_GetMapAddress(EXTMEM_MEMORY_BOOTXIP, &Application_vector))
   {
-    DBG_PRINT("BOOT: GetMapAddress FAILED\r\n");
+    dbg_puts("BOOT: GetMapAddress FAILED\r\n");
     return BOOT_ERROR_INCOMPATIBLEMEMORY;
   }
-  DBG_PRINT("BOOT: base=0x%08lX offset=0x%08lX+0x%08lX\r\n",
-            (unsigned long)Application_vector, (unsigned long)EXTMEM_XIP_IMAGE_OFFSET, (unsigned long)EXTMEM_HEADER_OFFSET);
-  DBG_PRINT("BOOT: SP=0x%08lX PC=0x%08lX\r\n",
-            (unsigned long)(*(__IO uint32_t *)(Application_vector + EXTMEM_XIP_IMAGE_OFFSET + EXTMEM_HEADER_OFFSET)),
-            (unsigned long)(*(__IO uint32_t *)(Application_vector + EXTMEM_XIP_IMAGE_OFFSET + EXTMEM_HEADER_OFFSET + 4u)));
+  dbg_puts("BOOT: base=0x");
+  dbg_put_hex32((uint32_t)Application_vector);
+  dbg_puts(" offset=0x");
+  dbg_put_hex32((uint32_t)EXTMEM_XIP_IMAGE_OFFSET);
+  dbg_puts("+0x");
+  dbg_put_hex32((uint32_t)EXTMEM_HEADER_OFFSET);
+  dbg_puts("\r\n");
+  dbg_puts("BOOT: SP=0x");
+  dbg_put_hex32(*(__IO uint32_t *)(Application_vector + EXTMEM_XIP_IMAGE_OFFSET + EXTMEM_HEADER_OFFSET));
+  dbg_puts(" PC=0x");
+  dbg_put_hex32(*(__IO uint32_t *)(Application_vector + EXTMEM_XIP_IMAGE_OFFSET + EXTMEM_HEADER_OFFSET + 4u));
+  dbg_puts("\r\n");
 
   /* Suspend SysTick */
   HAL_SuspendTick();
@@ -190,7 +265,18 @@ BOOTStatus_TypeDef JumpToApplication(void)
   /* Re-enable the interrupts */
   __set_PRIMASK(primask_bit);
 
-  DBG_PRINT("BOOT: jumping now to 0x%08lX\r\n", (unsigned long)JumpToApp);
+  /* Bug fix: a DBG_PRINT() used to sit here, after SCB->VTOR (line ~174)
+     and the stack pointer (line 188 above) were already switched to the
+     Appli's own (not-yet-running) context. DBG_PRINT's snprintf() needs
+     a working stack, and any fault during it - even a small UART timing
+     hiccup - would vector through the Appli's exception table instead
+     of the FSBL's, landing in unmapped/untracked code (confirmed on
+     real hardware: a SIGTRAP into an address with "no debug information
+     available", inside snprintf/_svfprintf_r/__ssputs_r, right at this
+     line). Removed rather than moved: JumpToApp is the exact same
+     address already printed two lines above the MapMemory print block
+     ("BOOT: SP=... PC=..." - see that DBG_PRINT), so this told us
+     nothing new anyway. */
   JumpToApp();
   return BOOT_OK;
 }

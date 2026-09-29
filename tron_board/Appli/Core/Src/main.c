@@ -52,7 +52,17 @@ static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void SystemIsolation_Config(void);
 /* USER CODE BEGIN PFP */
-
+#ifdef APPLI_DEVRAM_STANDALONE
+/*
+ * DEV-boot diagnostic path only (STM32N657X0HXQ_LRUN.ld build config):
+ * the debugger loads this image straight into internal SRAM with no FSBL
+ * ever having run, so nothing has configured the PLL yet - do it here,
+ * identical to FSBL/Core/Src/main.c's SystemClock_Config(), so USART1's
+ * baud rate divisor is computed against the clock that's actually running.
+ */
+static void SystemClock_Config(void);
+void PeriphCommonClock_Config(void);
+#endif
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -68,14 +78,27 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+#ifdef APPLI_DEVRAM_STANDALONE
+  /* Tried SCB_EnableICache()+SCB_EnableDCache() here - crashed the kernel
+     dispatcher (SIGTRAP at 0x0 inside knl_force_dispatch/set_basepri),
+     reproducibly, independent of the PLL/VOS revert above. mtkernel's
+     context-switch path (int_armv8m.c/cpu_cntl.c) does raw stack-pointer
+     and exception-return-value manipulation with no cache maintenance
+     barriers around it, which is exactly the kind of code D-cache (or
+     I-cache, not separately tested) breaks without care. Left disabled;
+     don't re-enable without auditing that path for the necessary
+     DSB/ISB/cache-clean calls first. */
+#endif
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+#ifdef APPLI_DEVRAM_STANDALONE
+  SystemClock_Config();
+  PeriphCommonClock_Config();
+#endif
   /* USER CODE END Init */
 
   /* USER CODE BEGIN SysInit */
@@ -103,6 +126,110 @@ int main(void)
   }
   /* USER CODE END 3 */
 }
+
+#ifdef APPLI_DEVRAM_STANDALONE
+/**
+  * @brief System Clock Configuration (DEV-boot/no-FSBL diagnostic path only).
+  * Mirrors FSBL/Core/Src/main.c's SystemClock_Config() verbatim: same
+  * HSI-driven PLL1 setup the FSBL would otherwise have already applied
+  * before this image ever got a chance to run.
+  * @retval None
+  */
+static void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  if (HAL_PWREx_ConfigSupply(PWR_EXTERNAL_SOURCE_SUPPLY) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* Tried VOS0 (1600 MHz VCO / 800 MHz CPU) here - crashed the kernel
+     dispatcher (SIGTRAP at 0x0 inside knl_force_dispatch/set_basepri on
+     real hardware), almost certainly because IC2/IC6/IC11 (SYSCLK/AHB/
+     APB) scale up right along with the CPU clock and something downstream
+     (RTOS tick timer or an interrupt path) has an unverified frequency
+     assumption that breaks at that point. Back to VOS1/600 MHz, the
+     FSBL's own proven operating point - do not re-attempt VOS0 without
+     also auditing every other IC divider and the RTOS tick source. */
+  if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSIDiv = RCC_HSI_DIV1;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL2.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL3.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL4.PLLState = RCC_PLL_NONE;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  HAL_RCC_GetClockConfig(&RCC_ClkInitStruct);
+  if ((RCC_ClkInitStruct.CPUCLKSource == RCC_CPUCLKSOURCE_IC1) ||
+     (RCC_ClkInitStruct.SYSCLKSource == RCC_SYSCLKSOURCE_IC2_IC6_IC11))
+  {
+    RCC_ClkInitStruct.ClockType = (RCC_CLOCKTYPE_CPUCLK | RCC_CLOCKTYPE_SYSCLK);
+    RCC_ClkInitStruct.CPUCLKSource = RCC_CPUCLKSOURCE_HSI;
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct) != HAL_OK)
+    {
+      Error_Handler();
+    }
+  }
+
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL1.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL1.PLLM = 4;
+  /* PLLN=75 (matches the FSBL exactly): VCO = HSI(64MHz)/PLLM(4)*PLLN =
+     1200 MHz, /IC1(2 below) = 600 MHz CPU clock. PLLN=100 (800 MHz) was
+     tried and crashed the kernel - see the VOS0 comment above. */
+  RCC_OscInitStruct.PLL1.PLLN = 75;
+  RCC_OscInitStruct.PLL1.PLLFractional = 0;
+  RCC_OscInitStruct.PLL1.PLLP1 = 1;
+  RCC_OscInitStruct.PLL1.PLLP2 = 1;
+  RCC_OscInitStruct.PLL2.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL3.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL4.PLLState = RCC_PLL_NONE;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_CPUCLK|RCC_CLOCKTYPE_HCLK
+                              |RCC_CLOCKTYPE_SYSCLK|RCC_CLOCKTYPE_PCLK1
+                              |RCC_CLOCKTYPE_PCLK2|RCC_CLOCKTYPE_PCLK5
+                              |RCC_CLOCKTYPE_PCLK4;
+  RCC_ClkInitStruct.CPUCLKSource = RCC_CPUCLKSOURCE_IC1;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_IC2_IC6_IC11;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV1;
+  RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV1;
+  RCC_ClkInitStruct.APB5CLKDivider = RCC_APB5_DIV1;
+  RCC_ClkInitStruct.IC1Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
+  RCC_ClkInitStruct.IC1Selection.ClockDivider = 2;
+  RCC_ClkInitStruct.IC2Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
+  RCC_ClkInitStruct.IC2Selection.ClockDivider = 3;
+  RCC_ClkInitStruct.IC6Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
+  RCC_ClkInitStruct.IC6Selection.ClockDivider = 4;
+  RCC_ClkInitStruct.IC11Selection.ClockSelection = RCC_ICCLKSOURCE_PLL1;
+  RCC_ClkInitStruct.IC11Selection.ClockDivider = 3;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+#endif /* APPLI_DEVRAM_STANDALONE */
 
 /**
   * @brief Peripherals Common Clock Configuration

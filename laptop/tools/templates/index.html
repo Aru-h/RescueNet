@@ -772,6 +772,7 @@ async function exitDashboard() {
   await fetch('/api/board/disconnect', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'}).catch(()=>console.log("Disconnected locally"));
   stopLive();
   stopBoardMissionPolling();
+  document.getElementById('boardMissionBar').classList.add('hidden');
   showScreen('startup-screen');
 }
 
@@ -782,8 +783,8 @@ async function exitDashboard() {
 let boardMissionTimer = null;
 
 function startBoardMissionPolling() {
-  document.getElementById('boardMissionBar').classList.remove('hidden');
   stopBoardMissionPolling();
+  document.getElementById('boardMissionBar').classList.remove('hidden');
   boardMissionTimer = setInterval(() => refreshBoardMission().catch(console.error), 1000);
   refreshBoardMission().catch(console.error);
 }
@@ -791,7 +792,6 @@ function startBoardMissionPolling() {
 function stopBoardMissionPolling() {
   if (boardMissionTimer) { clearInterval(boardMissionTimer); boardMissionTimer = null; }
   if (boardMissionAbort) { boardMissionAbort.abort(); boardMissionAbort = null; }
-  document.getElementById('boardMissionBar').classList.add('hidden');
 }
 
 async function refreshBoardMission() {
