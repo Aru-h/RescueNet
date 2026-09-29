@@ -1036,12 +1036,15 @@ EXPORT INT usermain(void)
        that macro's default lives in comms_transport.c, private to
        that file (see its own comment), not something this file should
        reach into. */
-    tm_printf((UB*)"tron: CONFIG teams_per_board=%u vbus=%u consensus_enforce=%u radio=%u model_loaded=%u\n",
+    tm_printf((UB*)"tron: CONFIG teams_per_board=%u vbus=%u consensus_enforce=%u radio=%u model_loaded=%u cpu_hz=%lu icache=%u dcache=%u\n",
                (unsigned)(NUM_TEAMS / comms_transport_board_count()),
                (unsigned)VIRTUAL_BUS_ENABLED,
                (unsigned)CONSENSUS_ENFORCE,
                (unsigned)BOARD_RADIO_ENABLED,
-               (unsigned)FAULT_MODEL_LOADED);
+               (unsigned)FAULT_MODEL_LOADED,
+               (unsigned long)SystemCoreClock,
+               (unsigned)((SCB->CCR & SCB_CCR_IC_Msk) != 0u),
+               (unsigned)((SCB->CCR & SCB_CCR_DC_Msk) != 0u));
 
     tm_putstring((UB*)"tron: starting simulation task\n");
 

@@ -78,7 +78,17 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+#ifdef APPLI_DEVRAM_STANDALONE
+  /* Tried SCB_EnableICache()+SCB_EnableDCache() here - crashed the kernel
+     dispatcher (SIGTRAP at 0x0 inside knl_force_dispatch/set_basepri),
+     reproducibly, independent of the PLL/VOS revert above. mtkernel's
+     context-switch path (int_armv8m.c/cpu_cntl.c) does raw stack-pointer
+     and exception-return-value manipulation with no cache maintenance
+     barriers around it, which is exactly the kind of code D-cache (or
+     I-cache, not separately tested) breaks without care. Left disabled;
+     don't re-enable without auditing that path for the necessary
+     DSB/ISB/cache-clean calls first. */
+#endif
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -135,6 +145,14 @@ static void SystemClock_Config(void)
     Error_Handler();
   }
 
+  /* Tried VOS0 (1600 MHz VCO / 800 MHz CPU) here - crashed the kernel
+     dispatcher (SIGTRAP at 0x0 inside knl_force_dispatch/set_basepri on
+     real hardware), almost certainly because IC2/IC6/IC11 (SYSCLK/AHB/
+     APB) scale up right along with the CPU clock and something downstream
+     (RTOS tick timer or an interrupt path) has an unverified frequency
+     assumption that breaks at that point. Back to VOS1/600 MHz, the
+     FSBL's own proven operating point - do not re-attempt VOS0 without
+     also auditing every other IC divider and the RTOS tick source. */
   if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK)
   {
     Error_Handler();
@@ -171,6 +189,9 @@ static void SystemClock_Config(void)
   RCC_OscInitStruct.PLL1.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL1.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL1.PLLM = 4;
+  /* PLLN=75 (matches the FSBL exactly): VCO = HSI(64MHz)/PLLM(4)*PLLN =
+     1200 MHz, /IC1(2 below) = 600 MHz CPU clock. PLLN=100 (800 MHz) was
+     tried and crashed the kernel - see the VOS0 comment above. */
   RCC_OscInitStruct.PLL1.PLLN = 75;
   RCC_OscInitStruct.PLL1.PLLFractional = 0;
   RCC_OscInitStruct.PLL1.PLLP1 = 1;
