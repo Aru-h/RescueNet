@@ -1,7 +1,7 @@
 """THROWAWAY. Step 5: peer-side judge = f(target's self-reported embedding, peer's own observations).
 
 tron_peer_obs.csv does not exist yet (feat/consensus is design-only), so a peer's observations
-are SIMULATED from the dataset with the vocabulary CONSENSUS_DESIGN.md §5.2 defines:
+are SIMULATED from the dataset with the vocabulary docs/architecture/CONSENSUS_DESIGN.md §5.2 defines:
   rx_on_time (beacon heard: target emitted that tick AND the link did not drop it, iid loss q),
   rx_age_ticks, comm_misses over the last 6 ticks, mob_stalled/mob_window_n over the last 4
   consecutive received pairs (reported loc unchanged), plaus_fail (reported step > 1 cell/tick),

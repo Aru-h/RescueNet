@@ -36,7 +36,7 @@ Mobility detection is now based on observed movement stalls, so a mobility fault
 
 ---
 
-# Known Limitations — `core/` (accepted findings from the AUDIT.md triage pass)
+# Known Limitations — `core/` (accepted findings from the docs/reports/AUDIT.md triage pass)
 
 Different audience from the CSV section above: this is for anyone reading `core/` source, not consuming the dataset. These are LOW-severity items from `AUDIT.md` that were deliberately triaged as "leave as-is" — each is either protected by an invariant unlikely to break, purely theoretical given current constants, an explicit accepted tradeoff, or genuinely style-only. Not bugs to fix; documented here so nobody re-discovers and re-litigates them from scratch.
 
@@ -56,7 +56,7 @@ Different audience from the CSV section above: this is for anyone reading `core/
 
 ---
 
-# Known Limitations — `board/` (accepted findings from the AUDIT.md board audit pass)
+# Known Limitations — `board/` (accepted findings from the docs/reports/AUDIT.md board audit pass)
 
 Same audience as the `core/` section above: accepted findings from the board/-specific audit (`board/STM32N6570-DK/*.c`, `board/Raspberry_Pi_Pico/*.c`). Each is either an explicitly intentional stub, cosmetic-only, or a low-confidence/unverified concern with no demonstrated failure — not bugs to fix.
 

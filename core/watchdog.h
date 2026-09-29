@@ -80,7 +80,7 @@ float watchdog_get_mobility_stall_fraction(uint8_t team_id);
  * with at least WATCHDOG_STALL_MIN_SAMPLES samples reports a stall
  * fraction, and WATCHDOG_STALL_CONFIRM_COUNT stalls in it confirm an
  * impairment. Exported so the peer-side mirror in core/consensus.c uses the
- * same numbers (CONSENSUS_DESIGN.md 2.2). */
+ * same numbers (docs/architecture/CONSENSUS_DESIGN.md 2.2). */
 #define WATCHDOG_STALL_WINDOW_TICKS 4u
 #define WATCHDOG_STALL_MIN_SAMPLES 2u
 #define WATCHDOG_STALL_CONFIRM_COUNT 2u

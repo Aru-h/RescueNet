@@ -3,7 +3,7 @@
 Scope: how the fault-detection AI gets its inputs on the STM32N6570-DK and over the (virtual) LoRa link.
 No tracked file was modified. Experiments live in
 [feature_contract_experiments/](feature_contract_experiments/) (throwaway; logs in `results/`).
-Companion design: [../../FEATURE_CONTRACT_DESIGN.md](../../FEATURE_CONTRACT_DESIGN.md).
+Companion design: [../ml/FEATURE_CONTRACT_DESIGN.md](../ml/FEATURE_CONTRACT_DESIGN.md).
 
 Base: `origin/submission/single-board-dk` @ 45298e2.
 

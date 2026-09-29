@@ -17,7 +17,7 @@ over a simulated LoRa-like bus (`vbus_*`), so that the same code carries over
 to one board per team later.
 
 **Revision 2 (2026-09-26)** applies the prior-art review in
-[docs/research/peer_fault_detection_prior_art.md](docs/research/peer_fault_detection_prior_art.md).
+[docs/research/peer_fault_detection_prior_art.md](../research/peer_fault_detection_prior_art.md).
 The per-peer detectors stay; the fusion changes:
 
 | # | Change | Where |

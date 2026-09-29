@@ -71,7 +71,7 @@ TARGET = tron
 
 all: $(TARGET) $(LABELER)
 
-# Peer consensus (CONSENSUS_DESIGN.md): the laptop `tron` build turns on the
+# Peer consensus (docs/architecture/CONSENSUS_DESIGN.md): the laptop `tron` build turns on the
 # virtual bus and enforcement (decision D1). Deliberately NOT part of CFLAGS:
 # every board build, Pico build, two-board harness and selftest keeps
 # VIRTUAL_BUS_ENABLED=0 and compiles none of it. Override with
@@ -1033,7 +1033,7 @@ check-zone-refresh:
 	@cd $(ZONE_REFRESH_DIR) && ./zone_refresh_gen frames.txt truth.csv
 	@cd $(ZONE_REFRESH_DIR) && ./zone_refresh_check frames.txt truth.csv
 
-# Feature-pack C-vs-Python parity (FEATURE_CONTRACT_DESIGN.md section 5:
+# Feature-pack C-vs-Python parity (docs/ml/FEATURE_CONTRACT_DESIGN.md section 5:
 # "C vs Python feature parity: <=1e-5 scaled"): a real 5-seed run through
 # feature_pack_dump (core/feature_pack.c's own feature_pack_build_
 # vector(), same tick/same state snapshot.c just recorded from) compared
@@ -1055,7 +1055,7 @@ check-feature-pack-parity:
 	@$(PYTHON) $(TOOLS_DIR)/feature_pack_parity_test.py \
 		$(FEATURE_PACK_PARITY_DIR)/features_c.csv $(FEATURE_PACK_PARITY_DIR)/features_py_raw.csv
 
-# Peer consensus unit tests (CONSENSUS_DESIGN.md 7.9, 7.11): real vbus,
+# Peer consensus unit tests (docs/architecture/CONSENSUS_DESIGN.md 7.9, 7.11): real vbus,
 # synthetic teams, no simulation. Needs the virtual bus and the test hooks.
 CONSENSUS_TEST_DEFS = -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_TEST_HOOKS=1
 

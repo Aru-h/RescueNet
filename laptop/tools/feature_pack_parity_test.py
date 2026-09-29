@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-C-vs-Python feature-pack parity check (FEATURE_CONTRACT_DESIGN.md section
+C-vs-Python feature-pack parity check (docs/ml/FEATURE_CONTRACT_DESIGN.md section
 5: "C vs Python feature parity: <=1e-5 scaled").
 
 Compares:

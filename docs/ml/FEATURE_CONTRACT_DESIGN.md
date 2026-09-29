@@ -1,6 +1,6 @@
 # FEATURE_CONTRACT_DESIGN.md — draft rev 1
 
-Written for: the team deciding how fault-detection inputs are defined, packed and shared. Evidence: [docs/research/feature_contract_research.md](docs/research/feature_contract_research.md). Design only; no code changed.
+Written for: the team deciding how fault-detection inputs are defined, packed and shared. Evidence: [docs/research/feature_contract_research.md](../research/feature_contract_research.md). Design only; no code changed.
 
 ## Changelog
 

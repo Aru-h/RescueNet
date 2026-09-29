@@ -38,7 +38,7 @@ and dataset generation, and on a real STM32N6570-DK board running
   - *Consensus* — `core/consensus.c` lets teams corroborate or contest
     each other's fault reports from what their own radio hears, adding
     robustness against a single faulty (or faking) self-report. See
-    [`CONSENSUS_DESIGN.md`](CONSENSUS_DESIGN.md).
+    [`docs/architecture/CONSENSUS_DESIGN.md`](docs/architecture/CONSENSUS_DESIGN.md).
   - *AI* — a float32 MLP fault predictor (`core/fault_predictor.c`),
     gated by the `FAULT_MODEL_LOADED` flag so it stays inert (all-zero
     scores) until a trained model is exported. Being added on a separate
@@ -52,7 +52,7 @@ and dataset generation, and on a real STM32N6570-DK board running
   to the real board — including a drag-and-drop manual override of team
   assignments in simulation mode.
 
-Full technical detail: [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Full technical detail: [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md).
 
 ## Repo layout
 
@@ -86,8 +86,13 @@ assignments while in simulation mode.
 
 ### Board bring-up (STM32N6570-DK)
 
-See [`docs/DK_DEMO_LAUNCH.md`](docs/DK_DEMO_LAUNCH.md) for boot-mode
-switches, the `DevRam` debug configuration, and demo-pace guidance.
+The only currently verified boot path is **DEV boot via the `DevRam`
+STM32CubeIDE debug configuration** (the Application loaded straight into
+SRAM by the debugger). Standalone Flash Boot hangs at the FSBL →
+Application handoff and is open with ST as support case 00269955. See
+[`docs/DK_DEMO_LAUNCH.md`](docs/DK_DEMO_LAUNCH.md) for the full checklist:
+boot switch positions, the `DevRam` debug configuration, and known rough
+edges.
 
 ### Evaluation
 
@@ -109,7 +114,7 @@ python data_prep.py tron_snapshot_dataset.csv
 
 `data_prep.py` builds the 74-input feature matrix used to train the AI
 fault predictor and enforces the ground-truth-leak guards described in
-[`FEATURE_CONTRACT_DESIGN.md`](FEATURE_CONTRACT_DESIGN.md). Read
+[`docs/ml/FEATURE_CONTRACT_DESIGN.md`](docs/ml/FEATURE_CONTRACT_DESIGN.md). Read
 [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) before training on any
 previously generated CSV — several dataset-affecting fixes landed during
 development.
@@ -119,7 +124,7 @@ development.
 The AI fault predictor's training and export pipeline is being developed
 on a separate branch; this branch ships with `FAULT_MODEL_LOADED=0` (the
 predictor returns all-zero scores) so dataset generation stays
-unaffected. See [`FEATURE_CONTRACT_DESIGN.md`](FEATURE_CONTRACT_DESIGN.md)
+unaffected. See [`docs/ml/FEATURE_CONTRACT_DESIGN.md`](docs/ml/FEATURE_CONTRACT_DESIGN.md)
 for the feature contract the model is trained against.
 
 ## Test / check commands
@@ -131,13 +136,16 @@ make check-live-override-noop-regression    # dashboard override is a byte-ident
 make check-consensus-shadow-regression      # consensus doesn't change pre-existing CSV columns
 make check-single-board-dk-harness          # 10 teams + virtual bus + consensus + mission link, single board
 make check-board-single                     # single-board DK compile/link/symbol flags (needs arm-none-eabi-gcc)
+make check-cubeide-single-flags             # tron_board's CubeIDE project matches DK_SINGLE_BOARD_FLAGS
 make check-dashboard-csrf-selftest          # dashboard API CSRF/content-type hardening
-make check-dashboard-e2e                    # browser end-to-end check (needs Playwright + a browser; see requirements.txt)
+make check-dashboard-e2e                    # browser end-to-end check (needs Playwright + a browser)
 ```
 
-`check-board-single` and `check-dashboard-e2e` need an ARM cross-compiler
-and a Playwright browser respectively, so they won't run in every
-environment — see each target's Makefile comment for setup.
+`check-board-single` needs an ARM cross-compiler (`arm-none-eabi-gcc`),
+and `check-dashboard-e2e` needs
+[`laptop/tools/requirements-dashboard-dev.txt`](laptop/tools/requirements-dashboard-dev.txt)'s
+Playwright plus a fetched browser — see that file and each target's
+Makefile comment for setup. Neither runs in every environment.
 
 ## Known limitations
 

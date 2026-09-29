@@ -10,7 +10,7 @@
  *
  * Every function here treats a missing/-1 consensus_tier or a missing
  * peer_votes/vbus object as "n/a", not as 0/NONE - board mission mode
- * frames (CONSENSUS_DESIGN.md 5.3) and any build without
+ * frames (docs/architecture/CONSENSUS_DESIGN.md 5.3) and any build without
  * VIRTUAL_BUS_ENABLED both look like this, and must never be drawn as
  * a false "all clear".
  */

@@ -34,7 +34,7 @@
  *
  * consensus_tier is [-1, -1] (not built) whenever the sim wasn't
  * compiled with VIRTUAL_BUS_ENABLED, and the whole field (including
- * `heard`) is absent in board mission mode (CONSENSUS_DESIGN.md 5.3's
+ * `heard`) is absent in board mission mode (docs/architecture/CONSENSUS_DESIGN.md 5.3's
  * "Not in v1" note). Both cases render as "n/a" / no edges, never a
  * crash and never a fabricated NONE/grey tier or a fabricated edge.
  */

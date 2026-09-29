@@ -320,7 +320,7 @@ void snapshot_begin_run(uint32_t seed)
 }
 
 /*
- * Appended consensus columns (CONSENSUS_DESIGN.md 5.1). The header is the
+ * Appended consensus columns (docs/architecture/CONSENSUS_DESIGN.md 5.1). The header is the
  * same in every build: a build without the virtual bus writes -1 for the
  * tiers and 0 elsewhere, so data_prep needs no per-build branches. Describes
  * the team as a TARGET, from the latest published result computed at that
@@ -696,7 +696,7 @@ void snapshot_peer_log_enable(uint8_t enable)
 }
 
 /*
- * Training set for a future peer-judge model (CONSENSUS_DESIGN.md 5.2): one
+ * Training set for a future peer-judge model (docs/architecture/CONSENSUS_DESIGN.md 5.2): one
  * row per (tick, observer, target), observer != target. Labels come from
  * joining the main CSV on (run_id, cycle, target_id). Columns prefixed gt_
  * are label-only, like fault_*; data_prep must never feed them to a model.

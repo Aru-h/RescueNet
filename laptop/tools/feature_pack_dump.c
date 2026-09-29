@@ -1,5 +1,5 @@
 /*
- * Feature-pack parity dump (FEATURE_CONTRACT_DESIGN.md section 5 test:
+ * Feature-pack parity dump (docs/ml/FEATURE_CONTRACT_DESIGN.md section 5 test:
  * "C vs Python feature parity: <=1e-5 scaled"): runs a real seeded,
  * random-fault-profile mission through the SAME simulation + snapshot.c
  * pipeline `tron` itself uses - so tron_snapshot_dataset.csv it writes is

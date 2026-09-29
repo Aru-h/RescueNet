@@ -1,6 +1,6 @@
 """
 Data preparation pipeline for the fault-detection model's 74-input feature
-contract (FEATURE_CONTRACT_DESIGN.md; decisions D1-D10 finalized in review).
+contract (docs/ml/FEATURE_CONTRACT_DESIGN.md; decisions D1-D10 finalized in review).
 Supersedes data_prep-2.py and data_prep-3.py - neither is imported here, and
 this is the only place the 74 inputs are defined; core/feature_spec.h and
 feature_spec.py are generated from this file's feature_spec.json output
@@ -222,7 +222,7 @@ print(max_cycle_per_run.value_counts().head(10))
 # run_id (laptop/snapshot.c's compute_composite_run_id()) is a deterministic
 # function of (world_seed, fault profile, CONSENSUS_ENFORCE, vbus link
 # loss). Within one dataset-generation session (fixed profile/enforce/
-# link-loss - CONSENSUS_DESIGN.md 5.1's provenance rule: never mix 0/1
+# link-loss - docs/architecture/CONSENSUS_DESIGN.md 5.1's provenance rule: never mix 0/1
 # enforce runs in one training set), this must be a bijection with
 # world_seed - a collision here means either a genuine hash collision
 # (astronomically unlikely at these row counts) or the dataset mixes run
@@ -550,7 +550,7 @@ X = downcast_numeric_columns(X)
 print("Number of features (with path_is_unreachable):", X.shape[1])
 assert X.shape[1] == 74, (
     f"Expected exactly 74 inputs, got {X.shape[1]}. Stop and report why "
-    "rather than forcing 74 - see FEATURE_CONTRACT_DESIGN.md."
+    "rather than forcing 74 - see docs/ml/FEATURE_CONTRACT_DESIGN.md."
 )
 del df
 

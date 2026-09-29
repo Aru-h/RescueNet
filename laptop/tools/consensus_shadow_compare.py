@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shadow-mode regression for peer consensus (CONSENSUS_DESIGN.md 7.7).
+"""Shadow-mode regression for peer consensus (docs/architecture/CONSENSUS_DESIGN.md 7.7).
 
 With CONSENSUS_ENFORCE=0 the virtual bus and consensus run, but nothing they
 compute may reach the simulation. This runs a baseline `tron` (built from the

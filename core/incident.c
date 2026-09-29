@@ -1557,7 +1557,7 @@ void initialize_evacuation_gateways(uint32_t seed) //incident
              * unlikely given how few cells are ever claimed relative to
              * the perimeter's size, but not impossible) would spin
              * forever with no external watchdog to catch it on this
-             * single-task board model (see AUDIT.md item #21). After a
+             * single-task board model (see docs/reports/AUDIT.md item #21). After a
              * bounded number of random attempts, fall back to a
              * deterministic scan that is guaranteed to terminate. */
             if(random_attempts >= EVACUATION_GATEWAY_MAX_RANDOM_ATTEMPTS)
@@ -2557,7 +2557,7 @@ void abandon_task_for_recovery(TeamState_t *team)
            pool/slot still got cleared and it still got sent to rest
            below - same outcome as every other branch, just with no
            signal that the "shouldn't happen" case was actually hit.
-           Diagnostic-only; see AUDIT.md item #23 for why this wasn't
+           Diagnostic-only; see docs/reports/AUDIT.md item #23 for why this wasn't
            given the heavier fix (cross-checking against a remembered
            incident_id, which would need a new TeamState_t field and
            updates at every assignment site). */

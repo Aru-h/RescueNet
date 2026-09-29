@@ -54,7 +54,7 @@
  *   ENTIRE tick budget - a real, disclosed limitation, not something
  *   silently patched by shrinking this back below what a genuine
  *   5-frame burst needs (that would reintroduce the exact bug this
- *   timeout exists to prevent - see AUDIT.md item #3's history in
+ *   timeout exists to prevent - see docs/reports/AUDIT.md item #3's history in
  *   cbba_ingest_remote_mesh_replies()). 60x-speed CBBA over a real
  *   LoRa link is not achievable without either a faster PHY (shorter
  *   airtime per frame) or dropping full-fidelity board-to-board CBBA

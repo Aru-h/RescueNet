@@ -21,7 +21,7 @@ void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id);
  */
 void snapshot_record_resolved(uint32_t cycle, TaskPool_t pool, const IncidentState_t *task);
 void snapshot_end_run(void);
-/* Peer-consensus observation log (CONSENSUS_DESIGN.md 5.2), laptop only.
+/* Peer-consensus observation log (docs/architecture/CONSENSUS_DESIGN.md 5.2), laptop only.
  * Called by simulation_step() under VIRTUAL_BUS_ENABLED; a no-op unless
  * snapshot_peer_log_enable(1) was called first (--peer-log). Not defined
  * by the board snapshot backends, which never build the virtual bus. */

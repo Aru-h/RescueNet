@@ -1430,7 +1430,7 @@ static int cbba_decode_wire_message(const uint8_t *payload, uint8_t payload_len,
    so this finalizes with whatever's been ingested so far rather than
    blocking indefinitely.
 
-   Bug fix (AUDIT.md item #3): this used to busy-wait the FULL
+   Bug fix (docs/reports/AUDIT.md item #3): this used to busy-wait the FULL
    CBBA_ROUND_TIMEOUT_MS every single call regardless of whether every
    expected reply had already arrived, because cbba_run() (and
    therefore this function) runs every tick via allocate_all_

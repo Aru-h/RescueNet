@@ -2,7 +2,7 @@
 #define CONSENSUS_CONFIG_H
 
 /*
- * Build flags for peer consensus (CONSENSUS_DESIGN.md 6.1). Kept apart from
+ * Build flags for peer consensus (docs/architecture/CONSENSUS_DESIGN.md 6.1). Kept apart from
  * consensus.h so recovery_manager_config.h can size the evaluator table
  * without pulling in the whole consensus API.
  *
@@ -24,7 +24,7 @@
  *                       IID link loss it gives 0 false ELEVATED up to q = 0.20, and
  *                       on the combined profile, where most comm faults are outside
  *                       the f = 2 budget, it detects 98.8% vs 48.3% with it off
- *                       (CONSENSUS_DESIGN.md 10.2, 10.4). Known cost: under
+ *                       (docs/architecture/CONSENSUS_DESIGN.md 10.2, 10.4). Known cost: under
  *                       PER_SOURCE loss it raises about 10 false ELEVATED per 1000
  *                       target-rounds at q = 0.05. Set 0 for the vote path only.
  * CONSENSUS_TEST_HOOKS  0 (default). Test-only forcing hooks.
