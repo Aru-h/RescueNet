@@ -4,7 +4,23 @@ Audience: whoever is starting the single-board demo on real hardware. This is th
 
 ## 1. Boot switch position
 
-Set **BOOT1 = high, BOOT0 = low** (DEV boot). Both boot pins low (Flash Boot) is out of scope — don't use it for the demo.
+Set **SW1 (BOOT1) = right/ON, SW2 (BOOT0) = left/OFF** (DEV boot). Verify it: press the black NRST button — **LED2 must turn red**. If it doesn't, the board is not actually in DEV boot and nothing below will work (this exact mistake — an invalid switch combination that is neither DEV boot nor Flash Boot — caused unexplained "Target not responding" debugger failures during bring-up).
+
+Flash Boot (standalone, no debugger) is **both switches left/OFF** — out of scope for the demo; see [Known limitation E.18](../KNOWN_LIMITATIONS.md).
+
+## 1a. Recommended path: standalone SRAM build (`DevRam`), no FSBL
+
+The most reliably verified path this session was running the Application **by itself**, loaded straight into internal SRAM by the debugger, with no FSBL involved at all — this isolates the Application from the still-unresolved FSBL→XIP handoff entirely, and is what actually produced a full confirmed run (handshake, world transfer, live telemetry, fault detection) on real hardware.
+
+1. In CubeIDE, select the **`DevRam`** build configuration for the `Appli` project (uses `STM32N657X0HXQ_LRUN.ld` + defines `APPLI_DEVRAM_STANDALONE`) and build it.
+2. Create a debug configuration pointing at `DevRam/tron_board_Appli.elf` directly. No external loader is needed (it's internal SRAM, not external flash) and no signing is needed (the debugger loads the plain `.elf`).
+3. Debug, then **Resume**. Expect `TRON Board is online and ready!`, then the kernel/CONFIG boot trace, same as the FSBL path below.
+4. **Reset the board (CubeIDE Restart + Resume) before every new mission run.** Stopping and relaunching a mission on an already-connected board session without resetting it first leaves the board's mission-link session state stale, and the board silently stops sending team-status reports (observed directly: `reports_forwarded` stuck at 0 for the rest of that session). A fresh reset is required between runs — this is a known limitation, not yet fixed at the protocol level.
+5. Runs at 600 MHz CPU clock, no I/D-cache (both were tried and reverted — see the corresponding git commit for why), `-O2`. Confirmed clean (zero skipped ticks) at 30× real-time pace with `combined` fault injection over 150+ ticks; 50-60× still occasionally skip ticks under heavy fault load.
+
+## 1b. FSBL → XIP path (steps 2 onward below)
+
+This is the originally-intended production boot chain. The linker-script bug in step "3" was found and fixed this session, but a live end-to-end test of this exact path (FSBL signed+flashed, Application signed+flashed, full boot trace observed) was **not completed this session** due to time constraints — do not assume it works from this doc alone until it's actually been run.
 
 ## 2. One-time debug configuration setup (STM32CubeIDE)
 
@@ -40,7 +56,7 @@ The FSBL itself needs no signing — CubeIDE's Debug launch flashes its plain `.
 1. Board connected via the onboard ST-LINK USB, boot pins as in step 1.
 2. Run the `tron_board_FSBL` debug configuration (Debug button, or the launch icon's dropdown if a previous config is selected).
 3. It flashes both binaries, resets, and halts once (a "Break at ... no debug information" stop right after connect — this is the debugger's own halt point before any of our code runs, not a fault).
-4. Hit **Resume**. The FSBL runs, prints its boot trace over USART1, jumps to the Application, and the Application starts ticking.
+4. Hit **Resume**. The FSBL's own boot trace over USART1 has been observed reliably. Whether it then successfully jumps to the Application and the Application starts ticking via this exact path (signed FSBL + signed XIP Appli + hardware reset) has **not been confirmed this session** — see section 1b above. Use the `DevRam` path (section 1a) for a demo you can rely on today.
 5. If a breakpoint at `BOOT_Application` was left set from earlier debugging, remove it (or just Resume past it) — the demo should run to completion uninterrupted, not stop there.
 
 ## 5. Serial output
