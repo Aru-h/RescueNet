@@ -104,6 +104,30 @@
 #include <tk/tkernel.h>
 #include <tm/tmonitor.h>   /* tm_printf() - temporary DBG instrumentation below */
 
+/*
+ * BOARD_RADIO_ENABLED: the single-board DK submission (see Makefile's
+ * DK_SINGLE_BOARD_FLAGS) has no peer to talk to - all 10 teams run
+ * local, over core/vbus.c, not comms_transport/LoRa - so it must not
+ * depend on this chip at all: not on it being flashed correctly, not
+ * on it being physically present, not on its SPI bus behaving. Default
+ * 0 (compiled out) so a missing/dead radio can never stall or spam the
+ * tick loop; -DBOARD_RADIO_ENABLED=1 restores the real driver below
+ * unchanged, for the two-board configuration this file was written
+ * for. When 0, everything past this point compiles out except the
+ * small stub block at the bottom that satisfies main_board.c's three
+ * direct (non-weak) extern calls - sx1262_hal_init(), sx1262_poll_rx(),
+ * sx1262_hal_get_random_u32() - plus the ordinary declarations every
+ * build needs. lora_spi_transmit()/lora_radio_tx_busy() are NOT
+ * redefined here when disabled: core/comms_transport.c already has a
+ * __attribute__((weak)) default for both (see that file's own
+ * comment), so simply not providing a strong override here lets the
+ * linker fall back to those automatically, same as before this file's
+ * driver ever existed.
+ */
+#ifndef BOARD_RADIO_ENABLED
+#define BOARD_RADIO_ENABLED 0
+#endif
+
 #include "stm32n657xx.h"
 
 #include "sx126x.h"
@@ -117,6 +141,8 @@
 #ifdef SX1262_SOFT_SPI
 #include "soft_spi.h"            /* bit-banged SPI, used instead of SPI5 - see spi5_init() below */
 #endif
+
+#if BOARD_RADIO_ENABLED
 
 /*
  * -----------------------------------------------------------------------
@@ -1241,3 +1267,75 @@ void sx1262_poll_rx(void)
         }
     }
 }
+
+#else /* !BOARD_RADIO_ENABLED */
+
+/*
+ * Stand-ins for the three functions main_board.c calls directly via its
+ * own `extern` declarations (not through a weak-default pattern, unlike
+ * lora_spi_transmit()/lora_radio_tx_busy() - see the top-of-file
+ * comment). Nothing below touches SPI5, GPIO or the SX1262 in any way.
+ */
+
+/* One-time bring-up, called once from main_board.c's start sequence.
+   Nothing to bring up. */
+void sx1262_hal_init(void)
+{
+}
+
+/* Called every tick. Nothing to poll; every tick is a no-op, same cost
+   as not calling it at all. */
+void sx1262_poll_rx(void)
+{
+}
+
+/* No chip to draw entropy from - fail every time, exactly like every
+   real attempt failing on hardware would. main_board.c already retries
+   a few times then falls back to a weaker epoch derived from the
+   system clock (see its own comment on this call site), so this isn't
+   a new failure mode, just the permanent case of an existing one. */
+int sx1262_hal_get_random_u32(uint32_t *out)
+{
+    (void)out;
+    return 1;
+}
+
+/* core/vendor/sx126x_driver/src/sx126x.c (the vendored driver core)
+   calls these four unconditionally from its own API functions - it has
+   no idea whether BOARD_RADIO_ENABLED is 0 or 1, and it's always
+   compiled/linked into the build either way (see the Makefile's
+   BOARD_SOURCES). With the real implementations above compiled out,
+   nothing left in this build ever calls INTO sx126x.c's API in the
+   first place (sx1262_hal_init()/sx1262_poll_rx() above are both
+   empty), so these four are dead code at runtime - they exist purely
+   so the link succeeds. Every one fails cleanly rather than touching
+   any peripheral. */
+sx126x_hal_status_t sx126x_hal_write(const void *context, const uint8_t *command,
+                                      const uint16_t command_length, const uint8_t *data,
+                                      const uint16_t data_length)
+{
+    (void)context; (void)command; (void)command_length; (void)data; (void)data_length;
+    return SX126X_HAL_STATUS_ERROR;
+}
+
+sx126x_hal_status_t sx126x_hal_read(const void *context, const uint8_t *command,
+                                     const uint16_t command_length, uint8_t *data,
+                                     const uint16_t data_length)
+{
+    (void)context; (void)command; (void)command_length; (void)data; (void)data_length;
+    return SX126X_HAL_STATUS_ERROR;
+}
+
+sx126x_hal_status_t sx126x_hal_reset(const void *context)
+{
+    (void)context;
+    return SX126X_HAL_STATUS_ERROR;
+}
+
+sx126x_hal_status_t sx126x_hal_wakeup(const void *context)
+{
+    (void)context;
+    return SX126X_HAL_STATUS_ERROR;
+}
+
+#endif /* BOARD_RADIO_ENABLED */
