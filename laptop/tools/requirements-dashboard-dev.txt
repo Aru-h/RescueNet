@@ -1,9 +1,9 @@
 # Dev/test-only dependency for the Live Ops dashboard's end-to-end
 # check (laptop/tools/dashboard_e2e_selftest.py, `make
-# check-dashboard-e2e`). Deliberately NOT in the repo root's
-# requirements.txt: that file is read by the simulator, dataset and
-# board tooling, none of which touch a browser. Nothing in a normal
-# `make`/build/simulation run needs this file.
+# check-dashboard-e2e`). Also listed in the repo root's requirements.txt
+# so `pip install -r requirements.txt` alone is enough to run every
+# `make check-*` target; this file remains for anyone who only wants
+# the dashboard e2e dependency on its own.
 #
 # Usage (from a dev checkout, not CI/build):
 #   pip install -r laptop/tools/requirements-dashboard-dev.txt

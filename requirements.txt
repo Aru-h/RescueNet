@@ -5,3 +5,9 @@ pyserial
 numpy
 pandas
 scikit-learn
+# Dashboard end-to-end check only (make check-dashboard-e2e,
+# laptop/tools/dashboard_e2e_selftest.py). Not needed by the simulator,
+# dataset tooling, or the plain dashboard server itself. After
+# installing this, fetch a browser once with:
+#   python -m playwright install chromium
+playwright

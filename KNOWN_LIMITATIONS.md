@@ -116,3 +116,11 @@ Audience: anyone running, presenting or judging the single-board STM32N6570-DK b
 ## E. Not yet verified on hardware
 
 17. **The DK build's timing and memory are not yet measured on the board.** Tick duration (DWT counter), stack/heap headroom over a full 3000-tick run, and the AI's inference time on the DK (weights ≈ 74 KB of flash, float32) still have to be measured on the physical board. Until then, treat them as estimates.
+
+## F. Board bring-up (STM32N6570-DK)
+
+See [`docs/DK_DEMO_LAUNCH.md`](docs/DK_DEMO_LAUNCH.md) for the full bring-up and demo-launch procedure. Summary of the parts that matter for judging or reproducing a run:
+
+18. **Flash Boot is unresolved (ST case 00269955); this build runs in DEV boot via the `DevRam` STM32CubeIDE debug configuration instead.** DEV boot loads and runs the firmware from RAM. Boot switches: DEV = BOOT1 on / BOOT0 off; Flash = both off (not currently usable — see above).
+19. **Reset the board between mission runs.** DEV/RAM boot does not reliably restart a clean mission on its own; power-cycle or reset before starting a new run rather than re-running the previous session's state.
+20. **10x pace (`time_scale=10` in the dashboard/live simulator) is fully safe.** 30x pace has been verified working but is not guaranteed as a supported baseline — if a demo run at 30x looks off, drop back to 10x.

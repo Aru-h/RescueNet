@@ -47,6 +47,10 @@ Thumbs.db
 .vscode/
 __pycache__/
 .venv/
+venv/
+.env
+*.log
+.ipynb_checkpoints/
 .pytest_cache/
 *.pyc
 *.dSYM/
