@@ -661,14 +661,14 @@ feature_spec = {
 }
 with open(f"{OUTPUT_DIR}/feature_spec.json", "w") as f:
     json.dump(feature_spec, f, indent=2)
-# Also written at the repo root: generate_feature_spec.py's default input,
-# and the file this project commits as the frozen contract.
-with open("feature_spec.json", "w") as f:
+# Also written to ml/feature_spec.json: generate_feature_spec.py's default
+# input, and the file this project commits as the frozen contract.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "feature_spec.json"), "w") as f:
     json.dump(feature_spec, f, indent=2)
 
 print(f"\nSaved all preprocessed arrays + scaler + feature_columns + "
       f"fault_class_names + feature_spec.json to ./{OUTPUT_DIR}/ "
-      f"(feature_spec.json also written to the repo root).")
+      f"(feature_spec.json also written to ml/).")
 print("The 75 inputs, in order:")
 for i, name in enumerate(feature_columns):
     print(f"  [{i:2d}] {name}")

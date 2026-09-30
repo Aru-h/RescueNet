@@ -364,7 +364,7 @@ def write_weights_header(path, scaler_mean, scaler_std, hidden_layers, output_la
 
 
 def check_matches_feature_spec(feature_columns, scaler_mean, scaler_std,
-                               spec_path="feature_spec.json"):
+                               spec_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "feature_spec.json")):
     """Guards the two things that would silently break the board: the
     checkpoint's feature ORDER and the scaler must both equal the committed
     feature_spec.json (which core/feature_spec.h is generated from). The

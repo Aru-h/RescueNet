@@ -9,6 +9,7 @@ usage: generate_feature_spec.py [feature_spec.json]
 """
 import json
 import re
+import os
 import sys
 
 
@@ -144,8 +145,11 @@ def generate_python(spec: dict) -> str:
     return "\n".join(lines)
 
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def main():
-    spec_path = sys.argv[1] if len(sys.argv) > 1 else "feature_spec.json"
+    spec_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(REPO_ROOT, "ml", "feature_spec.json")
     with open(spec_path) as f:
         spec = json.load(f)
 
@@ -153,14 +157,14 @@ def main():
         raise ValueError("feature_spec.json: inputs/scaler_mean/scaler_std length mismatch")
 
     header = generate_header(spec)
-    with open("core/feature_spec.h", "w") as f:
+    with open(os.path.join(REPO_ROOT, "core", "feature_spec.h"), "w") as f:
         f.write(header)
     print(f"wrote core/feature_spec.h ({len(spec['inputs'])} inputs)")
 
     py = generate_python(spec)
-    with open("feature_spec.py", "w") as f:
+    with open(os.path.join(REPO_ROOT, "ml", "feature_spec.py"), "w") as f:
         f.write(py)
-    print("wrote feature_spec.py")
+    print("wrote ml/feature_spec.py")
 
 
 if __name__ == "__main__":

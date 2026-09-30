@@ -10,7 +10,7 @@ import os, sys
 import numpy as np, pandas as pd
 REPO = os.environ.get("REPO", os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 WORK = os.environ.get("TRON_G_WORK", os.path.abspath("work"))
-sys.path.insert(0, REPO)
+sys.path.insert(0, os.path.join(REPO, "ml"))
 import evidence_channels as ec
 
 N_SEEDS = int(os.environ.get("N_SEEDS", "8"))

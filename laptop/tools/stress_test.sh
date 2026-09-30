@@ -1,6 +1,6 @@
 #!/bin/bash
-# stress_test.sh - run from the repo root (same dir as Makefile).
-# Usage: ./stress_test.sh [run_count] [induce_load]
+# laptop/tools/stress_test.sh - run from the repo root (same dir as Makefile).
+# Usage: laptop/tools/stress_test.sh [run_count] [induce_load]
 #   run_count:   number of iterations per phase (default 400)
 #   induce_load: "load" to also run a second phase with background
 #                CPU load, anything else/omitted to skip it

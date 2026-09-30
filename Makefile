@@ -859,26 +859,26 @@ check-env-raw-travel-cost-ablation: $(TRAVEL_COST_ABLATION_DIR)/tron_snapshot_da
 		$(PYTHON) $(TOOLS_DIR)/env_raw_travel_cost_ablation.py
 
 # Feature contract (single source of truth): core/feature_spec.h and
-# feature_spec.py are GENERATED from the committed feature_spec.json by
-# generate_feature_spec.py - never hand-edited. This regenerates both in
+# ml/feature_spec.py are GENERATED from the committed ml/feature_spec.json
+# by ml/generate_feature_spec.py - never hand-edited. This regenerates both in
 # place and fails if that changes anything relative to what's committed,
 # so a feature_spec.json edit that forgot to re-run the generator (or a
 # hand-edit to either generated file) is caught, not silently merged.
 check-feature-spec-fresh:
-	@test -f feature_spec.json || (echo "check-feature-spec-fresh: feature_spec.json missing - run data_prep.py first" && exit 1)
-	@$(PYTHON) generate_feature_spec.py feature_spec.json
-	@git diff --quiet -- core/feature_spec.h feature_spec.py || \
-		(echo "check-feature-spec-fresh: core/feature_spec.h / feature_spec.py are stale relative to the committed feature_spec.json:" && \
-		 git diff -- core/feature_spec.h feature_spec.py && exit 1)
-	@echo "check-feature-spec-fresh: core/feature_spec.h and feature_spec.py match feature_spec.json"
+	@test -f ml/feature_spec.json || (echo "check-feature-spec-fresh: ml/feature_spec.json missing - run ml/data_prep.py first" && exit 1)
+	@$(PYTHON) ml/generate_feature_spec.py ml/feature_spec.json
+	@git diff --quiet -- core/feature_spec.h ml/feature_spec.py || \
+		(echo "check-feature-spec-fresh: core/feature_spec.h / ml/feature_spec.py are stale relative to the committed ml/feature_spec.json:" && \
+		 git diff -- core/feature_spec.h ml/feature_spec.py && exit 1)
+	@echo "check-feature-spec-fresh: core/feature_spec.h and ml/feature_spec.py match ml/feature_spec.json"
 
-# Fast leak guard on the committed feature_spec.json alone (no CSV, no
-# simulator run) - data_prep.py asserts the same thing every time it runs;
+# Fast leak guard on the committed ml/feature_spec.json alone (no CSV, no
+# simulator run) - ml/data_prep.py asserts the same thing every time it runs;
 # this is the always-cheap version for CI/a plain `make check-feature-
 # spec-leak-guard` with nothing else built.
 check-feature-spec-leak-guard:
-	@test -f feature_spec.json || (echo "check-feature-spec-leak-guard: feature_spec.json missing - run data_prep.py first" && exit 1)
-	@$(PYTHON) $(TOOLS_DIR)/feature_spec_leak_check.py feature_spec.json
+	@test -f ml/feature_spec.json || (echo "check-feature-spec-leak-guard: ml/feature_spec.json missing - run ml/data_prep.py first" && exit 1)
+	@$(PYTHON) $(TOOLS_DIR)/feature_spec_leak_check.py ml/feature_spec.json
 
 # --- Standalone laptop/tools selftests ---------------------------------------
 # These seven selftests existed with no Makefile target at all, so nothing
@@ -1056,9 +1056,9 @@ check-zone-refresh:
 # "C vs Python feature parity: <=1e-5 scaled"): a real 5-seed run through
 # feature_pack_dump (core/feature_pack.c's own feature_pack_build_
 # vector(), same tick/same state snapshot.c just recorded from) compared
-# against data_prep.py's --dump-raw-features reconstruction of the same
+# against ml/data_prep.py's --dump-raw-features reconstruction of the same
 # rows from the training CSV it wrote, both scaled with the same
-# committed feature_spec.py constants. See feature_pack_dump.c's and
+# committed ml/feature_spec.py constants. See feature_pack_dump.c's and
 # feature_pack_parity_test.py's own top-of-file comments.
 FEATURE_PACK_PARITY_DIR = build/feature-pack-parity
 
@@ -1069,7 +1069,7 @@ check-feature-pack-parity:
 		$(TOOLS_DIR)/feature_pack_dump.c $(CORE_SOURCES) \
 		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
 	@cd $(FEATURE_PACK_PARITY_DIR) && ./feature_pack_dump 5 300 9001 features_c.csv
-	@$(PYTHON) data_prep.py $(FEATURE_PACK_PARITY_DIR)/tron_snapshot_dataset.csv \
+	@$(PYTHON) ml/data_prep.py $(FEATURE_PACK_PARITY_DIR)/tron_snapshot_dataset.csv \
 		--dump-raw-features $(FEATURE_PACK_PARITY_DIR)/features_py_raw.csv > /dev/null
 	@$(PYTHON) $(TOOLS_DIR)/feature_pack_parity_test.py \
 		$(FEATURE_PACK_PARITY_DIR)/features_c.csv $(FEATURE_PACK_PARITY_DIR)/features_py_raw.csv

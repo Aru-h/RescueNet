@@ -49,7 +49,7 @@ src = sub('train_idx, val_idx, test_idx = group_split(df, y_balance, group_col="
 src = sub('X = downcast_numeric_columns(X)\nprint("Number of features (with path_is_unreachable):"',
  'X = downcast_numeric_columns(X)\nX.to_pickle(f"{OUTPUT_DIR}/X_raw.pkl")\nprint("Number of features (with path_is_unreachable):"', src)
 
-sys.path.insert(0, REPO)          # evidence_channels.py
+sys.path.insert(0, os.path.join(REPO, "ml"))  # evidence_channels.py
 os.chdir(WORK)
 # run in __main__'s own namespace so the script's pickled SafeStandardScaler resolves
 exec(compile(src, "data_prep-2.py(patched copy)", "exec"), sys.modules["__main__"].__dict__)
