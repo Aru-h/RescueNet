@@ -4,7 +4,7 @@ Purpose: let a second person check, step by step, what was run, what came out, a
 
 ## 0. Setup and provenance
 
-- Branch `ai-integration`. Code state for the numbers below: thresholds commit `3bea8f6`; analysis tools `443828d`.
+- Measured on the `ai-integration` branch (thresholds commit `3bea8f6`, analysis tools `443828d`), since merged into `submission/single-board-dk` as `c578f5d` with the same thresholds and model. Paths below are as of that merge; the ML scripts formerly at the repository root (`data_prep.py`, `feature_spec.*`, `evidence_channels.py`) now live in `ml/`, and the checkpoint is `ml/fault_predictor_checkpoint.pt`.
 - Simulator: `./tron` (AI off, default build) and `./tron_ai` (`make tron-ai`, `-DFAULT_MODEL_LOADED=1`). Both use `-DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=1`.
 - Model: 75 -> 128 -> 64 -> 5 float32 MLP, sigmoid outputs; checkpoint epoch 8, val_loss 0.435948 (`core/fault_predictor_weights.h` is its BatchNorm-folded export).
 - Seeds: **held-out 1001-1020** for every reported number, except threshold selection which used **dev seeds 2001-2008** (training seeds are 1-300). 3000 ticks per run, fault profile `random` unless stated (`none` = no faults).
@@ -154,7 +154,7 @@ A second layer sits above the flag: an AI flag only produces an action stronger 
 3. Real-world performance (all data is synthetic; fault rate unrealistic).
 4. Environment and mission are OFF; using them would need a recovery action for them and probably retraining.
 5. `make evaluate` still shows the AI's detection as worse than no-AI (communication 32.4% vs 53.2%); it needs per-class AI scores in its CSV to fix (AI build only), not yet implemented.
-6. `make check-dashboard-e2e` has never run (playwright missing on the owner's machine), so the dashboard changes are untested end to end; the full step-9 chain was not re-run on the latest commit.
+6. (Resolved.) `make check-dashboard-e2e` has since been run on the merged code on the owner's Mac and passed in full, including replay take-over.
 
 ## 6. How to reproduce every result
 

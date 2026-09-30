@@ -1,5 +1,36 @@
 # Changelog
 
+## Trained AI fault predictor integrated; repository tidied for submission
+
+- Trained fault predictor integrated (`core/fault_predictor.c`,
+  `core/fault_predictor_weights.h`): float32 MLP 75 → 128 → 64 → 5,
+  BatchNorm folded, independent sigmoid per class, `_Static_assert`s on the
+  layer sizes against `FEATURE_SPEC_NUM_INPUTS`.
+- Off by default (`FAULT_MODEL_LOADED=0`): the default build and its dataset
+  are byte-identical to before. Enabled by `make tron-ai` (`./tron_ai`), the
+  `make evaluate` +AI variant and the STM32CubeIDE `DevRam` configuration.
+- Per-class decision thresholds in `core/fault_predictor.h` (mobility 0.573,
+  communication 0.965, resource 0.705; environment and mission off), tuned in
+  closed loop on dev seeds 2001–2008 and verified on held-out seeds 1001–1020:
+  +3.05 incidents resolved per run (95% CI 1.30–4.80). See
+  `ml/MODEL_REPORT.md` and `docs/evaluation/AI_EVALUATION_BRIEF.md`.
+- Feature contract is now 75 inputs: `incident_req_capability` gains
+  category 4 (`SPEC_SUPPORT`).
+- The map-ready gate before inference now applies to board builds only; the
+  laptop build stores the world locally and never fed the gate, so the model
+  previously never ran in the simulator.
+- `ml/`: data preparation, training, evaluation, baseline, export, the
+  feature contract (moved from the repository root) and the trained
+  checkpoint. New `make check-model-parity` (C forward pass vs PyTorch within
+  1e-5).
+- Dashboard: `TRON_BINARY` selects the simulator binary (e.g. `./tron_ai`);
+  recordings record `model_loaded`.
+- Replay demo recording replaced with `demo_seed1002_combined_600ticks`,
+  recorded at current code so replay take-over accepts it.
+- Removed the Raspberry Pi Pico board (`board/Raspberry_Pi_Pico/`, its
+  selftest and Makefile targets) from the single-board submission; the
+  multi-board path remains on the development branch.
+
 ## Single-board STM32N6570-DK (the submission target)
 
 - New `DK_SINGLE_BOARD_FLAGS` in the `Makefile`

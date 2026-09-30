@@ -27,8 +27,15 @@ the `tron` / REMCE rescue-coordination system. Start at the repo root
 
 ## Machine learning (`docs/ml/`)
 
-- [`ml/FEATURE_CONTRACT_DESIGN.md`](ml/FEATURE_CONTRACT_DESIGN.md) — the AI
-  fault predictor's 74-input feature contract.
+- [`../ml/MODEL_REPORT.md`](../ml/MODEL_REPORT.md) — the AI fault predictor:
+  data, features, results, thresholds, closed-loop evaluation, limitations.
+- [`../ml/README.md`](../ml/README.md) — how to train, evaluate and export it.
+- [`ml/FEATURE_CONTRACT_DESIGN.md`](ml/FEATURE_CONTRACT_DESIGN.md) — the
+  75-input feature contract.
+- [`ml/FAULT_PREDICTOR_THRESHOLDS.md`](ml/FAULT_PREDICTOR_THRESHOLDS.md) — the
+  per-class decision thresholds and how they were chosen.
+- [`evaluation/AI_EVALUATION_BRIEF.md`](evaluation/AI_EVALUATION_BRIEF.md) —
+  the full closed-loop evaluation record: tests, commands, raw results.
 
 ## Research (`docs/research/`)
 

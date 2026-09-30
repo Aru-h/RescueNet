@@ -1,7 +1,11 @@
+# Dashboard and board connection (laptop/tools/app.py).
 flask
 pyserial
-# Analysis gates only (check-environment-e2e-stress,
-# check-persistence-bounded-forgiveness); not needed by the dashboard.
+# Analysis gates (check-environment-e2e-stress,
+# check-persistence-bounded-forgiveness) and the ML pipeline in ml/.
 numpy
 pandas
 scikit-learn
+# ML pipeline in ml/ only (training, evaluation, export on a development
+# machine); nothing runs on the board, and the dashboard does not need it.
+torch
