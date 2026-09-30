@@ -1,7 +1,7 @@
 # REMCE — Fault-tolerant rescue coordination on μT-Kernel 3.0
 
-**TRON Programming Contest 2026 · RTOS Application category · Theme: TRON × AI**
-Team: `<TEAM NAME>` — `<MEMBER NAMES>`
+**TRON Programming Contest 2026 · RTOS Application category (Student) · Theme: TRON × AI**
+Team: **Rescuenet** — Harush S G Temkar, Harshith Ragi
 
 Ten rescue teams (search, medical, extraction, perimeter, support) respond to
 incidents in a procedurally generated, earthquake-damaged city. There is no
