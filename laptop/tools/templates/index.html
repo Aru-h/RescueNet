@@ -250,6 +250,16 @@
   .live-map-header h2 { margin: 0; font-size: 13px; }
   .live-map-canvas-area { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; }
   .live-map-square { position: relative; aspect-ratio: 1 / 1; max-width: 100%; max-height: 100%; width: auto; height: 100%; margin: auto; }
+  .legend-help-btn { margin-left: 8px; width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid var(--border); background: var(--panel2); color: var(--text); font-size: 10px; font-weight: 700; line-height: 1; cursor: pointer; }
+  .legend-help-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .legend-modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); }
+  .legend-modal.hidden { display: none; }
+  .legend-modal-box { width: min(440px, 92vw); max-height: 70vh; display: flex; flex-direction: column; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+  .legend-modal-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .legend-modal-head button { background: none; border: none; color: var(--muted); font-size: 14px; cursor: pointer; }
+  .legend-modal-body { overflow-y: auto; padding: 8px 14px 12px; }
+  .legend-row { display: flex; align-items: center; gap: 12px; padding: 5px 0; font-size: 12px; border-bottom: 1px solid rgba(139,152,165,0.12); }
+  .legend-sym { flex: 0 0 34px; display: flex; align-items: center; justify-content: center; }
   .live-map-legend { font-size: 10px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow-x: auto; flex: 0 0 auto; }
 
   .live-side-tabs { display: flex; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
@@ -487,28 +497,12 @@
               </div>
             </div>
             <div class="live-map-legend">
-              <span>Incidents (colour=priority, size=victims):</span>
+              <span>Incidents:</span>
               <span style="margin-left:5px;display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span> P1
               <span style="margin-left:6px;display:inline-block;width:9px;height:9px;background:#d29922;vertical-align:-1px;"></span> P2
               <span style="margin-left:6px;display:inline-block;width:9px;height:9px;background:#39c5cf;vertical-align:-1px;"></span> P3
               <span style="margin-left:6px;display:inline-block;width:9px;height:9px;background:#8b98a5;vertical-align:-1px;"></span> P4
-              <span style="margin-left:6px;display:inline-flex;align-items:center;justify-content:center;width:11px;height:11px;background:#1f6feb;color:#fff;border-radius:50%;font-size:8px;vertical-align:-2px;">2</span> shared building
-              <span style="margin-left:6px;display:inline-flex;align-items:center;justify-content:center;width:11px;height:11px;background:#0d1117;border-radius:50%;font-size:8px;vertical-align:-2px;">🔥</span> hazard (click/hover any marker for detail)
-              <span style="margin-left:10px;display:inline-block;width:6px;height:6px;background:rgba(139,152,165,0.7);border-radius:50%;vertical-align:0px;"></span> building (outline on hover/click or zoomed in)
-              <span style="margin-left:10px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(63,185,80,0.9);border-radius:50%;vertical-align:-1px;"></span> available
-              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(88,166,255,0.9);border-radius:50%;vertical-align:-1px;"></span> en route
-              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px solid rgba(210,153,34,0.9);border-radius:50%;vertical-align:-1px;"></span> on scene
-              <span style="margin-left:6px;display:inline-block;width:9px;height:9px;border:1.5px dashed rgba(139,152,165,0.9);border-radius:50%;vertical-align:-1px;"></span> resting
-              <span style="margin-left:6px;display:inline-block;width:6px;height:6px;background:#f85149;border-radius:50%;vertical-align:0px;"></span> fault
-              <span style="margin-left:6px;display:inline-block;width:7px;height:7px;background:#a371f7;transform:rotate(45deg);vertical-align:0px;"></span> manual override
-              <span style="margin-left:8px;"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;vertical-align:-1px;"></span> safe zone</span>
-              <span style="margin-left:8px;display:inline-block;width:12px;height:9px;background:rgba(158,178,207,0.7);vertical-align:-1px;"></span> road (brighter = arterial)
-              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(6,9,13,0.9),rgba(6,9,13,0.9) 2px,rgba(230,237,243,0.4) 2px,rgba(230,237,243,0.4) 3px);vertical-align:-1px;"></span> blocked/rubble
-              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;border:1px dashed rgba(248,81,73,0.75);vertical-align:-1px;position:relative;">&#10005;</span> road blocked
-              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(210,153,34,0.15),rgba(210,153,34,0.15) 2px,rgba(210,153,34,0.5) 2px,rgba(210,153,34,0.5) 3px);vertical-align:-1px;"></span> hazard zone
-              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;background:rgba(56,139,253,0.5);vertical-align:-1px;"></span> flood/water
-              <span style="margin-left:6px;display:inline-block;width:12px;height:9px;border-left:1px solid rgba(230,237,243,0.5);vertical-align:-1px;"></span> district border
-              <span style="margin-left:8px;">- - <span style="color:#a371f7;">epicenter</span></span>
+              <button type="button" class="legend-help-btn" onclick="openMapLegend()" title="What do the map symbols mean?" aria-label="Map legend">?</button>
               <span style="margin-left:8px;" id="dragHintText">drag to pan · wheel to zoom · drag a team onto an incident to reassign</span>
             </div>
           </div>
@@ -2678,6 +2672,40 @@ DashboardTheme.init();
 // the existing cross-panel DashboardSelection, not a panel of its own.
 ConsensusNetwork.init(document.getElementById("consensusCanvas"));
 DetectionTimeline.init(document.getElementById("timelineCanvas"), document.getElementById("timelineLegend"), TEAM_COLORS, SPEC_NAMES, document.getElementById("timelineRange"));
+</script>
+
+<div id="mapLegendModal" class="legend-modal hidden" onclick="if(event.target===this)closeMapLegend()">
+  <div class="legend-modal-box" role="dialog" aria-label="Map legend">
+    <div class="legend-modal-head"><b>Map legend</b><button type="button" onclick="closeMapLegend()" aria-label="Close">✕</button></div>
+    <div class="legend-modal-body">
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span></span><span>Priority 1 incident (highest); marker size = number of victims</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;background:#d29922;vertical-align:-1px;"></span></span><span>Priority 2 incident</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;background:#39c5cf;vertical-align:-1px;"></span></span><span>Priority 3 incident</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;background:#8b98a5;vertical-align:-1px;"></span></span><span>Priority 4 incident (lowest)</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-flex;align-items:center;justify-content:center;width:11px;height:11px;background:#1f6feb;color:#fff;border-radius:50%;font-size:8px;vertical-align:-2px;">2</span></span><span>Number of incidents sharing one building</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-flex;align-items:center;justify-content:center;width:11px;height:11px;background:#0d1117;border-radius:50%;font-size:8px;vertical-align:-2px;">🔥</span></span><span>Active hazard (fire/gas) - click or hover any marker for detail</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:6px;height:6px;background:rgba(139,152,165,0.7);border-radius:50%;vertical-align:0px;"></span></span><span>Building (outline shows on hover/click or when zoomed in)</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid rgba(63,185,80,0.9);border-radius:50%;vertical-align:-1px;"></span></span><span>Team: available</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid rgba(88,166,255,0.9);border-radius:50%;vertical-align:-1px;"></span></span><span>Team: en route</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid rgba(210,153,34,0.9);border-radius:50%;vertical-align:-1px;"></span></span><span>Team: on scene</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;border:1.5px dashed rgba(139,152,165,0.9);border-radius:50%;vertical-align:-1px;"></span></span><span>Team: resting</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:6px;height:6px;background:#f85149;border-radius:50%;vertical-align:0px;"></span></span><span>Team has an injected fault</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:7px;height:7px;background:#a371f7;transform:rotate(45deg);vertical-align:0px;"></span></span><span>Team manually overridden by you</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;"></span></span><span>Safe zone</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:9px;background:rgba(158,178,207,0.7);vertical-align:-1px;"></span></span><span>Road (brighter = arterial)</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(6,9,13,0.9),rgba(6,9,13,0.9) 2px,rgba(230,237,243,0.4) 2px,rgba(230,237,243,0.4) 3px);vertical-align:-1px;"></span></span><span>Blocked / rubble</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:9px;border:1px dashed rgba(248,81,73,0.75);vertical-align:-1px;position:relative;">&#10005;</span></span><span>Road blocked</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(210,153,34,0.15),rgba(210,153,34,0.15) 2px,rgba(210,153,34,0.5) 2px,rgba(210,153,34,0.5) 3px);vertical-align:-1px;"></span></span><span>Hazard zone</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:9px;background:rgba(56,139,253,0.5);vertical-align:-1px;"></span></span><span>Flood / water</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:9px;border-left:1px solid rgba(230,237,243,0.5);vertical-align:-1px;"></span></span><span>District border</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="color:#a371f7;">- - -</span></span><span>Earthquake epicenter</span></div>
+    </div>
+  </div>
+</div>
+<script>
+function openMapLegend() { document.getElementById("mapLegendModal").classList.remove("hidden"); }
+function closeMapLegend() { document.getElementById("mapLegendModal").classList.add("hidden"); }
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMapLegend(); });
 </script>
 </body>
 </html>
