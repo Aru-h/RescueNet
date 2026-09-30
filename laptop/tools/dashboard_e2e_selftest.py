@@ -775,17 +775,21 @@ def _replay_takeover_check(page, console_errors):
     }""")
     check(replayed["tick"] == target, f"replay is at tick {target} before taking over (got {replayed['tick']})")
 
+    # Paced like a person would watch it (earlier checks left 3 ms in the field).
+    page.fill("#tickDelay", "150")
     page.click("#replayTakeoverBtn")
     saw_rebuilding = False
+    # runLive() shows "running" from the first instant, so only the
+    # server's takeover_ready (which pauses the run at tick T) counts.
     for _ in range(300):
         label = page.eval_on_selector("#runStateLabel", "el => el.textContent")
         if "Rebuilding" in label:
             saw_rebuilding = True
-        if label in ("paused", "running"):
+        if label == "paused":
             break
         page.wait_for_timeout(100)
     else:
-        fail_and_exit("take over did not reach a live state within 30s")
+        fail_and_exit("take over did not reach the paused take-over state within 30s")
         return
     if not saw_rebuilding:
         print("INFO: fast-forward finished before the 'Rebuilding state' label could be observed (fast machine)")
