@@ -18,8 +18,13 @@ fetch it yourself:
 
 ```sh
 cd board/STM32N6570-DK/vendor
-git clone --recurse-submodules https://github.com/tron-forum/mtk3_bsp2.git
+git clone --recurse-submodules --branch v1.00.03 https://github.com/tron-forum/mtk3_bsp2.git
 ```
+
+Use **v1.00.03**, the version the board build was tested with. The newer
+v1.00.04 does not compile for the STM32N6570-DK (`'sN_INTVEC' undeclared`
+in `sysdepend/stm32_cube/cpu/core/armv8m/interrupt.c`). If you already cloned
+the latest version, switch with `git checkout v1.00.03` inside `mtk3_bsp2/`.
 
 `board/STM32N6570-DK/` and `make check-board` expect it at
 `board/STM32N6570-DK/vendor/mtk3_bsp2/` exactly as cloned above. If
