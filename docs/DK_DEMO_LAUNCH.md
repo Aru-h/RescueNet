@@ -1,6 +1,6 @@
 # STM32N6570-DK demo launch checklist (DEV boot / debug probe)
 
-Audience: whoever is starting the single-board demo on real hardware. This is the **only** supported boot path for the demo right now — standalone Flash Boot hangs at the FSBL→Application handoff (see [Known limitation E.18](../KNOWN_LIMITATIONS.md) and the full diagnosis report). Follow these steps exactly; skipping the loader-init or reset-mode settings below reproduces failures we already hit and fixed once.
+Audience: whoever is starting the single-board demo on real hardware. This is the **only** supported boot path for the demo right now — standalone Flash Boot hangs at the FSBL→Application handoff (see [Known limitation 1](../KNOWN_LIMITATIONS.md) and the full diagnosis report). Follow these steps exactly; skipping the loader-init or reset-mode settings below reproduces failures we already hit and fixed once.
 
 Flash Boot is also open with ST as support case **00269955**.
 
@@ -8,7 +8,7 @@ Flash Boot is also open with ST as support case **00269955**.
 
 Set **SW1 (BOOT1) = right/ON, SW2 (BOOT0) = left/OFF** (DEV boot). Verify it: press the black NRST button — **LED2 must turn red**. If it doesn't, the board is not actually in DEV boot and nothing below will work (this exact mistake — an invalid switch combination that is neither DEV boot nor Flash Boot — caused unexplained "Target not responding" debugger failures during bring-up).
 
-Flash Boot (standalone, no debugger) is **both switches left/OFF** — out of scope for the demo; see [Known limitation E.18](../KNOWN_LIMITATIONS.md).
+Flash Boot (standalone, no debugger) is **both switches left/OFF** — out of scope for the demo; see [Known limitation 1](../KNOWN_LIMITATIONS.md).
 
 ## 1a. Recommended path: standalone SRAM build (`DevRam`), no FSBL
 
