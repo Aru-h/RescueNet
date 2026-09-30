@@ -24,8 +24,7 @@ LDFLAGS ?= -lm
 # --- Layout ---------------------------------------------------------
 # core/                    portable simulator: no stdio/OS/filesystem
 #                          dependencies. Verified freestanding-clean
-#                          for Cortex-M55/Cortex-M0+ (see check-board/
-#                          check-pico).
+#                          for Cortex-M55 (see check-board).
 # core/vendor/             vendored (redistribution-licensed, unlike
 #                          either BSP) SHARED dependencies - currently
 #                          just sx126x_driver, the SX1262 radio driver
@@ -42,10 +41,6 @@ LDFLAGS ?= -lm
 # board/STM32N6570-DK/     STM32N6570-DK entry point + debug/snapshot
 #                          backends, plus its own vendor/mtk3_bsp2 BSP
 #                          (see that folder's own vendor/README.md).
-# board/Raspberry_Pi_Pico/ Raspberry Pi Pico entry point + debug/
-#                          snapshot backends, plus its own
-#                          vendor/mtk3_bsp (v1 — NOT the DK's BSP2)
-#                          BSP (see that folder's own vendor/README.md).
 
 CORE_DIR = core
 LAPTOP_DIR = laptop
@@ -68,13 +63,13 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 TARGET = tron
 TARGET_AI = tron_ai
 
-.PHONY: all clean smoke tron-ai check-model-parity label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-pack-parity check-feature-spec-fresh check-feature-spec-leak-guard check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-cubeide-single-flags check-single-board-dk-harness check-live-override-selftest check-replay-takeover-selftest check-live-override-noop-regression
+.PHONY: all clean smoke tron-ai check-model-parity label_dataset check-board check-board-compile check-board-link check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-pack-parity check-feature-spec-fresh check-feature-spec-leak-guard check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-cubeide-single-flags check-single-board-dk-harness check-live-override-selftest check-replay-takeover-selftest check-live-override-noop-regression
 
 all: $(TARGET) $(LABELER)
 
 # Peer consensus (docs/architecture/CONSENSUS_DESIGN.md): the laptop `tron` build turns on the
 # virtual bus and enforcement (decision D1). Deliberately NOT part of CFLAGS:
-# every board build, Pico build, two-board harness and selftest keeps
+# every multi-board build, two-board harness and selftest keeps
 # VIRTUAL_BUS_ENABLED=0 and compiles none of it. Override with
 # LAPTOP_CONSENSUS_FLAGS='' or CONSENSUS_ENFORCE=0 for a shadow-mode build.
 CONSENSUS_ENFORCE ?= 1
@@ -85,9 +80,9 @@ LAPTOP_CONSENSUS_FLAGS ?= -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=$(CONSENSU
 # the laptop CFLAGS above already apply unconditionally), plus the same
 # consensus flags LAPTOP_CONSENSUS_FLAGS uses (fast path stays on via
 # consensus_config.h's own default - not repeated here). Deliberately NOT
-# folded into ARM_CFLAGS/PICO_ARM_CFLAGS below: those stay exactly as they
+# folded into ARM_CFLAGS below: it stays exactly as it
 # are (VIRTUAL_BUS_ENABLED=0, default 5-teams-per-board split) so every
-# existing multi-board board/Pico/two-board-harness target keeps building
+# existing multi-board board/two-board-harness target keeps building
 # and testing unchanged - see check-board-single-* targets and
 # check-single-board-dk-harness further down for what actually uses this.
 DK_SINGLE_BOARD_FLAGS ?= -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=$(CONSENSUS_ENFORCE)
@@ -152,10 +147,8 @@ N ?= 5
 # BSP_DIR's default moved here (from the old top-level vendor/) as
 # part of splitting each physical board into its own self-contained
 # board/<name>/ folder -- see board/STM32N6570-DK/vendor/README.md's
-# own note on why. A Pico/RP2040 target, when it exists, gets its own
-# board/Raspberry_Pi_Pico/vendor/mtk3_bsp (v1, NOT this v2 BSP -- see
-# the original handoff doc's BSP/toolchain section) and its own build
-# rule entirely; it does NOT reuse BSP_DIR/ARM_CFLAGS below, which are
+# own note on why. Any other board would get its own BSP and build
+# rule entirely; it would NOT reuse BSP_DIR/ARM_CFLAGS below, which are
 # STM32N6570-DK/Cortex-M55-specific (-mcpu=cortex-m55,
 # -D_STM32CUBE_DISCOVERY_N657_).
 ARM_CC ?= arm-none-eabi-gcc
@@ -207,7 +200,7 @@ ifeq ($(SX1262_SOFT_SPI),1)
   ARM_CFLAGS += -DSX1262_SOFT_SPI
 endif
 
-check-board: check-board-ids-distinct check-board-compile check-board-link
+check-board: check-board-compile check-board-link
 	@echo "check-board: compile + link checks both passed ($(BSP_MODE))"
 
 check-board-compile:
@@ -318,8 +311,8 @@ check-board-link: check-board-compile
 # Mirrors check-board-compile/check-board-link exactly (same BOARD_SOURCES,
 # same BSP_MODE fallback), just with DK_SINGLE_BOARD_FLAGS added and a
 # separate object directory, so this never touches build/board-check --
-# check-consensus-multiboard-untouched's nm scan of that directory (and of
-# build/pico-check) must keep seeing zero vbus_/consensus_ symbols, and this
+# check-consensus-multiboard-untouched's nm scan of that directory
+# must keep seeing zero vbus_/consensus_ symbols, and this
 # target's whole point is the opposite assertion (see check-board-single-
 # symbols below). Two independent object sets from the same sources, one
 # with the flag on and one with it off, is what actually proves the flag -
@@ -327,7 +320,7 @@ check-board-link: check-board-compile
 ARM_CFLAGS_DK_SINGLE = $(ARM_CFLAGS) $(DK_SINGLE_BOARD_FLAGS)
 BOARD_OBJ_DIR_SINGLE = build/board-single-check
 
-check-board-single: check-board-ids-distinct check-board-single-compile check-board-single-link check-board-single-symbols check-cubeide-single-flags
+check-board-single: check-board-single-compile check-board-single-link check-board-single-symbols check-cubeide-single-flags
 	@echo "check-board-single: single-board DK compile + link + symbol checks all passed ($(BSP_MODE))"
 
 check-board-single-compile:
@@ -455,164 +448,25 @@ check-cubeide-single-flags:
 
 clean:
 	rm -f $(TARGET) $(TARGET_AI) $(LABELER) tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv tron_telemetry.log
-	rm -rf $(BOARD_OBJ_DIR) $(BOARD_OBJ_DIR_SINGLE) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
+	rm -rf $(BOARD_OBJ_DIR) $(BOARD_OBJ_DIR_SINGLE) $(SX126X_OBJ_DIR)
 	rm -f $(TWO_BOARD_HARNESS_BIN) $(MISSION_LINK_STATUS_GATE_TEST_BIN) \
 		$(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) \
 		$(RECOVERY_MANAGER_PERSISTENCE_SELFTEST_BIN)
 	rm -rf $(SELFTEST_BIN_DIR)
 
-# --- Pico compile check --------------------------------------------------
-# Mirrors check-board-compile/-link above, same class of check now that
-# real project sources exist (board/Raspberry_Pi_Pico/{main_board,
-# mission_link_task,debug,snapshot}.c, ported from board/STM32N6570-DK/'s
-# equivalents) -- not just the BSP-only smoke check this used to be
-# (check-pico-bsp, kept below as its own smaller target: still useful on
-# its own to isolate "is the vendored BSP itself broken" from "did OUR
-# port break something", since it only ever compiles the BSP's own
-# sample, never our files).
-#
-# -mcpu=cortex-m0plus, NOT cortex-m55: RP2040 is dual Cortex-M0+, a
-# different core family from the DK's Cortex-M55, not just a different
-# chip in the same family -- see board/Raspberry_Pi_Pico/vendor/README.md.
-# -D_PICO_RP2040_ is the one BSP-select flag (see that same README for
-# why this, not a hand-set TARGET_DIR, is the real mechanism).
-PICO_DIR = board/Raspberry_Pi_Pico
-PICO_BSP_DIR ?= $(PICO_DIR)/vendor/mtk3_bsp
-PICO_ARM_CC ?= arm-none-eabi-gcc
-PICO_ARM_CFLAGS_BASE = -std=gnu11 -Wall -Wextra -mcpu=cortex-m0plus -mthumb \
-	-ffreestanding -fno-builtin -D_PICO_RP2040_ -DTHIS_BOARD_ID=1 \
-	-I$(CORE_DIR) -I$(PICO_DIR)
-PICO_BSP_OBJ_DIR = build/pico-bsp-check
-PICO_BOARD_OBJ_DIR = build/pico-check
-
-ifneq ($(wildcard $(PICO_BSP_DIR)/include),)
-  # -I$(SX126X_DIR): sx1262_hal.c #includes "sx126x.h"/"sx126x_hal.h", which
-  # live in core/vendor/sx126x_driver/src, not board/Raspberry_Pi_Pico/.
-  PICO_ARM_CFLAGS = $(PICO_ARM_CFLAGS_BASE) \
-	-I$(PICO_BSP_DIR)/config -I$(PICO_BSP_DIR)/include -I$(PICO_BSP_DIR)/kernel/knlinc \
-	-I$(SX126X_DIR)
-  # sx126x.c (vendored driver core) + sx1262_hal.c (this board's HAL,
-  # raw RP2040-register SPI0 + this BSP's own libbsp gpio_*() wrapper)
-  # now fold into the real per-board build, so check-pico-link genuinely
-  # link-checks the HAL instead of leaving those four symbols undefined.
-  PICO_BOARD_SOURCES = $(CORE_SOURCES) $(PICO_DIR)/debug.c $(PICO_DIR)/snapshot.c $(PICO_DIR)/main_board.c $(PICO_DIR)/mission_link_task.c $(SX126X_DIR)/sx126x.c $(PICO_DIR)/sx1262_hal.c
-  PICO_BSP_MODE = real BSP (v1) headers ($(PICO_BSP_DIR))
-else
-  PICO_ARM_CFLAGS = $(PICO_ARM_CFLAGS_BASE)
-  # Same reasoning as check-board's fallback mode: board/Raspberry_Pi_Pico/
-  # debug.c and main_board.c call real BSP APIs (tm_printf, tk_cre_tsk,
-  # ...), so they genuinely can't compile without the BSP present -- not
-  # a check-pico bug. Fallback checks core/ only.
-  PICO_BOARD_SOURCES = $(CORE_SOURCES)
-  PICO_BSP_MODE = plain freestanding, core/ only ($(PICO_BSP_DIR) not found -- see board/Raspberry_Pi_Pico/vendor/README.md; $(PICO_DIR)/*.c needs real BSP headers so it's skipped in this mode)
-endif
-
-check-pico: check-board-ids-distinct check-pico-compile check-pico-link
-	@echo "check-pico: compile + link checks both passed ($(PICO_BSP_MODE))"
-
-check-pico-compile:
-	@echo "check-pico mode: $(PICO_BSP_MODE)"
-	@mkdir -p $(PICO_BOARD_OBJ_DIR)
-	@for f in $(PICO_BOARD_SOURCES); do \
-		obj=$(PICO_BOARD_OBJ_DIR)/$$(basename $$f .c).o; \
-		echo "  ARM-CC  $$f"; \
-		$(PICO_ARM_CC) $(PICO_ARM_CFLAGS) -c $$f -o $$obj || exit 1; \
-	done
-	@echo "check-pico-compile: all sources compile clean for Cortex-M0+ ($(PICO_BSP_MODE))"
-
-# Same undefined-cross-reference check as check-board-link -- see that
-# target's own long comment above for the full 5-step reasoning; not
-# repeated here since it's identical, only the target CPU/BSP differ.
-PICO_ARM_TARGET_FLAGS = -mcpu=cortex-m0plus -mthumb
-
-check-pico-link: check-pico-compile
-	@echo "check-pico-link: partial-linking every $(PICO_BOARD_OBJ_DIR)/*.o together to check for undefined cross-file references"
-	@objs="$$(ls $(PICO_BOARD_OBJ_DIR)/*.o 2>/dev/null)"; \
-	if [ -z "$$objs" ]; then \
-		echo "check-pico-link: no objects in $(PICO_BOARD_OBJ_DIR) -- check-pico-compile did not run?"; \
-		exit 1; \
-	fi; \
-	$(ARM_NM) -o $$objs | awk -F'[: \t]+' '$$2=="U" {print $$3}' | sort -u > $(PICO_BOARD_OBJ_DIR)/.undefined_syms.txt; \
-	$(ARM_NM) -o $$objs | awk -F'[: \t]+' '$$2!="U" && NF>=4 {print $$4}' | sort -u > $(PICO_BOARD_OBJ_DIR)/.defined_syms.txt; \
-	comm -23 $(PICO_BOARD_OBJ_DIR)/.undefined_syms.txt $(PICO_BOARD_OBJ_DIR)/.defined_syms.txt > $(PICO_BOARD_OBJ_DIR)/.unresolved_syms.txt; \
-	libc_a="$$($(PICO_ARM_CC) $(PICO_ARM_TARGET_FLAGS) -print-file-name=libc.a)"; \
-	libm_a="$$($(PICO_ARM_CC) $(PICO_ARM_TARGET_FLAGS) -print-file-name=libm.a)"; \
-	libgcc_a="$$($(PICO_ARM_CC) $(PICO_ARM_TARGET_FLAGS) -print-file-name=libgcc.a)"; \
-	: > $(PICO_BOARD_OBJ_DIR)/.expected_external.txt; \
-	for lib in "$$libc_a" "$$libm_a" "$$libgcc_a"; do \
-		if [ -f "$$lib" ]; then \
-			$(ARM_NM) "$$lib" 2>/dev/null | awk -F'[: \t]+' 'NF>=3 && $$2 ~ /^[A-Za-z]$$/ && $$2!="U" && $$2!="u" {print $$3}' >> $(PICO_BOARD_OBJ_DIR)/.expected_external.txt; \
-		fi; \
-	done; \
-	if [ -d "$(PICO_BSP_DIR)" ]; then \
-		grep -rhoE '^[[:space:]]*IMPORT[[:space:]]+[A-Za-z_][A-Za-z0-9_ ]*\*?[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(' $(PICO_BSP_DIR) 2>/dev/null \
-			| sed -E 's/^.*[[:space:]\*]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\($$/\1/' \
-			>> $(PICO_BOARD_OBJ_DIR)/.expected_external.txt; \
-		grep -rhoE '^[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[A-Za-z_][A-Za-z0-9_]*\(' $(PICO_BSP_DIR)/include/bsp 2>/dev/null \
-			| sed -E 's/^[A-Za-z_][A-Za-z0-9_]*[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\($$/\1/' \
-			>> $(PICO_BOARD_OBJ_DIR)/.expected_external.txt; \
-	fi; \
-	sort -u $(PICO_BOARD_OBJ_DIR)/.expected_external.txt -o $(PICO_BOARD_OBJ_DIR)/.expected_external.txt; \
-	comm -23 $(PICO_BOARD_OBJ_DIR)/.unresolved_syms.txt $(PICO_BOARD_OBJ_DIR)/.expected_external.txt > $(PICO_BOARD_OBJ_DIR)/.bad_undefined_syms.txt; \
-	if [ -s $(PICO_BOARD_OBJ_DIR)/.bad_undefined_syms.txt ]; then \
-		echo ""; \
-		echo "check-pico-link: FAILED -- undefined reference(s) to symbol(s) that should be"; \
-		echo "defined somewhere in core/*.c or $(PICO_DIR)/*.c, but aren't in this build:"; \
-		echo ""; \
-		sed 's/^/    /' $(PICO_BOARD_OBJ_DIR)/.bad_undefined_syms.txt; \
-		echo ""; \
-		echo "(checked against the real libc.a/libm.a/libgcc.a for this target multilib and"; \
-		echo "every IMPORT-declared symbol under $(PICO_BSP_DIR) -- these are not libc/BSP calls)"; \
-		echo ""; \
-		echo "This means some file calls a function that no .c file in core/ or"; \
-		echo "$(PICO_DIR)/ actually defines -- a cross-file interface break that"; \
-		echo "check-pico-compile's per-file compile step cannot catch on its own."; \
-		exit 1; \
-	fi; \
-	echo "check-pico-link: real partial link of $$(echo $$objs | wc -w) objects clean --"; \
-	echo "  every undefined reference is accounted for by libc/libm/libgcc or an"; \
-	echo "  IMPORT-declared BSP symbol under $(PICO_BSP_DIR); no cross-file interface breaks."
-
-# --- Pico BSP smoke check ------------------------------------------------
-# Smaller, narrower check kept alongside check-pico above: only ever
-# compiles the vendored BSP's OWN bundled sample (app_program/app_main.c),
-# never this project's files -- useful specifically to isolate "the
-# vendored BSP itself is broken" from "our port broke something", which
-# check-pico-compile alone can't distinguish (a BSP header problem and a
-# project-file problem both show up as "check-pico-compile failed").
-check-pico-bsp:
-	@if [ ! -d "$(PICO_BSP_DIR)/include" ]; then \
-		echo "check-pico-bsp: SKIPPED -- $(PICO_BSP_DIR) not found (see"; \
-		echo "  board/Raspberry_Pi_Pico/vendor/README.md to fetch it)"; \
-		exit 0; \
-	fi
-	@mkdir -p $(PICO_BSP_OBJ_DIR)
-	@echo "  ARM-CC  $(PICO_BSP_DIR)/app_program/app_main.c"
-	@# -Wno-unused-parameter: the vendored sample task_1(INT stacd, void *exinf)
-	@# ignores both µT-Kernel task arguments; vendored code is not edited here.
-	@$(PICO_ARM_CC) -std=gnu11 -Wall -Wextra -Wno-unused-parameter -mcpu=cortex-m0plus -mthumb \
-		-ffreestanding -fno-builtin -D_PICO_RP2040_ \
-		-I$(PICO_BSP_DIR)/config -I$(PICO_BSP_DIR)/include -I$(PICO_BSP_DIR)/kernel/knlinc \
-		-c $(PICO_BSP_DIR)/app_program/app_main.c -o $(PICO_BSP_OBJ_DIR)/app_main.o
-	@echo "check-pico-bsp: vendored mtk3_bsp (pico_rp2040) compiles clean for Cortex-M0+"
-
 # --- SX126X driver smoke check --------------------------------------------
-# Compiles core/vendor/sx126x_driver/src/sx126x.c freestanding for BOTH
-# real target CPUs -- unlike check-board/check-pico, this driver core
+# Compiles core/vendor/sx126x_driver/src/sx126x.c freestanding for the
+# DK's Cortex-M55 -- unlike check-board, this driver core
 # doesn't need either board's BSP headers at all (it's genuinely
 # standalone, calling out to sx126x_hal.h's four functions, which have
 # no implementation anywhere yet -- see core/vendor/sx126x_driver/
 # README.md's "What's still genuinely undecided" section). This only
-# proves the vendored driver core itself compiles clean for both CPUs.
-# It is now ALSO wired into check-board-compile/check-pico-compile's
-# BOARD_SOURCES/PICO_BOARD_SOURCES (real per-board HALs exist now --
-# board/STM32N6570-DK/sx1262_hal.c, board/Raspberry_Pi_Pico/sx1262_hal.c
-# -- so check-board-link/check-pico-link genuinely link-check them
-# instead of failing on "undefined reference to sx126x_hal_write" etc).
-# This target stays anyway: it's a narrower, faster sanity check that
-# isolates "is the vendored driver core itself sound" from "did one
-# board's HAL/BSP integration break", the same way check-pico-bsp is
-# kept alongside check-pico for an analogous reason.
+# proves the vendored driver core itself compiles clean.
+# It is ALSO wired into check-board-compile's BOARD_SOURCES (with
+# board/STM32N6570-DK/sx1262_hal.c), so check-board-link link-checks it.
+# This target stays anyway: a narrower, faster sanity check that
+# isolates "is the vendored driver core itself sound" from "did the
+# board's HAL/BSP integration break".
 SX126X_DIR = core/vendor/sx126x_driver/src
 SX126X_OBJ_DIR = build/sx126x-driver-check
 
@@ -625,10 +479,7 @@ check-sx126x-driver:
 	@echo "  ARM-CC  $(SX126X_DIR)/sx126x.c (Cortex-M55, DK)"
 	@$(ARM_CC) -std=gnu11 -Wall -Wextra -mcpu=cortex-m55 -mthumb -mfloat-abi=hard -mfpu=auto \
 		-ffreestanding -fno-builtin -c $(SX126X_DIR)/sx126x.c -o $(SX126X_OBJ_DIR)/sx126x_m55.o
-	@echo "  ARM-CC  $(SX126X_DIR)/sx126x.c (Cortex-M0+, Pico)"
-	@$(PICO_ARM_CC) -std=gnu11 -Wall -Wextra -mcpu=cortex-m0plus -mthumb \
-		-ffreestanding -fno-builtin -c $(SX126X_DIR)/sx126x.c -o $(SX126X_OBJ_DIR)/sx126x_m0.o
-	@echo "check-sx126x-driver: vendored sx126x_driver core compiles clean for both Cortex-M55 and Cortex-M0+"
+	@echo "check-sx126x-driver: vendored sx126x_driver core compiles clean for Cortex-M55"
 
 # --- Two-board mission-link harness check ---------------------------------
 # Builds and runs laptop/tools/two_board_harness.c for real: two forked OS
@@ -642,44 +493,6 @@ check-sx126x-driver:
 # laptop-only, host-gcc harness (real board firmware is out of scope; see
 # the file's own "Does NOT prove" section), so it uses $(CC), not $(ARM_CC).
 TWO_BOARD_HARNESS_BIN = build/two_board_harness
-
-# --- Board-id distinctness check --------------------------------------
-# core/lora_crypto.h's nonce construction (lora_crypto_build_nonce())
-# only guarantees two boards can never produce the same (key, nonce)
-# pair if their THIS_BOARD_ID values actually differ - that guarantee
-# is a per-target compile-time constant (-DTHIS_BOARD_ID=..., set once
-# each in ARM_CFLAGS above for the DK and PICO_ARM_CFLAGS below for the
-# Pico), and NOTHING checks the two against each other at build time -
-# they're baked into two separate binaries by two separate recipes, so
-# no _Static_assert can span them. A provisioning slip (someone edits
-# one recipe's -DTHIS_BOARD_ID and not the other, or a future third
-# board reuses an existing value) would silently reintroduce the exact
-# nonce-collision vulnerability that field was added to close, with
-# nothing in the crypto layer itself able to catch it (see
-# core/lora_crypto.h's own doc on why this can't be caught mesh-side
-# either, once Channel 2 exists). This target is the cheapest place
-# such a mistake CAN be caught: both values are visible in this one
-# Makefile at once, even though the boards they belong to never are.
-check-board-ids-distinct:
-	@dk_id=$$($(ARM_CC) -dM -E -x c $(ARM_CFLAGS) /dev/null 2>/dev/null | grep -w THIS_BOARD_ID | awk '{print $$3}' | tr -d 'u'); \
-	pico_id=$$($(PICO_ARM_CC) -dM -E -x c $(PICO_ARM_CFLAGS) /dev/null 2>/dev/null | grep -w THIS_BOARD_ID | awk '{print $$3}' | tr -d 'u'); \
-	if [ -z "$$dk_id" ] || [ -z "$$pico_id" ]; then \
-		echo "check-board-ids-distinct: SKIPPED -- THIS_BOARD_ID not defined for one or both targets in this build mode."; \
-		echo "  (fallback/core-only mode does not compile board/*.c at all, so"; \
-		echo "  THIS_BOARD_ID is moot there -- see BSP_MODE/PICO_BSP_MODE above."; \
-		exit 0; \
-	fi; \
-	if [ "$$dk_id" = "$$pico_id" ]; then \
-		echo "check-board-ids-distinct: FAILED -- DK and Pico THIS_BOARD_ID both resolve to $$dk_id."; \
-		echo "  core/lora_crypto.h's per-board nonce partition (sender_board_id"; \
-		echo "  byte in lora_crypto_build_nonce()) only holds if every board's"; \
-		echo "  THIS_BOARD_ID is unique -- see this target's own comment in"; \
-		echo "  the Makefile. Fix Makefile's -DTHIS_BOARD_ID=... overrides"; \
-		echo "  (or board/*/main_board.c's #ifndef THIS_BOARD_ID fallbacks)"; \
-		echo "  so DK and Pico do not both resolve to the same value."; \
-		exit 1; \
-	fi; \
-	echo "check-board-ids-distinct: DK=$$dk_id, Pico=$$pico_id -- distinct, nonce partition assumption holds"
 
 check-two-board-harness:
 	@mkdir -p build
@@ -908,12 +721,12 @@ CBBA_BOARD_SELFTEST_CORE_SOURCES = $(filter-out $(CORE_DIR)/simulation.c $(CORE_
 check-selftests: check-handshake-selftest check-lora-frame-selftest \
 	check-mission-link-selftest check-override-selftest \
 	check-cbba-board-selftest check-sx1262-rx-selftest-dk \
-	check-sx126x-rx-selftest-pico check-comms-transport-selftest \
+	check-comms-transport-selftest \
 	check-mission-link-roster-selftest check-mission-mirror-selftest \
 	check-soft-spi-selftest check-sx1262-setup-selftest \
 	check-live-override-selftest check-replay-takeover-selftest \
 	check-model-parity
-	@echo "check-selftests: all fifteen laptop/tools selftests passed"
+	@echo "check-selftests: all fourteen laptop/tools selftests passed"
 
 # Part 4: drives a real `tron --live` subprocess over its actual
 # stdin/stdout (laptop/tools/live_override_selftest.py's own docstring
@@ -1194,7 +1007,7 @@ check-live-override-noop-regression: $(TARGET)
 	@echo "check-live-override-noop-regression: dataset CSV is byte-identical to $(LIVE_OVERRIDE_BASE_REF) (Part 4 is a true no-op with nothing on stdin)"
 
 # Multi-board builds must contain none of the virtual bus or consensus code
-# (design 7.8): the board, Pico and two-board targets build and pass as
+# (design 7.8): the board and two-board targets build and pass as
 # before, and no consensus_* / vbus_* symbol appears in any board object.
 # Needs arm-none-eabi-gcc; without it the object scan is skipped and the
 # board targets say so themselves.
@@ -1202,14 +1015,14 @@ check-live-override-noop-regression: $(TARGET)
 # whole-image link checks fail on the base branch too, for unrelated missing
 # snapshot and debug backends; the per-file compile checks still run, and so
 # does the link check whenever the BSP is present.
-CONSENSUS_MULTIBOARD_BOARD_CHECKS = check-board-compile check-pico-compile
+CONSENSUS_MULTIBOARD_BOARD_CHECKS = check-board-compile
 ifneq ($(wildcard $(BSP_DIR)/include),)
-  CONSENSUS_MULTIBOARD_BOARD_CHECKS = check-board check-pico
+  CONSENSUS_MULTIBOARD_BOARD_CHECKS = check-board
 endif
 
 check-consensus-multiboard-untouched: $(CONSENSUS_MULTIBOARD_BOARD_CHECKS) check-two-board-harness check-two-board-cbba-harness check-two-board-mission-harness
 	@found=0; \
-	for d in build/board-check build/pico-check; do \
+	for d in build/board-check; do \
 		[ -d $$d ] || continue; \
 		for o in $$d/*.o; do \
 			if $(ARM_NM) $$o 2>/dev/null | grep -Eq ' [A-Za-z] (consensus_|vbus_|g_diag_consensus|g_consensus|lora_time_on_air_ms_x1000)'; then \
@@ -1218,7 +1031,7 @@ check-consensus-multiboard-untouched: $(CONSENSUS_MULTIBOARD_BOARD_CHECKS) check
 		done; \
 	done; \
 	if [ $$found -ne 0 ]; then exit 1; fi; \
-	echo "check-consensus-multiboard-untouched: no consensus or vbus symbols in board or Pico objects"
+	echo "check-consensus-multiboard-untouched: no consensus or vbus symbols in board objects"
 
 check-soft-spi-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)
@@ -1226,14 +1039,6 @@ check-soft-spi-selftest:
 	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/soft_spi_selftest \
 		$(TOOLS_DIR)/soft_spi_selftest.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./soft_spi_selftest
-
-check-sx126x-rx-selftest-pico:
-	@mkdir -p $(SELFTEST_BIN_DIR)
-	@echo "  CC      $(TOOLS_DIR)/sx126x_rx_selftest_pico.c"
-	@$(CC) $(SELFTEST_CFLAGS) -I$(SX126X_DIR) -o $(SELFTEST_BIN_DIR)/sx126x_rx_selftest_pico \
-		$(TOOLS_DIR)/sx126x_rx_selftest_pico.c $(SX126X_DIR)/sx126x.c $(LORA_CRYPTO_SOURCES) \
-		$(CORE_DIR)/comms_transport.c $(CORE_DIR)/mission_state.c $(LDFLAGS)
-	@cd $(SELFTEST_BIN_DIR) && ./sx126x_rx_selftest_pico
 
 check-mission-link-roster-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)
@@ -1289,14 +1094,14 @@ REBOOT_HARNESS_BIN_DIR = build/reboot-harness
 
 check-two-board-reboot-harness:
 	@mkdir -p $(REBOOT_HARNESS_BIN_DIR)
-	@set -e; for board in STM32N6570-DK Raspberry_Pi_Pico; do \
+	@set -e; for board in STM32N6570-DK; do \
 		echo "  CC      $(TOOLS_DIR)/two_board_reboot_harness.c (board/$$board)"; \
 		$(CC) -std=gnu11 -Wall -Wextra -Wpedantic -I$(CORE_DIR) -Iboard/$$board -I$(LAPTOP_DIR) \
 			-I$(TOOLS_DIR)/harness_stubs -o $(REBOOT_HARNESS_BIN_DIR)/$$board \
 			$(TOOLS_DIR)/two_board_reboot_harness.c board/$$board/mission_link_task.c \
 			$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(CORE_SOURCES) -lm; \
 	done
-	@fail=0; for board in STM32N6570-DK Raspberry_Pi_Pico; do \
+	@fail=0; for board in STM32N6570-DK; do \
 		for mode in board1 board0; do for traffic in quiet cbba; do \
 			pass=0; i=0; while [ $$i -lt $(REBOOT_HARNESS_RUNS) ]; do \
 				if ./$(REBOOT_HARNESS_BIN_DIR)/$$board $$mode $$traffic > $(REBOOT_HARNESS_BIN_DIR)/last.log 2>&1; \
@@ -1308,7 +1113,7 @@ check-two-board-reboot-harness:
 		done; done; \
 	done; \
 	if [ $$fail -ne 0 ]; then echo "check-two-board-reboot-harness: FAILED - logs in $(REBOOT_HARNESS_BIN_DIR)/fail-*.log"; exit 1; fi
-	@echo "check-two-board-reboot-harness: every reboot scenario recovered on both boards"
+	@echo "check-two-board-reboot-harness: every reboot scenario recovered"
 
 # Laptop as clock master, through the real board code on two processes: a
 # clock tick from USART1 reaches both boards (latest wins), and a team
@@ -1318,7 +1123,7 @@ MISSION_HARNESS_BIN_DIR = build/mission-harness
 
 check-two-board-mission-harness:
 	@mkdir -p $(MISSION_HARNESS_BIN_DIR)
-	@set -e; for board in STM32N6570-DK Raspberry_Pi_Pico; do \
+	@set -e; for board in STM32N6570-DK; do \
 		echo "  CC      $(TOOLS_DIR)/two_board_mission_harness.c (board/$$board)"; \
 		$(CC) -std=gnu11 -Wall -Wextra -Wpedantic -I$(CORE_DIR) -Iboard/$$board -I$(LAPTOP_DIR) \
 			-I$(TOOLS_DIR)/harness_stubs -o $(MISSION_HARNESS_BIN_DIR)/$$board \
