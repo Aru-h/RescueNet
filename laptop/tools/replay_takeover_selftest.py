@@ -73,33 +73,44 @@ def test_bad_args():
 
 
 def live_run_with_overrides(seed, ticks, profile):
-    """Paced live run; sends one OVERRIDE and later an OVERRIDE_CLEAR
-    mid-run. Returns (frames by tick, script lines of the applied ones,
-    lines sent, acks). Acks come back one per line, in order - the same
-    pairing app.py's recorder relies on."""
+    """Paced live run. From tick 40 it tries an OVERRIDE (a different
+    team/incident pair each frame, one at a time) until one is applied,
+    then sends an OVERRIDE_CLEAR for that team 30 ticks later. Returns
+    (frames by tick, script lines of the applied ones, lines sent, acks).
+    Acks come back one per line, in order - the same pairing app.py's
+    recorder relies on."""
     proc = subprocess.Popen(
         [BINARY, str(seed), "1", str(ticks), "--live", "--fault-profile", profile, "--tick-delay-ms=8"],
         cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
     frames, sent, acks = {}, [], []
-    override_team = None
+    applied_at, cleared, attempt = None, False, 0
+
+    def send(cmd):
+        sent.append(cmd)
+        proc.stdin.write(cmd + "\n")
+        proc.stdin.flush()
+
     try:
         for line in proc.stdout:
             if line.startswith("LIVEFRAME "):
                 f = json.loads(line[10:])
                 k = f["tick"]
                 frames[k] = line.rstrip("\n")
-                if k >= 40 and not sent:
-                    inc = next((i for i in f["incidents"] if i["status"] != 3), None)
-                    team = next((t for t in f["teams"] if t["status"] in (1, 2)), None)
-                    if inc and team:
-                        override_team = team["id"]
-                        sent.append(f"OVERRIDE {k} {team['id']} {inc['id']}")
-                        proc.stdin.write(sent[-1] + "\n"); proc.stdin.flush()
-                elif k >= 70 and len(sent) == 1:
-                    sent.append(f"OVERRIDE_CLEAR {k} {override_team}")
-                    proc.stdin.write(sent[-1] + "\n"); proc.stdin.flush()
+                if len(sent) != len(acks):
+                    continue  # one line in flight at a time
+                if applied_at is None and k >= 40:
+                    incs = [i for i in f["incidents"] if i["status"] != 3 and i.get("pool", 0) == 0]
+                    if incs:
+                        team = f["teams"][attempt % len(f["teams"])]["id"]
+                        send(f"OVERRIDE {k} {team} {incs[attempt % len(incs)]['id']}")
+                        attempt += 1
+                elif applied_at is not None and not cleared and k >= applied_at + 30:
+                    send(f"OVERRIDE_CLEAR {k} {sent[-1].split()[2]}")
+                    cleared = True
             elif line.startswith("OVERRIDEACK "):
                 acks.append(json.loads(line[len("OVERRIDEACK "):]))
+                if applied_at is None and acks[-1]["result"] == "applied":
+                    applied_at = acks[-1]["effective_tick"]
     finally:
         proc.wait(timeout=120)
     script = []
@@ -114,10 +125,9 @@ def live_run_with_overrides(seed, ticks, profile):
 def test_with_overrides():
     seed, profile, total, t = 7, "combined", 220, 150
     frames, script, sent, acks = live_run_with_overrides(seed, total, profile)
-    check(len(sent) == 2 and len(acks) == 2, f"paced run sent 2 override lines and got 2 acks (sent={sent}, acks={len(acks)})")
-    applied = [a for a in acks if a["result"] == "applied"]
-    check(len(script) >= 1 and len(applied) >= 1, f"at least one override was applied (script={script})")
-    if not script:
+    check(len(sent) == len(acks) and len(sent) >= 1, f"every override line got an ack (sent={sent}, acks={len(acks)})")
+    check(any(l.startswith("OVERRIDE ") for l in script), f"an OVERRIDE (not just a clear) was applied (script={script})")
+    if not any(l.startswith("OVERRIDE ") for l in script):
         return
     with tempfile.NamedTemporaryFile("w", suffix=".ovr", delete=False) as fh:
         fh.write("\n".join(script) + "\n")
