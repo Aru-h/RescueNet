@@ -2,7 +2,7 @@
 
 ## In use (closed-loop tuned)
 
-`{ mobility 0.573, communication 0.965, resource 0.705, environment OFF, mission OFF }` (`core/fault_predictor.h`). Picked with `laptop/tools/ai_threshold_sweep.py` on dev seeds 2001-2008 and verified on held-out seeds 1001-1020; results in `AI_EVALUATION_BRIEF.md`. Environment and mission are disabled because, in the simulator, acting on them lowered incidents resolved even at threshold 0.95. The table below is the offline validation-set analysis (recall-leaning) they started from.
+`{ mobility 0.573, communication 0.965, resource 0.705, environment OFF, mission OFF }` (`core/fault_predictor.h`). Picked with `laptop/tools/ai_threshold_sweep.py` on dev seeds 2001-2008 and verified on held-out seeds 1001-1020; results in `AI_EVALUATION_BRIEF.md`. Environment and mission are disabled because acting on them lowers incidents resolved even with a perfect detector (ground-truth scores: −8.8 incidents per run, 95% CI −10.4 to −7.25, seeds 1001-1020). The reason is the recovery layer, not the model: those faults hit a map cell or the incident, not the team, but every recovery action acts on the team, so acting only pulls healthy teams off their work. See `ml/MODEL_REPORT.md` §7 and `AI_EVALUATION_BRIEF.md` C13. The table below is the offline validation-set analysis (recall-leaning) they started from.
 
 ## Offline validation analysis (starting point, not the shipped values)
 

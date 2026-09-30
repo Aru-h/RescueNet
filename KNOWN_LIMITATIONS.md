@@ -31,17 +31,24 @@ accepted code-audit findings, implementation notes) is in
 
 ## B. Fault detection and the AI
 
-5. **The AI acts on three of its five fault classes.** It is trained on
-   mobility, communication, resource, environment and mission faults, but only
-   the first three act. Acting on environment or mission made the mission
-   outcome worse in closed-loop tests, even at a high threshold, so those two
-   classes are switched off (`ml/MODEL_REPORT.md` §7).
-6. **The AI's gain is modest, and detection is not what limits it.** With the
+5. **The AI acts on three of its five fault classes, because of the recovery
+   layer, not the model.** It is trained on mobility, communication, resource,
+   environment and mission faults, but only the first three act. Environment
+   and mission faults don't damage the team: an environment fault raises the
+   cost of a road cell, and a mission fault makes the incident worse. Every
+   recovery action acts on the team (recover, reassign, send back, abort), so
+   acting on these faults only pulls healthy teams off their work. A test with
+   a perfect detector confirms it: letting environment and mission act costs
+   8.8 incidents per run (95% CI 7.25–10.40) even when every detection is
+   correct. Enabling them needs recovery actions on the map or the incident,
+   not a better model (`ml/MODEL_REPORT.md` §7).
+6. **The AI's gain is modest, and the model is not what limits it.** With the
    AI, teams resolve 38.95 incidents per run instead of 35.9 (+3.05, 95% CI
-   1.30–4.80, held-out seeds). A perfect detector reaches only 39.7. Faults in
-   this simulator clear on a fixed timer that no recovery action can shorten,
-   and only resource faults are measurably recoverable by the current recovery
-   actions (`ml/MODEL_REPORT.md` §9).
+   1.30–4.80, held-out seeds). A perfect detector reaches only 39.7, so a
+   better model could add at most about 0.75. The limit is the simulator's
+   fault model: a fault clears on a fixed timer that no recovery action can
+   shorten, and only resource faults are measurably recoverable by the current
+   recovery actions (`ml/MODEL_REPORT.md` §9).
 7. **Environment faults are nearly invisible.** An environment fault only
    raises the travel cost of one map cell, which leaves almost no trace in a
    team's own telemetry. The rules and consensus detect about 0% of them.

@@ -22,7 +22,13 @@ environment, mission).
 - **Closed-loop result:** acting on mobility, communication and resource, the
   AI raises incidents resolved from 35.9 to 38.95 per run (+3.05, 95% CI
   [1.30, 4.80]) on held-out seeds. Environment and mission are switched off
-  because acting on them made the mission worse (§7, §9).
+  because acting on them makes the mission worse **even with a perfect
+  detector**: those faults hit the map or the incident, while every recovery
+  action acts on the team (§7).
+- **The limits are in the recovery layer, not the model.** A perfect detector
+  on the shipped classes reaches only 39.7 incidents vs the model's 38.95,
+  because faults in this simulator clear on a fixed timer that no recovery
+  action can shorten (§9).
 - **Everything here was measured on simulator data**, not on real hardware.
 
 ## 2. Problem and labels
@@ -173,11 +179,43 @@ ablation on dev seeds 2001–2008 (no-AI reference 37.0) isolated the cause:
 | those three + environment and mission at 0.95 | 29.8 |
 
 Acting on environment or mission lowers incidents resolved even at threshold
-0.95. Their offline F1 is weak, and neither class has a dedicated recovery
-action, so their flags mostly pull healthy teams off tasks. They are therefore
-off. Among the three-class variants the differences were within noise, so
-mobility uses its validated best-F1 point (0.573). The shipped set was then
-verified on held-out seeds 1001–1020 (§9). After any retrain, re-run
+0.95.
+
+**Why environment and mission are off: the recovery layer, not the model.**
+Neither fault damages the team. An environment fault raises the travel cost of
+one road cell on the team's path; a mission fault makes the *incident* worse
+(more victims, priority raised toward critical). Every recovery action,
+however, acts on the team: local recovery, reallocating its task, returning it
+to the safe zone, or aborting. So when these classes trigger recovery, the
+system pulls a healthy team off its work, in the mission case off an incident
+that has just become more urgent, and fixes nothing, because the fault is in
+the map or the incident.
+
+This was tested directly by replacing the model's scores with perfect ground
+truth, a detector that is never wrong, and letting only these classes act
+(held-out seeds 1001–1020, random faults, paired against no AI):
+
+| What acts | Incidents resolved | vs no AI (95% CI) |
+|---|---|---|
+| No AI | 36.65 | — |
+| Perfect detector, environment only | 34.40 | −2.25 [−3.50, −1.00] |
+| Perfect detector, mission only | 29.30 | −7.35 [−9.20, −5.50] |
+| Perfect detector, environment + mission | 27.85 | −8.80 [−10.40, −7.25] |
+| Real model, environment + mission | 22.15 | −14.50 [−18.80, −11.20] |
+
+Even with perfect detection, acting on these classes costs up to 8.8 incidents
+per run, so they would have to be off with any model. The real model loses
+more (−14.5) because it also raises false alarms, but that is not what forces
+the decision. Turning these classes back on needs recovery actions that act on
+the map or the incident (for example rerouting around a blocked road, or
+sending reinforcements to a worsening incident), not a better model. The
+experiment reproduces with `bash laptop/tools/ai_env_mission_oracle.sh`; its
+control rows reproduce the shipped results exactly (no AI 36.65, shipped AI
+38.95, perfect detector on the three shipped classes 39.70).
+
+Among the three-class variants the differences were within noise, so mobility
+uses its validated best-F1 point (0.573). The shipped set was then verified on
+held-out seeds 1001–1020 (§9). After any retrain, re-run
 `laptop/tools/ai_threshold_sweep.py` the same way.
 
 ## 8. How it runs on the board
@@ -237,11 +275,14 @@ inside the AI-on runs it degrades by less than measurement noise: macro F1
 0.708 open loop vs 0.706 closed loop (5 classes), 0.799 vs 0.798 (4 classes
 excluding environment).
 
-**Why the gain is +3 and not more.** Faults cost about 12 incidents per run
-(47.85 with no faults vs 35.9). A diagnostic that replaced the model's scores
-with perfect ground truth reached only 39.7, about the same as the real AI
-(38.95), so detection quality is not the limit. Faults in this simulator clear
-on a fixed timer in `core/fault_injector.c`; no recovery action shortens them.
+**Why the gain is +3 and not more: not the model.** Faults cost about 12
+incidents per run (47.85 with no faults vs 35.9). A diagnostic that replaced
+the model's scores with perfect ground truth reached only 39.7, within noise of
+the real AI (38.95), so a better model could add at most about 0.75 incidents.
+The cause is how faults and recovery work in this simulator: a fault clears on
+a fixed timer in `core/fault_injector.c` (its duration plus one repair
+interval), and nothing outside the injector can end it early, so no recovery
+action shortens a fault, however early it is detected.
 Per single-class profile, even a perfect detector recovers:
 
 | Fault class | Incidents lost to faults | Recovered by perfect detection |
@@ -257,9 +298,15 @@ different recovery action could is untested.
 
 ## 10. Limitations
 
-- **Environment and mission are switched off.** Acting on them lowered the
-  mission outcome (§7). Using them would need a recovery action for each and
-  probably retraining.
+- **Environment and mission are switched off, for a recovery-layer reason.**
+  Acting on them lowers the mission outcome even with a perfect detector
+  (−8.8 incidents per run), because those faults are in the map or the
+  incident while every recovery action acts on the team (§7). Using them needs
+  new recovery actions that act on the map or the incident, not a better
+  model.
+- **The gain is capped by the simulator's fault model, not the detector.**
+  Faults clear on a fixed timer that no recovery action can shorten; a perfect
+  detector gains only about 0.75 incidents over the model (§9).
 - **Environment is the weakest class** (test F1 0.37, precision about 0.26 at
   best F1). An environment fault only raises the travel cost of one cell,
   leaving almost no trace in a team's own telemetry; what the model detects

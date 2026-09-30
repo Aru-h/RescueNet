@@ -45,6 +45,7 @@ A second layer sits above the flag: an AI flag only produces an action stronger 
 | C10 | A perfect detector does about as well as the real AI; detection is not the limit | PROVEN for the tested logic (single diagnostic) |
 | C11 | The remaining loss happens after detection, because recovery actions cannot recover it | INFERENCE |
 | C12 | The evaluation has biases (list in section 4) | PROVEN / SUPPORTED per item |
+| C13 | Environment and mission must stay off even with a perfect detector: the cause is the recovery layer, not the model | PROVEN |
 
 ## 3. Claims and proofs
 
@@ -67,7 +68,7 @@ A second layer sits above the flag: an AI flag only produces an action stronger 
 ### C4. Environment and mission cause the harm (ablation)
 - Test: `laptop/tools/ai_threshold_sweep.py` builds one AI binary per threshold set (`-DFAULT_PREDICTOR_CLASS_THRESHOLDS={...}`, 1.01 = class off) and runs it on **dev seeds 2001-2008** (random) plus 4 no-fault seeds. No-AI reference on the same seeds: 37.0 incidents.
 - Result (incidents resolved): mobility only 35.6 | communication only 36.6 | resource only 38.1 | **environment only 32.9** | **mission only 25.2** | mobility+communication+resource 38.8. Environment+mission at 0.95 on top of the three: 29.8.
-- Conclusion: acting on environment or mission lowers incidents even at 0.95. Reason (SUPPORTED): their offline F1 is weak (environment 0.34, mission 0.66) and neither class has a recovery evaluator, so flags only pull healthy teams off tasks. Noise: dev-seed differences of about 1 incident are within noise (three-class variants 37.8-39.6).
+- Conclusion: acting on environment or mission lowers incidents even at 0.95. Reason: PROVEN in C13 to be the recovery layer, not the model (a perfect detector acting on these classes also lowers incidents). Noise: dev-seed differences of about 1 incident are within noise (three-class variants 37.8-39.6).
 
 ### C5. Tuned thresholds: modest, real gain
 - Test: `python3 laptop/tools/evaluate.py --variants rules,rules+consensus,rules+consensus+ai --baseline rules --seeds-start 1001 --seeds-count 20 --ticks 3000 --profiles random,none` (paired per-seed differences, 95% bootstrap CI). Thresholds in the code: 0.573 / 0.965 / 0.705 / off / off.
@@ -135,6 +136,25 @@ A second layer sits above the flag: an AI flag only produces an action stronger 
 - Conclusion: the whole recoverable gain sits in resource faults; for mobility and communication even a perfect detector gains nothing measurable, and the remaining loss is the cost of the fault itself for its fixed duration. Environment and mission faults are not isolated by any profile, so their share of the random-profile loss is not separately measured.
 - Limits: the oracle also flags resting teams (no-ops); it is the same recovery logic, so this shows the *current recovery actions* cannot recover mobility/communication loss, not that no possible action could. I did not test alternative recovery actions, so whether a better response exists is open. Working ticks in the random runs: 15,178 (no faults) vs 12,061 (no AI) vs 11,889 (oracle) per run; resting ticks rise correspondingly.
 
+### C13. Environment and mission: off because of the recovery layer, not the model (PROVEN)
+- Code fact (`core/fault_injector.c`): an environment fault raises the travel cost of one road cell on the team's next path step and marks it `road_blocked`; a mission fault makes the team's *incident* worse (victim count up, priority raised one level toward critical). Neither changes the team itself. Every recovery action in `core/recovery_manager.c` targets the team (local recovery, task reallocation, return to safe zone, abort).
+- Test: same oracle patch as C10/C11 (scores overwritten with ground truth, corroboration rule kept), built with `-DFAULT_PREDICTOR_CLASS_THRESHOLDS` so that only environment and/or mission act (0.5 on a 0/1 oracle score = act on every true fault). Seeds 1001-1020, 3000 ticks, profile `random`, paired against `./tron` (rules + consensus). Script: `bash laptop/tools/ai_env_mission_oracle.sh` (builds in `build/env-mission-oracle/`, repo sources untouched).
+- Result (incidents resolved, mean; paired difference vs no AI, bootstrap 95% CI):
+
+| condition | incidents | vs no AI |
+|---|---|---|
+| no AI (`./tron`) | 36.65 | — |
+| real AI, shipped thresholds (control) | 38.95 | +2.30 [+0.65, +4.05] |
+| oracle, shipped thresholds (control) | 39.70 | +3.05 [+1.75, +4.45] |
+| oracle, environment only | 34.40 | -2.25 [-3.50, -1.00] |
+| oracle, mission only | 29.30 | -7.35 [-9.20, -5.50] |
+| oracle, environment + mission | 27.85 | -8.80 [-10.40, -7.25] |
+| real AI, environment + mission only (0.706 / 0.731) | 22.15 | -14.50 [-18.80, -11.20] |
+
+- The three control rows reproduce C5/C11 exactly (36.65, 38.95, 39.70), so the setup matches.
+- Conclusion: a detector that is never wrong still lowers incidents when environment or mission act, so these classes must stay off with any model; the cause is that the recovery actions target the team while these faults sit in the map or the incident. The real model's larger loss (-14.50 vs -8.80) adds its false alarms on top, but the decision does not depend on them. Enabling these classes requires recovery actions that act on the map or the incident (e.g. rerouting around a blocked cell, reinforcing a worsening incident).
+- Limits: `random` profile only (no single-class environment/mission profile exists); one set of 20 seeds.
+
 ## 4. Are the tests biased?
 
 | Bias | Direction | Evidence |
@@ -149,10 +169,10 @@ A second layer sits above the flag: an AI flag only produces an action stronger 
 
 ## 5. Not proven / open
 
-1. Whether a different recovery action could recover mobility/communication losses (C11 shows the current ones do not; cause inside the recovery logic not tested). Environment/mission loss share not isolated.
+1. Whether a different recovery action could recover mobility/communication losses (C11 shows the current ones do not). For environment/mission, C13 shows the current actions make things worse even with perfect detection.
 2. Whether faults during rest cost anything.
 3. Real-world performance (all data is synthetic; fault rate unrealistic).
-4. Environment and mission are OFF; using them would need a recovery action for them and probably retraining.
+4. Environment and mission are OFF; using them needs recovery actions that act on the map or the incident (C13). Whether retraining would then also help is untested.
 5. `make evaluate` still shows the AI's detection as worse than no-AI (communication 32.4% vs 53.2%); it needs per-class AI scores in its CSV to fix (AI build only), not yet implemented.
 6. (Resolved.) `make check-dashboard-e2e` has since been run on the merged code on the owner's Mac and passed in full, including replay take-over.
 

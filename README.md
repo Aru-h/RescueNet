@@ -144,10 +144,13 @@ communication, resource, environment and mission.
   95% CI 1.30–4.80)**, with no measurable harm on fault-free runs. The model
   keeps its accuracy when its own decisions change what teams do (macro F1
   0.708 before vs 0.706 while acting).
-- **Honest limits:** only mobility, communication and resource act;
-  environment and mission are switched off because acting on them made
-  missions worse. A perfect detector would reach only 39.7, so the remaining
-  loss comes from faults no recovery action can shorten, not from detection.
+- **Limits come from the recovery layer, not the model.** Only mobility,
+  communication and resource act. Environment and mission faults hit the map
+  or the incident, not the team, while every recovery action acts on the team;
+  even a detector that is never wrong costs 8.8 incidents per run when those
+  classes act, so they are off. And a perfect detector on the three shipped
+  classes reaches only 39.7 vs the model's 38.95, because faults clear on a
+  fixed timer no recovery action can shorten.
 - **Verified C = PyTorch:** `make check-model-parity` checks the C forward pass
   against PyTorch within 1e-5 (worst measured 3.6e-7).
 
