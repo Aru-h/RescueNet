@@ -1,6 +1,6 @@
 """
 Data preparation pipeline for the fault-detection model's 74-input feature
-contract (docs/ml/FEATURE_CONTRACT_DESIGN.md; decisions D1-D10 finalized in review).
+contract (FEATURE_CONTRACT_DESIGN.md; decisions D1-D10 finalized in review).
 Supersedes data_prep-2.py and data_prep-3.py - neither is imported here, and
 this is the only place the 74 inputs are defined; core/feature_spec.h and
 feature_spec.py are generated from this file's feature_spec.json output
@@ -100,7 +100,7 @@ FIXED_VOCABULARIES = {
     "twin_expected_operating_state": list(range(4)),
     "status": list(range(4)),                              # TeamStatus_t
     "fitness_tier": list(range(3)),                         # Fitness_Tier
-    "incident_req_capability": [-1, 0, 1, 2, 3],           # -1 = "none"
+    "incident_req_capability": [-1, 0, 1, 2, 3, 4],           # -1 = "none"
     "team_zone_id": list(range(10)),                        # NUM_SEARCH_ZONES
 }
 
@@ -136,8 +136,8 @@ def downcast_numeric_columns(frame):
 
 def parse_args():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("csv_path", nargs="?", default="tron_snapshot_dataset.csv",
-                     help="Path to the snapshot CSV (default: tron_snapshot_dataset.csv)")
+    ap.add_argument("csv_path", nargs="?", default="simulation_output_100_seeds.csv",
+                     help="Path to the snapshot CSV (default: simulation_output_100_seeds.csv)")
     ap.add_argument("--evidence-parity-check", action="store_true",
                      help="Also recompute evidence via evidence_channels.py's Python "
                           "mirror and report agreement against the CSV's own evidence "
@@ -222,7 +222,7 @@ print(max_cycle_per_run.value_counts().head(10))
 # run_id (laptop/snapshot.c's compute_composite_run_id()) is a deterministic
 # function of (world_seed, fault profile, CONSENSUS_ENFORCE, vbus link
 # loss). Within one dataset-generation session (fixed profile/enforce/
-# link-loss - docs/architecture/CONSENSUS_DESIGN.md 5.1's provenance rule: never mix 0/1
+# link-loss - CONSENSUS_DESIGN.md 5.1's provenance rule: never mix 0/1
 # enforce runs in one training set), this must be a bijection with
 # world_seed - a collision here means either a genuine hash collision
 # (astronomically unlikely at these row counts) or the dataset mixes run
@@ -524,19 +524,51 @@ for split_name, idx in [("train", train_idx), ("val", val_idx), ("test", test_id
     print(f"  {split_name}:")
     print(y_multi.iloc[idx].mean().to_string())
 
+# ── Save test-set identifiers for the lead-time metric (evaluate.py) ────
+# NOT part of feature_columns / X -- a parallel lookup table only, so
+# evaluate.py can trace a test row back to (run_id, team_id, cycle) and
+# the real watchdog's own detection flag, after the model has already
+# made its prediction. Restored here (dropped somewhere during the leak-
+# guard/fixed-vocab/74-input-contract rewrite -- confirmed against the
+# pre-rewrite file: every other section carried over, this one didn't;
+# it's outside everything that rewrite was checking, so it's the one
+# thing that could go missing without any assertion here catching it).
+#
+# Uses .iloc, not .loc: train_idx/val_idx/test_idx are POSITIONAL indices
+# from GroupShuffleSplit, but df's row LABELS are never reset after the
+# sort_values()/drop_duplicates() dedup above -- confirmed no reset_index()
+# anywhere before this point -- so .loc[test_idx, ...] would silently
+# select rows by leftover label value instead of by position. Same fix
+# applied to the sentinel-replacement block just below, which had the
+# identical bug.
+metadata_cols = ["run_id", "team_id", "cycle"]
+if "watchdog_anomaly_detected" in df.columns:
+    metadata_cols.append("watchdog_anomaly_detected")
+else:
+    print("WARNING: watchdog_anomaly_detected not in this CSV -- "
+          "evaluate.py's lead-time analysis will fail without it.")
+test_metadata = df[metadata_cols].iloc[test_idx].copy()
+np.save(f"{OUTPUT_DIR}/test_run_id.npy", test_metadata["run_id"].to_numpy())
+np.save(f"{OUTPUT_DIR}/test_team_id.npy", test_metadata["team_id"].to_numpy())
+np.save(f"{OUTPUT_DIR}/test_cycle.npy", test_metadata["cycle"].to_numpy())
+if "watchdog_anomaly_detected" in test_metadata.columns:
+    np.save(f"{OUTPUT_DIR}/test_watchdog_anomaly_detected.npy",
+            test_metadata["watchdog_anomaly_detected"].to_numpy())
+del test_metadata
+print(f"Saved test-set metadata ({len(test_idx)} rows) for evaluate.py's lead-time analysis.")
+
 # ── twin_remaining_path_cost: sentinel replacement ───────────────────
 # Uses only training rows to avoid leakage. Replaced with the mean of
 # actively-traveling rows only (nonzero, non-sentinel), not a plain mean
 # over all real rows - the column is heavily zero-inflated by teams that
 # have already arrived, and an unreachable path resembles "still
 # traveling" far more than "already arrived."
-real_nonzero_train_mask = (
-    (df.loc[train_idx, "twin_remaining_path_cost"] != 65535)
-    & (df.loc[train_idx, "twin_remaining_path_cost"] != 0)
-)
-mean_nonzero_real_cost = float(
-    df.loc[train_idx, "twin_remaining_path_cost"][real_nonzero_train_mask].mean()
-)
+#
+# .iloc, not .loc -- see the note on the test-metadata block above; same
+# bug, same fix, both pre-dating this rewrite.
+train_path_cost = df["twin_remaining_path_cost"].iloc[train_idx]
+real_nonzero_train_mask = (train_path_cost != 65535) & (train_path_cost != 0)
+mean_nonzero_real_cost = float(train_path_cost[real_nonzero_train_mask].mean())
 
 print(f"\ntwin_remaining_path_cost training-set mean (actively-traveling rows only): "
       f"{mean_nonzero_real_cost:.2f}")
@@ -548,9 +580,9 @@ feature_columns = feature_columns + ["path_is_unreachable"]
 X = df[feature_columns]
 X = downcast_numeric_columns(X)
 print("Number of features (with path_is_unreachable):", X.shape[1])
-assert X.shape[1] == 74, (
-    f"Expected exactly 74 inputs, got {X.shape[1]}. Stop and report why "
-    "rather than forcing 74 - see docs/ml/FEATURE_CONTRACT_DESIGN.md."
+assert X.shape[1] == 75, (
+    "Expected exactly 75 inputs, got a different count. Stop and report why "
+    "rather than forcing 75 - see FEATURE_CONTRACT_DESIGN.md."
 )
 del df
 

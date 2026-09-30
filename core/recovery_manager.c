@@ -1288,8 +1288,17 @@ static RecoverySignal_t evaluate_fault_predictor(
      * returns all-zero scores regardless - but the check belongs here,
      * at the one call site that uses this vector, so it is already in
      * place for when a real model lands. */
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+    /* Laptop/simulator build: the full world is local, so env_raw_travel_cost
+     * and team_zone_id are computed directly - there is no mission-link map
+     * to wait for (nothing on the laptop path ever calls
+     * mission_link_apply_map_row/_district_row, so gating on them would keep
+     * the model permanently off in the simulator and in evaluate.py). */
+    if(0)
+#else
     if(mission_link_map_rows_received() < MISSION_LINK_MAP_HEIGHT ||
        mission_link_district_rows_received() < MISSION_LINK_MAP_HEIGHT)
+#endif
     {
         FaultPredictorScores_t no_scores = {0};
         scores = no_scores;

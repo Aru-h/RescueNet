@@ -20,7 +20,7 @@
  * first - default stays 0.
  */
 #ifndef FAULT_MODEL_LOADED
-#define FAULT_MODEL_LOADED 0
+#define FAULT_MODEL_LOADED 1
 #endif
 
 /*

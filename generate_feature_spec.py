@@ -71,7 +71,7 @@ def generate_header(spec: dict) -> str:
         "",
         f"#define FEATURE_SPEC_NUM_INPUTS {n}",
         "",
-        "/* Index of each input in the 74-float vector core/fault_predictor.c",
+        f"/* Index of each input in the {n}-float vector core/fault_predictor.c",
         " * builds (core/feature_spec.h's own single source of truth for the",
         " * order - see data_prep.py's feature_columns list). */",
     ]
