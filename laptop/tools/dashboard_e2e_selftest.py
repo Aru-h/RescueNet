@@ -632,7 +632,7 @@ def _replay_check(page, console_errors):
     check(scrub_hidden_again, "switching back to Live mode hides the replay scrub bar again")
 
 
-DEMO_RECORDING = "demo_seed42_combined_600ticks.jsonl.gz"
+DEMO_RECORDING = "demo_seed1002_combined_600ticks.jsonl.gz"
 
 
 def _timeline_state(page):
