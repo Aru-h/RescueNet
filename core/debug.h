@@ -131,6 +131,10 @@ void debug_emit_static_map_if_changed(void);
  */
 void debug_live_override_init(void);
 void debug_live_override_poll(uint32_t tick);
+/* --fast-forward support: load an override script (see debug.c) and
+ * replay its entries for one tick, silently. */
+int debug_live_override_load_script(const char *path);
+void debug_live_override_replay_script(uint32_t tick);
 
 /*
  * Priority 1 repro/verification harness: deterministically reproduces

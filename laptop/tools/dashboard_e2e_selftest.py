@@ -632,6 +632,249 @@ def _replay_check(page, console_errors):
     check(scrub_hidden_again, "switching back to Live mode hides the replay scrub bar again")
 
 
+DEMO_RECORDING = "demo_seed42_combined_600ticks.jsonl.gz"
+
+
+def _timeline_state(page):
+    """(first, last, bar_pixels) of the Detection Timeline as drawn now.
+    bar_pixels counts non-transparent pixels in the plot area (right of
+    the label gutter), so it is > 0 only when history bars are drawn."""
+    return page.evaluate("""() => {
+      const txt = document.getElementById('timelineRange').textContent;
+      const m = /ticks (\\d+)\u2013(\\d+)/.exec(txt);
+      const c = document.getElementById('timelineCanvas');
+      const dpr = c.width / c.getBoundingClientRect().width;
+      const x0 = Math.ceil(100 * dpr);
+      const d = c.getContext('2d').getImageData(x0, 0, c.width - x0, c.height).data;
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+      return m ? [parseInt(m[1], 10), parseInt(m[2], 10), n] : [null, null, n];
+    }""")
+
+
+def _replay_timeline_check(page, console_errors, recordings_dir):
+    """Replay-mode Detection Timeline: follows Play with no clicks and is
+    rebuilt after every kind of seek (forward, backward, Next detection)."""
+    page.select_option("#modeSelect", "replay")
+    page.click("#replayRefreshBtn")
+    page.wait_for_timeout(300)
+    has_demo = page.evaluate(
+        "(f) => Array.from(document.querySelectorAll('#replaySelect option')).some(o => o.value === f)",
+        DEMO_RECORDING)
+    check(has_demo, "the bundled demo recording is listed in Replay mode")
+    if not has_demo:
+        page.select_option("#modeSelect", "live")
+        return
+    page.select_option("#replaySelect", DEMO_RECORDING)
+    page.click("#replayLoadBtn")
+    page.wait_for_function("() => Replay.frameCount > 0 && Replay.currentIndex === 0", timeout=10000)
+
+    def tick_of(idx):
+        return page.evaluate(f"() => Replay.frameTick({idx})")
+
+    # Play: the range must advance on its own, with no clicks on the page.
+    page.select_option("#replaySpeed", index=page.evaluate(
+        "() => Array.from(document.getElementById('replaySpeed').options).length - 1"))
+    page.click("#replayPlayBtn")
+    page.wait_for_timeout(600)
+    first_a, last_a, bars_a = _timeline_state(page)
+    page.wait_for_timeout(600)
+    first_b, last_b, _ = _timeline_state(page)
+    page.click("#replayPlayBtn")  # pause
+    page.wait_for_timeout(100)
+    cur = page.evaluate("() => Replay.currentIndex")
+    first_c, last_c, _ = _timeline_state(page)
+    check(last_a is not None and last_b is not None and last_b > last_a,
+          f"timeline range advances during Play without clicks (ticks {first_a}-{last_a} -> {first_b}-{last_b})")
+    check(first_b == 0 and last_c == tick_of(cur),
+          f"timeline covers tick 0..current while playing/paused (got {first_c}-{last_c}, current tick {tick_of(cur)})")
+    check(bars_a > 0, "timeline bars are drawn during Play")
+
+    def seek_and_check(idx, label):
+        page.evaluate(f"() => Replay.seekToIndex({idx})")
+        page.wait_for_timeout(150)
+        first, last, bars = _timeline_state(page)
+        want = tick_of(idx)
+        check(first == 0 and last == want and bars > 0,
+              f"{label}: timeline shows ticks 0-{want} with bars (got {first}-{last}, bars={bars})")
+
+    frame_count = page.evaluate("() => Replay.frameCount")
+    hi = min(200, frame_count - 1)
+    lo = min(70, hi)
+    seek_and_check(lo, "scrub to tick 70")
+    seek_and_check(hi, "scrub forward")
+    seek_and_check(min(30, hi), "scrub backward")
+    # Stepping past a seek must not reset the history (the reported bug).
+    page.evaluate(f"() => Replay.seekToIndex({lo})")
+    page.click("#replayPlayBtn")
+    page.wait_for_timeout(300)
+    page.click("#replayPlayBtn")
+    first, last, bars = _timeline_state(page)
+    check(first == 0 and last > tick_of(lo) and bars > 0,
+          f"playing on from a seek keeps full history (got {first}-{last})")
+
+    # Real scrubber input event.
+    page.evaluate("""() => {
+      const el = document.getElementById('replayScrubber');
+      el.value = 5; el.dispatchEvent(new Event('input'));
+    }""")
+    page.wait_for_timeout(100)
+    first, last, _ = _timeline_state(page)
+    check(first == 0 and last == tick_of(5), f"scrubber input rebuilds the timeline (got {first}-{last})")
+
+    # Next detection.
+    page.evaluate("() => Replay.seekToIndex(0)")
+    page.click("#replayJumpBtn")
+    page.wait_for_timeout(150)
+    idx = page.evaluate("() => Replay.currentIndex")
+    first, last, bars = _timeline_state(page)
+    check(idx > 0 and first == 0 and last == tick_of(idx) and bars > 0,
+          f"Next detection updates the timeline (index {idx}, got {first}-{last}, bars={bars})")
+
+    # Reload the recording: history rebuilt from tick 0.
+    page.click("#replayLoadBtn")
+    page.wait_for_function("() => Replay.frameCount > 0 && Replay.currentIndex === 0", timeout=10000)
+    page.wait_for_timeout(100)
+    first, last, _ = _timeline_state(page)
+    check(first == 0 and last == 0, f"reloading a recording restarts the timeline at tick 0 (got {first}-{last})")
+
+    page.select_option("#modeSelect", "live")
+    page.wait_for_timeout(100)
+
+
+def _replay_takeover_check(page, console_errors):
+    """Part 5: load the bundled demo recording, scrub to a tick, take
+    over. The regenerated frame must equal the replayed one, the
+    timeline must cover 0..T, and an override on the taken-over run must
+    be applied - and recorded, so the new recording can itself be
+    taken over."""
+    page.select_option("#modeSelect", "replay")
+    page.click("#replayRefreshBtn")
+    page.wait_for_timeout(300)
+    if not page.evaluate(
+            "(f) => Array.from(document.querySelectorAll('#replaySelect option')).some(o => o.value === f)",
+            DEMO_RECORDING):
+        check(False, "the bundled demo recording is listed (needed for the take-over check)")
+        page.select_option("#modeSelect", "live")
+        return
+    page.select_option("#replaySelect", DEMO_RECORDING)
+    page.click("#replayLoadBtn")
+    page.wait_for_function("() => Replay.frameCount > 0 && Replay.currentIndex === 0", timeout=10000)
+
+    takeover_visible = page.eval_on_selector("#replayTakeoverBtn", "el => !el.classList.contains('hidden')")
+    check(takeover_visible, "the 'Take over from here' button appears once a recording is loaded")
+
+    target = 120
+    page.evaluate(f"() => Replay.seekToIndex({target})")
+    page.wait_for_timeout(150)
+    replayed = page.evaluate("""() => {
+      const f = window._lastFrame;
+      return { tick: f.tick,
+               teams: f.teams.map(t => [t.x, t.y, t.status, t.dest_id, t.has_dest]),
+               incidents: JSON.stringify(f.incidents) };
+    }""")
+    check(replayed["tick"] == target, f"replay is at tick {target} before taking over (got {replayed['tick']})")
+
+    # Paced like a person would watch it (earlier checks left 3 ms in the field).
+    # (the field lives in the live controls, hidden in Replay mode, so it
+    # is set directly rather than through Playwright's visible-only fill)
+    page.evaluate("() => { document.getElementById('tickDelay').value = '150'; }")
+    page.click("#replayTakeoverBtn")
+    saw_rebuilding = False
+    # runLive() shows "running" from the first instant, so only the
+    # server's takeover_ready (which pauses the run at tick T) counts.
+    for _ in range(300):
+        label = page.eval_on_selector("#runStateLabel", "el => el.textContent")
+        if "Rebuilding" in label:
+            saw_rebuilding = True
+        if label == "paused":
+            break
+        page.wait_for_timeout(100)
+    else:
+        fail_and_exit("take over did not reach the paused take-over state within 30s")
+        return
+    if not saw_rebuilding:
+        print("INFO: fast-forward finished before the 'Rebuilding state' label could be observed (fast machine)")
+
+    mode = page.eval_on_selector("#modeSelect", "el => el.value")
+    check(mode == "live" and page.evaluate("() => !Replay.isActive()"),
+          "taking over switches the dashboard to Live mode and ends the replay")
+    check(page.eval_on_selector("#runStateLabel", "el => el.textContent") == "paused",
+          "the taken-over run starts paused at the take-over tick")
+    live = page.evaluate("""() => {
+      const f = window._lastFrame;
+      return { tick: f.tick,
+               teams: f.teams.map(t => [t.x, t.y, t.status, t.dest_id, t.has_dest]),
+               incidents: JSON.stringify(f.incidents) };
+    }""")
+    check(live["tick"] == target, f"the first live frame is tick {target} (got {live['tick']})")
+    check(live["teams"] == replayed["teams"] and live["incidents"] == replayed["incidents"],
+          "the regenerated frame matches the replayed one (team positions/status/tasks and incidents)")
+    first, last, bars = _timeline_state(page)
+    check(first == 0 and last == target and bars > 0,
+          f"the timeline shows history 0..{target} after take-over (got {first}-{last}, bars={bars})")
+    stats = page.evaluate("() => simTelemetry.lastProcessedTick")
+    check(stats == target, f"telemetry history is consistent at the take-over tick (lastProcessedTick={stats})")
+
+    page.click("#resumeLiveBtn")
+    page.wait_for_timeout(1200)
+    after_tick = page.evaluate("() => window._lastFrame.tick")
+    check(after_tick > target, f"the taken-over run advances live (tick {target} -> {after_tick})")
+    first, last, _ = _timeline_state(page)
+    check(first == 0 and last > target, f"the timeline keeps following the live run (got {first}-{last})")
+
+    # Override on the taken-over run: same staging as the plain-live check.
+    staged = None
+    for _ in range(30):
+        staged = page.evaluate("""() => {
+          const frame = window._lastFrame;
+          const inc = frame && (frame.incidents || []).find(i => i.status !== 3 && i.pool === 0);
+          if (!inc) return null;
+          const team = frame.teams[0];
+          pendingOverride = { team, teamIndex: 0, from: {x: team.x, y: team.y}, to: inc };
+          selectedMarker = { type: 'team', id: team.id };
+          renderInspector();
+          return inc.id;
+        }""")
+        if staged is not None:
+            break
+        page.wait_for_timeout(300)
+    check(staged is not None, "a real open incident was available to override onto after take-over")
+    if staged is not None:
+        page.click("#overrideConfirmBtn")
+        applied = False
+        for _ in range(60):
+            page.wait_for_timeout(200)
+            box_text = page.evaluate("() => document.getElementById('overrideBox').textContent")
+            if box_text and "Applied" in box_text:
+                applied = True
+                break
+        check(applied, "an override on the taken-over run is acknowledged as applied")
+
+    page.click("#stopLiveBtn")
+    page.wait_for_timeout(500)
+    listing = page.evaluate("""async () => {
+      const items = await (await fetch('/api/recordings')).json();
+      const it = items.find(i => i.takeover_from);
+      if (!it) return null;
+      const text = await (await fetch('/api/recordings/' + it.filename)).text();
+      return { takeover_from: it.takeover_from,
+               overrideLines: text.split('\\n').filter(l => l.startsWith('OVERRIDE ')).length,
+               frames: text.split('\\n').filter(l => l.startsWith('LIVEFRAME ')).length };
+    }""")
+    check(listing is not None and listing["takeover_from"]["tick"] == target,
+          f"a new recording was written for the taken-over run (got {listing})")
+    if listing and staged is not None:
+        check(listing["overrideLines"] >= 1, "the applied override was written into the new recording")
+    if listing:
+        check(listing["frames"] > target, f"the new recording holds the full history plus live frames (got {listing['frames']} frames)")
+
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0,
+          f"no UNEXPECTED console/page errors during the take-over check (got {len(real_errors)}: {real_errors[:5]})")
+    page.evaluate("() => { overrideStatus = null; pendingOverride = null; selectedMarker = null; renderInspector(); }")
+
+
 def main():
     try:
         from playwright.sync_api import sync_playwright
@@ -650,6 +893,9 @@ def main():
     # exactly one curated demo file tracked in git, and this test would
     # otherwise litter it with a fresh recording on every run.
     recordings_tmpdir = tempfile.mkdtemp(prefix="dashboard_e2e_recordings_")
+    _demo_src = os.path.join(TOOLS_DIR, "recordings", DEMO_RECORDING)
+    if os.path.exists(_demo_src):
+        shutil.copy(_demo_src, recordings_tmpdir)
     if not _port_open(HOST, PORT):
         we_started_it = True
         env = dict(os.environ, SIM_ONLY="1", DASHBOARD_RECORDINGS_DIR=recordings_tmpdir)
@@ -923,6 +1169,8 @@ def main():
 
             # Part 2: replay of a recorded live run.
             _replay_check(page, console_errors)
+            _replay_timeline_check(page, console_errors, recordings_tmpdir)
+            _replay_takeover_check(page, console_errors)
 
             page.close()
 

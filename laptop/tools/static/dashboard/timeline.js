@@ -243,6 +243,31 @@
       }
     }
 
+    // Replay path: append one frame and redraw immediately. Unlike
+    // update() this is not throttled - replay renders at most one frame
+    // per timer tick, and a throttled skip would leave the panel stale
+    // (nothing else redraws it between frames).
+    function append(frame) {
+      recordTick(frame);
+      draw();
+      lastRenderMs = performance.now();
+    }
+
+    // Replay seek: replace the whole history with `frameList` (frames in
+    // tick order, ending at the current replay frame) and draw once.
+    // Rows are built directly from the frames, so an N-frame seek costs
+    // N cheap pushes and a single draw instead of N throttled updates.
+    function setHistory(frameList) {
+      history = [];
+      trackedRange = null;
+      ensureRows();
+      const list = frameList || [];
+      const start = Math.max(0, list.length - MAX_HISTORY);
+      for (let i = start; i < list.length; i++) recordTick(list[i]);
+      draw();
+      lastRenderMs = performance.now();
+    }
+
     function reset() {
       history = [];
       selected = null;
@@ -255,7 +280,7 @@
       }
     }
 
-    return { init, update, reset, layout: () => { layout(); draw(); } };
+    return { init, update, append, setHistory, reset, layout: () => { layout(); draw(); } };
   }
 
   global.DetectionTimeline = create();

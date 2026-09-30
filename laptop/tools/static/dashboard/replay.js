@@ -34,6 +34,7 @@
   let playing = false;
   let speed = 1;
   let playTimer = null;
+  let currentFile = null; // filename of the loaded recording (for take-over)
   let active = false;     // true once a recording is loaded - gates map drag-drop (index.html reads this)
 
   function isActive() { return active; }
@@ -49,6 +50,7 @@
       scrubBar: document.getElementById("replayScrubBar"),
       scrubber: document.getElementById("replayScrubber"),
       tickLabel: document.getElementById("replayTickLabel"),
+      takeoverBtn: document.getElementById("replayTakeoverBtn"),
     };
   }
 
@@ -107,8 +109,8 @@
   }
 
   function setButtonsVisible(visible) {
-    const { playBtn, speedField, jumpBtn, stateWrap, scrubBar } = els();
-    [playBtn, speedField, jumpBtn, stateWrap, scrubBar].forEach((el) => {
+    const { playBtn, speedField, jumpBtn, stateWrap, scrubBar, takeoverBtn } = els();
+    [playBtn, speedField, jumpBtn, stateWrap, scrubBar, takeoverBtn].forEach((el) => {
       if (el) el.classList.toggle("hidden", !visible);
     });
   }
@@ -125,6 +127,7 @@
     const parsed = parseRecordingText(text);
     header = parsed.header;
     frames = parsed.frames;
+    currentFile = filename;
     currentIndex = -1;
 
     if (typeof global.telemetryReset === "function") global.telemetryReset();
@@ -189,22 +192,28 @@
     global.replaySyncTelemetry(cumulative, lastChangeTick);
   }
 
-  function feedTimelineWindow(index) {
+  // Rebuilds the timeline's history from frames 0..index (its own
+  // window keeps the newest TIMELINE_WINDOW) and draws once.
+  function rebuildTimeline(index) {
     if (!global.DetectionTimeline) return;
-    global.DetectionTimeline.reset();
     const start = Math.max(0, index - TIMELINE_WINDOW + 1);
-    for (let i = start; i <= index; i++) global.DetectionTimeline.update(frames[i]);
+    global.DetectionTimeline.setHistory(frames.slice(start, index + 1));
   }
 
-  function renderFrameAt(index) {
+  // `sequential` is true only for normal playback stepping to the very
+  // next frame, where appending is enough; every other entry (seek,
+  // scrub, jump, load, reset) rebuilds the history.
+  function renderFrameAt(index, sequential) {
     if (index < 0 || index >= frames.length) return;
+    const canAppend = sequential && currentIndex >= 0 && index === currentIndex + 1;
     currentIndex = index;
     const frame = frames[index];
     syncTelemetry(index);
     global.drawFrame(frame);
     global.updateLiveTables(frame);
     if (global.ConsensusNetwork) global.ConsensusNetwork.update(frame);
-    feedTimelineWindow(index);
+    if (canAppend && global.DetectionTimeline) global.DetectionTimeline.append(frame);
+    else rebuildTimeline(index);
 
     const { scrubber, tickLabel } = els();
     if (scrubber) scrubber.value = index;
@@ -225,7 +234,7 @@
     const delay = BASE_INTERVAL_MS / speed;
     playTimer = setTimeout(() => {
       if (currentIndex < frames.length - 1) {
-        renderFrameAt(currentIndex + 1);
+        renderFrameAt(currentIndex + 1, true);
         scheduleNext();
       } else {
         pause();
@@ -306,5 +315,10 @@
     get header() { return header; },
     get frameCount() { return frames.length; },
     get currentIndex() { return currentIndex; },
+    get currentFile() { return currentFile; },
+    // Frames 0..index-1 (not including `index`), for seeding the
+    // dashboard's history when a live run takes over at `index`.
+    framesBefore(index) { return frames.slice(0, Math.max(0, index)); },
+    frameTick(i) { return frames[i] ? frames[i].tick : null; },
   };
 })(window);
