@@ -24,6 +24,7 @@ run it.
 | `naive_baseline.py` | Baseline: how well the watchdog's single confidence score detects each class. |
 | `export.py` | Folds BatchNorm into the linear layers and writes `fault_predictor_weights.h`. Refuses to write if the checkpoint's feature order or scaler disagrees with `feature_spec.json`. |
 | `export_parity_fixture.py` | Writes the PyTorch reference outputs used by `make check-model-parity`. |
+| `fault_predictor_checkpoint.pt` | The trained model the shipped weights were exported from. |
 | `MODEL_REPORT.md` | Model report: data, features, results, thresholds, closed-loop evaluation, limitations. |
 
 Shipped files this pipeline feeds, outside this folder:
@@ -36,11 +37,14 @@ Shipped files this pipeline feeds, outside this folder:
 | `core/fault_predictor.c` / `.h` | Forward pass in plain C, and the per-class decision thresholds. |
 | `laptop/tools/model_parity_fixture.csv` | 19 input vectors with their PyTorch outputs, for the C-vs-PyTorch parity test. |
 
-**The trained checkpoint (`fault_predictor_checkpoint.pt`) is not included in
-this repository.** The exported weights in `core/fault_predictor_weights.h` are
-committed, and `make check-model-parity` proves the C forward pass reproduces
-the checkpoint's outputs on the fixture. Re-running `export.py` or
-`export_parity_fixture.py` needs a checkpoint, which step 5 below produces.
+**The trained checkpoint is `ml/fault_predictor_checkpoint.pt`** (epoch 8,
+validation loss 0.435948, 85 KB). The committed `core/fault_predictor_weights.h`
+is its export: on the 19 parity-fixture vectors the checkpoint reproduces the
+fixture's reference outputs within 2.1e-7, and the C forward pass reproduces
+them within 3.6e-7 (`make check-model-parity`). `train.py` writes a new
+checkpoint to the repository root, and `export.py` reads it from there; to
+re-export the shipped model, copy it there first:
+`cp ml/fault_predictor_checkpoint.pt .`
 
 ## Install
 
