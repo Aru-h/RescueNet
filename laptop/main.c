@@ -173,6 +173,11 @@ int main(int argc, char **argv)
     int mission_feed_mode = 0; /* --mission-feed, see laptop/mission_feed.h */
     int diag_mode = 0;  /* off by default - see --diag below */
     uint32_t tick_delay_ms = 0;
+    /* --fast-forward=T (with --live): silently run ticks 0..T-1, then
+     * emit frame T and carry on normally - the dashboard's "take over
+     * from replay" rebuilds state by deterministic re-simulation. */
+    uint32_t fast_forward_ticks = 0;
+    const char *override_script_path = NULL;
     uint32_t positional_args[5] = {0};
     uint32_t positional_count = 0;
 
@@ -227,6 +232,21 @@ int main(int argc, char **argv)
             continue;
         }
 
+        if(strncmp(argv[i], "--fast-forward=", 15) == 0)
+        {
+            fast_forward_ticks = (uint32_t)strtoul(argv[i] + 15, NULL, 10);
+            continue;
+        }
+
+        /* Applied overrides of the recording being resumed (see
+         * debug_live_override_load_script()); only used with
+         * --fast-forward. */
+        if(strncmp(argv[i], "--override-script=", 18) == 0)
+        {
+            override_script_path = argv[i] + 18;
+            continue;
+        }
+
         if(is_tick_delay_flag(argv[i]))
         {
             tick_delay_ms = (uint32_t)strtoul(argv[i] + 16, NULL, 10);
@@ -274,6 +294,12 @@ int main(int argc, char **argv)
     fault_config_apply_profile(fault_profile);
     fault_injector_set_profile(fault_profile);
 
+    if(fast_forward_ticks > 0 && (!live_mode || mission_feed_mode))
+    {
+        fprintf(stderr, "--fast-forward requires --live (and not --mission-feed)\n");
+        return 2;
+    }
+
     uint32_t first_seed = positional_count >= 1 ? positional_args[0] : 1;
     uint32_t seed_count = positional_count >= 2 ? positional_args[1] : 1;
     uint32_t ticks_per_seed = positional_count >= 3 ? positional_args[2] : 10000;
@@ -293,7 +319,14 @@ int main(int argc, char **argv)
             mission_feed_begin();
         }
 
-        if(live_mode)
+        if(fast_forward_ticks > 0 && fast_forward_ticks >= ticks_per_seed)
+        {
+            fprintf(stderr, "--fast-forward=%u is not before the last tick (%u ticks)\n",
+                    fast_forward_ticks, ticks_per_seed);
+            return 2;
+        }
+
+        if(live_mode && fast_forward_ticks == 0)
         {
             /* Static layout - buildings, roads, districts don't move once
              * generated, so this is sent once per run, not every tick, to
@@ -323,6 +356,17 @@ int main(int argc, char **argv)
             if(!mission_feed_mode)
                 debug_live_override_init();
         }
+        else if(live_mode)
+        {
+            /* Fast-forward: nothing is emitted until frame T; the static
+             * environment/terrain are then sent once, as of tick T. */
+            debug_live_override_init();
+            if(override_script_path && debug_live_override_load_script(override_script_path) != 0)
+            {
+                fprintf(stderr, "cannot load --override-script=%s\n", override_script_path);
+                return 2;
+            }
+        }
 
         uint64_t next_tick_deadline_ms = monotonic_ms() + tick_delay_ms;
 
@@ -341,6 +385,22 @@ int main(int argc, char **argv)
             }
 
             sim_tick();
+
+            if(tick < fast_forward_ticks)
+            {
+                debug_live_override_replay_script(tick);
+                if(tick % 100u == 99u)
+                {
+                    printf("FFPROGRESS {\"tick\":%u,\"target\":%u}\n", tick + 1u, fast_forward_ticks);
+                    fflush(stdout);
+                }
+                continue;
+            }
+            if(tick == fast_forward_ticks && fast_forward_ticks > 0)
+            {
+                debug_emit_static_environment();
+                debug_emit_static_map_if_changed();
+            }
 
             if(mission_feed_mode)
             {

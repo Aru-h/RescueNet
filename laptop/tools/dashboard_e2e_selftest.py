@@ -742,6 +742,133 @@ def _replay_timeline_check(page, console_errors, recordings_dir):
     page.wait_for_timeout(100)
 
 
+def _replay_takeover_check(page, console_errors):
+    """Part 5: load the bundled demo recording, scrub to a tick, take
+    over. The regenerated frame must equal the replayed one, the
+    timeline must cover 0..T, and an override on the taken-over run must
+    be applied - and recorded, so the new recording can itself be
+    taken over."""
+    page.select_option("#modeSelect", "replay")
+    page.click("#replayRefreshBtn")
+    page.wait_for_timeout(300)
+    if not page.evaluate(
+            "(f) => Array.from(document.querySelectorAll('#replaySelect option')).some(o => o.value === f)",
+            DEMO_RECORDING):
+        check(False, "the bundled demo recording is listed (needed for the take-over check)")
+        page.select_option("#modeSelect", "live")
+        return
+    page.select_option("#replaySelect", DEMO_RECORDING)
+    page.click("#replayLoadBtn")
+    page.wait_for_function("() => Replay.frameCount > 0 && Replay.currentIndex === 0", timeout=10000)
+
+    takeover_visible = page.eval_on_selector("#replayTakeoverBtn", "el => !el.classList.contains('hidden')")
+    check(takeover_visible, "the 'Take over from here' button appears once a recording is loaded")
+
+    target = 120
+    page.evaluate(f"() => Replay.seekToIndex({target})")
+    page.wait_for_timeout(150)
+    replayed = page.evaluate("""() => {
+      const f = window._lastFrame;
+      return { tick: f.tick,
+               teams: f.teams.map(t => [t.x, t.y, t.status, t.dest_id, t.has_dest]),
+               incidents: JSON.stringify(f.incidents) };
+    }""")
+    check(replayed["tick"] == target, f"replay is at tick {target} before taking over (got {replayed['tick']})")
+
+    page.click("#replayTakeoverBtn")
+    saw_rebuilding = False
+    for _ in range(300):
+        label = page.eval_on_selector("#runStateLabel", "el => el.textContent")
+        if "Rebuilding" in label:
+            saw_rebuilding = True
+        if label in ("paused", "running"):
+            break
+        page.wait_for_timeout(100)
+    else:
+        fail_and_exit("take over did not reach a live state within 30s")
+        return
+    if not saw_rebuilding:
+        print("INFO: fast-forward finished before the 'Rebuilding state' label could be observed (fast machine)")
+
+    mode = page.eval_on_selector("#modeSelect", "el => el.value")
+    check(mode == "live" and page.evaluate("() => !Replay.isActive()"),
+          "taking over switches the dashboard to Live mode and ends the replay")
+    check(page.eval_on_selector("#runStateLabel", "el => el.textContent") == "paused",
+          "the taken-over run starts paused at the take-over tick")
+    live = page.evaluate("""() => {
+      const f = window._lastFrame;
+      return { tick: f.tick,
+               teams: f.teams.map(t => [t.x, t.y, t.status, t.dest_id, t.has_dest]),
+               incidents: JSON.stringify(f.incidents) };
+    }""")
+    check(live["tick"] == target, f"the first live frame is tick {target} (got {live['tick']})")
+    check(live["teams"] == replayed["teams"] and live["incidents"] == replayed["incidents"],
+          "the regenerated frame matches the replayed one (team positions/status/tasks and incidents)")
+    first, last, bars = _timeline_state(page)
+    check(first == 0 and last == target and bars > 0,
+          f"the timeline shows history 0..{target} after take-over (got {first}-{last}, bars={bars})")
+    stats = page.evaluate("() => simTelemetry.lastProcessedTick")
+    check(stats == target, f"telemetry history is consistent at the take-over tick (lastProcessedTick={stats})")
+
+    page.click("#resumeLiveBtn")
+    page.wait_for_timeout(1200)
+    after_tick = page.evaluate("() => window._lastFrame.tick")
+    check(after_tick > target, f"the taken-over run advances live (tick {target} -> {after_tick})")
+    first, last, _ = _timeline_state(page)
+    check(first == 0 and last > target, f"the timeline keeps following the live run (got {first}-{last})")
+
+    # Override on the taken-over run: same staging as the plain-live check.
+    staged = None
+    for _ in range(30):
+        staged = page.evaluate("""() => {
+          const frame = window._lastFrame;
+          const inc = frame && (frame.incidents || []).find(i => i.status !== 3 && i.pool === 0);
+          if (!inc) return null;
+          const team = frame.teams[0];
+          pendingOverride = { team, teamIndex: 0, from: {x: team.x, y: team.y}, to: inc };
+          selectedMarker = { type: 'team', id: team.id };
+          renderInspector();
+          return inc.id;
+        }""")
+        if staged is not None:
+            break
+        page.wait_for_timeout(300)
+    check(staged is not None, "a real open incident was available to override onto after take-over")
+    if staged is not None:
+        page.click("#overrideConfirmBtn")
+        applied = False
+        for _ in range(60):
+            page.wait_for_timeout(200)
+            box_text = page.evaluate("() => document.getElementById('overrideBox').textContent")
+            if box_text and "Applied" in box_text:
+                applied = True
+                break
+        check(applied, "an override on the taken-over run is acknowledged as applied")
+
+    page.click("#stopLiveBtn")
+    page.wait_for_timeout(500)
+    listing = page.evaluate("""async () => {
+      const items = await (await fetch('/api/recordings')).json();
+      const it = items.find(i => i.takeover_from);
+      if (!it) return null;
+      const text = await (await fetch('/api/recordings/' + it.filename)).text();
+      return { takeover_from: it.takeover_from,
+               overrideLines: text.split('\\n').filter(l => l.startsWith('OVERRIDE ')).length,
+               frames: text.split('\\n').filter(l => l.startsWith('LIVEFRAME ')).length };
+    }""")
+    check(listing is not None and listing["takeover_from"]["tick"] == target,
+          f"a new recording was written for the taken-over run (got {listing})")
+    if listing and staged is not None:
+        check(listing["overrideLines"] >= 1, "the applied override was written into the new recording")
+    if listing:
+        check(listing["frames"] > target, f"the new recording holds the full history plus live frames (got {listing['frames']} frames)")
+
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0,
+          f"no UNEXPECTED console/page errors during the take-over check (got {len(real_errors)}: {real_errors[:5]})")
+    page.evaluate("() => { overrideStatus = null; pendingOverride = null; selectedMarker = null; renderInspector(); }")
+
+
 def main():
     try:
         from playwright.sync_api import sync_playwright
@@ -1037,6 +1164,7 @@ def main():
             # Part 2: replay of a recorded live run.
             _replay_check(page, console_errors)
             _replay_timeline_check(page, console_errors, recordings_tmpdir)
+            _replay_takeover_check(page, console_errors)
 
             page.close()
 

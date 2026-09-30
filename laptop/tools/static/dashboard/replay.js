@@ -34,6 +34,7 @@
   let playing = false;
   let speed = 1;
   let playTimer = null;
+  let currentFile = null; // filename of the loaded recording (for take-over)
   let active = false;     // true once a recording is loaded - gates map drag-drop (index.html reads this)
 
   function isActive() { return active; }
@@ -49,6 +50,7 @@
       scrubBar: document.getElementById("replayScrubBar"),
       scrubber: document.getElementById("replayScrubber"),
       tickLabel: document.getElementById("replayTickLabel"),
+      takeoverBtn: document.getElementById("replayTakeoverBtn"),
     };
   }
 
@@ -107,8 +109,8 @@
   }
 
   function setButtonsVisible(visible) {
-    const { playBtn, speedField, jumpBtn, stateWrap, scrubBar } = els();
-    [playBtn, speedField, jumpBtn, stateWrap, scrubBar].forEach((el) => {
+    const { playBtn, speedField, jumpBtn, stateWrap, scrubBar, takeoverBtn } = els();
+    [playBtn, speedField, jumpBtn, stateWrap, scrubBar, takeoverBtn].forEach((el) => {
       if (el) el.classList.toggle("hidden", !visible);
     });
   }
@@ -125,6 +127,7 @@
     const parsed = parseRecordingText(text);
     header = parsed.header;
     frames = parsed.frames;
+    currentFile = filename;
     currentIndex = -1;
 
     if (typeof global.telemetryReset === "function") global.telemetryReset();
@@ -312,6 +315,10 @@
     get header() { return header; },
     get frameCount() { return frames.length; },
     get currentIndex() { return currentIndex; },
+    get currentFile() { return currentFile; },
+    // Frames 0..index-1 (not including `index`), for seeding the
+    // dashboard's history when a live run takes over at `index`.
+    framesBefore(index) { return frames.slice(0, Math.max(0, index)); },
     frameTick(i) { return frames[i] ? frames[i].tick : null; },
   };
 })(window);

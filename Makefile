@@ -67,7 +67,7 @@ LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-pack-parity check-feature-spec-fresh check-feature-spec-leak-guard check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-cubeide-single-flags check-single-board-dk-harness check-live-override-selftest check-live-override-noop-regression
+.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-pack-parity check-feature-spec-fresh check-feature-spec-leak-guard check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-cubeide-single-flags check-single-board-dk-harness check-live-override-selftest check-replay-takeover-selftest check-live-override-noop-regression
 
 all: $(TARGET) $(LABELER)
 
@@ -900,8 +900,8 @@ check-selftests: check-handshake-selftest check-lora-frame-selftest \
 	check-sx126x-rx-selftest-pico check-comms-transport-selftest \
 	check-mission-link-roster-selftest check-mission-mirror-selftest \
 	check-soft-spi-selftest check-sx1262-setup-selftest \
-	check-live-override-selftest
-	@echo "check-selftests: all thirteen laptop/tools selftests passed"
+	check-live-override-selftest check-replay-takeover-selftest
+	@echo "check-selftests: all fourteen laptop/tools selftests passed"
 
 # Part 4: drives a real `tron --live` subprocess over its actual
 # stdin/stdout (laptop/tools/live_override_selftest.py's own docstring
@@ -914,6 +914,13 @@ check-selftests: check-handshake-selftest check-lora-frame-selftest \
 check-live-override-selftest: $(TARGET)
 	@echo "  PY      $(TOOLS_DIR)/live_override_selftest.py"
 	@$(PYTHON) $(TOOLS_DIR)/live_override_selftest.py
+
+# Part 5 (take over from replay): `tron --live --fast-forward=T` must
+# rebuild the state of an uninterrupted run exactly, also with recorded
+# overrides replayed via --override-script. Drives the real $(TARGET).
+check-replay-takeover-selftest: $(TARGET)
+	@echo "  PY      $(TOOLS_DIR)/replay_takeover_selftest.py"
+	@$(PYTHON) $(TOOLS_DIR)/replay_takeover_selftest.py
 
 check-handshake-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)

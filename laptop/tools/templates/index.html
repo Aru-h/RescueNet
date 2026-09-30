@@ -424,6 +424,7 @@
         </select>
       </div>
       <button type="button" id="replayJumpBtn" class="topbar-btn hidden" onclick="Replay.jumpToNextDetection()" title="Jump to the next tick where any team goes ELEVATED or degraded">⏭ Next detection</button>
+      <button type="button" id="replayTakeoverBtn" class="topbar-btn hidden" onclick="takeOverFromReplay()" title="Continue this run live from the current tick: the simulator re-simulates to here, then you can override tasks">⏵ Take over from here</button>
       <span class="tstat hidden" id="replayStateWrap"><span class="tstat-label">State</span><span class="tstat-value" id="replayStateLabel">–</span></span>
     </div>
     <div class="topbar-stats">
@@ -441,6 +442,7 @@
     <input type="range" id="replayScrubber" min="0" max="0" value="0" style="flex:1;" oninput="Replay.seekToIndex(parseInt(this.value, 10))">
     <span style="font-size:11px;color:var(--muted);white-space:nowrap;">Replay — switch to Live to reassign tasks</span>
   </div>
+  <div class="sub hidden" id="takeoverNotice" style="padding:4px 20px;border-bottom:1px solid var(--border);color:var(--warn);cursor:pointer;" title="Click to dismiss" onclick="this.classList.add('hidden')"></div>
   <div class="sub hidden" id="boardMissionBar" style="padding:4px 20px;border-bottom:1px solid var(--border);">
     <span id="boardMissionText">Waiting for board handshake…</span>
     <select id="boardMissionSpeed" title="Mission pace. Real time is one tick per 36 s, as in a real deployment."
@@ -2503,8 +2505,29 @@ async function resumeLive() {
   } catch (e) { console.error("resume failed:", e); setRunState("finished"); }
 }
 
-async function runLive() {
+// Part 5: continue the loaded recording as a live run from its current
+// frame. The server re-simulates ticks 0..T-1 (deterministically, replaying
+// the recording's overrides), checks its frame T against the recording's,
+// and only then goes live - see /api/replay/takeover in app.py.
+function takeOverFromReplay() {
+  if (!Replay.isActive() || !Replay.currentFile || Replay.currentIndex < 0) return;
+  const idx = Replay.currentIndex;
+  const takeover = {
+    recording: Replay.currentFile,
+    index: idx,
+    tick: Replay.frameTick(idx),
+    history: Replay.framesBefore(idx),
+  };
+  document.getElementById("modeSelect").value = "live";
+  setDashboardMode("live"); // stops Replay (drops its frames), shows the live controls
+  runLive(takeover);
+}
+
+async function runLive(takeover) {
   let liveEndedCleanly = false;
+  let takeoverFailed = false;
+  let takeoverFirstFrame = false; // the first live frame of a take-over gets an immediate timeline redraw
+  document.getElementById("takeoverNotice").classList.add("hidden");
   liveRunMode = "sim";
   setRunState("running");
   showTab("live");
@@ -2526,12 +2549,21 @@ async function runLive() {
   const CHART_RENDER_INTERVAL_MS = 75; 
 
   try {
-    const resp = await fetch("/api/run-live", {
+    const resp = await fetch(takeover ? "/api/replay/takeover" : "/api/run-live", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(takeover
+        ? { recording: takeover.recording, tick: takeover.tick, tick_delay_ms: body.tick_delay_ms }
+        : body),
       signal: liveAbortController.signal,
     });
+    if (takeover && !resp.ok) {
+      let msg = "HTTP " + resp.status;
+      try { msg = (await resp.json()).message || msg; } catch (e) { /* keep the status text */ }
+      takeoverFailed = true;
+      alert("Cannot take over: " + msg);
+      return;
+    }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -2556,12 +2588,34 @@ async function runLive() {
             staticEnvironment = msg.env;
           } else if (msg.type === "static_map") {
             terrainMap = msg.map;
+          } else if (msg.type === "ff_progress") {
+            document.getElementById("runStateLabel").textContent = `Rebuilding state… tick ${msg.tick}/${msg.target}`;
+          } else if (msg.type === "takeover_ready") {
+            // Everything before tick T comes from the recording (identical
+            // by the server's check); frames from T on arrive live.
+            takeover.history.forEach((f) => telemetryProcessFrame(f));
+            DetectionTimeline.setHistory(takeover.history);
+            takeoverFirstFrame = true;
+            (msg.prior_overrides || []).forEach((ov) => {
+              const spec = SPEC_NAMES[ov.team_id % SPEC_NAMES.length] || "team";
+              const clear = ov.cmd === "OVERRIDE_CLEAR";
+              logOverrideEvent(ov.effective_tick, ov.team_id, "override", "good",
+                clear ? "Manual override released (recorded)" : "Manual override applied (recorded)",
+                clear ? `${spec} #${ov.team_id} released` : `${spec} #${ov.team_id} → Incident ${ov.incident_id}`);
+            });
+            setRunState(msg.paused ? "paused" : "running");
+            const notice = document.getElementById("takeoverNotice");
+            if (msg.warning) { notice.textContent = "⚠ " + msg.warning + " (click to dismiss)"; notice.classList.remove("hidden"); }
+          } else if (msg.type === "takeover_error") {
+            takeoverFailed = true;
+            alert(msg.message);
           } else if (msg.type === "frame") {
             const accepted = telemetryProcessFrame(msg.frame);
             drawFrame(msg.frame);
             updateLiveTables(msg.frame);
             ConsensusNetwork.update(msg.frame);
-            DetectionTimeline.update(msg.frame);
+            if (takeoverFirstFrame) { takeoverFirstFrame = false; DetectionTimeline.append(msg.frame); }
+            else DetectionTimeline.update(msg.frame);
             if (accepted) {
               const now = performance.now();
               if (now - lastChartRenderMs >= CHART_RENDER_INTERVAL_MS) {
@@ -2599,6 +2653,16 @@ async function runLive() {
     if (e.name !== "AbortError") alert("Live run error: " + e);
   } finally {
     if (!liveEndedCleanly) setRunState("idle");
+    if (takeoverFailed) {
+      // Nothing went live: put the user back where they were in Replay.
+      document.getElementById("modeSelect").value = "replay";
+      setDashboardMode("replay");
+      const sel = document.getElementById("replaySelect");
+      Replay.refreshList().then(() => {
+        if (sel) sel.value = takeover.recording;
+        return Replay.load(takeover.recording);
+      }).then(() => Replay.seekToIndex(takeover.index));
+    }
   }
 }
 

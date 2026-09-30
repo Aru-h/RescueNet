@@ -25,6 +25,7 @@ import signal
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections import Counter, defaultdict
@@ -316,7 +317,7 @@ class _RecordingWriter:
     /api/run-live's `finally` block.
     """
 
-    def __init__(self, seed, fault_profile, ticks, link_loss, start_tick=0):
+    def __init__(self, seed, fault_profile, ticks, link_loss, start_tick=0, extra=None):
         self.path = RECORDINGS_DIR / _recording_filename(seed, fault_profile, link_loss)
         self._fh = gzip.open(self.path, "wt")
         header = {
@@ -329,6 +330,8 @@ class _RecordingWriter:
             "git_commit": _git_commit(),
             "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
+        if extra:
+            header.update(extra)
         self._fh.write("RECORDING " + json.dumps(header) + "\n")
 
     def write_line(self, line):
@@ -991,6 +994,12 @@ def api_run():
 _live_lock = threading.Lock()
 _live_proc = None
 _live_paused = False
+# Every line written to the live run's stdin, in order. The simulator
+# answers each non-empty line with exactly one OVERRIDEACK, in order, so
+# the n-th ack belongs to the n-th entry here; that pairing is how an
+# applied ack (which does not say whether it was a set or a clear) is
+# recorded as a replayable OVERRIDE / OVERRIDE_CLEAR line.
+_live_sent_cmds = []
 # Part 4: the most recent tick this live run's own LIVEFRAME output
 # reported, so /api/run-live/override can stamp a request with "as of
 # what world state" without the browser needing to track and resend
@@ -1061,6 +1070,7 @@ def _live_write_line(text):
             proc.stdin.flush()
         except (BrokenPipeError, OSError) as exc:
             return False, f"failed to write to the live run's stdin: {exc}"
+        _live_sent_cmds.append(text.strip())
     return True, None
 
 
@@ -1176,7 +1186,46 @@ def api_run_live():
         args += ["--fault-profile", fault_profile]
     if link_loss is not None:
         args += [f"--vbus-loss={link_loss}"]
+    return _live_run_response(args, seed, ticks, fault_profile, link_loss)
 
+
+def _override_script_line(cmd, effective_tick, team_id, incident_id):
+    """The --override-script line for one applied override."""
+    if cmd == "OVERRIDE_CLEAR":
+        return f"OVERRIDE_CLEAR {effective_tick} {team_id}"
+    return f"OVERRIDE {effective_tick} {team_id} {incident_id}"
+
+
+def _frame_diff(want, got, path=""):
+    """Path of the first difference between two LIVEFRAME values (None
+    when they agree): what a takeover checks before going live. Dicts
+    are compared on the keys BOTH sides have, so a recording made
+    before a field was added to the frame (older recordings lack e.g.
+    teams[].override) still matches when the simulation itself is
+    unchanged; every shared field, list length and element must be
+    equal."""
+    if isinstance(want, dict) and isinstance(got, dict):
+        for key in sorted(want.keys() & got.keys()):
+            diff = _frame_diff(want[key], got[key], f"{path}.{key}" if path else key)
+            if diff:
+                return diff
+        return None
+    if isinstance(want, list) and isinstance(got, list):
+        if len(want) != len(got):
+            return f"{path} has {len(got)} entries, recording has {len(want)}"
+        for i, (w, g) in enumerate(zip(want, got)):
+            diff = _frame_diff(w, g, f"{path}[{i}]")
+            if diff:
+                return diff
+        return None
+    return None if want == got else path
+
+
+def _live_run_response(args, seed, ticks, fault_profile, link_loss, takeover=None):
+    """Runs `args` (a tron --live command line) and streams it as SSE.
+    With `takeover` (see api_replay_takeover) the process starts with
+    --fast-forward: nothing is recorded or shown until its first frame,
+    which must equal the recording's frame at that tick."""
     def generate():
         global _live_proc, _live_paused, _live_last_tick
         proc = subprocess.Popen(
@@ -1193,20 +1242,59 @@ def api_run_live():
             old_proc = _live_proc
             _live_proc = proc
             _live_paused = False
+            del _live_sent_cmds[:]
         if old_proc is not None and old_proc.poll() is None:
             old_proc.kill()
         _live_last_tick = 0
         stderr_lines = []
         start = time.time()
-        recorder = _RecordingWriter(seed, fault_profile, ticks, link_loss)
+        recorder = None if takeover else _RecordingWriter(seed, fault_profile, ticks, link_loss)
+        fast_forwarding = takeover is not None
+        held_lines = []  # static lines that arrive before a takeover is verified
+
+        def record(text):
+            if recorder is not None:
+                recorder.write_line(text)
+            else:
+                held_lines.append(text)
+
         try:
             for line in proc.stdout:
                 line = line.rstrip("\n")
                 if not line:
                     continue
+                if line.startswith("FFPROGRESS "):
+                    if fast_forwarding:
+                        prog = json.loads(line[len("FFPROGRESS "):])
+                        yield f"data: {json.dumps({'type': 'ff_progress', **prog})}\n\n"
+                    continue
                 if line.startswith("LIVEFRAME "):
-                    recorder.write_line(line)
                     frame = json.loads(line[len("LIVEFRAME "):])
+                    if fast_forwarding:
+                        fast_forwarding = False
+                        diff = _frame_diff(takeover["rec_frame"], frame)
+                        if diff is not None:
+                            proc.kill()
+                            msg = ("Cannot take over: the state regenerated at tick "
+                                   f"{takeover['tick']} does not match the recording (first difference: {diff}). "
+                                   "The recording was made on a different code version or is not reproducible.")
+                            yield f"data: {json.dumps({'type': 'takeover_error', 'message': msg})}\n\n"
+                            return
+                        recorder = _RecordingWriter(
+                            seed, fault_profile, ticks, link_loss,
+                            extra={"takeover_from": {"recording": takeover["source"], "tick": takeover["tick"]}})
+                        for prefix_line in takeover["prefix_lines"] + held_lines:
+                            recorder.write_line(prefix_line)
+                        del held_lines[:]
+                        paused = False
+                        if takeover["start_paused"] and hasattr(signal, "SIGSTOP"):
+                            _, status = _live_signal("pause")
+                            paused = status == 200
+                        ready = {"type": "takeover_ready", "tick": takeover["tick"], "paused": paused,
+                                 "warning": takeover["warning"], "recording": recorder.path.name,
+                                 "prior_overrides": takeover["prior_overrides"]}
+                        yield f"data: {json.dumps(ready)}\n\n"
+                    record(line)
                     # Only this generate() call's own process may update
                     # the shared tick global - guards against a stray
                     # write from an orphaned previous run that hasn't
@@ -1216,27 +1304,33 @@ def api_run_live():
                         _live_last_tick = frame.get("tick", _live_last_tick)
                     yield f"data: {json.dumps({'type': 'frame', 'frame': frame})}\n\n"
                 elif line.startswith("STATICENV "):
-                    recorder.write_line(line)
+                    record(line)
                     env = line[len("STATICENV "):]
                     yield f"data: {json.dumps({'type': 'static_env', 'env': json.loads(env)})}\n\n"
                 elif line.startswith("STATICMAP "):
-                    recorder.write_line(line)
+                    record(line)
                     terrain = line[len("STATICMAP "):]
                     yield f"data: {json.dumps({'type': 'static_map', 'map': json.loads(terrain)})}\n\n"
                 elif line.startswith("OVERRIDEACK "):
                     # Part 4, sim-mode only - a completely separate channel
                     # from the board path's binary MissionLinkOverrideAck_t/
                     # OverrideTracker (laptop/tools/telemetry_bridge.py).
-                    # Not written to the recording: Part 2/3's replay.js
-                    # already anticipated this ("OVERRIDE / OVERRIDEACK
-                    # lines (Part 4+) aren't emitted into a Part-2/3
-                    # recording yet") - left for a future pass, not
-                    # silently dropped by oversight.
                     ack = line[len("OVERRIDEACK "):]
-                    yield f"data: {json.dumps({'type': 'override_ack', **json.loads(ack)})}\n\n"
+                    # Recorded (raw, plus an OVERRIDE line for applied
+                    # ones) so a takeover of THIS recording can replay
+                    # the override at its effective tick.
+                    with _live_lock:
+                        cmd = _live_sent_cmds.pop(0) if _live_sent_cmds else ""
+                    ack_obj = json.loads(ack)
+                    record(line)
+                    if ack_obj.get("result") == "applied" and cmd:
+                        record("OVERRIDE " + json.dumps({
+                            "cmd": cmd.split()[0], "effective_tick": ack_obj["effective_tick"],
+                            "team_id": ack_obj["team_id"], "incident_id": ack_obj["incident_id"]}))
+                    yield f"data: {json.dumps({'type': 'override_ack', **ack_obj})}\n\n"
                 else:
                     stderr_lines.append(line)
-                    if line.startswith("[DIAG"):
+                    if line.startswith("[DIAG") and not fast_forwarding:
                         yield f"data: {json.dumps({'type': 'diag_line', 'line': line})}\n\n"
             proc.wait(timeout=30)
         except GeneratorExit:
@@ -1249,7 +1343,13 @@ def api_run_live():
                 if _live_proc is proc:
                     _live_proc = None
                     _live_paused = False
-            recorder.close()
+            if recorder is not None:
+                recorder.close()
+            if takeover and takeover.get("script_file"):
+                try:
+                    os.unlink(takeover["script_file"])
+                except OSError:
+                    pass
 
         elapsed = time.time() - start
         diag = parse_diag("\n".join(stderr_lines))
@@ -1268,10 +1368,103 @@ def api_run_live():
         }
         history = save_history(run_record)
 
-        yield f"data: {json.dumps({'type': 'done', 'diag': diag, 'telemetry': telemetry, 'history': history, 'elapsed_seconds': round(elapsed, 2), 'recording': recorder.path.name})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'diag': diag, 'telemetry': telemetry, 'history': history, 'elapsed_seconds': round(elapsed, 2), 'recording': recorder.path.name if recorder else None})}\n\n"
 
     return Response(stream_with_context(generate()), mimetype="text/event-stream",
                      headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.route("/api/replay/takeover", methods=["POST"])
+def api_replay_takeover():
+    """Part 5: continue a recorded run as a LIVE simulation from `tick`.
+    No state snapshot exists, so the simulator re-simulates ticks
+    0..tick-1 (`--fast-forward`), replaying the recording's applied
+    overrides at their effective ticks, and the regenerated frame at
+    `tick` must equal the recording's (see _live_run_response) before
+    anything goes live. Streams SSE like /api/run-live, preceded by
+    ff_progress events and one takeover_ready (or takeover_error)."""
+    payload = _json_object_body()
+    if payload is None:
+        return _bad_json_body()
+    name = payload.get("recording")
+    try:
+        tick = int(payload.get("tick"))
+        tick_delay_ms = int(payload.get("tick_delay_ms", 150))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "tick and tick_delay_ms must be integers"}), 400
+    if not isinstance(name, str) or not _RECORDING_NAME_RE.match(name):
+        return jsonify({"status": "error", "message": "invalid recording name"}), 400
+    path = RECORDINGS_DIR / name
+    if not path.is_file():
+        return jsonify({"status": "error", "message": "recording not found"}), 404
+
+    header, rec_frame, prefix_lines, script, prior = None, None, [], [], []
+    try:
+        with gzip.open(path, "rt") as fh:
+            for raw in fh:
+                raw = raw.rstrip("\n")
+                if raw.startswith("RECORDING "):
+                    header = json.loads(raw[len("RECORDING "):])
+                elif raw.startswith("LIVEFRAME "):
+                    frame = json.loads(raw[len("LIVEFRAME "):])
+                    if frame.get("tick") == tick:
+                        rec_frame = frame
+                    if frame.get("tick", 0) < tick:
+                        prefix_lines.append(raw)
+                elif raw.startswith("OVERRIDE "):
+                    ov = json.loads(raw[len("OVERRIDE "):])
+                    if ov["effective_tick"] < tick:
+                        prefix_lines.append(raw)
+                        script.append(_override_script_line(
+                            ov["cmd"], ov["effective_tick"], ov["team_id"], ov["incident_id"]))
+                        prior.append(ov)
+    except (OSError, ValueError, KeyError) as exc:
+        return jsonify({"status": "error", "message": f"cannot read recording: {exc}"}), 400
+    if not header or "seed" not in header:
+        return jsonify({"status": "error", "message": "recording has no usable header"}), 400
+    if rec_frame is None:
+        return jsonify({"status": "error", "message": f"recording has no frame at tick {tick}"}), 400
+    ticks = int(header.get("ticks") or 0)
+    if not (0 < tick < ticks):
+        return jsonify({"status": "error",
+                        "message": f"tick must be between 1 and {ticks - 1} for this recording"}), 400
+
+    seed = int(header["seed"])
+    fault_profile = header.get("fault_profile", "none")
+    link_loss = header.get("link_loss")
+
+    warning = None
+    rec_commit, here_commit = header.get("git_commit"), _git_commit()
+    if rec_commit != here_commit:
+        warning = (f"Recording was made on commit {rec_commit or 'unknown'}, this dashboard runs "
+                   f"{here_commit or 'unknown'}; trying anyway.")
+
+    build_ok, build_log = build_binary()
+    if not build_ok:
+        def err_stream():
+            yield f"data: {json.dumps({'type': 'error', 'message': 'build failed', 'log': build_log})}\n\n"
+        return Response(err_stream(), mimetype="text/event-stream")
+
+    args = [str(BINARY), str(seed), "1", str(ticks), "--live", "--trace", "--diag",
+            f"--tick-delay-ms={tick_delay_ms}", f"--fast-forward={tick}"]
+    script_file = None
+    if script:
+        script_file = tempfile.NamedTemporaryFile("w", suffix=".ovr", delete=False)
+        script_file.write("\n".join(script) + "\n")
+        script_file.close()
+        args.append(f"--override-script={script_file.name}")
+    if fault_profile and fault_profile != "none":
+        args += ["--fault-profile", fault_profile]
+    if link_loss is not None:
+        args += [f"--vbus-loss={link_loss}"]
+    takeover = {
+        "tick": tick, "rec_frame": rec_frame, "prefix_lines": prefix_lines, "source": name,
+        "warning": warning, "prior_overrides": prior,
+        "start_paused": bool(payload.get("start_paused", True)),
+        # Read by the simulator once at start-up; deleted when the run ends.
+        "script_file": script_file.name if script_file else None,
+    }
+    return _live_run_response(args, seed, ticks, fault_profile, link_loss, takeover=takeover)
 
 
 @app.route("/api/history")

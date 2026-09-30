@@ -90,7 +90,7 @@ def main():
     calls_before = len(bridge.calls)
     for route in ("/api/board/override", "/api/board/launch", "/api/board/connect",
                   "/api/board/connect-sim", "/api/board/disconnect", "/api/run",
-                  "/api/run-live"):
+                  "/api/run-live", "/api/replay/takeover"):
         resp = client.post(route, data='{"team_id": 1, "incident_id": 2, "port": "/dev/x"}',
                            headers={"Content-Type": "text/plain"})
         check(resp.status_code == 415, f"text/plain POST to {route} refused (415)")
@@ -129,6 +129,9 @@ def main():
     for route, body in (("/api/run", {"seed": "x"}),
                         ("/api/run", {"ticks": None}),
                         ("/api/run-live", {"tick_delay_ms": "fast"}),
+                        ("/api/replay/takeover", {"recording": "x.jsonl.gz", "tick": "soon"}),
+                        ("/api/replay/takeover", {"recording": "../../etc/passwd", "tick": 5}),
+                        ("/api/replay/takeover", {"tick": 5}),
                         ("/api/board/connect-sim", {"ticks": [1]})):
         resp = client.post(route, json=body)
         check(resp.status_code == 400, f"{route} with {body} is a 400")

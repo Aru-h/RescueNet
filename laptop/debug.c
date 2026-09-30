@@ -252,6 +252,17 @@ static int s_override_stdin_open = 1;
  * resumes cleanly on the next one, with no desync. */
 static int s_override_line_overflowed;
 
+/* Fast-forward support (--fast-forward=T --override-script=FILE): while
+ * quiet, no OVERRIDEACK is printed; the scripted lines are the applied
+ * overrides of the recording being resumed, replayed at their recorded
+ * effective ticks through the exact same live_override_process_line()
+ * path a live line takes, so the resumed run follows the same path. */
+#define LIVE_OVERRIDE_SCRIPT_MAX 1024u
+static int s_override_quiet;
+static uint32_t s_script_tick[LIVE_OVERRIDE_SCRIPT_MAX];
+static char s_script_line[LIVE_OVERRIDE_SCRIPT_MAX][LIVE_OVERRIDE_LINE_MAX];
+static uint32_t s_script_count;
+
 void debug_live_override_init(void)
 {
     s_override_line_len = 0;
@@ -337,6 +348,8 @@ static void live_override_emit_ack(uint32_t requested_tick, uint32_t effective_t
                                     uint8_t team_id, uint32_t incident_id,
                                     int applied, const char *reason)
 {
+    if(s_override_quiet)
+        return;
     printf("OVERRIDEACK {\"team_id\":%u,\"incident_id\":%u,\"requested_tick\":%u,"
            "\"effective_tick\":%u,\"result\":\"%s\",\"reason\":%s%s%s}\n",
            (unsigned)team_id, incident_id, requested_tick, effective_tick,
@@ -356,6 +369,8 @@ static void live_override_emit_ack(uint32_t requested_tick, uint32_t effective_t
 static void live_override_emit_malformed_ack(uint32_t effective_tick, int tick_known,
                                                uint32_t requested_tick, const char *reason)
 {
+    if(s_override_quiet)
+        return;
     printf("OVERRIDEACK {\"team_id\":null,\"incident_id\":null,\"requested_tick\":");
     if(tick_known)
         printf("%u", requested_tick);
@@ -587,6 +602,51 @@ void debug_live_override_poll(uint32_t tick)
             s_override_line_len = 0;
         }
     }
+}
+
+/* Loads the override script: one "OVERRIDE <tick> <team> <incident>" or
+ * "OVERRIDE_CLEAR <tick> <team>" line per applied override, <tick> being
+ * the effective tick it was applied on. Returns 0 on success. */
+int debug_live_override_load_script(const char *path)
+{
+    s_script_count = 0;
+    FILE *f = fopen(path, "r");
+    if(!f)
+        return -1;
+    char line[LIVE_OVERRIDE_LINE_MAX];
+    while(fgets(line, sizeof(line), f))
+    {
+        size_t len = strlen(line);
+        while(len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+        if(len == 0)
+            continue;
+        unsigned long tick = 0;
+        char cmd[24];
+        if(sscanf(line, "%23s %lu", cmd, &tick) != 2 || tick > 0xFFFFFFFFUL)
+            continue;
+        if(s_script_count >= LIVE_OVERRIDE_SCRIPT_MAX)
+        {
+            fclose(f);
+            return -2;
+        }
+        s_script_tick[s_script_count] = (uint32_t)tick;
+        strcpy(s_script_line[s_script_count], line);
+        s_script_count++;
+    }
+    fclose(f);
+    return 0;
+}
+
+/* Applies every scripted override whose effective tick is `tick`, in
+ * file order, silently. Called where the live poll would have run. */
+void debug_live_override_replay_script(uint32_t tick)
+{
+    s_override_quiet = 1;
+    for(uint32_t i = 0; i < s_script_count; i++)
+        if(s_script_tick[i] == tick)
+            live_override_process_line(s_script_line[i], tick);
+    s_override_quiet = 0;
 }
 
 /* Emits one line of JSON to stdout describing the full world state for
