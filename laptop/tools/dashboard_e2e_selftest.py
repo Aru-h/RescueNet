@@ -776,7 +776,9 @@ def _replay_takeover_check(page, console_errors):
     check(replayed["tick"] == target, f"replay is at tick {target} before taking over (got {replayed['tick']})")
 
     # Paced like a person would watch it (earlier checks left 3 ms in the field).
-    page.fill("#tickDelay", "150")
+    # (the field lives in the live controls, hidden in Replay mode, so it
+    # is set directly rather than through Playwright's visible-only fill)
+    page.evaluate("() => { document.getElementById('tickDelay').value = '150'; }")
     page.click("#replayTakeoverBtn")
     saw_rebuilding = False
     # runLive() shows "running" from the first instant, so only the
