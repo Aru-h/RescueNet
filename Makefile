@@ -66,8 +66,9 @@ LABELER = label_snapshots
 LABELER_SOURCES = $(TOOLS_DIR)/label_snapshots.c
 
 TARGET = tron
+TARGET_AI = tron_ai
 
-.PHONY: all clean smoke label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-pack-parity check-feature-spec-fresh check-feature-spec-leak-guard check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-cubeide-single-flags check-single-board-dk-harness check-live-override-selftest check-replay-takeover-selftest check-live-override-noop-regression
+.PHONY: all clean smoke tron-ai check-model-parity label_dataset check-board check-board-compile check-board-link check-pico check-pico-compile check-pico-link check-pico-bsp check-sx126x-driver check-two-board-harness check-two-board-cbba-harness check-board-ids-distinct check-mission-link-status-gate check-recovery-predictor-stress check-realloc-gate check-recovery-manager-persistence check-persistence-bounded-forgiveness check-environment-e2e-stress check-selftests check-handshake-selftest check-lora-frame-selftest check-mission-link-selftest check-override-selftest check-cbba-board-selftest check-sx1262-rx-selftest-dk check-sx126x-rx-selftest-pico check-comms-transport-selftest check-mission-link-roster-selftest check-mission-mirror-selftest check-soft-spi-selftest check-sx1262-setup-selftest check-two-board-reboot-harness check-two-board-mission-harness check-bridge-selftests check-virtual-bus check-env-raw-travel-cost-ablation check-consensus-selftest check-consensus-scenarios check-consensus-airtime check-consensus-shadow-regression check-consensus-multiboard-untouched build-consensus-scenario check-fault-predictor-features-selftest check-zone-parity check-zone-refresh check-feature-pack-parity check-feature-spec-fresh check-feature-spec-leak-guard check-board-single check-board-single-compile check-board-single-link check-board-single-symbols check-cubeide-single-flags check-single-board-dk-harness check-live-override-selftest check-replay-takeover-selftest check-live-override-noop-regression
 
 all: $(TARGET) $(LABELER)
 
@@ -93,6 +94,16 @@ DK_SINGLE_BOARD_FLAGS ?= -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS -DVIRTUAL_B
 
 $(TARGET): $(LAPTOP_SOURCES)
 	$(CC) $(CFLAGS) $(LAPTOP_CONSENSUS_FLAGS) $(LAPTOP_INCLUDES) -o $(TARGET) $(LAPTOP_SOURCES) $(LDFLAGS)
+
+# AI-enabled laptop build (opt-in, never part of `all`): identical to $(TARGET)
+# plus -DFAULT_MODEL_LOADED=1, so evaluate_fault_predictor() runs the trained
+# MLP in core/fault_predictor_weights.h. It changes team behaviour (and so
+# the CSV) - the default $(TARGET) and the dataset generator stay AI-off.
+# Dashboard: TRON_BINARY=./$(TARGET_AI) SIM_ONLY=1 python laptop/tools/app.py
+tron-ai: $(TARGET_AI)
+
+$(TARGET_AI): $(LAPTOP_SOURCES) $(wildcard $(CORE_DIR)/*.h)
+	$(CC) $(CFLAGS) $(LAPTOP_CONSENSUS_FLAGS) -DFAULT_MODEL_LOADED=1 $(LAPTOP_INCLUDES) -o $(TARGET_AI) $(LAPTOP_SOURCES) $(LDFLAGS)
 
 $(LABELER): $(LABELER_SOURCES)
 	$(CC) $(CFLAGS) -I$(CORE_DIR) -o $(LABELER) $(LABELER_SOURCES) $(LDFLAGS)
@@ -443,7 +454,7 @@ check-cubeide-single-flags:
 	echo "check-cubeide-single-flags: $(CUBEIDE_APPLI_CPROJECT) (Debug + Release) matches DK_SINGLE_BOARD_FLAGS = $(DK_SINGLE_BOARD_FLAGS)"
 
 clean:
-	rm -f $(TARGET) $(LABELER) tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv tron_telemetry.log
+	rm -f $(TARGET) $(TARGET_AI) $(LABELER) tron_snapshot_dataset.csv tron_snapshot_dataset_labeled.csv tron_telemetry.log
 	rm -rf $(BOARD_OBJ_DIR) $(BOARD_OBJ_DIR_SINGLE) $(PICO_BSP_OBJ_DIR) $(PICO_BOARD_OBJ_DIR) $(SX126X_OBJ_DIR)
 	rm -f $(TWO_BOARD_HARNESS_BIN) $(MISSION_LINK_STATUS_GATE_TEST_BIN) \
 		$(RECOVERY_PREDICTOR_STRESS_TEST_BIN) $(REALLOC_GATE_TEST_BIN) \
@@ -900,8 +911,9 @@ check-selftests: check-handshake-selftest check-lora-frame-selftest \
 	check-sx126x-rx-selftest-pico check-comms-transport-selftest \
 	check-mission-link-roster-selftest check-mission-mirror-selftest \
 	check-soft-spi-selftest check-sx1262-setup-selftest \
-	check-live-override-selftest check-replay-takeover-selftest
-	@echo "check-selftests: all fourteen laptop/tools selftests passed"
+	check-live-override-selftest check-replay-takeover-selftest \
+	check-model-parity
+	@echo "check-selftests: all fifteen laptop/tools selftests passed"
 
 # Part 4: drives a real `tron --live` subprocess over its actual
 # stdin/stdout (laptop/tools/live_override_selftest.py's own docstring
@@ -1061,6 +1073,27 @@ check-feature-pack-parity:
 		--dump-raw-features $(FEATURE_PACK_PARITY_DIR)/features_py_raw.csv > /dev/null
 	@$(PYTHON) $(TOOLS_DIR)/feature_pack_parity_test.py \
 		$(FEATURE_PACK_PARITY_DIR)/features_c.csv $(FEATURE_PACK_PARITY_DIR)/features_py_raw.csv
+
+# Model parity (PyTorch vs C): laptop/tools/model_parity_test.c feeds every
+# vector of laptop/tools/model_parity_fixture.csv (ml/export_parity_fixture.py
+# regenerates it from the checkpoint after a retrain) through
+# fault_predictor_run() built with -DFAULT_MODEL_LOADED=1 and requires each of
+# the 5 outputs within 1e-5 of PyTorch's. A second build with the default
+# (FAULT_MODEL_LOADED=0) asserts the predictor returns exact zeros. The
+# fixture is required - a missing one fails, it is not skipped.
+MODEL_PARITY_FIXTURE = $(TOOLS_DIR)/model_parity_fixture.csv
+
+check-model-parity:
+	@test -f $(MODEL_PARITY_FIXTURE) || { echo "check-model-parity: FAIL - $(MODEL_PARITY_FIXTURE) is missing; generate it with: python ml/export_parity_fixture.py"; exit 1; }
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/model_parity_test.c (FAULT_MODEL_LOADED=1)"
+	@$(CC) $(SELFTEST_CFLAGS) -DFAULT_MODEL_LOADED=1 -o $(SELFTEST_BIN_DIR)/model_parity_test_on \
+		$(TOOLS_DIR)/model_parity_test.c $(CORE_DIR)/fault_predictor.c $(LDFLAGS)
+	@echo "  CC      $(TOOLS_DIR)/model_parity_test.c (default, model off)"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/model_parity_test_off \
+		$(TOOLS_DIR)/model_parity_test.c $(CORE_DIR)/fault_predictor.c $(LDFLAGS)
+	@$(SELFTEST_BIN_DIR)/model_parity_test_on $(MODEL_PARITY_FIXTURE)
+	@$(SELFTEST_BIN_DIR)/model_parity_test_off $(MODEL_PARITY_FIXTURE)
 
 # Peer consensus unit tests (docs/architecture/CONSENSUS_DESIGN.md 7.9, 7.11): real vbus,
 # synthetic teams, no simulation. Needs the virtual bus and the test hooks.
@@ -1392,7 +1425,7 @@ check-cbba-wire-validation:
 # rules-only vs. rules+consensus, fault-profile=random. Override any of
 # EVAL_* to sweep other seeds/ticks/profiles/variants; see evaluate.py
 # --help for the rest of the flags (e.g. --profiles random,combined).
-EVAL_VARIANTS ?= rules,rules+consensus
+EVAL_VARIANTS ?= rules,rules+consensus,rules+consensus+ai
 EVAL_SEEDS_START ?= 1001
 EVAL_SEEDS_COUNT ?= 20
 EVAL_TICKS ?= 3000

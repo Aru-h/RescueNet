@@ -1273,7 +1273,6 @@ static RecoverySignal_t evaluate_fault_predictor(
     MissionStage_t stage = recovery_stage_for_team(team, twin);
     float feature_vector[FEATURE_SPEC_NUM_INPUTS];
     FaultPredictorScores_t scores;
-    uint8_t best_class = 0u;
     float confidence;
     uint8_t sustained;
     uint8_t corroborated;
@@ -1283,13 +1282,19 @@ static RecoverySignal_t evaluate_fault_predictor(
     /* Inference gate (core/feature_pack.h's own doc): before the route
      * map and district map have both fully arrived, env_raw_travel_cost
      * and team_zone_id read silently-wrong defaults rather than missing
-     * values. Not yet a behavioural gate on anything - FAULT_MODEL_
-     * LOADED is 0, so fault_predictor_run() ignores its input and always
-     * returns all-zero scores regardless - but the check belongs here,
-     * at the one call site that uses this vector, so it is already in
-     * place for when a real model lands. */
-    if(mission_link_map_rows_received() < MISSION_LINK_MAP_HEIGHT ||
-       mission_link_district_rows_received() < MISSION_LINK_MAP_HEIGHT)
+     * values, so the model must not run on them - scores stay all-zero
+     * until the whole map is there. Only matters when a model is
+     * compiled in (FAULT_MODEL_LOADED=1); with it 0, fault_predictor_run()
+     * returns zeros regardless. */
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+    const int map_ready = 1;    /* laptop: world is local, nothing to wait for */
+#else
+    const int map_ready =
+        mission_link_map_rows_received() >= MISSION_LINK_MAP_HEIGHT &&
+        mission_link_district_rows_received() >= MISSION_LINK_MAP_HEIGHT;
+#endif
+
+    if(!map_ready)
     {
         FaultPredictorScores_t no_scores = {0};
         scores = no_scores;
@@ -1310,13 +1315,27 @@ static RecoverySignal_t evaluate_fault_predictor(
         scores = fault_predictor_run(feature_vector);
     }
 
-    for(uint8_t fault_class = 1u; fault_class < NUM_OPERATIONAL_FAULT_CLASSES; fault_class++)
+    /* A class counts as flagged only when its own score reaches that
+     * class's validated decision threshold (FAULT_PREDICTOR_CLASS_
+     * THRESHOLDS, core/fault_predictor.h - chosen on the validation set,
+     * docs/ml/FAULT_PREDICTOR_THRESHOLDS.md), not a shared floor on the
+     * best raw score. The strongest flagged class sets the confidence;
+     * nothing flagged means no AI signal (confidence 0). */
     {
-        if(scores.score[fault_class] > scores.score[best_class])
-            best_class = fault_class;
-    }
+        static const float class_threshold[NUM_OPERATIONAL_FAULT_CLASSES] =
+            FAULT_PREDICTOR_CLASS_THRESHOLDS;
+        float best_score = 0.0f;
 
-    confidence = scores.score[best_class];
+        for(uint8_t fault_class = 0u; fault_class < NUM_OPERATIONAL_FAULT_CLASSES; fault_class++)
+        {
+            if(scores.score[fault_class] >= class_threshold[fault_class] &&
+               scores.score[fault_class] > best_score)
+            {
+                best_score = scores.score[fault_class];
+            }
+        }
+        confidence = best_score;
+    }
 
     /* Updated unconditionally, ahead of both early returns below, so a
        low-confidence tick still resets the streak even though this
@@ -1326,30 +1345,19 @@ static RecoverySignal_t evaluate_fault_predictor(
     sustained = predictor_persistence_streak_update(team->team_id, confidence)
                     >= FAULT_PERSISTENCE_TRIP_TICKS;
 
-    /* This early return is why WATCHDOG_ANOMALY_THRESHOLD (core/watchdog.c)
-     * is currently risk-free to keep tuned aggressively (0.10, lowered
-     * from 0.35 this pass - 43.3% fault-active detection / 9.5% no-fault
-     * false-positive rate at that value, combined fault profile, 5
-     * seeds x 3000 ticks): fault_predictor_run() is still the untrained
-     * placeholder (FAULT_MODEL_LOADED undefined, core/fault_predictor.c
-     * returns all-zero scores), so confidence is always <= 0 here and
-     * this function always returns CONTINUE_MONITORING before ever
-     * reaching the corroborated = watchdog->anomaly_detected check
-     * below - a 9.5% false-positive rate on that flag has zero live
-     * effect on any dispatched RecoveryAction_t today, only on logging
-     * (core/simulation.c's EVENT_WATCHDOG_ANOMALY_CHANGED) and the
-     * dashboard's anomaly counter (laptop/tools/app.py). Once a real
-     * trained-weights header lands and FAULT_MODEL_LOADED is defined,
-     * this early return stops firing unconditionally and
-     * WATCHDOG_ANOMALY_THRESHOLD's false-positive rate starts actually
-     * gating escalation past LOCAL_RECOVERY (below) - re-evaluate the
-     * threshold's FPR/TPR tradeoff at that point, don't assume today's
-     * "good enough" verdict still holds.
-     *
-     * The 43.3%/9.5% figures above were measured while the watchdog's
-     * communication channel and the degraded flag were still reading
-     * the injector's fault_state (since removed), so they are not
-     * trustworthy either - re-measure before relying on them. */
+    /* With FAULT_MODEL_LOADED=0 (the default build), fault_predictor_run()
+     * returns all-zero scores, so confidence is always <= 0 here and this
+     * function returns CONTINUE_MONITORING before reaching the
+     * corroborated = watchdog->anomaly_detected check below: the
+     * watchdog's false-positive rate then has no effect on dispatched
+     * actions. With FAULT_MODEL_LOADED=1 (`make tron-ai`, the DevRam
+     * board build) a score can escalate past LOCAL_RECOVERY only when
+     * backed up by the watchdog anomaly flag, a sustained streak or
+     * consensus ELEVATED - so a false watchdog alarm can now back up an
+     * AI score. WATCHDOG_ANOMALY_THRESHOLD (core/watchdog.c) was tuned
+     * (0.10) while the predictor returned zeros; its earlier FPR figures
+     * are not trustworthy. Measure AI-on vs AI-off with
+     * laptop/tools/ai_fp_report.py before relying on them. */
     if(confidence <= 0.0f)
         return recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING,
             RECOVERY_REASON_NONE,

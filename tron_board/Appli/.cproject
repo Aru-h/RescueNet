@@ -275,6 +275,7 @@
 									<listOptionValue builtIn="false" value="COMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS"/>
 									<listOptionValue builtIn="false" value="VIRTUAL_BUS_ENABLED=1"/>
 									<listOptionValue builtIn="false" value="CONSENSUS_ENFORCE=1"/>
+									<listOptionValue builtIn="false" value="FAULT_MODEL_LOADED=1"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.includepaths.1583875780" name="Include paths (-I)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.includepaths" useByScannerDiscovery="false" valueType="includePath">
 									<listOptionValue builtIn="false" value="../Core/Inc"/>

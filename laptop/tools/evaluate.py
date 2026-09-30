@@ -133,20 +133,17 @@ def build_variant(name: str, bin_path: Path, model_header: str | None) -> None:
     sources = core_sources + [str(REPO_ROOT / p) for p in LAPTOP_TAIL_SOURCES]
 
     if name == AI_VARIANT:
-        if model_header is None:
-            log(
-                f"ERROR: no model header supplied for variant '{AI_VARIANT}'. "
-                "Pass --model-header <path-to-weights-header> once a trained "
-                "model exists (see docs/evaluation/README.md). Refusing to "
-                "build this variant rather than silently running it with "
-                "FAULT_MODEL_LOADED's all-zero placeholder scores."
-            )
-            sys.exit(1)
-        header_path = Path(model_header).resolve()
-        if not header_path.is_file():
-            log(f"ERROR: --model-header '{model_header}' is not a file.")
-            sys.exit(1)
-        defines = BASE_DEFINES + ["-DCONSENSUS_ENFORCE=1", "-DFAULT_MODEL_LOADED=1", "-include", str(header_path)]
+        # Same flags as `make tron-ai` (./tron_ai): the trained weights live in
+        # core/fault_predictor_weights.h, which fault_predictor.c includes when
+        # FAULT_MODEL_LOADED=1. --model-header, if given, is force-included
+        # instead to override those weights (e.g. a candidate retrain).
+        defines = BASE_DEFINES + ["-DCONSENSUS_ENFORCE=1", "-DFAULT_MODEL_LOADED=1"]
+        if model_header is not None:
+            header_path = Path(model_header).resolve()
+            if not header_path.is_file():
+                log(f"ERROR: --model-header '{model_header}' is not a file.")
+                sys.exit(1)
+            defines += ["-include", str(header_path)]
     else:
         defines = VARIANT_DEFINES[name]
 
@@ -363,7 +360,7 @@ def render_markdown(variants, baseline, profiles, seeds, ticks, summary_rows, pa
         if v in VARIANT_DEFINES:
             lines.append(f"  - `{v}`: `{' '.join(VARIANT_DEFINES[v])}`")
         else:
-            lines.append(f"  - `{v}`: `{' '.join(BASE_DEFINES)} -DCONSENSUS_ENFORCE=1 -DFAULT_MODEL_LOADED=1 -include<model-header>`")
+            lines.append(f"  - `{v}`: `{' '.join(BASE_DEFINES)} -DCONSENSUS_ENFORCE=1 -DFAULT_MODEL_LOADED=1` (same as `make tron-ai`)")
     lines.append("")
     lines.append(
         "See `docs/evaluation/README.md` for what counts as a \"detection\" "

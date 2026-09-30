@@ -85,6 +85,7 @@ laptop/tools/recordings/*
 # Laptop build outputs (the root Makefile's TARGET and LABELER) and the
 # dataset ./tron writes into its working directory - all regenerated
 /tron
+/tron_ai
 /label_snapshots
 /tron_snapshot_dataset.csv
 

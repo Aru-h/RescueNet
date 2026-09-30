@@ -21,6 +21,7 @@
 #include "mission_mirror.h"
 #include "mission_state.h" /* TICK_TIME_SEC */
 #include "consensus.h"
+#include "fault_predictor.h" /* FAULT_MODEL_LOADED - --model-info */
 
 static uint64_t monotonic_ms(void)
 {
@@ -127,6 +128,15 @@ static int is_tick_delay_flag(const char *arg)
 
 int main(int argc, char **argv)
 {
+    /* `tron --model-info`: report whether the AI fault predictor is compiled
+     * in and exit. Read by laptop/tools/app.py so a recording's header says
+     * whether it was an AI run. Runs no simulation and writes no files. */
+    if(argc == 2 && strcmp(argv[1], "--model-info") == 0)
+    {
+        printf("model_loaded=%d\n", (int)FAULT_MODEL_LOADED);
+        return 0;
+    }
+
     if(sim_runner_init() != 0)
     {
         fprintf(stderr, "equipment requirement matrix validation failed\n");

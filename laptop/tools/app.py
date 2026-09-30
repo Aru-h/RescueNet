@@ -44,7 +44,12 @@ TOOLS_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = TOOLS_DIR.parent.parent
 CSV_PATH = PROJECT_DIR / "tron_snapshot_dataset.csv"
 HISTORY_PATH = PROJECT_DIR / ".dashboard_history.json"
-BINARY = PROJECT_DIR / "tron"
+# TRON_BINARY overrides the simulator binary (default ./tron, AI off). Relative
+# paths resolve against PROJECT_DIR, not the cwd. For the AI build:
+#   make tron-ai && TRON_BINARY=./tron_ai SIM_ONLY=1 python laptop/tools/app.py
+BINARY = Path(os.environ.get("TRON_BINARY", PROJECT_DIR / "tron"))
+if not BINARY.is_absolute():
+    BINARY = PROJECT_DIR / BINARY
 
 # Part 2 (replay): every line a live run forwards over SSE (STATICENV
 # once, LIVEFRAME every tick, STATICMAP on change, and OVERRIDE/
@@ -294,6 +299,33 @@ def _git_commit():
         return "unknown"
 
 
+_MODEL_LOADED_CACHE = {}
+
+
+def _model_loaded():
+    """True/False: was the simulator binary built with the AI fault predictor
+    (FAULT_MODEL_LOADED=1)? Asked of the binary itself (`--model-info`), so it
+    is right for whatever TRON_BINARY points at; TRON_MODEL_LOADED=0/1
+    overrides it. None if it cannot be determined (e.g. an older binary)."""
+    override = os.environ.get("TRON_MODEL_LOADED")
+    if override in ("0", "1"):
+        return override == "1"
+    key = str(BINARY)
+    if key not in _MODEL_LOADED_CACHE:
+        value = None
+        try:
+            with tempfile.TemporaryDirectory() as scratch:
+                result = subprocess.run([key, "--model-info"], cwd=scratch,
+                                        capture_output=True, text=True, timeout=5)
+            match = re.search(r"model_loaded=([01])", result.stdout)
+            if match:
+                value = match.group(1) == "1"
+        except Exception:  # noqa: BLE001
+            pass
+        _MODEL_LOADED_CACHE[key] = value
+    return _MODEL_LOADED_CACHE[key]
+
+
 def _recording_filename(seed, fault_profile, link_loss):
     """File name includes seed, profile and link loss (spec) so a
     directory listing is somewhat readable without opening any file;
@@ -328,6 +360,7 @@ class _RecordingWriter:
             "link_loss": link_loss,
             "start_tick": start_tick,
             "git_commit": _git_commit(),
+            "model_loaded": _model_loaded(),
             "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         if extra:
