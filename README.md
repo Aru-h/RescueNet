@@ -1,154 +1,230 @@
-# tron — REMCE rescue-coordination system
+# REMCE — Fault-tolerant rescue coordination on μT-Kernel 3.0
 
-A decentralized, fault-tolerant disaster-response coordination system built
-for the TRON Programming Contest 2026. Ten specialist response teams
-(search, medical, extraction, perimeter, support) are allocated across
-incidents in a procedurally generated city using CBBA (Consensus-Based
-Bundle Algorithm), with no central coordinator: teams reach a shared plan
-by exchanging bids over a peer-to-peer link. A digital-twin watchdog on
-each team compares expected vs. actual behaviour to detect faults
-(communication, mobility, resource, environment, mission), peer consensus
-cross-checks those detections against what other teams observed, and an
-AI fault predictor (in progress on a separate branch) is layered in behind
-a simplex architecture so it can never make a decision unilaterally. The
-same core logic (`core/`) runs identically on a laptop, for development
-and dataset generation, and on a real STM32N6570-DK board running
-µT-Kernel 3.0.
+**TRON Programming Contest 2026 · RTOS Application category · Theme: TRON × AI**
+Team: `<TEAM NAME>` — `<MEMBER NAMES>`
 
-## Architecture
+Ten rescue teams (search, medical, extraction, perimeter, support) respond to
+incidents in a procedurally generated, earthquake-damaged city. There is no
+central dispatcher: the teams divide the work among themselves with an auction
+algorithm (CBBA), and every team checks its own health against a digital twin.
+When a team is faulty (a failing radio, a stalled vehicle, missing
+equipment…), a rule-based watchdog, the other teams (peer consensus) and a
+small neural network running on the microcontroller detect it, and the system
+reassigns work so the mission keeps going.
 
-- **Single board, 10 teams.** The submission build
-  (`DK_SINGLE_BOARD_FLAGS` in the `Makefile`) runs all 10 teams on one
-  STM32N6570-DK. Team-to-team messages go over an in-memory virtual bus
-  (`core/vbus.c`) rather than a radio link; the multi-board LoRa path
-  (`core/lora_*.c`, `board/STM32N6570-DK/sx1262_hal.c`,
-  `board/Raspberry_Pi_Pico/`) still exists in the code and is exercised by
-  its own two-board harness targets, but is not what this build ships.
-- **Task allocation: CBBA.** `core/cbba.c` implements the Consensus-Based
-  Bundle Algorithm — each team builds a bundle of tasks by bidding and
-  reconciles conflicts with peers, with no central allocator.
-- **Fault injection.** `core/fault_injector.c` and `core/fault_config.c`
-  inject configurable communication/mobility/resource/environment/mission
-  faults into a run, driving both the training dataset and the detection
-  evaluation.
-- **Fault detection, three layers:**
-  - *Rules* — a digital-twin watchdog (`core/mission_execution_twin.c`,
-    `core/watchdog.c`) compares each team's expected vs. actual state and
-    raises evidence across 7 channels.
-  - *Consensus* — `core/consensus.c` lets teams corroborate or contest
-    each other's fault reports from what their own radio hears, adding
-    robustness against a single faulty (or faking) self-report. See
-    [`docs/architecture/CONSENSUS_DESIGN.md`](docs/architecture/CONSENSUS_DESIGN.md).
-  - *AI* — a float32 MLP fault predictor (`core/fault_predictor.c`),
-    gated by the `FAULT_MODEL_LOADED` flag so it stays inert (all-zero
-    scores) until a trained model is exported. Being added on a separate
-    branch; not active in this build.
-- **Evaluation tooling** (`laptop/tools/evaluate.py`, `make evaluate`)
-  measures whether each layer actually improves fault detection and
-  mission outcome over a rules-only baseline, with paired per-seed
-  comparisons and bootstrap confidence intervals.
-- **Laptop dashboard** (`laptop/tools/app.py`) drives and visualizes a run
-  in three modes — live simulation, replay of a recorded run, or connected
-  to the real board — including a drag-and-drop manual override of team
-  assignments in simulation mode.
+All ten teams, the coordination logic and the AI run on **one STM32N6570-DK
+under μT-Kernel 3.0**. A laptop dashboard shows the mission live, lets an
+operator overrule the system by dragging a team onto an incident, and can
+replay any recorded mission and take it over from any moment.
 
-Full technical detail: [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md).
+## Contents
 
-## Repo layout
+1. [What you need](#1-what-you-need)
+2. [Five-minute evaluation without the board](#2-five-minute-evaluation-without-the-board)
+3. [Running on the STM32N6570-DK](#3-running-on-the-stm32n6570-dk)
+4. [The AI on μT-Kernel](#4-the-ai-on-μt-kernel)
+5. [How it works](#5-how-it-works)
+6. [Verifying the results](#6-verifying-the-results)
+7. [Repository layout](#7-repository-layout)
+8. [Known limitations, third-party software, license](#8-known-limitations-third-party-software-license)
 
-| Path | What's there |
+## 1. What you need
+
+**Hardware:** one STM32N6570-DK and a USB cable to its ST-LINK connector.
+No other hardware. (The laptop-only evaluation in §2 needs no board at all.)
+
+**Software:**
+
+| For | Needs |
 |---|---|
-| `core/` | Portable C simulation/coordination core — CBBA, consensus, fault injection/detection, LoRa crypto and framing. Builds identically for the laptop and the board. |
-| `laptop/` | Laptop-only entry point (`main.c`), dataset snapshot writer (`snapshot.c`), and `laptop/tools/` — the dashboard, evaluation harness, and every `make check-*` selftest. |
-| `board/STM32N6570-DK/` | Single-board submission target's board-specific code (mission link task, SX1262 HAL, debug). |
-| `board/Raspberry_Pi_Pico/` | Second-board target for the multi-board LoRa path (not used by the submission build, kept for that path's own harness/tests). |
-| `tron_board/` | The STM32CubeIDE project for the physical board (`.project`/`.cproject`, HAL/CMSIS drivers, FSBL). |
-| `docs/` | Design docs, evaluation results, and research notes — see [`docs/README.md`](docs/README.md) for the index. |
-| `data_prep.py`, `generate_feature_spec.py`, `feature_spec.json` | The 74-input feature contract for the AI fault predictor: dataset preparation and the C/Python feature-spec generation, kept in sync by `make check-feature-spec-fresh`. |
-| `Makefile` | Every build and `make check-*` target for the laptop, board, and Pico builds. |
-
-## Quick start
-
-### Laptop simulator + dashboard
+| Laptop simulator and dashboard | macOS or Linux (tested), a C compiler (`cc`/gcc/clang), `make`, Python 3 |
+| Board | STM32CubeIDE, and the μT-Kernel 3.0 BSP2 from TRON Forum (fetched separately, see §3) |
+| Retraining the AI (optional) | PyTorch (installed by `requirements.txt`) |
 
 ```
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-make tron                              # builds ./tron
-
-# Dashboard, simulation-only (no real board needed):
-SIM_ONLY=1 python laptop/tools/app.py       # macOS/Linux
-python laptop/tools/app.py --no-hardware    # Windows, or as an explicit flag anywhere
 ```
 
-The dashboard supports live simulation, replay of a recorded run, and a
-real-board connection, plus a drag-and-drop manual override of team
-assignments while in simulation mode.
+## 2. Five-minute evaluation without the board
 
-### Board bring-up (STM32N6570-DK)
+The laptop build runs exactly the same `core/` code as the board.
 
-The only currently verified boot path is **DEV boot via the `DevRam`
-STM32CubeIDE debug configuration** (the Application loaded straight into
-SRAM by the debugger). Standalone Flash Boot hangs at the FSBL →
-Application handoff and is open with ST as support case 00269955. See
-[`docs/DK_DEMO_LAUNCH.md`](docs/DK_DEMO_LAUNCH.md) for the full checklist:
-boot switch positions, the `DevRam` debug configuration, and known rough
-edges.
-
-### Evaluation
+**Build and start the dashboard:**
 
 ```
-make evaluate                          # seeds 1001-1020, 3000 ticks, rules vs rules+consensus
+make                                   # builds ./tron (AI off)
+make tron-ai                           # builds ./tron_ai (AI on)
+TRON_BINARY=./tron_ai SIM_ONLY=1 python laptop/tools/app.py
 ```
 
-Results are written to `build/evaluate/` and copied to
-[`docs/evaluation/RESULTS.md`](docs/evaluation/RESULTS.md). See
-[`docs/evaluation/README.md`](docs/evaluation/README.md) for options and
-what the harness actually measures.
+Open **http://127.0.0.1:5050** and click **Bypass & Enter Dashboard**. (On
+Windows, which is untested, use `python laptop/tools/app.py --no-hardware`.
+Leave out `TRON_BINARY=./tron_ai` to run with the AI off.)
 
-### Dataset generation
+**Things to try:**
 
-```
-make tron_snapshot_dataset.csv         # or: ./tron <seed> <world-count> <ticks> --fault-profile=combined
-python data_prep.py tron_snapshot_dataset.csv
-```
+1. **A live mission.** Choose a seed and a fault profile (for example
+   `combined`) and press **▶ Live**. The map shows the teams moving, incidents
+   opening and closing, and faults being detected; the side panels show each
+   team's state, the peer votes and the virtual radio traffic.
+2. **Overrule the system.** Drag a team onto an open incident on the map and
+   confirm. The dashboard shows the override's lifecycle: pending → committed
+   → resolved or interrupted.
+3. **Replay.** Switch the mode selector to **Replay**, choose
+   `demo_seed1002_combined_600ticks.jsonl.gz` (a bundled 600-tick mission) and
+   press **Load**, then **▶ Play**. Use the scrub bar or **⏭ Next detection**
+   to jump to the next fault detection.
+4. **Take over a replay.** Pause at any tick and press **⏵ Take over from
+   here**. The simulator re-runs the mission to that tick (checking that it
+   matches the recording) and continues live, where you can override again.
+   The bundled demo was recorded with `./tron` (AI off), so start the dashboard
+   without `TRON_BINARY=./tron_ai` to take it over.
 
-`data_prep.py` builds the 74-input feature matrix used to train the AI
-fault predictor and enforces the ground-truth-leak guards described in
-[`docs/ml/FEATURE_CONTRACT_DESIGN.md`](docs/ml/FEATURE_CONTRACT_DESIGN.md). Read
-[`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) before training on any
-previously generated CSV — several dataset-affecting fixes landed during
-development.
-
-### AI training / export
-
-The AI fault predictor's training and export pipeline is being developed
-on a separate branch; this branch ships with `FAULT_MODEL_LOADED=0` (the
-predictor returns all-zero scores) so dataset generation stays
-unaffected. See [`docs/ml/FEATURE_CONTRACT_DESIGN.md`](docs/ml/FEATURE_CONTRACT_DESIGN.md)
-for the feature contract the model is trained against.
-
-## Test / check commands
+**Batch run without the dashboard:**
 
 ```
-make                                        # build ./tron and label_snapshots
-make check-selftests                        # all laptop/tools selftests
-make check-live-override-noop-regression    # dashboard override is a byte-identical no-op on the dataset
-make check-consensus-shadow-regression      # consensus doesn't change pre-existing CSV columns
-make check-single-board-dk-harness          # 10 teams + virtual bus + consensus + mission link, single board
-make check-board-single                     # single-board DK compile/link/symbol flags (needs arm-none-eabi-gcc)
-make check-cubeide-single-flags             # tron_board's CubeIDE project matches DK_SINGLE_BOARD_FLAGS
-make check-dashboard-csrf-selftest          # dashboard API CSRF/content-type hardening
-make check-dashboard-e2e                    # browser end-to-end check (needs Playwright + a browser)
+./tron 1001 1 3000 --fault-profile=combined   # seed 1001, one run, 3000 ticks
 ```
 
-`check-board-single` needs an ARM cross-compiler (`arm-none-eabi-gcc`),
-and `check-dashboard-e2e` needs
-[`laptop/tools/requirements-dashboard-dev.txt`](laptop/tools/requirements-dashboard-dev.txt)'s
-Playwright plus a fetched browser — see that file and each target's
-Makefile comment for setup. Neither runs in every environment.
+This writes `tron_snapshot_dataset.csv`, one row per team per tick.
 
-## Known limitations
+## 3. Running on the STM32N6570-DK
 
-See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for known behaviours
-and gaps in the dataset, the core simulation, the board firmware, and the
-dashboard — read this before training on the CSV or judging a live demo.
+The full checklist, including the exact CubeIDE settings, is
+[`docs/DK_DEMO_LAUNCH.md`](docs/DK_DEMO_LAUNCH.md). In short:
+
+1. **Fetch the μT-Kernel 3.0 BSP2** (TRON Forum's T-License does not allow us
+   to bundle it):
+   ```
+   cd board/STM32N6570-DK/vendor
+   git clone --recurse-submodules https://github.com/tron-forum/mtk3_bsp2.git
+   ```
+2. **Open `tron_board/` in STM32CubeIDE** (File → Import → Existing Projects),
+   select the **`DevRam`** build configuration of the `Appli` project, and
+   build. `DevRam` includes the AI (`FAULT_MODEL_LOADED=1`) and the
+   single-board flags (all 10 teams on one board, virtual bus, consensus on).
+3. **Set the boot switches to DEV boot:** BOOT1 (SW1) on, BOOT0 (SW2) off.
+   Pressing the reset button should turn LED2 red.
+4. **Debug** with a configuration that loads `DevRam/tron_board_Appli.elf`,
+   then **Resume**. The serial console (ST-LINK virtual COM port, 115200 8N1)
+   prints `TRON Board is online and ready!` and a `CONFIG` line including
+   `model_loaded=1`.
+5. **Start the dashboard in hardware mode:**
+   ```
+   python laptop/tools/app.py
+   ```
+   Enter the board's serial port (macOS: `/dev/cu.usbmodem…`, Linux:
+   `/dev/ttyACM0`, Windows: `COMx`), click **Connect to Board**, wait for the
+   handshake, then click **Start board mission**. The laptop sends the city
+   map and the clock; the board runs all ten teams and reports back.
+6. **Reset the board** (CubeIDE Restart, then Resume) **before every new
+   mission.**
+
+Standalone Flash Boot (without the debugger) does not work yet; see
+[Known limitation 1](KNOWN_LIMITATIONS.md).
+
+## 4. The AI on μT-Kernel
+
+A float32 neural network (75 inputs → 128 → 64 → 5 fault scores, 18,309
+weights and biases, about 73 KB) runs **on the board's CPU, inside the
+μT-Kernel simulation task**, with no ML runtime: the whole forward pass is a
+71-line plain-C file, `core/fault_predictor.c`. Every tick, for each team, it
+reads 75 features of live state (digital-twin errors, watchdog evidence,
+movement history, map signals) and scores five fault classes: mobility,
+communication, resource, environment and mission.
+
+- **Safe by design (simplex pattern):** on its own the AI can only trigger
+  local recovery. Reallocating a team's task or sending it back to the safe
+  zone also needs the rule-based watchdog, 8 consecutive ticks of AI
+  confidence, or peer consensus to agree.
+- **Measured effect** (simulator, held-out seeds 1001–1020, 3000 ticks):
+  teams resolve **38.95 incidents per run with the AI vs 35.9 without (+3.05,
+  95% CI 1.30–4.80)**, with no measurable harm on fault-free runs. The model
+  keeps its accuracy when its own decisions change what teams do (macro F1
+  0.708 before vs 0.706 while acting).
+- **Honest limits:** only mobility, communication and resource act;
+  environment and mission are switched off because acting on them made
+  missions worse. A perfect detector would reach only 39.7, so the remaining
+  loss comes from faults no recovery action can shorten, not from detection.
+- **Verified C = PyTorch:** `make check-model-parity` checks the C forward pass
+  against PyTorch within 1e-5 (worst measured 3.6e-7).
+
+Details: [`ml/MODEL_REPORT.md`](ml/MODEL_REPORT.md) (model, data, thresholds,
+closed-loop results) and
+[`docs/evaluation/AI_EVALUATION_BRIEF.md`](docs/evaluation/AI_EVALUATION_BRIEF.md)
+(every test, command and raw result). Retraining: [`ml/README.md`](ml/README.md).
+
+## 5. How it works
+
+- **Task allocation — CBBA** (`core/cbba.c`): each team bids for incidents
+  and resolves conflicts with its peers; no central allocator.
+- **One board, ten teams:** each team runs as its own logical node; teams talk
+  over an in-memory virtual bus (`core/vbus.c`) that simulates per-link packet
+  loss and airtime, standing in for a radio mesh.
+- **Fault injection** (`core/fault_injector.c`): communication, mobility,
+  resource, environment and mission faults, by profile (`none`, `combined`,
+  `random`, single-class profiles).
+- **Fault detection in three layers:**
+  1. *Rules:* a digital twin (`core/mission_execution_twin.c`) predicts each
+     team's state, and a watchdog (`core/watchdog.c`) accumulates evidence on
+     seven channels when reality diverges.
+  2. *Peer consensus* (`core/consensus.c`): teams vote on each other from what
+     they observe over the bus, so a team cannot hide its own fault and one
+     faulty peer cannot fake one.
+     [`docs/architecture/CONSENSUS_DESIGN.md`](docs/architecture/CONSENSUS_DESIGN.md)
+  3. *AI* (§4).
+- **Recovery** (`core/recovery_manager.c`): fuses the three layers into one
+  action per team — keep monitoring, local recovery, reallocate the task,
+  return to the safe zone or abort.
+- **Laptop ↔ board mission link** (`core/mission_link.c`,
+  `board/STM32N6570-DK/mission_link_task.c`): over USART1 the laptop sends the
+  city map, incidents, injected faults and the clock; the board sends team
+  status back.
+- **Deterministic:** the same seed gives the same mission, which is what makes
+  replay, take-over and the byte-identical regression tests possible.
+
+Full design: [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md).
+
+## 6. Verifying the results
+
+```
+make check-selftests                        # 14 selftests: mission link, overrides, CBBA, replay take-over, AI model parity, …
+make check-live-override-noop-regression    # overrides change nothing when unused (byte-identical dataset)
+make check-consensus-shadow-regression      # consensus does not alter pre-existing behaviour
+make check-feature-pack-parity              # C feature vector == Python training features
+make check-single-board-dk-harness          # 10 teams + virtual bus + consensus + real board mission-link code, host-side
+make check-cubeide-single-flags             # the CubeIDE project uses the single-board flags
+make check-dashboard-csrf-selftest          # dashboard API hardening
+make check-dashboard-e2e                    # full browser test of the dashboard (needs Playwright, see below)
+make evaluate                               # rules vs +consensus vs +AI, paired seeds, bootstrap CIs
+```
+
+`check-dashboard-e2e` needs
+`pip install -r laptop/tools/requirements-dashboard-dev.txt` and
+`python -m playwright install chromium`. `make check-board-single` also
+cross-compiles the board code and needs `arm-none-eabi-gcc`.
+
+## 7. Repository layout
+
+| Path | Contents |
+|---|---|
+| `core/` | Portable C: simulation, CBBA, virtual bus, consensus, fault injection and detection, recovery, AI forward pass and weights. Built unchanged for the laptop and the board. (Also contains LoRa framing/encryption code from an earlier multi-board design; not used by this build.) |
+| `board/STM32N6570-DK/` | Board-specific code: μT-Kernel entry point and tasks, mission link over USART1, serial debug output. `vendor/` is where the μT-Kernel BSP2 goes. |
+| `tron_board/` | The STM32CubeIDE project (application, FSBL, ST HAL drivers, linker scripts, `DevRam` configuration). |
+| `laptop/` | Laptop simulator entry point and dataset writer; `laptop/tools/` holds the dashboard (`app.py`), the evaluation harness and every test. |
+| `ml/` | AI pipeline: data preparation, feature contract, training, evaluation, export, trained checkpoint, model report. |
+| `docs/` | Architecture, evaluation results, launch checklist, reports; index in [`docs/README.md`](docs/README.md). |
+| `Makefile` | Every build and check target. |
+
+## 8. Known limitations, third-party software, license
+
+- **Known limitations:** [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md).
+- **Third-party software**, rights holders, licenses and our rights statement:
+  [`THIRD_PARTY.md`](THIRD_PARTY.md). Third-party components keep their own
+  licenses.
+- **Originality:** this program is the original work of the entrants. It has
+  not been published, and it has not been entered in any other contest.
+- **License:** see [`LICENSE`](LICENSE). We intend to release this project as
+  open source after the contest.
