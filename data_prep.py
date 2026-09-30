@@ -1,8 +1,8 @@
 """
-Data preparation pipeline for the fault-detection model's 74-input feature
-contract (FEATURE_CONTRACT_DESIGN.md; decisions D1-D10 finalized in review).
+Data preparation pipeline for the fault-detection model's 75-input feature
+contract (docs/ml/FEATURE_CONTRACT_DESIGN.md; decisions D1-D10 finalized in review).
 Supersedes data_prep-2.py and data_prep-3.py - neither is imported here, and
-this is the only place the 74 inputs are defined; core/feature_spec.h and
+this is the only place the 75 inputs are defined; core/feature_spec.h and
 feature_spec.py are generated from this file's feature_spec.json output
 (generate_feature_spec.py), never hand-edited to match.
 
@@ -11,7 +11,7 @@ constructs the 5-class ground-truth labels, reads the 7 evidence-channel
 features + confirmed_mobility_impairment straight from the CSV, encodes
 categorical/bitmask fields using FIXED one-hot vocabularies, adds the
 stall-fraction and incident-delta history features, splits by run_id into
-train/val/test, and scales the final 74-column feature matrix.
+train/val/test, and scales the final 75-column feature matrix.
 
 Combines data_prep-2.py's ground-truth guard rails (GROUND_TRUTH_COLUMNS
 name guard, the gt_* prefix guard, the value-based leak check) with
@@ -40,8 +40,10 @@ intentional and not something to silently change here), on top of:
   read 0, not -1, for a team with no incident assigned - laptop/snapshot.c
   writes it that way now, so there is nothing left to do here beyond not
   re-deriving a -1 sentinel from something else. incident_req_capability
-  is untouched: it keeps -1 as its own one-hot "none" category, which
-  can never collide with a real capability value of 0.
+  keeps -1 as its own one-hot "none" category, which can never collide
+  with a real capability value of 0. Its vocabulary is -1..4 (6 columns):
+  4 is SPEC_SUPPORT, required by INCIDENT_EQUIPMENT_CACHE (core/incident.c),
+  which the simulator really generates.
 - Decision 5 (run_id): laptop/snapshot.c now computes it as a deterministic
   hash of (world_seed, fault profile, CONSENSUS_ENFORCE, vbus link loss),
   not process-start-time + seed - grouped/split on exactly as before, but
@@ -136,15 +138,15 @@ def downcast_numeric_columns(frame):
 
 def parse_args():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("csv_path", nargs="?", default="simulation_output_100_seeds.csv",
-                     help="Path to the snapshot CSV (default: simulation_output_100_seeds.csv)")
+    ap.add_argument("csv_path", nargs="?", default="tron_snapshot_dataset.csv",
+                     help="Path to the snapshot CSV (default: tron_snapshot_dataset.csv)")
     ap.add_argument("--evidence-parity-check", action="store_true",
                      help="Also recompute evidence via evidence_channels.py's Python "
                           "mirror and report agreement against the CSV's own evidence "
                           "columns. Optional cross-check only (Decision 2) - the result "
                           "is never merged into the training features.")
     ap.add_argument("--dump-raw-features", metavar="PATH",
-                     help="Write the UNSCALED 74-column feature matrix (plus run_id/"
+                     help="Write the UNSCALED 75-column feature matrix (plus run_id/"
                           "team_id/cycle) to PATH and exit before splitting or scaling - "
                           "for laptop/tools/feature_pack_parity_test.py, which compares "
                           "this against core/feature_pack.c's own output. Uses the "
@@ -390,7 +392,7 @@ df["delta_priority"] = df["delta_priority"].fillna(0)
 df["delta_victim_count"] = df["delta_victim_count"].fillna(0)
 df = df.drop(columns=["baseline_incident_priority", "baseline_victim_count", "moved"])
 
-# ── Final feature selection: the 74-input contract ───────────────────
+# ── Final feature selection: the 75-input contract ───────────────────
 # Order here IS the order feature_spec.json/core/feature_spec.h/feature_
 # spec.py fix for good - the single source of truth, not any one of the
 # files this was merged from.
@@ -529,7 +531,7 @@ for split_name, idx in [("train", train_idx), ("val", val_idx), ("test", test_id
 # evaluate.py can trace a test row back to (run_id, team_id, cycle) and
 # the real watchdog's own detection flag, after the model has already
 # made its prediction. Restored here (dropped somewhere during the leak-
-# guard/fixed-vocab/74-input-contract rewrite -- confirmed against the
+# guard/fixed-vocab/75-input-contract rewrite -- confirmed against the
 # pre-rewrite file: every other section carried over, this one didn't;
 # it's outside everything that rewrite was checking, so it's the one
 # thing that could go missing without any assertion here catching it).
@@ -582,7 +584,7 @@ X = downcast_numeric_columns(X)
 print("Number of features (with path_is_unreachable):", X.shape[1])
 assert X.shape[1] == 75, (
     "Expected exactly 75 inputs, got a different count. Stop and report why "
-    "rather than forcing 75 - see FEATURE_CONTRACT_DESIGN.md."
+    "rather than forcing 75 - see docs/ml/FEATURE_CONTRACT_DESIGN.md."
 )
 del df
 
@@ -667,6 +669,6 @@ with open("feature_spec.json", "w") as f:
 print(f"\nSaved all preprocessed arrays + scaler + feature_columns + "
       f"fault_class_names + feature_spec.json to ./{OUTPUT_DIR}/ "
       f"(feature_spec.json also written to the repo root).")
-print("The 74 inputs, in order:")
+print("The 75 inputs, in order:")
 for i, name in enumerate(feature_columns):
     print(f"  [{i:2d}] {name}")
