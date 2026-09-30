@@ -189,22 +189,28 @@
     global.replaySyncTelemetry(cumulative, lastChangeTick);
   }
 
-  function feedTimelineWindow(index) {
+  // Rebuilds the timeline's history from frames 0..index (its own
+  // window keeps the newest TIMELINE_WINDOW) and draws once.
+  function rebuildTimeline(index) {
     if (!global.DetectionTimeline) return;
-    global.DetectionTimeline.reset();
     const start = Math.max(0, index - TIMELINE_WINDOW + 1);
-    for (let i = start; i <= index; i++) global.DetectionTimeline.update(frames[i]);
+    global.DetectionTimeline.setHistory(frames.slice(start, index + 1));
   }
 
-  function renderFrameAt(index) {
+  // `sequential` is true only for normal playback stepping to the very
+  // next frame, where appending is enough; every other entry (seek,
+  // scrub, jump, load, reset) rebuilds the history.
+  function renderFrameAt(index, sequential) {
     if (index < 0 || index >= frames.length) return;
+    const canAppend = sequential && currentIndex >= 0 && index === currentIndex + 1;
     currentIndex = index;
     const frame = frames[index];
     syncTelemetry(index);
     global.drawFrame(frame);
     global.updateLiveTables(frame);
     if (global.ConsensusNetwork) global.ConsensusNetwork.update(frame);
-    feedTimelineWindow(index);
+    if (canAppend && global.DetectionTimeline) global.DetectionTimeline.append(frame);
+    else rebuildTimeline(index);
 
     const { scrubber, tickLabel } = els();
     if (scrubber) scrubber.value = index;
@@ -225,7 +231,7 @@
     const delay = BASE_INTERVAL_MS / speed;
     playTimer = setTimeout(() => {
       if (currentIndex < frames.length - 1) {
-        renderFrameAt(currentIndex + 1);
+        renderFrameAt(currentIndex + 1, true);
         scheduleNext();
       } else {
         pause();
@@ -306,5 +312,6 @@
     get header() { return header; },
     get frameCount() { return frames.length; },
     get currentIndex() { return currentIndex; },
+    frameTick(i) { return frames[i] ? frames[i].tick : null; },
   };
 })(window);

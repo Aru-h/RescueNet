@@ -632,6 +632,116 @@ def _replay_check(page, console_errors):
     check(scrub_hidden_again, "switching back to Live mode hides the replay scrub bar again")
 
 
+DEMO_RECORDING = "demo_seed42_combined_600ticks.jsonl.gz"
+
+
+def _timeline_state(page):
+    """(first, last, bar_pixels) of the Detection Timeline as drawn now.
+    bar_pixels counts non-transparent pixels in the plot area (right of
+    the label gutter), so it is > 0 only when history bars are drawn."""
+    return page.evaluate("""() => {
+      const txt = document.getElementById('timelineRange').textContent;
+      const m = /ticks (\\d+)\u2013(\\d+)/.exec(txt);
+      const c = document.getElementById('timelineCanvas');
+      const dpr = c.width / c.getBoundingClientRect().width;
+      const x0 = Math.ceil(100 * dpr);
+      const d = c.getContext('2d').getImageData(x0, 0, c.width - x0, c.height).data;
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+      return m ? [parseInt(m[1], 10), parseInt(m[2], 10), n] : [null, null, n];
+    }""")
+
+
+def _replay_timeline_check(page, console_errors, recordings_dir):
+    """Replay-mode Detection Timeline: follows Play with no clicks and is
+    rebuilt after every kind of seek (forward, backward, Next detection)."""
+    page.select_option("#modeSelect", "replay")
+    page.click("#replayRefreshBtn")
+    page.wait_for_timeout(300)
+    has_demo = page.evaluate(
+        "(f) => Array.from(document.querySelectorAll('#replaySelect option')).some(o => o.value === f)",
+        DEMO_RECORDING)
+    check(has_demo, "the bundled demo recording is listed in Replay mode")
+    if not has_demo:
+        page.select_option("#modeSelect", "live")
+        return
+    page.select_option("#replaySelect", DEMO_RECORDING)
+    page.click("#replayLoadBtn")
+    page.wait_for_function("() => Replay.frameCount > 0 && Replay.currentIndex === 0", timeout=10000)
+
+    def tick_of(idx):
+        return page.evaluate(f"() => Replay.frameTick({idx})")
+
+    # Play: the range must advance on its own, with no clicks on the page.
+    page.select_option("#replaySpeed", index=page.evaluate(
+        "() => Array.from(document.getElementById('replaySpeed').options).length - 1"))
+    page.click("#replayPlayBtn")
+    page.wait_for_timeout(600)
+    first_a, last_a, bars_a = _timeline_state(page)
+    page.wait_for_timeout(600)
+    first_b, last_b, _ = _timeline_state(page)
+    page.click("#replayPlayBtn")  # pause
+    page.wait_for_timeout(100)
+    cur = page.evaluate("() => Replay.currentIndex")
+    first_c, last_c, _ = _timeline_state(page)
+    check(last_a is not None and last_b is not None and last_b > last_a,
+          f"timeline range advances during Play without clicks (ticks {first_a}-{last_a} -> {first_b}-{last_b})")
+    check(first_b == 0 and last_c == tick_of(cur),
+          f"timeline covers tick 0..current while playing/paused (got {first_c}-{last_c}, current tick {tick_of(cur)})")
+    check(bars_a > 0, "timeline bars are drawn during Play")
+
+    def seek_and_check(idx, label):
+        page.evaluate(f"() => Replay.seekToIndex({idx})")
+        page.wait_for_timeout(150)
+        first, last, bars = _timeline_state(page)
+        want = tick_of(idx)
+        check(first == 0 and last == want and bars > 0,
+              f"{label}: timeline shows ticks 0-{want} with bars (got {first}-{last}, bars={bars})")
+
+    frame_count = page.evaluate("() => Replay.frameCount")
+    hi = min(200, frame_count - 1)
+    lo = min(70, hi)
+    seek_and_check(lo, "scrub to tick 70")
+    seek_and_check(hi, "scrub forward")
+    seek_and_check(min(30, hi), "scrub backward")
+    # Stepping past a seek must not reset the history (the reported bug).
+    page.evaluate(f"() => Replay.seekToIndex({lo})")
+    page.click("#replayPlayBtn")
+    page.wait_for_timeout(300)
+    page.click("#replayPlayBtn")
+    first, last, bars = _timeline_state(page)
+    check(first == 0 and last > tick_of(lo) and bars > 0,
+          f"playing on from a seek keeps full history (got {first}-{last})")
+
+    # Real scrubber input event.
+    page.evaluate("""() => {
+      const el = document.getElementById('replayScrubber');
+      el.value = 5; el.dispatchEvent(new Event('input'));
+    }""")
+    page.wait_for_timeout(100)
+    first, last, _ = _timeline_state(page)
+    check(first == 0 and last == tick_of(5), f"scrubber input rebuilds the timeline (got {first}-{last})")
+
+    # Next detection.
+    page.evaluate("() => Replay.seekToIndex(0)")
+    page.click("#replayJumpBtn")
+    page.wait_for_timeout(150)
+    idx = page.evaluate("() => Replay.currentIndex")
+    first, last, bars = _timeline_state(page)
+    check(idx > 0 and first == 0 and last == tick_of(idx) and bars > 0,
+          f"Next detection updates the timeline (index {idx}, got {first}-{last}, bars={bars})")
+
+    # Reload the recording: history rebuilt from tick 0.
+    page.click("#replayLoadBtn")
+    page.wait_for_function("() => Replay.frameCount > 0 && Replay.currentIndex === 0", timeout=10000)
+    page.wait_for_timeout(100)
+    first, last, _ = _timeline_state(page)
+    check(first == 0 and last == 0, f"reloading a recording restarts the timeline at tick 0 (got {first}-{last})")
+
+    page.select_option("#modeSelect", "live")
+    page.wait_for_timeout(100)
+
+
 def main():
     try:
         from playwright.sync_api import sync_playwright
@@ -650,6 +760,9 @@ def main():
     # exactly one curated demo file tracked in git, and this test would
     # otherwise litter it with a fresh recording on every run.
     recordings_tmpdir = tempfile.mkdtemp(prefix="dashboard_e2e_recordings_")
+    _demo_src = os.path.join(TOOLS_DIR, "recordings", DEMO_RECORDING)
+    if os.path.exists(_demo_src):
+        shutil.copy(_demo_src, recordings_tmpdir)
     if not _port_open(HOST, PORT):
         we_started_it = True
         env = dict(os.environ, SIM_ONLY="1", DASHBOARD_RECORDINGS_DIR=recordings_tmpdir)
@@ -923,6 +1036,7 @@ def main():
 
             # Part 2: replay of a recorded live run.
             _replay_check(page, console_errors)
+            _replay_timeline_check(page, console_errors, recordings_tmpdir)
 
             page.close()
 
