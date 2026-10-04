@@ -430,6 +430,7 @@ def _view3d_check(page, console_errors, screenshot_dir):
     _view3d_lighting_check(page, console_errors)
     _view3d_labels_check(page)
     _view3d_pins_check(page, console_errors)
+    _view3d_pin_details_check(page, console_errors)
 
     # Tilt limits, full rotation, top-down shortcut.
     lim = page.evaluate("""() => {
@@ -887,6 +888,95 @@ def _view3d_pins_check(page, console_errors):
     check("Incident pin" in legend and "glow halo" in legend and "slowly pulsing" in legend and "steady" in legend, "[3d] the legend explains the pin, its P1-P4 label, badges and the P1 / P2 halos")
     real_errors = real_console_errors(console_errors)
     check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the pin checks (got {real_errors[:5]})")
+
+
+def _view3d_pin_details_check(page, console_errors):
+    """Pin details in 3D, only from data the frames already carry: assignment
+    (hollow / team ring / fault warning / hover tether), work progress,
+    type icons, undiscovered ghost pins in God view, the priority-escalation
+    pulse, and the zoom levels of detail."""
+    page.evaluate("""() => { window.__orig = window._lastFrame; window.__t = window._lastFrame.tick + 5000;
+      map3d.setSettings({ reduceMotion: false }); fogViewMode = 'god';
+      window.__mock = (edit) => { const f = JSON.parse(JSON.stringify(window.__orig)); edit(f); f.tick = (window.__t += 1); drawFrame(f, true); return f; };
+      mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); }""")
+    # 1. Assignment: hollow = nobody assigned; ring = team; fault warning
+    res = page.evaluate("""() => {
+      const f = window.__mock((f) => { f.incidents.forEach((i) => { i.status = 0; i.assigned_team = 255; i.support_team = 255; i.discovered = 1; });
+        f.incidents[0].assigned_team = f.teams[1].id; f.teams[1].fault_mask = 0; f.teams[2].fault_mask = 1; f.incidents[1].assigned_team = f.teams[2].id; });
+      const pins = map3d.incidentPins(); const by = (id) => pins.find((p) => p.ids.includes(id));
+      const a = by(f.incidents[0].id), b = by(f.incidents[1].id), c = pins.find((p) => !p.ids.includes(f.incidents[0].id) && !p.ids.includes(f.incidents[1].id));
+      return { a: [a.hollow, a.assigned.map((x) => [x.team, x.fault])], b: [b.hollow, b.assigned.map((x) => [x.team, x.fault])], c: c ? [c.hollow, c.assigned.length] : null,
+               t1: f.teams[1].id, t2: f.teams[2].id };
+    }""")
+    check(res["a"][0] is False and res["a"][1] == [[res["t1"], False]], f"[3d] an assigned incident has a solid pin and the assigned team's ring, no fault warning ({res['a']})")
+    check(res["b"][0] is False and res["b"][1] == [[res["t2"], True]], f"[3d] the pin of an incident whose team has an active fault carries the warning ({res['b']})")
+    check(res["c"] is not None and res["c"][0] is True and res["c"][1] == 0, f"[3d] an unassigned incident is a hollow, outlined pin ({res['c']})")
+    # hover tether (and select) draws one line per assigned team
+    inc_id = page.evaluate("() => window.__orig.incidents[0].id")
+    page.evaluate("(id) => map3d.setHoverIncident(id)", inc_id)
+    tet = page.evaluate("() => map3d.escalationState().tethers")
+    lod = page.evaluate("(id) => map3d.incidentPins().find((p) => p.ids.includes(id)).lod", inc_id)
+    check(tet == 1 and lod == 2, f"[3d] hovering an incident draws a tether to its assigned team and shows full detail (tethers={tet}, detail level={lod})")
+    page.evaluate("() => map3d.setHoverIncident(null)")
+    check(page.evaluate("() => map3d.escalationState().tethers") == 0, "[3d] the tether goes away when the hover ends")
+    # 2. Progress arc from work_remaining (estimate against the largest value seen)
+    prog = page.evaluate("""() => {
+      const id = window.__orig.incidents[0].id, g = (f) => f.incidents.find((i) => i.id === id);
+      window.__mock((f) => { f.incidents.forEach((i) => { i.work_remaining = 1000; }); });
+      const p0 = map3d.incidentPins().find((p) => p.ids.includes(id)).progress;
+      window.__mock((f) => { f.incidents.forEach((i) => { i.work_remaining = 400; }); });
+      const p1 = map3d.incidentPins().find((p) => p.ids.includes(id)).progress;
+      return [p0, p1]; }""")
+    check(prog[0] == 0 and prog[1] is not None and abs(prog[1] - 0.6) < 0.05, f"[3d] the progress arc fills as work remaining drops ({prog[0]} -> {prog[1]}; vs. the largest seen)")
+    # 3. God view: undiscovered incidents are ghost pins; Operator view hides them
+    gv = page.evaluate("""() => {
+      const hide = (f) => { f.incidents.forEach((i) => { i.discovered = 1; }); const b = f.incidents[3].building_id; f.incidents.forEach((i) => { if (i === f.incidents[3] || (b >= 0 && i.building_id === b)) i.discovered = 0; }); };
+      window.__mock(hide);
+      const pins = map3d.incidentPins(); const ghost = pins.filter((p) => p.ghost).length; const n = pins.length;
+      fogViewMode = 'operator'; window.__mock(hide);
+      const nOp = map3d.incidentPins().length; fogViewMode = 'god';
+      return { ghost, n, nOp }; }""")
+    check(gv["ghost"] >= 1 and gv["nOp"] == gv["n"] - gv["ghost"], f"[3d] God view shows the undiscovered incident as a ghost pin; Operator view hides it ({gv})")
+    # 4. Escalation pulse (priority number goes DOWN), with Reduce motion respected
+    esc = page.evaluate("""() => {
+      const id = window.__orig.incidents[0].id; const g = (f) => f.incidents.find((i) => i.id === id);
+      window.__mock((f) => { f.incidents.forEach((i) => { i.discovered = 1; }); g(f).priority = 3; });
+      const first = map3d.escalationState().active;
+      window.__mock((f) => { f.incidents.forEach((i) => { i.discovered = 1; }); g(f).priority = 3; });
+      const steady = map3d.escalationState().active;
+      window.__mock((f) => { f.incidents.forEach((i) => { i.discovered = 1; }); g(f).priority = 1; });
+      const up = map3d.escalationState(); const flagged = map3d.incidentPins().find((p) => p.ids.includes(id)).escalated;
+      map3d.setSettings({ reduceMotion: true });
+      window.__mock((f) => { f.incidents.forEach((i) => { i.discovered = 1; }); g(f).priority = 3; });
+      window.__mock((f) => { f.incidents.forEach((i) => { i.discovered = 1; }); g(f).priority = 1; });
+      const reduced = map3d.escalationState().total; map3d.setSettings({ reduceMotion: false });
+      return { first, steady, up, flagged, reduced }; }""")
+    check(esc["first"] == 0 and esc["steady"] == 0, f"[3d] no pulse on first sight or when the priority does not change ({esc['first']}, {esc['steady']})")
+    check(esc["up"]["active"] >= 1 and esc["flagged"], f"[3d] a priority escalation (P3 -> P1) starts a pulse ({esc['up']})")
+    check(esc["reduced"] == 0, "[3d] with Reduce motion there is no escalation pulse")
+    page.wait_for_timeout(1900)
+    check(page.evaluate("() => map3d.escalationState().active") == 0, "[3d] the escalation pulse is brief (gone after ~1.6 s)")
+    # 5. Type icons: every hazard type draws (hover forces full detail)
+    types = page.evaluate("""() => {
+      window.__mock((f) => { f.incidents.forEach((i, k) => { i.discovered = 1; i.type = k % 11; }); });
+      const pins = map3d.incidentPins(); const seen = new Set();
+      pins.forEach((p) => { map3d.setHoverIncident(p.id); const q = map3d.incidentPins().find((x) => x.id === p.id); if (q.lod === 2) seen.add(q.type); });
+      map3d.setHoverIncident(null); return Array.from(seen).sort((a, b) => a - b); }""")
+    check(len(types) >= 6, f"[3d] type icons draw at full detail for the hazard types in the data ({types})")
+    # 6. Levels of detail by zoom
+    lv = page.evaluate("""() => {
+      window.__mock((f) => { f.incidents.forEach((i) => { i.discovered = 1; }); });
+      const c = mapCamera, levels = () => Array.from(new Set(map3d.incidentPins().map((p) => p.lod))).sort();
+      const far = levels();
+      let steps = 0; while (steps++ < 40 && !levels().includes(2)) { c.zoomAt(c.state.viewW / 2, c.state.viewH / 2, 1.2); window.__mock(() => {}); }
+      const near = levels(); c.reset(c.state.viewW, c.state.viewH); window.__mock(() => {});
+      return { far, near }; }""")
+    check(lv["far"] == [0] and 2 in lv["near"], f"[3d] zoomed out pins show only colour / halo / label (level {lv['far']}); zooming in adds detail (levels {lv['near']})")
+    legend = page.evaluate("() => { openMapLegend(); const t = document.querySelector('#mapLegendModal .legend-modal-body').textContent; closeMapLegend(); return t; }")
+    check(all(w in legend for w in ("Assignment", "Progress arc", "Type icon", "Faded dashed pin", "Escalation pulse")), "[3d] the legend explains assignment, progress arc, type icon, ghost pins and the escalation pulse")
+    page.evaluate("() => { drawFrame(window.__orig, true); }")
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the pin-detail checks (got {real_errors[:5]})")
 
 
 def _route_accuracy_check(page):

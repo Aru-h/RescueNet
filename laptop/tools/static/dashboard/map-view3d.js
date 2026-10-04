@@ -98,7 +98,6 @@
   const PIN_R_WORLD = 0.22;      // ... and in world units
   const PIN_Z = 0.62;            // head height above the footing
   const PIN_HIT_R = 0.26;        // pick radius (world units, before MARKER_BOOST)
-  const PIN_ICONS = { 6: "\u2622", 7: "\ud83d\udd25" };
   const GROUND_TEX_PX_PER_CELL = 48;
   const FOV = 35;
   // Perspective makes the 3D map's markers read smaller than in 2D/2.5D at the same world size; scale sprites and hit areas up a little.
@@ -434,12 +433,14 @@
     // (depthFunc Greater) - so a marker behind a building is never lost.
     // Markers ignore fog so they stay fully readable at any distance.
     const glyphCache = new Map();
-    function glyphSprites(key, drawFn) {
+    function glyphSprites(key, drawFn, k) {
       let g = glyphCache.get(key);
       if (!g) {
         const cv = document.createElement("canvas");
-        cv.width = cv.height = GLYPH_PX;
-        drawFn(cv.getContext("2d"));
+        cv.width = cv.height = GLYPH_PX * (k || 1);
+        const cx = cv.getContext("2d");
+        if (k) cx.scale(k, k);                       // draw in 128-unit coordinates on a sharper canvas
+        drawFn(cx);
         const tex = new THREE.CanvasTexture(cv);
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.anisotropy = 4;
@@ -458,37 +459,91 @@
       return g;
     }
 
-    // The pin: a round beacon head in the priority colour with the priority
-    // label ("P1".."P4") in it, a victim-count badge (top right), a blue
-    // "N incidents" badge for a grouped building (top left) and a hazard icon
-    // (bottom left). Drawn on a small canvas and used as a camera-facing
-    // sprite, so it reads from any angle. `label` is false for the variant
-    // shown when the pin is too small on screen for the text to be legible.
-    function drawPinGlyph(ctx, color, inc, members, selected, label) {
-      const cx = GLYPH_PX / 2, cy = GLYPH_PX / 2, r = PIN_R_PX;
-      const victims = members.reduce((a, m) => a + (m.victims || 0), 0);
-      ctx.save();
-      ctx.globalAlpha = inc.status === 0 ? 1 : 0.62;     // open = solid, assigned / in progress = softer (as in 2D)
-      const grad = ctx.createRadialGradient(cx - r * 0.35, cy - r * 0.4, r * 0.1, cx, cy, r);
-      grad.addColorStop(0, "#ffffff"); grad.addColorStop(0.22, color); grad.addColorStop(1, color);
-      ctx.beginPath(); ctx.arc(cx, cy, r + 3, 0, Math.PI * 2); ctx.fillStyle = "rgba(8,12,18,0.85)"; ctx.fill();   // dark rim for contrast on any ground
-      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fillStyle = grad; ctx.fill();
-      ctx.restore();
-      if (label) {                                       // the priority, as text: priority never relies on colour alone
-        ctx.fillStyle = inc.priority >= 3 ? "#0d1117" : "#fff"; ctx.font = "bold 26px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText("P" + inc.priority, cx, cy + 1);
+    // Pin levels of detail (by the pin head's size on screen):
+    //   0 far: colour + P-label (+ halo, drawn separately)
+    //   1 medium: + assignment (hollow = unassigned, team-colour token, warning if that team is faulted) + group count
+    //   2 close / hovered / selected: + progress arc, type icon, victim badge
+    const LOD_MED_PX = 12, LOD_CLOSE_PX = 26, HOVER_HEAD_PX = 18;
+
+    // Small vector icons for the incident types (INCIDENT_TYPE_NAMES order).
+    function drawTypeIcon(ctx, type, x, y, s) {
+      ctx.save(); ctx.translate(x, y); ctx.strokeStyle = "#fff"; ctx.fillStyle = "#fff"; ctx.lineWidth = 1.7; ctx.lineJoin = "round"; ctx.lineCap = "round";
+      const poly = (pts, close) => { ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q[0] * s, q[1] * s) : ctx.moveTo(q[0] * s, q[1] * s))); if (close) ctx.closePath(); ctx.stroke(); };
+      switch (type) {
+        case 0: poly([[-1, 1], [-1, -0.2], [-0.35, -0.7], [0, -0.1], [0.4, -0.8], [1, -0.2], [1, 1]], true); break;                       // collapsed building
+        case 1: ctx.strokeRect(-s, -s, 2 * s, 2 * s); ctx.strokeRect(-s * 0.4, -s * 0.4, s * 0.8, s * 0.8); break;                          // confined space
+        case 2: ctx.fillRect(-s * 0.3, -s, s * 0.6, 2 * s); ctx.fillRect(-s, -s * 0.3, 2 * s, s * 0.6); break;                              // mass casualty: cross
+        case 3: poly([[-0.35, -1], [-0.35, -0.2], [-1, 0.9], [1, 0.9], [0.35, -0.2], [0.35, -1]], false); break;                             // chemical: flask
+        case 4: ctx.font = "bold " + Math.round(s * 2.4) + "px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("?", 0, s * 0.1); break;
+        case 5: ctx.beginPath(); ctx.arc(0, s * 0.6, s * 0.2, 0, 7); ctx.fill(); ctx.beginPath(); ctx.arc(0, s * 0.6, s * 0.8, -2.3, -0.84); ctx.stroke(); ctx.beginPath(); ctx.arc(0, s * 0.6, s * 1.5, -2.2, -0.94); ctx.stroke(); break; // survivor signal
+        case 6: ctx.beginPath(); ctx.arc(-s * 0.45, s * 0.1, s * 0.5, 0, 7); ctx.moveTo(s * 0.95, s * 0.1); ctx.arc(s * 0.45, s * 0.1, s * 0.5, 0, 7); ctx.moveTo(s * 0.5, -s * 0.4); ctx.arc(0, -s * 0.35, s * 0.55, 0, 7); ctx.stroke(); break; // gas cloud
+        case 7: ctx.beginPath(); ctx.moveTo(0, -s * 1.1); ctx.bezierCurveTo(s * 0.2, -s * 0.4, s * 0.95, -s * 0.2, s * 0.8, s * 0.4); ctx.bezierCurveTo(s * 0.7, s * 1.0, -s * 0.7, s * 1.0, -s * 0.8, s * 0.4); ctx.bezierCurveTo(-s * 0.9, -s * 0.1, -s * 0.2, -s * 0.5, 0, -s * 1.1); ctx.fill(); break; // flame
+        case 8: ctx.strokeRect(-s, -s * 0.6, 2 * s, 1.6 * s); poly([[-1, -0.1], [1, -0.1]], false); break;                                     // cache: box
+        case 9: poly([[-1, 0], [0, -1], [1, 0]], false); poly([[-0.7, 0], [-0.7, 0.9], [0.7, 0.9], [0.7, 0]], false); break;                  // safe zone: house
+        case 10: ctx.beginPath(); ctx.arc(0, -s * 0.65, s * 0.35, 0, 7); ctx.fill(); poly([[0, -0.2], [0, 0.45], [-0.6, 1], [0, 0.45], [0.6, 1]], false); poly([[-0.65, 0.05], [0.65, 0.05]], false); break; // evacuee
+        default: ctx.beginPath(); ctx.arc(0, 0, s * 0.3, 0, 7); ctx.fill();
       }
-      if (selected) { ctx.beginPath(); ctx.arc(cx, cy, r + 8, 0, Math.PI * 2); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke(); }
-      const badge = (x, y, d, fill, text, fg, font) => {
-        ctx.beginPath(); ctx.arc(x, y, d / 2, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
+      ctx.restore();
+    }
+
+    // The pin: a round beacon head in the priority colour with the priority
+    // label ("P1".."P4") in it. Drawn on a canvas and used as a camera-facing
+    // sprite, so it reads from any angle. `d`: { color, inc, members, selected,
+    // lod, label, hollow (nobody assigned), ghost (undiscovered, god view),
+    // assignColor, fault, progress (0..1 or null), victims }.
+    function drawPinGlyph(ctx, d) {
+      const cx = GLYPH_PX / 2, cy = GLYPH_PX / 2, r = PIN_R_PX, color = d.color, inc = d.inc;
+      const hollow = d.hollow && d.lod >= 1;              // far out every pin is a solid colour dot; hollow = unassigned appears from medium zoom
+      ctx.save();
+      ctx.globalAlpha = d.ghost ? 0.42 : 1;
+      ctx.beginPath(); ctx.arc(cx, cy, r + 3, 0, Math.PI * 2); ctx.fillStyle = "rgba(8,12,18,0.85)"; ctx.fill();   // dark rim for contrast on any ground
+      if (hollow || d.ghost) {
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fillStyle = "rgba(10,14,20,0.62)"; ctx.fill();    // hollow: outlined pin, ground shows through
+        ctx.beginPath(); ctx.arc(cx, cy, r - 2.5, 0, Math.PI * 2); ctx.strokeStyle = color; ctx.lineWidth = 5;
+        if (d.ghost) ctx.setLineDash([6, 5]);
+        ctx.stroke();
+      } else {
+        const grad = ctx.createRadialGradient(cx - r * 0.35, cy - r * 0.4, r * 0.1, cx, cy, r);
+        grad.addColorStop(0, "#ffffff"); grad.addColorStop(0.22, color); grad.addColorStop(1, color);
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fillStyle = grad; ctx.fill();
+      }
+      ctx.restore();
+      if (d.progress !== null && d.progress !== undefined && d.lod >= 2) {         // work progress: arc filling clockwise from 12 o'clock
+        ctx.save(); ctx.globalAlpha = d.ghost ? 0.42 : 1; ctx.lineCap = "butt";
+        ctx.beginPath(); ctx.arc(cx, cy, r - 3, 0, Math.PI * 2); ctx.strokeStyle = "rgba(0,0,0,0.38)"; ctx.lineWidth = 4; ctx.stroke();
+        if (d.progress > 0) { ctx.beginPath(); ctx.arc(cx, cy, r - 3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * d.progress); ctx.strokeStyle = "#3fb950"; ctx.lineWidth = 4; ctx.stroke(); }
+        ctx.restore();
+      }
+      if (d.label) {                                       // the priority, as text: priority never relies on colour alone
+        ctx.save(); ctx.globalAlpha = d.ghost ? 0.6 : 1;
+        ctx.fillStyle = (hollow || d.ghost) ? color : (inc.priority >= 3 ? "#0d1117" : "#fff");
+        ctx.font = "bold 26px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        if (hollow || d.ghost) { ctx.lineWidth = 4; ctx.strokeStyle = "rgba(8,12,18,0.9)"; ctx.strokeText("P" + inc.priority, cx, cy + 1); }
+        ctx.fillText("P" + inc.priority, cx, cy + 1);
+        ctx.restore();
+      }
+      if (d.selected) { ctx.beginPath(); ctx.arc(cx, cy, r + 8, 0, Math.PI * 2); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke(); }
+      const badge = (x, y, dia, fill, text, fg, font) => {
+        ctx.beginPath(); ctx.arc(x, y, dia / 2, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
         ctx.lineWidth = 2; ctx.strokeStyle = "rgba(8,12,18,0.9)"; ctx.stroke();
-        ctx.fillStyle = fg; ctx.font = font; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText(text, x, y + 1);
+        if (text) { ctx.fillStyle = fg; ctx.font = font; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(text, x, y + 1); }
       };
-      if (victims > 0) badge(cx + r * 0.95, cy - r * 0.95, 26, "#f0f3f6", String(victims > 99 ? "99+" : victims), "#0d1117", "bold 15px sans-serif");
-      if (members.length > 1) badge(cx - r * 0.95, cy - r * 0.95, 26, "#1f6feb", String(members.length), "#fff", "bold 15px sans-serif");
-      const icon = PIN_ICONS[inc.type];
-      if (icon) badge(cx - r * 0.9, cy + r * 0.95, 24, "#0d1117", icon, "#fff", "14px sans-serif");
+      if (d.lod >= 1 && d.members.length > 1) badge(cx - r * 0.95, cy - r * 0.95, 26, "#1f6feb", String(d.members.length), "#fff", "bold 15px sans-serif");
+      if (d.lod >= 1 && d.assignColor) {                                // assigned: a ring in the assigned team's colour
+        ctx.beginPath(); ctx.arc(cx + r * 0.95, cy + r * 0.95, 10, 0, Math.PI * 2); ctx.fillStyle = "rgba(8,12,18,0.9)"; ctx.fill();
+        ctx.beginPath(); ctx.arc(cx + r * 0.95, cy + r * 0.95, 8, 0, Math.PI * 2); ctx.strokeStyle = d.assignColor; ctx.lineWidth = 5; ctx.stroke();
+      }
+      if (d.lod >= 1 && d.fault) {                                      // the assigned team has an active fault
+        const x = cx, y = cy + r * 1.38;
+        ctx.beginPath(); ctx.moveTo(x, y - 11); ctx.lineTo(x + 12, y + 9); ctx.lineTo(x - 12, y + 9); ctx.closePath();
+        ctx.fillStyle = "#d29922"; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = "rgba(8,12,18,0.95)"; ctx.stroke();
+        ctx.fillStyle = "#0d1117"; ctx.font = "bold 14px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("!", x, y + 3);
+      }
+      if (d.lod >= 2) {
+        if (d.victims > 0) badge(cx + r * 0.95, cy - r * 0.95, 26, "#f0f3f6", String(d.victims > 99 ? "99+" : d.victims), "#0d1117", "bold 15px sans-serif");
+        badge(cx - r * 0.9, cy + r * 0.95, 24, "#0d1117", "", "#fff", "");
+        drawTypeIcon(ctx, inc.type, cx - r * 0.9, cy + r * 0.95, 6);
+      }
     }
 
     // Urgency as motion. P1 and P2 get a soft glow halo behind the pin: P1
@@ -545,7 +600,9 @@
       dynDisposables.push(geo, mat);
     }
 
-    let incidentHits = [], safezoneHits = [], pinInfo = [], pinSprites = [], pulseCount = 0, haloList = [];
+    let incidentHits = [], safezoneHits = [], pinInfo = [], pinSprites = [], pulseCount = 0, haloList = [], escList = [], escPulses = [];
+    const workMax = new Map(), lastPri = new Map();
+    let trackTick = null, hoverIncident = null;
     let lastIncidentSig = null;
 
     function rebuildTickScene(model, o) {
@@ -572,31 +629,67 @@
         safezoneHits.push({ type: "safezone", id: sz.id, wx: sz.x, wy: sz.y, wr: 0.5, data: sz });
       });
 
-      pinInfo = []; haloList = []; pinSprites = [];
+      pinInfo = []; haloList = []; pinSprites = []; escList = [];
+      const tickNow = o.frame ? o.frame.tick : null;
+      if (tickNow !== null && trackTick !== null && tickNow < trackTick) { workMax.clear(); lastPri.clear(); }   // time went backwards (replay seek): re-learn
+      trackTick = tickNow;
+      const teamById = new Map(model.teams.map((mt) => [mt.t.id, mt]));
+      const clock = performance.now() / 1000;
       model.incidents.forEach((mi) => {
         const { members, inc, wx, wy, foot, headZ, color, isSel } = mi;
         const victims = members.reduce((a, m) => a + (m.victims || 0), 0);
-        const base = [inc.id, inc.status, inc.type, inc.priority, victims, members.length, isSel ? 1 : 0, color];
-        const withLabel = glyphSprites(["P", "L"].concat(base).join("|"), (ctx) => drawPinGlyph(ctx, color, inc, members, isSel, true));
-        const noLabel = glyphSprites(["P", "N"].concat(base).join("|"), (ctx) => drawPinGlyph(ctx, color, inc, members, isSel, false));
+        // Priority escalation (a lower number than last seen) -> a brief pulse; never on first sight.
+        let escalated = false;
+        members.forEach((m) => { const pr = lastPri.get(m.id); if (pr !== undefined && m.priority < pr) escalated = true; lastPri.set(m.id, m.priority); });
+        if (escalated && !settings.reduceMotion) escPulses.push({ x: wx, y: headZ, z: wy, hex: new THREE.Color(color).getHex(), start: clock });
+        // Work progress: work_remaining is sent but the starting amount is not, so the arc
+        // measures against the largest value seen for the incident (an estimate).
+        let wr = 0, wm = 0;
+        members.forEach((m) => { const w = m.work_remaining || 0; workMax.set(m.id, Math.max(workMax.get(m.id) || 0, w)); wr += w; wm += workMax.get(m.id); });
+        const progress = wm > 0 ? Math.max(0, Math.min(1, 1 - wr / wm)) : null;
+        // Assignment: who is working it (assigned_team 255 = nobody), and whether that team has a fault.
+        const assigned = [];
+        members.forEach((m) => [m.assigned_team, m.support_team].forEach((tid) => {
+          const mt = tid !== undefined && tid !== 255 ? teamById.get(tid) : null;
+          if (mt && !assigned.some((a) => a.team === tid)) assigned.push({ team: tid, color: mt.color, fault: !!mt.t.fault_mask });
+        }));
+        const spec = { color, inc, members, selected: isSel, hollow: assigned.length === 0, ghost: members.every((m) => m.discovered === 0),
+                       assignColor: assigned.length ? assigned[0].color : null, fault: assigned.some((a) => a.fault),
+                       progress: progress === null ? null : Math.round(progress * 24) / 24, victims };
         const hex = new THREE.Color(color).getHex();
         stemPool.add(wx, foot + (headZ - foot) / 2, wy, 0.8, headZ - foot, 0.8, 0, hex);           // short stem
         blobPool.add(wx, foot + 0.012, wy, 0.2, 0.2, 1, FLAT);                                    // soft ground shadow
         dotPool.add(wx, foot + 0.02, wy, 0.2, 0.2, 1, FLAT, hex);                                 // small ground dot = the exact position
         const scale = (GLYPH_PX / PIN_R_PX) * PIN_R_WORLD;
-        const s = new THREE.Sprite(withLabel.solid); s.position.set(wx, headZ, wy); s.scale.set(scale, scale, 1); s.renderOrder = 5;
-        const gh = new THREE.Sprite(withLabel.ghost); gh.position.copy(s.position); gh.scale.copy(s.scale); gh.renderOrder = 6;
+        const s = new THREE.Sprite(new THREE.SpriteMaterial()); s.position.set(wx, headZ, wy); s.scale.set(scale, scale, 1); s.renderOrder = 5;
+        const gh = new THREE.Sprite(new THREE.SpriteMaterial()); gh.position.copy(s.position); gh.scale.copy(s.scale); gh.renderOrder = 6;
         dynGroup.add(s, gh);
         // Urgency as motion: a glow halo behind P1 (pulsing) and P2 (steady); P3/P4 none.
         let ring = "none";
         if (inc.priority <= 2) { haloList.push({ x: wx, y: headZ, z: wy, p: inc.priority, hex }); ring = inc.priority === 1 ? "pulse" : "steady"; }
         if (isSel) addGroundRing(wx, wy, foot, 0.7, selMat);
-        const info = { id: inc.id, priority: inc.priority, ring, label: true, victims, group: members.length, foot, headZ, scale };
+        const info = { id: inc.id, ids: members.map((m) => m.id), priority: inc.priority, ring, label: false, lod: 0, hollow: spec.hollow, ghost: spec.ghost,
+                       assigned, progress, victims, group: members.length, foot, headZ, scale, escalated, type: inc.type };
         pinInfo.push(info);
-        pinSprites.push({ wx, wy, headZ, s, gh, withLabel, noLabel, info });
+        const pin = { wx, wy, headZ, s, gh, spec, info, vars: new Map(), cur: -1 };
+        pin.variant = (idx) => {                                        // idx = lod * 2 + (label ? 1 : 0); drawn on demand
+          let g = pin.vars.get(idx);
+          if (!g) {
+            const lod = idx >> 1, label = (idx & 1) === 1, sp = Object.assign({}, spec, { lod, label });
+            const key = ["P", idx, inc.id, inc.type, inc.priority, victims, members.length, sp.selected ? 1 : 0, color, sp.hollow ? 1 : 0, sp.ghost ? 1 : 0,
+                         sp.assignColor || "-", sp.fault ? 1 : 0, sp.progress === null ? "-" : sp.progress].join("|");
+            g = glyphSprites(key, (ctx) => drawPinGlyph(ctx, sp), 2);
+            pin.vars.set(idx, g);
+          }
+          return g;
+        };
+        pinSprites.push(pin);
         incidentHits.push({ type: "incident", id: inc.id, wx, wy, wz: headZ, wr: PIN_HIT_R,
                             data: members.length > 1 ? Object.assign({}, inc, { groupIncidents: members }) : inc });
       });
+      escPulses = escPulses.filter((e) => clock - e.start < ESC_SECS);
+      buildEscalations();
+      updatePinLabels();
       buildHalos();
       pulseCount = pinInfo.filter((p) => p.ring === "pulse").length;
       hazardPools.forEach((p) => p.commit()); stemPool.commit(); blobPool.commit(); dotPool.commit();
@@ -887,24 +980,87 @@
 
     // Pin size on screen. Up close a pin keeps its compact world size; zoomed
     // far out it would shrink to a speck, so its head is held at a minimum
-    // pixel size (MIN_HEAD_PX). The "P1".."P4" text is only drawn while the
-    // head is big enough to read it (LABEL_MIN_PX, with hysteresis); colour,
-    // halo and badges stay at any zoom.
+    // pixel size (MIN_HEAD_PX); a hovered / selected pin is also enlarged a
+    // little so its details can be read. The "P1".."P4" text is only drawn
+    // while the head is big enough to read it (LABEL_MIN_PX, with hysteresis);
+    // more detail is added with zoom (see the levels above). Colour, halo and
+    // the label stay at every zoom.
+    const ESC_SECS = 1.6;
+    let tetherCount = 0;
     const MIN_HEAD_PX = 7, LABEL_MIN_PX = 9, LABEL_HYST = 1.5;
     function updatePinLabels() {
       for (const p of pinSprites) {
         const natural = pxPerWorldAt(p.wx, p.wy, p.headZ) * PIN_R_WORLD;       // head radius in px at its world size
-        const k = Math.max(1, MIN_HEAD_PX / Math.max(natural, 0.01));
+        const focus = p.info.ids.includes(hoverIncident) || p.spec.selected;
+        const k = Math.max(1, Math.max(MIN_HEAD_PX, focus ? HOVER_HEAD_PX : 0) / Math.max(natural, 0.01));
         const sc = p.info.scale * k;
         p.s.scale.set(sc, sc, 1); p.gh.scale.set(sc, sc, 1);
-        const show = p.info.label ? natural >= LABEL_MIN_PX - LABEL_HYST : natural >= LABEL_MIN_PX + LABEL_HYST;
-        if (show !== p.info.label) {
-          const g = show ? p.withLabel : p.noLabel;
-          p.s.material = g.solid; p.gh.material = g.ghost; p.info.label = show;
+        const shownPx = natural * k;
+        const label = p.info.label ? natural >= LABEL_MIN_PX - LABEL_HYST : natural >= LABEL_MIN_PX + LABEL_HYST;
+        const lod = focus || shownPx >= LOD_CLOSE_PX ? 2 : shownPx >= LOD_MED_PX ? 1 : 0;
+        const idx = lod * 2 + ((label || (focus && natural >= 5)) ? 1 : 0);
+        if (idx !== p.cur) {
+          const g = p.variant(idx);
+          p.s.material = g.solid; p.gh.material = g.ghost; p.cur = idx;
+          p.info.label = (idx & 1) === 1; p.info.lod = lod;
         }
         p.info.headPx = Math.max(natural, MIN_HEAD_PX);
       }
+      updateTether();
     }
+
+    // Hover / select an incident: a dashed line from its pin to each assigned team.
+    const tetherLines = [];
+    function updateTether() {
+      let n = 0;
+      const now = performance.now();
+      const pin = pinSprites.find((p) => p.info.ids.includes(hoverIncident) || p.spec.selected);
+      if (pin) {
+        for (const a of pin.info.assigned) {
+          const st = teamStates.get(a.team), v = teamViews.get(a.team);
+          if (!st || !v) continue;
+          const tp = poseOf(st, now);
+          let ln = tetherLines[n];
+          if (!ln) {
+            const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+            ln = new THREE.Line(geo, new THREE.LineDashedMaterial({ transparent: true, opacity: 0.95, dashSize: 0.22, gapSize: 0.14, depthTest: false, depthWrite: false }));
+            ln.renderOrder = 7; ln.frustumCulled = false; scene.add(ln); tetherLines.push(ln);
+          }
+          ln.material.color.set(a.color);
+          const pa = ln.geometry.attributes.position;
+          pa.setXYZ(0, pin.wx, pin.headZ, pin.wy); pa.setXYZ(1, tp.x, tp.f + MR.ISO_TEAM_Z * 0.6, tp.y); pa.needsUpdate = true;
+          ln.computeLineDistances(); ln.visible = true; n++;
+        }
+      }
+      for (let i = n; i < tetherLines.length; i++) tetherLines[i].visible = false;
+      tetherCount = n;
+    }
+
+    // Escalation pulse: an expanding, fading ring around the pin for ESC_SECS.
+    let escPts = null;
+    function buildEscalations() {
+      if (escPts) { dynGroup.remove(escPts); escPts.geometry.dispose(); escPts.material.dispose(); escPts = null; }
+      escList = settings.reduceMotion ? [] : escPulses.slice();
+      if (!escList.length) return;
+      const pos = new Float32Array(escList.length * 3), seed = new Float32Array(escList.length * 4);
+      escList.forEach((e, i) => { pos.set([e.x, e.y, e.z], i * 3); const c = new THREE.Color(e.hex); seed.set([c.r, c.g, c.b, e.start], i * 4); });
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(pos, 3)); g.setAttribute("aSeed", new THREE.BufferAttribute(seed, 4));
+      const m = new THREE.ShaderMaterial({
+        uniforms: { uTime: pulseU.uTime, uScale: { value: 600 }, uSecs: { value: ESC_SECS } },
+        vertexShader: `attribute vec4 aSeed; uniform float uTime, uScale, uSecs; varying vec4 vC; varying float vT;
+          void main() { float t = clamp((uTime - aSeed.w) / uSecs, 0.0, 1.0); vT = t;
+            vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv;
+            gl_PointSize = clamp((0.7 + 2.6 * t) * uScale / max(0.1, -mv.z), 24.0, 260.0); vC = vec4(aSeed.xyz, 1.0); }`,
+        fragmentShader: `varying vec4 vC; varying float vT; void main() { float d = length(gl_PointCoord - 0.5) * 2.0;
+          float r = 0.25 + 0.75 * vT; float ring = smoothstep(0.12, 0.0, abs(d - r)); gl_FragColor = vec4(mix(vC.rgb, vec3(1.0), 0.35), ring * (1.0 - vT) * (vT >= 1.0 ? 0.0 : 1.0)); }`,
+        transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending,
+      });
+      escPts = new THREE.Points(g, m); escPts.frustumCulled = false; escPts.renderOrder = 8;
+      escPts.onBeforeRender = (r) => { const sz = new THREE.Vector2(); r.getDrawingBufferSize(sz); m.uniforms.uScale.value = sz.y / (2 * Math.tan(FOV * Math.PI / 360)); };
+      dynGroup.add(escPts);
+    }
+    function escActive(now) { return !settings.reduceMotion && escList.some((e) => now / 1000 - e.start < ESC_SECS); }
 
     function drawNow(now, notify) {
       const dt = Math.max(0, Math.min(0.1, (now - lastDraw) / 1000));
@@ -926,7 +1082,7 @@
 
     function ambientOnly(now) { return !teamAnimating(now) && !shake && !director; }
     function needsMotion(now) {
-      return teamAnimating(now) || !!shake || !!director || (pulseCount > 0 && !settings.reduceMotion) || (!!fx && fx.animated(now / 1000));
+      return teamAnimating(now) || !!shake || !!director || (pulseCount > 0 && !settings.reduceMotion) || escActive(now) || (!!fx && fx.animated(now / 1000));
     }
 
     // Auto quality: if frames keep taking long at "high"/"low" effects,
@@ -1114,6 +1270,8 @@
       get fx() { return fx; },
       buildingStats() { return bld ? bld.stats : null; },
       // What each incident pin looks like (ring kind, badges, height), for tests/tooling.
+      setHoverIncident(id) { const v = id === undefined ? null : id; if (v !== hoverIncident) { hoverIncident = v; updatePinLabels(); kick(); } },
+      escalationState() { const n = performance.now() / 1000; return { active: escList.filter((e) => n - e.start < ESC_SECS).length, total: escList.length, tethers: tetherCount }; },
       incidentPins() { return pinInfo.map((p) => Object.assign({}, p)); },
       pulseState() { return { pulsing: pulseCount, animating: pulseCount > 0 && !settings.reduceMotion, uTime: pulseU.uTime.value, uMotion: pulseU.uMotion.value }; },
       // Current lighting, for tests/tooling.
