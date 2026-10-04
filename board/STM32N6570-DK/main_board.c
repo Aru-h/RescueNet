@@ -31,6 +31,7 @@
 #include <tk/tkernel.h>
 #include <tm/tmonitor.h>
 #include "board_log.h"       /* console output through the logger task */
+#include "board_rtos.h"      /* kernel objects, helper tasks, priorities */
 #include "mtkernel/lib/libtm/libtm.h"   /* tm_com_init() */
 #include "sim_runner.h"
 #include "state_hash.h"      /* per-tick determinism fingerprint */
@@ -1142,6 +1143,16 @@ EXPORT INT usermain(void)
                (unsigned long)SystemCoreClock,
                (unsigned)((SCB->CCR & SCB_CCR_IC_Msk) != 0u),
                (unsigned)((SCB->CCR & SCB_CCR_DC_Msk) != 0u));
+
+    {
+        int rtos_rc = board_rtos_create();
+
+        if (rtos_rc != 0)
+        {
+            BOARD_LOG((UB*)"tron: board_rtos_create FAILED rc=%d\n", rtos_rc);
+            return 1;
+        }
+    }
 
     board_log_puts((const char*)"tron: starting simulation task\n");
 
