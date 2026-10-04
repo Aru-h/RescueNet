@@ -101,6 +101,12 @@ Expected comparison result: `MATCH: 6 common ticks (50..300) identical in all fi
 
 ## Validity checks on the runs themselves
 
+- Every run must contain all six `STATEHASH` lines (ticks 50 to 300). A missing
+  one is a failure: the firmware never drops one on purpose, and
+  `statehash_compare.py` fails on a gap (`--allow-missing` only for logs with
+  different intervals, e.g. against a PC run). `log: N REQUIRED lines LOST` in the
+  log is the firmware admitting it lost one.
+
 - Neither log may contain `joining at` ("tick ... too far behind the laptop's"):
   skipped ticks change the state sequence. If it appears, lower the pace
   (`time_scale` 1-5) and capture again.
