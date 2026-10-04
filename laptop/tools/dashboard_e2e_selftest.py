@@ -423,6 +423,8 @@ def _view3d_check(page, console_errors, screenshot_dir):
     page.wait_for_timeout(100)
     check(abs(page.evaluate("() => map3d.state.az") - 0.7853981633974483) < 1e-6, "[3d] the reset button restores the default camera")
 
+    _view3d_motion_check(page, console_errors)
+
     # Tilt limits, full rotation, top-down shortcut.
     lim = page.evaluate("""() => {
       const c = mapCamera, st = map3d.state, out = {};
@@ -452,6 +454,124 @@ def _view3d_check(page, console_errors, screenshot_dir):
           "cycling on from 3D returns to 2D and hides the WebGL canvas")
     real_errors = real_console_errors(console_errors)
     check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the 3D checks (got {real_errors[:5]})")
+
+
+def _view3d_motion_check(page, console_errors):
+    """C1: smooth movement between ticks, routes along the road network
+    and heading. Drives drawFrame() with synthetic consecutive frames so
+    the timing is exact, then checks the drawn pose against them."""
+    res = page.evaluate("""async () => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const out = {};
+      const base = JSON.parse(JSON.stringify(window._lastFrame));
+      const t0 = base.teams[0];
+      // A team that is clear to move east one cell on the real map.
+      const terr = MapRender.parseTerrain(terrainMap);
+      let cell = null;
+      for (let y = 1; y < 34 && !cell; y++) for (let x = 1; x < 33; x++) {
+        if (terr.cells[y * 36 + x].navigable && terr.cells[y * 36 + x + 1].navigable) { cell = [x, y]; break; }
+      }
+      // A destination on the same row that really is reachable.
+      let dest = null;
+      for (let dx = 4; dx < 14 && !dest; dx++) {
+        const x = cell[0] + dx;
+        if (x < 35 && RoutePlanner.plan(terr, cell[0], cell[1], x, cell[1])) dest = [x, cell[1]];
+      }
+      let dest2 = null;                                  // a second, different reachable destination
+      for (let x = dest[0] + 1; x < 35 && !dest2; x++) if (RoutePlanner.plan(terr, cell[0], cell[1], x, cell[1])) dest2 = [x, cell[1]];
+      const mk = (tick, x, y, extra) => {
+        const f = JSON.parse(JSON.stringify(base)); f.tick = tick;
+        Object.assign(f.teams[0], { x, y, has_dest: 1, dest_x: dest[0], dest_y: dest[1], dest_id: 255, status: 1, fault_mask: 0, degraded: 0 }, extra || {});
+        return f;
+      };
+      const id = t0.id;
+      const T = 9000;
+      drawFrame(mk(T, cell[0], cell[1]), true);           // first frame: placed, no glide
+      let info = map3d.teamInfo(id);
+      out.snapFirst = Math.hypot(info.x - cell[0], info.y - cell[1]);
+      await sleep(600);                                   // a slow tick, so the glide lasts long enough to sample
+      drawFrame(mk(T + 1, cell[0] + 1, cell[1]), true);   // next tick: one cell east
+      info = map3d.teamInfo(id);
+      out.midX = info.x; out.midK = info.k; out.from = info.from; out.to = info.to;
+      out.heading = info.heading;
+      out.route = info.route;
+      await sleep(600);
+      info = map3d.teamInfo(id);
+      out.endX = info.x; out.endY = info.y;
+      await sleep(300);                                   // "paused": no frames - must not drift or wrap
+      out.pausedX = map3d.teamInfo(id).x;
+      // Settled on a steady destination for a while: not "rerouting", route is solid.
+      drawFrame(mk(T + 12, cell[0] + 1, cell[1]), true);
+      out.dashed = map3d.teamInfo(id).dashed;
+      // A jump (scrub / seek) must snap, not slide across the map.
+      drawFrame(mk(T + 40, cell[0] + 3, cell[1]), true);
+      out.snapJump = Math.hypot(map3d.teamInfo(id).x - (cell[0] + 3), 0);
+      // A faulted team's route is dashed; so is one that just changed destination.
+      drawFrame(mk(T + 41, cell[0] + 3, cell[1], { fault_mask: 1 }), true);
+      out.faultDashed = map3d.teamInfo(id).dashed;
+      drawFrame(mk(T + 42, cell[0] + 3, cell[1], { fault_mask: 0 }), true);
+      out.healthyDashed = map3d.teamInfo(id).dashed;
+      drawFrame(mk(T + 43, cell[0] + 3, cell[1], { dest_x: dest2[0], dest_y: dest2[1] }), true);
+      out.reroutedDashed = map3d.teamInfo(id).dashed;
+      // Route validity on the real map: starts at the team, ends at the destination, every hop one cell, every cell navigable.
+      drawFrame(mk(T + 60, cell[0], cell[1]), true);
+      drawFrame(mk(T + 61, cell[0], cell[1], { dest_x: 20, dest_y: 20 }), true);
+      const r = map3d.teamInfo(id).route;
+      out.routeLen = r ? r.length : 0;
+      if (r) {
+        out.routeStart = r[0]; out.routeEnd = r[r.length - 1];
+        out.routeStepsOk = r.every((c, i) => i === 0 || (Math.abs(c[0] - r[i - 1][0]) <= 1 && Math.abs(c[1] - r[i - 1][1]) <= 1));
+        out.routeNavigable = r.every((c, i) => i === 0 || terr.cells[c[1] * 36 + c[0]].navigable);
+      }
+      out.cell = cell;
+      drawFrame(base, true);                              // restore
+      return out;
+    }""")
+    check(res["snapFirst"] < 1e-6, "[3d] a team seen for the first time is placed, not slid in from the origin")
+    check(res["from"][0] < res["midX"] < res["to"][0] and 0 < res["midK"] < 1,
+          f"[3d] between ticks a team's drawn position is part-way between its old and new cell (x {res['from'][0]} -> {res['midX']:.2f} -> {res['to'][0]})")
+    check(abs(res["endX"] - res["to"][0]) < 1e-6 and abs(res["endY"] - res["to"][1]) < 1e-6, "[3d] the glide ends exactly on the new cell")
+    check(abs(res["pausedX"] - res["endX"]) < 1e-9, "[3d] with no new frames (paused) the team stays put")
+    check(res["snapJump"] < 1e-6, "[3d] a non-sequential jump (scrub / seek) snaps instead of sliding")
+    check(res["heading"] is not None and abs(res["heading"] - 1.5707963267948966) < 0.05,
+          f"[3d] a team moving east faces east (heading {res['heading']})")
+    check(res["dashed"] is False and res["faultDashed"] is True and res["healthyDashed"] is False and res["reroutedDashed"] is True,
+          f"[3d] routes are solid when healthy, dashed when faulted or just re-targeted (healthy {res['dashed']}, faulted {res['faultDashed']}, recovered {res['healthyDashed']}, rerouted {res['reroutedDashed']})")
+    check(res["routeLen"] > 2 and res["routeStart"] == res["cell"] and res["routeEnd"] == [20, 20] and res["routeStepsOk"] and res["routeNavigable"],
+          f"[3d] the drawn route runs cell to cell over navigable terrain from the team to its destination ({res['routeLen']} cells)")
+
+
+def _route_accuracy_check(page):
+    """The dashboard reconstructs routes (route.js ports core/path.c's A*);
+    check it against what the simulator ACTUALLY did in the bundled
+    recording: on every recorded move toward an unchanged destination,
+    the reconstructed route's first step should be the cell the team
+    really stepped to."""
+    res = page.evaluate("""async (name) => {
+      const txt = await (await fetch('/api/recordings/' + encodeURIComponent(name))).text();
+      let map = null; const frames = [];
+      for (const l of txt.split('\\n')) {
+        if (l.startsWith('STATICMAP ')) map = JSON.parse(l.slice(10));
+        else if (l.startsWith('LIVEFRAME ')) frames.push(JSON.parse(l.slice(10)));
+      }
+      const terr = MapRender.parseTerrain(map);
+      let moves = 0, match = 0;
+      for (let i = 0; i + 1 < frames.length; i++) {
+        const a = frames[i].teams, b = frames[i + 1].teams;
+        for (let k = 0; k < a.length; k++) {
+          const t = a[k], u = b[k];
+          if (!t.has_dest || (t.x === u.x && t.y === u.y) || t.dest_x !== u.dest_x || t.dest_y !== u.dest_y) continue;
+          const r = RoutePlanner.plan(terr, t.x, t.y, t.dest_x, t.dest_y);
+          if (!r || r.length < 2) continue;
+          moves++;
+          if (r[1][0] === u.x && r[1][1] === u.y) match++;
+        }
+      }
+      return { moves, match };
+    }""", DEMO_RECORDING)
+    rate = res["match"] / max(1, res["moves"])
+    check(res["moves"] > 500 and rate >= 0.97,
+          f"the reconstructed route's first step matches the simulator's actual move {rate:.1%} of the time ({res['match']}/{res['moves']} recorded moves)")
 
 
 def _webgl_fallback_check(browser):
@@ -1548,6 +1668,7 @@ def main():
             # Part 2: replay of a recorded live run.
             _replay_check(page, console_errors)
             _replay_timeline_check(page, console_errors, recordings_tmpdir)
+            _route_accuracy_check(page)
             _replay_takeover_check(page, console_errors)
 
             page.close()

@@ -66,6 +66,17 @@
     return;
   }
 
+  // three.js's own fat-line addon (vendored unmodified, see static/three/
+  // README.md) for route lines; falls back to plain 1px lines if it
+  // can't load.
+  let L2 = null;
+  try {
+    const [a, b, c] = await Promise.all([import("/static/three/addons/Line2.js"), import("/static/three/addons/LineGeometry.js"), import("/static/three/addons/LineMaterial.js")]);
+    L2 = { Line2: a.Line2, LineGeometry: b.LineGeometry, LineMaterial: c.LineMaterial };
+  } catch (e) {
+    console.warn("map-view3d: line addon failed to load; routes drawn as plain lines", e);
+  }
+
   const MR = window.MapRender;
   const GLYPH_PX = 128;          // marker glyph canvas size
   const GLYPH_TEAM_R = 26;       // team glyph radius on that canvas (px)
@@ -74,6 +85,24 @@
   const FOV = 35;
   // Perspective makes the 3D map's markers read smaller than in 2D/2.5D at the same world size; scale sprites and hit areas up a little.
   const MARKER_BOOST = 1.4;
+
+  const SETTINGS_KEY = "dashboard.map3dSettings";
+  const DEFAULT_SETTINGS = { effects: "low", reduceMotion: false, lighting: "day", autoQuality: true };
+  function loadSettings() {
+    const s = Object.assign({}, DEFAULT_SETTINGS);
+    try { s.reduceMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); } catch (e) { /* default */ }
+    try {
+      const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+      if (["off", "low", "high"].indexOf(saved.effects) >= 0) s.effects = saved.effects;
+      if (typeof saved.reduceMotion === "boolean") s.reduceMotion = saved.reduceMotion;
+      if (["day", "night"].indexOf(saved.lighting) >= 0) s.lighting = saved.lighting;
+      if (typeof saved.autoQuality === "boolean") s.autoQuality = saved.autoQuality;
+    } catch (e) { /* storage unavailable or corrupt - defaults */ }
+    return s;
+  }
+  function saveSettings(s) {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) { /* not remembered, still works */ }
+  }
 
   function create(canvas) {
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
@@ -89,8 +118,11 @@
     canvas.addEventListener("webglcontextlost", (e) => { e.preventDefault(); lost = true; });
     canvas.addEventListener("webglcontextrestored", () => { lost = false; });
 
+    const settings = loadSettings();
+
     // ---------- lights ----------
-    scene.add(new THREE.HemisphereLight(0xc9d8ee, 0x1b2430, 1.15));
+    const hemi = new THREE.HemisphereLight(0xc9d8ee, 0x1b2430, 1.15);
+    scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xfff3df, 2.3);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -220,10 +252,10 @@
     // ---------- static scene (rebuilt only when the map changes) ----------
     const staticGroup = new THREE.Group();
     scene.add(staticGroup);
-    let terrainSource = null, envSource = null;
-    let buildingMesh = null, buildingEntries = [];
+    let terrainSource = null, envSource = null, terrainParsed = null;
+    let buildingMesh = null;
     const outline = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
-      new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.9 }));
+      new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.9, fog: false }));
     outline.visible = false; outline.renderOrder = 20;
     scene.add(outline);
 
@@ -253,7 +285,6 @@
 
     function buildBuildings(prep) {
       if (buildingMesh) { staticGroup.remove(buildingMesh); buildingMesh.geometry.dispose(); buildingMesh.material.dispose(); buildingMesh = null; }
-      buildingEntries = prep.list;
       if (!prep.list.length) return;
       const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1),
         new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.02 }), prep.list.length);
@@ -271,17 +302,16 @@
       buildingMesh = mesh;
     }
 
-    // ---------- per-frame scene (markers, overlays) ----------
-    const dynGroup = new THREE.Group();
-    scene.add(dynGroup);
-    let dynDisposables = [];
-
+    // ---------- shared geometry / materials ----------
     const stemGeo = new THREE.CylinderGeometry(0.03, 0.03, 1, 6);
     const discGeo = new THREE.CircleGeometry(1, 20);
     const ringGeo = new THREE.RingGeometry(0.52, 0.62, 28);
     const planeGeo = new THREE.PlaneGeometry(1, 1);
-    const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.4, depthWrite: false });
-    const selMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide });
+    // Tip toward +Z; rotated about Y to face a team's direction of travel.
+    const arrowGeo = new THREE.BufferGeometry();
+    arrowGeo.setAttribute("position", new THREE.Float32BufferAttribute([0, 0.04, 0.3, -0.17, 0.04, -0.12, 0.17, 0.04, -0.12], 3));
+    const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.4, depthWrite: false, fog: false });
+    const selMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide, fog: false });
     const matCache = new Map();
     function colorMat(hex, opacity) {
       const k = hex + "|" + opacity;
@@ -289,23 +319,51 @@
       if (!m) { m = new THREE.MeshBasicMaterial({ color: new THREE.Color(hex), transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide }); matCache.set(k, m); }
       return m;
     }
-    // Per-frame batches: hazard cells, marker stems and ground shadows
-    // are drawn as InstancedMeshes (one draw call each) instead of one
-    // mesh per cell/marker - a mid-run frame has hundreds of hazard
-    // cells, and draw calls, not triangles, are what costs on the CPU.
+    const markerMats = new Map(); // hex -> { stem, arrow, ring, ... }
+    const l2mats = [];            // fat-line materials: their resolution tracks the canvas size
+    function markerMat(hex) {
+      let m = markerMats.get(hex);
+      if (!m) {
+        const c = new THREE.Color(hex);
+        m = {
+          stem: new THREE.MeshStandardMaterial({ color: c, roughness: 0.6 }),
+          arrow: new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.95, depthWrite: false, side: THREE.DoubleSide, fog: false }),
+          ring: new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide, fog: false }),
+          solid: new THREE.LineBasicMaterial({ color: c, transparent: true, opacity: 0.85, fog: false }),
+          dashed: new THREE.LineDashedMaterial({ color: c, transparent: true, opacity: 0.95, dashSize: 0.22, gapSize: 0.16, fog: false }),
+        };
+        if (L2) {
+          const mk = (dashed) => {
+            const lm = new L2.LineMaterial({ color: hex, linewidth: 2.4, transparent: true, opacity: 0.92, dashed, dashSize: 0.22, gapSize: 0.16, worldUnits: false });
+            lm.resolution.set(view.w, view.h);
+            l2mats.push(lm);
+            return lm;
+          };
+          m.solid2 = mk(false); m.dashed2 = mk(true);
+        }
+        markerMats.set(hex, m);
+      }
+      return m;
+    }
+    const AXIS_X = new THREE.Vector3(1, 0, 0);
+    const FLAT = -Math.PI / 2; // lay a plane/disc flat on the ground
+
+    // Per-tick batches (one draw call each): hazard-cell tints and
+    // incident stems / ground shadows. Teams are NOT batched - they move
+    // every frame, so each has its own small set of objects.
     function makePool(geo, mat, capacity, colored) {
       const mesh = new THREE.InstancedMesh(geo, mat, capacity);
       mesh.count = 0; mesh.frustumCulled = false;
       if (colored) mesh.setColorAt(0, new THREE.Color(1, 1, 1));
       scene.add(mesh);
-      const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3(), col = new THREE.Color();
+      const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc2 = new THREE.Vector3(), col = new THREE.Color();
       return {
         mesh,
         reset() { mesh.count = 0; },
         add(px, py, pz, sx, sy, sz, rotX, hex) {
           if (mesh.count >= capacity) return;
           q.setFromAxisAngle(AXIS_X, rotX || 0);
-          m4.compose(p.set(px, py, pz), q, sc.set(sx, sy, sz));
+          m4.compose(p.set(px, py, pz), q, sc2.set(sx, sy, sz));
           mesh.setMatrixAt(mesh.count, m4);
           if (colored && hex !== undefined) mesh.setColorAt(mesh.count, col.set(hex));
           mesh.count++;
@@ -316,8 +374,6 @@
         },
       };
     }
-    const AXIS_X = new THREE.Vector3(1, 0, 0);
-    const FLAT = -Math.PI / 2; // lay a plane/disc flat on the ground
     const hazardPools = [0.38, 0.24, 0.12].map((o) => makePool(planeGeo, colorMat(0xd29922, o), 2048, false));
     const stemPool = makePool(stemGeo, new THREE.MeshStandardMaterial({ roughness: 0.6 }), 512, true);
     stemPool.mesh.castShadow = true;
@@ -327,6 +383,7 @@
     // by the fields that change how it looks. Each gets a normal sprite
     // and a "ghost" that only draws where something is IN FRONT of it
     // (depthFunc Greater) - so a marker behind a building is never lost.
+    // Markers ignore fog so they stay fully readable at any distance.
     const glyphCache = new Map();
     function glyphSprites(key, drawFn) {
       let g = glyphCache.get(key);
@@ -338,8 +395,8 @@
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.anisotropy = 4;
         g = {
-          solid: new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: true }),
-          ghost: new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.38, depthTest: true, depthWrite: false, depthFunc: THREE.GreaterDepth }),
+          solid: new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: true, fog: false }),
+          ghost: new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.38, depthTest: true, depthWrite: false, depthFunc: THREE.GreaterDepth, fog: false }),
         };
         glyphCache.set(key, g);
         if (glyphCache.size > 400) { // bound memory: drop the oldest
@@ -352,25 +409,23 @@
       return g;
     }
 
-    function addSprite(mats, wx, headZ, wy, worldScale) {
-      const s = new THREE.Sprite(mats.solid);
-      s.position.set(wx, headZ, wy); s.scale.set(worldScale, worldScale, 1); s.renderOrder = 5;
-      const gh = new THREE.Sprite(mats.ghost);
-      gh.position.copy(s.position); gh.scale.copy(s.scale); gh.renderOrder = 6;
-      dynGroup.add(s, gh);
+    // Pixels per world unit at a point (for hit radii: a marker's hit
+    // area is the disc you see, as in 2.5D).
+    function pxPerWorldAt(wx, wy, z) {
+      const a = worldToScreen(wx, wy, z), b = worldToScreen(wx + 1, wy, z), c = worldToScreen(wx, wy + 1, z);
+      return (Math.hypot(b.x - a.x, b.y - a.y) + Math.hypot(c.x - a.x, c.y - a.y)) / 2;
     }
 
-    function addMarkerBase(wx, wy, foot, headZ, hex, shadowR) {
-      stemPool.add(wx, foot + (headZ - foot) / 2, wy, 1, headZ - foot, 1, 0, new THREE.Color(hex).getHex());
-      blobPool.add(wx, foot + 0.012, wy, shadowR, shadowR, 1, FLAT);
-    }
+    // ---------- per-tick scene: incidents, hazards, safe zones ----------
+    const dynGroup = new THREE.Group();
+    scene.add(dynGroup);
+    let dynDisposables = [];
 
     function addGroundRing(wx, wy, y, scale, mat) {
       const r = new THREE.Mesh(ringGeo, mat);
       r.rotation.x = -Math.PI / 2; r.position.set(wx, y + 0.02, wy); r.scale.set(scale, scale, 1);
       dynGroup.add(r);
     }
-
     function addDashedLine(points, hex, opacity) {
       const geo = new THREE.BufferGeometry().setFromPoints(points.map((p) => new THREE.Vector3(p[0], p[1], p[2])));
       const mat = new THREE.LineDashedMaterial({ color: new THREE.Color(hex), transparent: true, opacity, dashSize: 0.25, gapSize: 0.18, depthWrite: false });
@@ -380,48 +435,15 @@
       dynDisposables.push(geo, mat);
     }
 
-    // Pixels per world unit at a point (for hit radii: a marker's hit
-    // area is the disc you see, as in 2.5D).
-    function pxPerWorldAt(wx, wy, z) {
-      const a = worldToScreen(wx, wy, z), b = worldToScreen(wx + 1, wy, z), c = worldToScreen(wx, wy + 1, z);
-      return (Math.hypot(b.x - a.x, b.y - a.y) + Math.hypot(c.x - a.x, c.y - a.y)) / 2;
-    }
+    let incidentHits = [], safezoneHits = [];
+    let lastIncidentSig = null;
 
-
-    // o: { env, terrainMap, frame, fogViewMode, selectedMarker, teamColors, outlineBuildingId }
-    // Returns hit targets (same shape as the 2D/iso draw functions').
-    function render(o) {
-      const hits = [];
-      if (lost) return hits;
-      const model = MR.buildSceneModel(o);
-
-      if (o.terrainMap && o.terrainMap !== terrainSource) {
-        // First terrain frames the camera; a later STATICMAP update (e.g.
-        // flood spreading) only swaps the texture and leaves the user's view alone.
-        const first = terrainSource === null;
-        terrainSource = o.terrainMap;
-        buildGround(MR.renderTerrainTexture(o.terrainMap, GROUND_TEX_PX_PER_CELL));
-        if (first) projector.reset();
-      }
-      if (model.prep.source !== envSource) { envSource = model.prep.source; buildBuildings(model.prep); }
-
-      // Dispose last frame's per-frame objects.
+    function rebuildTickScene(model, o) {
       dynGroup.clear();
       hazardPools.forEach((p) => p.reset()); stemPool.reset(); blobPool.reset();
       dynDisposables.forEach((d) => d.dispose()); dynDisposables = [];
+      incidentHits = []; safezoneHits = [];
 
-      // Open incident card's building: outline it.
-      outline.visible = false;
-      if (o.outlineBuildingId !== undefined && o.outlineBuildingId !== null) {
-        const e = model.prep.byId.get(o.outlineBuildingId);
-        if (e) {
-          outline.visible = true;
-          outline.position.set((e.x0 + e.x1) / 2, e.h / 2, (e.y0 + e.y1) / 2);
-          outline.scale.set(e.x1 - e.x0, e.h, e.y1 - e.y0);
-        }
-      }
-
-      // Epicenter, hazard cells, safe zones: flat on the ground.
       if (model.epicenter) {
         const ep = model.epicenter, pts = [];
         for (let i = 0; i <= 48; i++) { const a = (i / 48) * Math.PI * 2; pts.push([ep.x + Math.cos(a) * 1.2, 0.03, ep.y + Math.sin(a) * 1.2]); }
@@ -437,40 +459,312 @@
         dynGroup.add(m);
         addDashedLine([[sz.x - half, 0.03, sz.y - half], [sz.x + half, 0.03, sz.y - half], [sz.x + half, 0.03, sz.y + half],
                        [sz.x - half, 0.03, sz.y + half], [sz.x - half, 0.03, sz.y - half]], 0x3fb950, 1);
-        hits.push({ type: "safezone", id: sz.id, wx: sz.x, wy: sz.y, wr: 0.5, data: sz });
+        safezoneHits.push({ type: "safezone", id: sz.id, wx: sz.x, wy: sz.y, wr: 0.5, data: sz });
       });
 
-      // Incidents.
       model.incidents.forEach((mi) => {
         const { members, inc, wx, wy, worldSize, foot, headZ, color, isSel } = mi;
         const selArg = isSel ? { type: "incident", id: inc.id } : null;
         const key = ["I", inc.id, inc.status, inc.type, inc.priority, inc.victims, members.map((m) => m.id + ":" + m.status).join(","), isSel ? 1 : 0].join("|");
         const mats = glyphSprites(key, (ctx) => MR.drawIncidentGlyph(ctx, { x: GLYPH_PX / 2, y: GLYPH_PX / 2 }, GLYPH_INC_SIZE, color, inc, members, selArg || { type: "none", id: -1 }));
-        addMarkerBase(wx, wy, foot, headZ, color, Math.max(0.3, worldSize * 0.6));
-        addSprite(mats, wx, headZ, wy, (GLYPH_PX / GLYPH_INC_SIZE) * worldSize * MARKER_BOOST);
+        stemPool.add(wx, foot + (headZ - foot) / 2, wy, 1, headZ - foot, 1, 0, new THREE.Color(color).getHex());
+        const shadowR = Math.max(0.3, worldSize * 0.6);
+        blobPool.add(wx, foot + 0.012, wy, shadowR, shadowR, 1, FLAT);
+        const scale = (GLYPH_PX / GLYPH_INC_SIZE) * worldSize * MARKER_BOOST;
+        const s = new THREE.Sprite(mats.solid); s.position.set(wx, headZ, wy); s.scale.set(scale, scale, 1); s.renderOrder = 5;
+        const gh = new THREE.Sprite(mats.ghost); gh.position.copy(s.position); gh.scale.copy(s.scale); gh.renderOrder = 6;
+        dynGroup.add(s, gh);
         if (isSel) addGroundRing(wx, wy, foot, Math.max(worldSize / 2, 0.4) + 0.25, selMat);
-        const wr = Math.max(worldSize / 2, 0.4);
-        hits.push({ type: "incident", id: inc.id, wx, wy, wz: headZ, wr,
-                    rpx: Math.max(wr * MARKER_BOOST * pxPerWorldAt(wx, wy, headZ), 6) + 2,
-                    data: members.length > 1 ? Object.assign({}, inc, { groupIncidents: members }) : inc });
+        incidentHits.push({ type: "incident", id: inc.id, wx, wy, wz: headZ, wr: Math.max(worldSize / 2, 0.4),
+                            data: members.length > 1 ? Object.assign({}, inc, { groupIncidents: members }) : inc });
       });
+      hazardPools.forEach((p) => p.commit()); stemPool.commit(); blobPool.commit();
+    }
 
-      // Teams.
+    // ---------- teams: persistent objects, smooth movement, routes ----------
+    // Every team has its own objects (stem, ground shadow, glyph sprites,
+    // heading arrow, selection ring, route line) that live across ticks
+    // and are re-posed every animation frame. A tick moves a team one
+    // cell; its position is interpolated from where it was to where it
+    // is over the time between ticks (measured from how fast frames are
+    // actually arriving, so Live pace and Replay speed both fall out of
+    // it, and a pause - no new frames - simply lets the glide finish).
+    const teamGroup = new THREE.Group();
+    scene.add(teamGroup);
+    const teamStates = new Map(); // id -> motion state
+    const teamViews = new Map();  // id -> scene objects
+    let lastTick = null, lastSyncAt = 0, emaGap = 150;
+    const SNAP_CELLS = 2.6;       // a bigger jump than this is a teleport/seek, not a move
+
+    function ensureTeamView(id) {
+      let v = teamViews.get(id);
+      if (v) return v;
+      const g = new THREE.Group();
+      const stem = new THREE.Mesh(stemGeo, markerMat(0xffffff).stem); stem.castShadow = true;
+      const blob = new THREE.Mesh(discGeo, shadowMat); blob.rotation.x = FLAT; blob.scale.set(0.34, 0.34, 1);
+      const solid = new THREE.Sprite(new THREE.SpriteMaterial()); solid.renderOrder = 5;
+      const ghost = new THREE.Sprite(new THREE.SpriteMaterial()); ghost.renderOrder = 6;
+      const ring = new THREE.Mesh(ringGeo, selMat); ring.rotation.x = FLAT; ring.visible = false;
+      const arrow = new THREE.Mesh(arrowGeo, markerMat(0xffffff).arrow);
+      g.add(stem, blob, solid, ghost, ring, arrow);
+      teamGroup.add(g);
+      v = { id, g, stem, blob, solid, ghost, ring, arrow, route: null, routeObjs: new THREE.Group(), pos: { x: 0, y: 0, foot: 0 }, data: null, color: null, dashed: false };
+      teamGroup.add(v.routeObjs);
+      teamViews.set(id, v);
+      return v;
+    }
+    function disposeRoute(v) {
+      v.routeObjs.children.slice().forEach((c) => { v.routeObjs.remove(c); if (c.geometry && c.userData.ownGeo) c.geometry.dispose(); });
+      v.route = null;
+    }
+    function removeTeamView(id) {
+      const v = teamViews.get(id);
+      if (!v) return;
+      disposeRoute(v);
+      teamGroup.remove(v.g); teamGroup.remove(v.routeObjs);
+      v.solid.material.dispose(); v.ghost.material.dispose();
+      teamViews.delete(id); teamStates.delete(id);
+    }
+
+    // Advance each team's motion target for a NEW tick.
+    function advanceTeams(model, tick, now, snapAll) {
+      const sequential = lastTick !== null && tick === lastTick + 1 && !snapAll;
+      const gap = now - lastSyncAt;
+      if (sequential) {
+        emaGap = gap < 1500 ? (emaGap * 0.6 + gap * 0.4) : emaGap;
+      }
+      // One tick's glide lasts as long as ticks are actually arriving; a
+      // lone manual step (long gap) gets a short fixed glide.
+      const dur = sequential ? (gap < 1500 ? Math.max(40, Math.min(1500, emaGap)) : 250) : 0;
       model.teams.forEach((mt) => {
-        const { t, i, wx, wy, foot, headZ, color, isSel } = mt;
+        const { t } = mt;
+        let st = teamStates.get(t.id);
+        const fresh = !st;
+        if (fresh) {
+          st = { px: mt.wx, py: mt.wy, pf: mt.foot, cx: mt.wx, cy: mt.wy, cf: mt.foot, t0: now, dur: 0, heading: null,
+                 dest: null, rerouteUntil: -1 };
+          teamStates.set(t.id, st);
+        }
+        const moved = Math.hypot(mt.wx - st.cx, mt.wy - st.cy);
+        const nowPos = fresh ? { x: mt.wx, y: mt.wy, f: mt.foot } : poseOf(st, now);
+        if (!sequential || fresh || moved > SNAP_CELLS) {
+          st.px = st.cx = mt.wx; st.py = st.cy = mt.wy; st.pf = st.cf = mt.foot; st.dur = 0;
+        } else {
+          // Start from where the marker is drawn right now so a tween
+          // interrupted by the next tick doesn't jump back.
+          st.px = nowPos.x; st.py = nowPos.y; st.pf = nowPos.f;
+          st.cx = mt.wx; st.cy = mt.wy; st.cf = mt.foot;
+          st.t0 = now; st.dur = dur;
+          const dx = st.cx - st.px, dy = st.cy - st.py;
+          if (Math.hypot(dx, dy) > 0.05) st.heading = Math.atan2(dx, dy);
+        }
+        // Rerouting: a team that already had a destination now has a
+        // different one.
+        const hasDest = !!t.has_dest;
+        const dest = hasDest ? [t.dest_x, t.dest_y, t.dest_id] : null;
+        if (st.dest && dest && (st.dest[0] !== dest[0] || st.dest[1] !== dest[1])) st.rerouteUntil = tick + 3;
+        st.dest = dest;
+      });
+      lastTick = tick; lastSyncAt = now;
+    }
+
+    function poseOf(st, now) {
+      const k = st.dur > 0 ? Math.max(0, Math.min(1, (now - st.t0) / st.dur)) : 1;
+      return { x: st.px + (st.cx - st.px) * k, y: st.py + (st.cy - st.py) * k, f: st.pf + (st.cf - st.pf) * k, k };
+    }
+
+    // Refresh per-team look (colour, glyph, selection) - every render call.
+    function syncTeamViews(model) {
+      const seen = new Set();
+      model.teams.forEach((mt) => {
+        const { t, i, color, isSel } = mt;
+        seen.add(t.id);
+        const v = ensureTeamView(t.id);
+        v.data = { ...t, i };
+        if (v.color !== color) {
+          v.color = color;
+          const hex = new THREE.Color(color).getHex();
+          const mm = markerMat(hex);
+          v.stem.material = mm.stem; v.arrow.material = mm.arrow; v.mm = mm;
+        }
         const phase = window._overridePhase && window._overridePhase[t.id];
         const key = ["T", t.id, t.status, t.fault_mask || 0, t.override ? 1 : 0, phase ? phase.kind : "", isSel ? 1 : 0, color].join("|");
-        const mats = glyphSprites(key, (ctx) => MR.drawTeamGlyph(ctx, { x: GLYPH_PX / 2, y: GLYPH_PX / 2 }, GLYPH_TEAM_R, color, t, isSel ? { type: "team", id: t.id } : null));
-        if (t.has_dest && (t.dest_x !== t.x || t.dest_y !== t.y)) addDashedLine([[wx, 0.04, wy], [t.dest_x, 0.04, t.dest_y]], color, 0.5);
-        addMarkerBase(wx, wy, foot, headZ, color, 0.34);
-        addSprite(mats, wx, headZ, wy, (GLYPH_PX / GLYPH_TEAM_R) * MR.MARKER_WORLD_R * MARKER_BOOST);
-        if (isSel) addGroundRing(wx, wy, foot, 1, selMat);
-        hits.push({ type: "team", id: t.id, wx, wy, wz: headZ, wr: MR.MARKER_WORLD_R + 0.18,
-                    rpx: (MR.MARKER_WORLD_R + 0.18) * MARKER_BOOST * pxPerWorldAt(wx, wy, headZ), data: { ...t, i } });
+        if (v.glyphKey !== key) {
+          v.glyphKey = key;
+          const mats = glyphSprites(key, (ctx) => MR.drawTeamGlyph(ctx, { x: GLYPH_PX / 2, y: GLYPH_PX / 2 }, GLYPH_TEAM_R, color, t, isSel ? { type: "team", id: t.id } : null));
+          v.solid.material = mats.solid; v.ghost.material = mats.ghost;
+          const sc3 = (GLYPH_PX / GLYPH_TEAM_R) * MR.MARKER_WORLD_R * MARKER_BOOST;
+          v.solid.scale.set(sc3, sc3, 1); v.ghost.scale.set(sc3, sc3, 1);
+        }
+        v.isSel = isSel;
+        v.ring.visible = isSel;
+        v.faulted = !!(t.fault_mask || t.degraded);
       });
+      Array.from(teamViews.keys()).forEach((id) => { if (!seen.has(id)) removeTeamView(id); });
+    }
 
-      hazardPools.forEach((p) => p.commit()); stemPool.commit(); blobPool.commit();
+    // Route for every team with a destination, for the CURRENT tick.
+    function rebuildRoutes(model, tick) {
+      model.teams.forEach((mt) => {
+        const { t } = mt;
+        const v = teamViews.get(t.id), st = teamStates.get(t.id);
+        if (!v || !st) return;
+        disposeRoute(v);
+        if (!(t.has_dest && (t.dest_x !== t.x || t.dest_y !== t.y))) return;
+        const path = terrainParsed ? window.RoutePlanner.plan(terrainParsed, t.x, t.y, t.dest_x, t.dest_y) : null;
+        const cells = path || [[t.x, t.y], [t.dest_x, t.dest_y]]; // no route known: straight line, drawn dashed
+        const dashed = v.faulted || tick < st.rerouteUntil || !path;
+        const n = cells.length + 1;
+        const arr = new Float32Array(n * 3);
+        arr[1] = 0.06;
+        cells.forEach((c, k) => { arr[(k + 1) * 3] = c[0]; arr[(k + 1) * 3 + 1] = 0.06; arr[(k + 1) * 3 + 2] = c[1]; });
+        const mm = v.mm || markerMat(0xffffff);
+        let route;
+        if (L2) {
+          const geo = new L2.LineGeometry();
+          geo.setPositions(arr);
+          const line = new L2.Line2(geo, dashed ? mm.dashed2 : mm.solid2);
+          if (dashed) line.computeLineDistances();
+          line.frustumCulled = false; line.userData.ownGeo = true; line.renderOrder = 3;
+          v.routeObjs.add(line);
+          route = { line, geo, l2: true, dashed, cells };
+        } else {
+          const geo = new THREE.BufferGeometry();
+          const attr = new THREE.BufferAttribute(arr, 3); attr.setUsage(THREE.DynamicDrawUsage);
+          geo.setAttribute("position", attr);
+          const line = new THREE.Line(geo, dashed ? mm.dashed : mm.solid);
+          line.frustumCulled = false; line.userData.ownGeo = true; line.renderOrder = 3;
+          v.routeObjs.add(line);
+          route = { line, attr, l2: false, dashed, cells };
+          if (dashed) line.computeLineDistances();
+        }
+        const dr = new THREE.Mesh(ringGeo, mm.ring);
+        dr.rotation.x = FLAT; dr.position.set(t.dest_x, 0.07, t.dest_y); dr.scale.set(0.5, 0.5, 1);
+        v.routeObjs.add(dr);
+        v.route = route;
+        if (st.heading === null && cells.length > 1) st.heading = Math.atan2(cells[1][0] - cells[0][0], cells[1][1] - cells[0][1]);
+      });
+    }
+
+    function poseTeams(now) {
+      teamViews.forEach((v, id) => {
+        const st = teamStates.get(id);
+        if (!st) return;
+        const p = poseOf(st, now);
+        const headZ = p.f + MR.ISO_TEAM_Z;
+        v.pos.x = p.x; v.pos.y = p.y; v.pos.foot = p.f;
+        v.stem.scale.set(1, headZ - p.f, 1);
+        v.stem.position.set(p.x, p.f + (headZ - p.f) / 2, p.y);
+        v.blob.position.set(p.x, p.f + 0.012, p.y);
+        v.solid.position.set(p.x, headZ, p.y); v.ghost.position.copy(v.solid.position);
+        v.ring.position.set(p.x, p.f + 0.02, p.y);
+        v.arrow.position.set(p.x, p.f, p.y);
+        v.arrow.visible = st.heading !== null;
+        if (st.heading !== null) {
+          v.arrow.rotation.y = st.heading;
+          // Sit just ahead of the stem so it points out from the marker.
+          v.arrow.position.x += Math.sin(st.heading) * 0.42;
+          v.arrow.position.z += Math.cos(st.heading) * 0.42;
+        }
+        if (v.route) {
+          // First vertex follows the gliding marker. (Fat lines keep
+          // segment endpoints in an interleaved buffer; the first
+          // segment's start is its first three floats.)
+          const buf = v.route.l2 ? v.route.geo.attributes.instanceStart.data : null;
+          const a = buf ? buf.array : v.route.attr.array;
+          a[0] = p.x; a[1] = p.f + 0.06; a[2] = p.y;
+          if (buf) buf.needsUpdate = true; else { v.route.attr.needsUpdate = true; if (v.route.dashed) v.route.line.computeLineDistances(); }
+        }
+      });
+    }
+
+    function teamAnimating(now) {
+      for (const st of teamStates.values()) if (st.dur > 0 && now < st.t0 + st.dur) return true;
+      return false;
+    }
+
+    // ---------- hit targets ----------
+    function buildHits() {
+      const hits = safezoneHits.slice();
+      incidentHits.forEach((h) => {
+        hits.push(Object.assign({}, h, { rpx: Math.max(h.wr * MARKER_BOOST * pxPerWorldAt(h.wx, h.wy, h.wz), 6) + 2 }));
+      });
+      teamViews.forEach((v) => {
+        if (!v.data) return;
+        const headZ = v.pos.foot + MR.ISO_TEAM_Z;
+        hits.push({ type: "team", id: v.data.id, wx: v.pos.x, wy: v.pos.y, wz: headZ, wr: MR.MARKER_WORLD_R + 0.18,
+                    rpx: (MR.MARKER_WORLD_R + 0.18) * MARKER_BOOST * pxPerWorldAt(v.pos.x, v.pos.y, headZ), data: v.data });
+      });
+      return hits;
+    }
+
+    // ---------- the frame ----------
+    let rafId = 0, lastDraw = 0, curModel = null, curOpts = null;
+    const api = { onHits: null };
+
+    function drawNow(now, notify) {
+      lastDraw = now;
+      poseTeams(now);
       renderer.render(scene, camera);
+      const hits = buildHits();
+      if (notify && api.onHits) api.onHits(hits);
+      return hits;
+    }
+
+    function needsMotion(now) {
+      return teamAnimating(now);
+    }
+
+    function loop(now) {
+      rafId = 0;
+      if (!active || lost) return;
+      drawNow(now, true);
+      if (needsMotion(now)) rafId = requestAnimationFrame(loop);
+    }
+    let active = true;
+    function kick() { if (active && !rafId) rafId = requestAnimationFrame(loop); }
+
+    // o: { env, terrainMap, frame, fogViewMode, selectedMarker, teamColors, outlineBuildingId, snap }
+    // Synchronous: updates the scene and draws once, returning the hit
+    // targets (same shape as the 2D/iso draw functions'). While teams are
+    // still gliding, an animation loop keeps drawing and reports fresh
+    // hit targets through api.onHits.
+    function render(o) {
+      if (lost) return [];
+      const now = performance.now();
+      const model = MR.buildSceneModel(o);
+      curModel = model; curOpts = o;
+
+      if (o.terrainMap && o.terrainMap !== terrainSource) {
+        const first = terrainSource === null;
+        terrainSource = o.terrainMap;
+        terrainParsed = MR.parseTerrain(o.terrainMap);
+        buildGround(MR.renderTerrainTexture(o.terrainMap, GROUND_TEX_PX_PER_CELL));
+        if (first) projector.reset();
+      }
+      if (model.prep.source !== envSource) { envSource = model.prep.source; buildBuildings(model.prep); }
+
+      const tick = o.frame ? o.frame.tick : null;
+      const newTick = tick !== lastTick;
+      if (newTick) advanceTeams(model, tick, now, !!o.snap);
+      syncTeamViews(model);
+
+      const sig = [tick, o.selectedMarker ? o.selectedMarker.type + ":" + o.selectedMarker.id : "", o.fogViewMode].join("|");
+      if (newTick || sig !== lastIncidentSig) { rebuildTickScene(model, o); lastIncidentSig = sig; }
+      if (newTick) rebuildRoutes(model, tick);
+
+      outline.visible = false;
+      if (o.outlineBuildingId !== undefined && o.outlineBuildingId !== null) {
+        const e = model.prep.byId.get(o.outlineBuildingId);
+        if (e) {
+          outline.visible = true;
+          outline.position.set((e.x0 + e.x1) / 2, e.h / 2, (e.y0 + e.y1) / 2);
+          outline.scale.set(e.x1 - e.x0, e.h, e.y1 - e.y0);
+        }
+      }
+
+      const hits = drawNow(now, false);
+      kick();
       return hits;
     }
 
@@ -478,20 +772,32 @@
       view.w = Math.max(1, cssW); view.h = Math.max(1, cssH);
       renderer.setPixelRatio(Math.min(dpr || 1, 2));
       renderer.setSize(view.w, view.h, false);
+      l2mats.forEach((m) => m.resolution.set(view.w, view.h));
       const first = !view._sized;
       view._sized = true;
       if (first) projector.reset(); else { view.dist = Math.min(view.dist, 170); updateCamera(); }
     }
 
     projector.reset();
-    return {
+    Object.assign(api, {
       projector, render, setSize,
+      setActive(on) { active = !!on; if (!active && rafId) { cancelAnimationFrame(rafId); rafId = 0; } else kick(); },
+      // Read-only snapshot of one team's drawn state (for tests and tooling).
+      teamInfo(id) {
+        const v = teamViews.get(id), st = teamStates.get(id);
+        if (!v || !st) return null;
+        const p = poseOf(st, performance.now());
+        return { x: p.x, y: p.y, k: p.k, from: [st.px, st.py], to: [st.cx, st.cy], heading: st.heading,
+                 route: v.route ? v.route.cells.map((c) => c.slice()) : null, dashed: v.route ? v.route.dashed : null, faulted: !!v.faulted };
+      },
+      get settings() { return Object.assign({}, settings); },
       get state() { return view; },
       get isLost() { return lost; },
       // Internals for profiling only: exposed just when the page URL has ?debug=1.
       ...(new URLSearchParams(window.location.search).get("debug") === "1"
-        ? { _renderer: renderer, _scene: scene, _camera: camera } : {}),
-    };
+        ? { _renderer: renderer, _scene: scene, _camera: camera, _teamViews: teamViews, _teamStates: teamStates } : {}),
+    });
+    return api;
   }
 
   window.MapView3D = { available: true, create };

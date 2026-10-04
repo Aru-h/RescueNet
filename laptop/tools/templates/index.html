@@ -705,12 +705,15 @@
      they define exists by the time that script's functions run. -->
 <script src="/static/dashboard/camera.js"></script>
 <script src="/static/dashboard/selection.js"></script>
+<script src="/static/dashboard/route.js"></script>
 <script src="/static/dashboard/map-render.js"></script>
 <script src="/static/dashboard/consensus-network.js"></script>
 <script src="/static/dashboard/timeline.js"></script>
 <script src="/static/dashboard/panels.js"></script>
 <script src="/static/dashboard/theme.js"></script>
 <script src="/static/dashboard/replay.js"></script>
+<!-- Maps the bare "three" specifier used by the vendored three.js addons to the local copy. Must come before any module script. -->
+<script type="importmap">{"imports":{"three":"/static/three/three.module.js"}}</script>
 <!-- Optional WebGL "3D" map view (three.js vendored under static/three/). A module, so it runs after the classic scripts and the inline script below; it announces itself with a "mapview3d-ready" event and the 3D option is only offered when WebGL works. -->
 <script type="module" src="/static/dashboard/map-view3d.js"></script>
 
@@ -1557,6 +1560,9 @@ function ensureMap3d() {
   try {
     map3d = window.MapView3D.create(document.getElementById("map3dCanvas"));
     mapCamera.setProjector(map3d.projector);
+    // While markers are still gliding between ticks the 3D view keeps
+    // drawing on its own and reports fresh hit targets here.
+    map3d.onHits = (hits) => { mapHitTargets = hits; };
     sizeMap3d();
     return true;
   } catch (e) {
@@ -1589,6 +1595,7 @@ function applyMapViewMode(mode) {
   if (box) box.classList.toggle("iso-view", mode !== "2d"); // 2.5D and 3D use the whole panel, not a square
   const c3 = document.getElementById("map3dCanvas");
   if (c3) c3.style.display = mode === "3d" ? "block" : "none";
+  if (map3d) map3d.setActive(mode === "3d");
   const topBtn = document.getElementById("topDownBtn");
   if (topBtn) topBtn.style.display = mode === "3d" ? "" : "none";
   mapCanvas.style.background = mode === "3d" ? "transparent" : "#05080c";

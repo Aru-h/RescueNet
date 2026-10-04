@@ -1406,5 +1406,7 @@
     // preparation and these marker glyphs instead of re-deriving them.
     buildSceneModel, renderTerrainTexture, drawTeamGlyph, drawIncidentGlyph,
     MARKER_WORLD_R, ISO_TEAM_Z, ISO_INCIDENT_Z, PRIORITY_COLORS,
+    parseTerrain, footingZ, ISO_FLOOR_H,
+    ENV_DAMAGE_MINOR, ENV_DAMAGE_MODERATE, ENV_DAMAGE_SEVERE,
   };
 })(window);
