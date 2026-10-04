@@ -23,6 +23,7 @@
 #include <stdarg.h>
 
 #include <tm/tmonitor.h>
+#include "board_log.h"       /* console output through the logger task */
 
 #include "debug.h"
 #include "mission_state.h"
@@ -135,7 +136,7 @@ void print_world_state(void)
 {
     char stamina_buf[16];
 
-    tm_printf((UB*)"Environment | Seed: %lu | Roads: %u | Navigable: %u | Buildings: %u | Damaged: %u | Blocked Roads: %u | Validated: %s\n",
+    BOARD_LOG((UB*)"Environment | Seed: %lu | Roads: %u | Navigable: %u | Buildings: %u | Damaged: %u | Blocked Roads: %u | Validated: %s\n",
         (unsigned long)g_environment_summary.seed,
         g_environment_summary.road_cell_count,
         g_environment_summary.navigable_cell_count,
@@ -146,7 +147,7 @@ void print_world_state(void)
 
     if(g_environment_summary.earthquake_applied)
     {
-        tm_printf((UB*)"Earthquake | Epicenter: (%d,%d) | Intensity: %u\n",
+        BOARD_LOG((UB*)"Earthquake | Epicenter: (%d,%d) | Intensity: %u\n",
             g_environment_summary.earthquake_epicenter_x,
             g_environment_summary.earthquake_epicenter_y,
             g_environment_summary.earthquake_intensity);
@@ -155,7 +156,7 @@ void print_world_state(void)
     for(int i = 0; i < NUM_TEAMS; i++)
     {
         fmt_fixed3(stamina_buf, sizeof(stamina_buf), g_teams[i].stamina, 3);
-        tm_printf((UB*)"Team %d | Tier: %d | Status: %s%s | Stamina: %s | Equipment: %d\n",
+        BOARD_LOG((UB*)"Team %d | Tier: %d | Status: %s%s | Stamina: %s | Equipment: %d\n",
             i,
             g_teams[i].fitness_tier,
             (UB*)team_status_to_string(g_teams[i].status),
@@ -208,12 +209,12 @@ void debug_emit_live_frame(uint32_t tick)
      * ever wanted on-device, is that same comment's proposed
      * DEBUG_FULL_DUMP-gated addition, not something to build in here.
      */
-    tm_printf((UB*)"LIVEFRAME tick=%lu", (unsigned long)tick);
+    BOARD_LOG((UB*)"LIVEFRAME tick=%lu", (unsigned long)tick);
 
     for(int i = 0; i < NUM_TEAMS; i++)
     {
         fmt_fixed3(stamina_buf, sizeof(stamina_buf), g_teams[i].stamina, 3);
-        tm_printf((UB*)" team%d={id=%d,x=%d,y=%d,stamina=%s,status=%s,pool=%d,slot=%d}",
+        BOARD_LOG((UB*)" team%d={id=%d,x=%d,y=%d,stamina=%s,status=%s,pool=%d,slot=%d}",
             i,
             g_teams[i].team_id,
             g_teams[i].loc_x,
@@ -224,7 +225,7 @@ void debug_emit_live_frame(uint32_t tick)
             g_teams[i].assigned_task_slot);
     }
 
-    tm_printf((UB*)"\n");
+    BOARD_LOG((UB*)"\n");
 }
 
 void debug_print_generator_evaluation(uint32_t tick,

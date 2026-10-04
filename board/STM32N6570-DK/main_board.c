@@ -30,6 +30,7 @@
 
 #include <tk/tkernel.h>
 #include <tm/tmonitor.h>
+#include "board_log.h"       /* console output through the logger task */
 #include "mtkernel/lib/libtm/libtm.h"   /* tm_com_init() */
 #include "sim_runner.h"
 #include "state_hash.h"      /* per-tick determinism fingerprint */
@@ -353,7 +354,7 @@ static void board_report_link_diagnostics(void)
 
     if(auth_fails != g_reported_auth_fails)
     {
-        tm_printf((UB*)"tron: LoRa AUTH FAIL (%lu so far) - frames arriving but failing authentication (RF corruption, a peer built with a different key, or a replay)\n",
+        BOARD_LOG((UB*)"tron: LoRa AUTH FAIL (%lu so far) - frames arriving but failing authentication (RF corruption, a peer built with a different key, or a replay)\n",
                   (unsigned long)auth_fails);
         g_reported_auth_fails = auth_fails;
     }
@@ -363,7 +364,7 @@ static void board_report_link_diagnostics(void)
 
         if(holds != g_reported_session_holds)
         {
-            tm_printf((UB*)"tron: LoRa session HOLD (%lu so far) - a peer started a new session (reboot?); its frames wait until it answers this board's challenge\n",
+            BOARD_LOG((UB*)"tron: LoRa session HOLD (%lu so far) - a peer started a new session (reboot?); its frames wait until it answers this board's challenge\n",
                       (unsigned long)holds);
             g_reported_session_holds = holds;
         }
@@ -374,7 +375,7 @@ static void board_report_link_diagnostics(void)
 
         if(reboots != g_reported_peer_reboots)
         {
-            tm_printf((UB*)"tron: peer reboot detected (%lu so far) - re-running that board's handshake\n",
+            BOARD_LOG((UB*)"tron: peer reboot detected (%lu so far) - re-running that board's handshake\n",
                       (unsigned long)reboots);
             g_reported_peer_reboots = reboots;
         }
@@ -385,7 +386,7 @@ static void board_report_link_diagnostics(void)
 
         if(rx_errors != g_reported_usart1_rx_errors)
         {
-            tm_printf((UB*)"tron: USART1 RX errors (%lu so far, %lu of them RX ring full) - laptop bytes lost or damaged (overrun/framing/noise, or the sim task not reading fast enough)\n",
+            BOARD_LOG((UB*)"tron: USART1 RX errors (%lu so far, %lu of them RX ring full) - laptop bytes lost or damaged (overrun/framing/noise, or the sim task not reading fast enough)\n",
                       (unsigned long)rx_errors,
                       (unsigned long)board_usart1_rx_drop_count());
             g_reported_usart1_rx_errors = rx_errors;
@@ -394,7 +395,7 @@ static void board_report_link_diagnostics(void)
 
     if(!g_reported_first_frame && lora_frame_accept_count() > 0u)
     {
-        tm_putstring((UB*)"tron: LoRa link alive - first authenticated frame received\n");
+        board_log_puts((const char*)"tron: LoRa link alive - first authenticated frame received\n");
         g_reported_first_frame = 1u;
     }
 
@@ -414,7 +415,7 @@ static void board_report_link_diagnostics(void)
                !mission_link_handshake_relay_reply_seen(peer) &&
                mission_link_handshake_relay_timed_out_seen(peer))
             {
-                tm_printf((UB*)"tron: peer board %lu never answered the handshake (timed out) - the laptop will not send mission data until it does; check that board is powered, flashed with this build, and on the same radio params\n",
+                BOARD_LOG((UB*)"tron: peer board %lu never answered the handshake (timed out) - the laptop will not send mission data until it does; check that board is powered, flashed with this build, and on the same radio params\n",
                           (unsigned long)peer);
                 g_reported_peer_timed_out[peer] = 1u;
             }
@@ -482,7 +483,7 @@ static void board_seed_lora_session_epoch(void)
 
     if(!rng_ok || epoch == 0u)
     {
-        tm_putstring((UB*)"tron: WARNING - SX1262 RNG unavailable; LoRa session epoch is weak, reboot recovery may fail\n");
+        board_log_puts((const char*)"tron: WARNING - SX1262 RNG unavailable; LoRa session epoch is weak, reboot recovery may fail\n");
         if(epoch == 0u)
         {
             epoch = 0x5EED0001u ^ (uint32_t)THIS_BOARD_ID;
@@ -490,7 +491,7 @@ static void board_seed_lora_session_epoch(void)
     }
 
     lora_crypto_set_tx_epoch(epoch);
-    tm_printf((UB*)"tron: LoRa session epoch %08lx\n", (unsigned long)epoch);
+    BOARD_LOG((UB*)"tron: LoRa session epoch %08lx\n", (unsigned long)epoch);
 }
 
 /* ---------------------------------------------------------------
@@ -512,12 +513,16 @@ void board_usart1_write(const uint8_t *bytes, uint32_t len)
     uint32_t i;
     UINT imask;
 
+    /* A whole frame under the UART lock: the logger task's text and other
+       tasks' frames cannot land in the middle of it. */
+    board_uart_tx_lock();
     for (i = 0u; i < len; i++)
     {
         DI(imask);
         tm_snd_dat((const UB *)&bytes[i], 1);
         EI(imask);
     }
+    board_uart_tx_unlock();
 }
 
 /* Real board_usart1_read_byte() lives in usart1_driver.c (interrupt-
@@ -697,7 +702,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
        doesn't depend on sim_runner_init()/mission_link state, so it
        goes first. See sx1262_hal.c's own top-of-file comment for the
        wiring this assumes. */
-    tm_putstring((UB*)"tron: sim_task entered\n");
+    board_log_puts((const char*)"tron: sim_task entered\n");
     sx1262_hal_init();
 
     /* Size CBBA's reply-wait budget from the kernel tick (see
@@ -715,11 +720,11 @@ LOCAL void sim_task(INT stacd, void *exinf)
        hardware bring-up, not per-tick work. */
     board_usart1_rx_init();
 
-    tm_putstring((UB*)"tron: sim_runner_init\n");
+    board_log_puts((const char*)"tron: sim_runner_init\n");
 
     if(sim_runner_init() != 0)
     {
-        tm_putstring((UB*)"tron: equipment requirement matrix validation FAILED\n");
+        board_log_puts((const char*)"tron: equipment requirement matrix validation FAILED\n");
         tk_slp_tsk(TMO_FEVR);
         return;
     }
@@ -741,7 +746,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
            (secure) USART1: expect usart1=0x52001000 fifoen=1 ue=1 re=1
            rxneie=1. fifoen=0 would mean the write missed the peripheral
            the BSP's console runs on. */
-        tm_printf((UB*)"tron: USART1 addr=0x%08lx fifoen=%u ue=%u re=%u rxneie=%u cr1=0x%08lx\n",
+        BOARD_LOG((UB*)"tron: USART1 addr=0x%08lx fifoen=%u ue=%u re=%u rxneie=%u cr1=0x%08lx\n",
                   (unsigned long)(uintptr_t)USART1_S,
                   (unsigned)((cr1 & USART_CR1_FIFOEN) != 0u),
                   (unsigned)((cr1 & USART_CR1_UE) != 0u),
@@ -783,7 +788,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
         uint32_t i;
         uint32_t rx_count = 0u;
 
-        tm_putstring((UB*)"tron: LORA_RAW_RX_CHECK - listening for authenticated frames (~15s)\n");
+        board_log_puts((const char*)"tron: LORA_RAW_RX_CHECK - listening for authenticated frames (~15s)\n");
 
         for (i = 0u; i < LORA_RAW_RX_CHECK_TICKS; i++)
         {
@@ -821,7 +826,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
                 line[safe_len] = '\0';
 
                 rx_count++;
-                tm_printf((UB*)"tron: AUTHENTICATED RX #%lu from team %u, type %u, %u bytes: %s\n",
+                BOARD_LOG((UB*)"tron: AUTHENTICATED RX #%lu from team %u, type %u, %u bytes: %s\n",
                           (unsigned long)rx_count, (unsigned)sender_team_id,
                           (unsigned)frame_type, (unsigned)payload_len, line);
             }
@@ -831,7 +836,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
                                   window length. */
         }
 
-        tm_printf((UB*)"tron: LORA_RAW_RX_CHECK done - %lu authenticated frame(s) received\n",
+        BOARD_LOG((UB*)"tron: LORA_RAW_RX_CHECK done - %lu authenticated frame(s) received\n",
                    (unsigned long)rx_count);
     }
 #endif /* LORA_RAW_RX_CHECK */
@@ -872,7 +877,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
      */
     mission_link_handshake_mark_local_ready();
 
-    tm_putstring((UB*)"tron: waiting on mission-link handshake\n");
+    board_log_puts((const char*)"tron: waiting on mission-link handshake\n");
 
     while (!mission_link_handshake_round_trip_complete())
     {
@@ -890,7 +895,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
         board_boot_wait_discard_stale_frames();
     }
 
-    tm_putstring((UB*)"tron: handshake ready\n");
+    board_log_puts((const char*)"tron: handshake ready\n");
 
     /*
      * Roster-arrival gate - see the mission_link_task_any_roster_
@@ -909,7 +914,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
        (core/mission_link.h sections 5c/5d): the laptop sends them right
        after the rosters, and a tick run without them routes teams through
        blocked cells and leaves nowhere to rest. */
-    tm_putstring((UB*)"tron: waiting on mission roster, map and sites\n");
+    board_log_puts((const char*)"tron: waiting on mission roster, map and sites\n");
 
     {
     uint32_t reported_rejects = 0u;
@@ -936,20 +941,20 @@ LOCAL void sim_task(INT stacd, void *exinf)
         rejects = mission_link_roster_reject_count();
         if(rejects != reported_rejects)
         {
-            tm_printf((UB*)"tron: roster REJECTED (%lu so far) - arriving but failing validation\n",
+            BOARD_LOG((UB*)"tron: roster REJECTED (%lu so far) - arriving but failing validation\n",
                       (unsigned long)rejects);
             reported_rejects = rejects;
         }
     }
     }
 
-    tm_putstring((UB*)"tron: roster, map and sites received, starting seed loop\n");
+    board_log_puts((const char*)"tron: roster, map and sites received, starting seed loop\n");
 
     board_dwt_init();
 
     for(uint32_t seed = BOARD_SEED; seed < BOARD_SEED + BOARD_SEED_COUNT; ++seed)
     {
-        tm_printf((UB*)"tron: seed %lu start\n", (unsigned long)seed);
+        BOARD_LOG((UB*)"tron: seed %lu start\n", (unsigned long)seed);
 
         /* sim_start_seed_board(), NOT sim_start_seed() — the board
          * variant, which does not self-generate a world. See
@@ -976,7 +981,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
 
             if(start_tick != g_current_tick)
             {
-                tm_printf((UB*)"tron: tick %lu is too far behind the laptop's %lu, joining at %lu\n",
+                BOARD_LOG((UB*)"tron: tick %lu is too far behind the laptop's %lu, joining at %lu\n",
                           (unsigned long)g_current_tick,
                           (unsigned long)mission_link_authorized_tick(),
                           (unsigned long)(start_tick + 1u));
@@ -1009,7 +1014,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
                 /* tm_printf has no 64-bit conversions: each hash goes out
                    as two zero-padded 32-bit halves, which concatenate to
                    the same 16 hex digits the PC prints. */
-                tm_printf((UB*)"STATEHASH tick=%lu all=%08lx%08lx teams=%08lx%08lx inc=%08lx%08lx flt=%08lx%08lx rec=%08lx%08lx\n",
+                BOARD_LOG((UB*)"STATEHASH tick=%lu all=%08lx%08lx teams=%08lx%08lx inc=%08lx%08lx flt=%08lx%08lx rec=%08lx%08lx\n",
                           (unsigned long)tick,
                           (unsigned long)(sh.all >> 32), (unsigned long)(uint32_t)sh.all,
                           (unsigned long)(sh.teams >> 32), (unsigned long)(uint32_t)sh.teams,
@@ -1047,7 +1052,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
                    Status_t schema stays untouched), so there is no
                    reason to print it more often than a human watching
                    the console would want a fresh number. */
-                tm_printf((UB*)"tron: tick cost last=%lu cyc (%lu.%02lu us) max=%lu cyc (%lu.%02lu us) @%lu MHz\n",
+                BOARD_LOG((UB*)"tron: tick cost last=%lu cyc (%lu.%02lu us) max=%lu cyc (%lu.%02lu us) @%lu MHz\n",
                           (unsigned long)g_tick_cycles_last,
                           (unsigned long)(g_tick_cycles_last / (BOARD_CPU_CLOCK_HZ / 1000000u)),
                           (unsigned long)(((uint64_t)g_tick_cycles_last * 100u / (BOARD_CPU_CLOCK_HZ / 1000000u)) % 100u),
@@ -1079,11 +1084,11 @@ LOCAL void sim_task(INT stacd, void *exinf)
         }
 
         sim_end_seed();
-        tm_printf((UB*)"tron: seed %lu done\n", (unsigned long)seed);
+        BOARD_LOG((UB*)"tron: seed %lu done\n", (unsigned long)seed);
     }
 
     sim_runner_shutdown();
-    tm_putstring((UB*)"tron: run complete\n");
+    board_log_puts((const char*)"tron: run complete\n");
 
     /* Mirrors the laptop's process exit: nothing left to do. Sleep
      * forever rather than returning, per BSP2 manual section 4.3.2 --
@@ -1096,7 +1101,19 @@ LOCAL void sim_task(INT stacd, void *exinf)
 
 EXPORT INT usermain(void)
 {
-    tm_com_init(); /* initializes USART1 - must run before any tm_putstring/tm_printf */
+    tm_com_init(); /* initializes USART1 - must run before any console output */
+
+    /* The logger task and the UART lock exist before anything prints, so all
+       later console output goes through the message buffer. If it cannot be
+       created, output stays direct (board_log_emit falls back). */
+    {
+        int log_rc = board_log_start();
+
+        if (log_rc != 0)
+        {
+            BOARD_LOG((UB*)"tron: board_log_start FAILED rc=%d (console stays direct)\n", log_rc);
+        }
+    }
 
     /* One line, once, before anything else runs: makes the actually-
        running build config visible on the wire instead of assumed.
@@ -1112,7 +1129,7 @@ EXPORT INT usermain(void)
        that macro's default lives in comms_transport.c, private to
        that file (see its own comment), not something this file should
        reach into. */
-    tm_printf((UB*)"tron: CONFIG teams_per_board=%u vbus=%u consensus_enforce=%u radio=%u model_loaded=%u cpu_hz=%lu icache=%u dcache=%u\n",
+    BOARD_LOG((UB*)"tron: CONFIG teams_per_board=%u vbus=%u consensus_enforce=%u radio=%u model_loaded=%u cpu_hz=%lu icache=%u dcache=%u\n",
                (unsigned)(NUM_TEAMS / comms_transport_board_count()),
                (unsigned)VIRTUAL_BUS_ENABLED,
                (unsigned)CONSENSUS_ENFORCE,
@@ -1122,12 +1139,12 @@ EXPORT INT usermain(void)
                (unsigned)((SCB->CCR & SCB_CCR_IC_Msk) != 0u),
                (unsigned)((SCB->CCR & SCB_CCR_DC_Msk) != 0u));
 
-    tm_putstring((UB*)"tron: starting simulation task\n");
+    board_log_puts((const char*)"tron: starting simulation task\n");
 
     sim_tskid = tk_cre_tsk(&sim_ctsk);
     if(sim_tskid <= 0)
     {
-        tm_putstring((UB*)"tron: tk_cre_tsk FAILED\n");
+        board_log_puts((const char*)"tron: tk_cre_tsk FAILED\n");
         return 1;
     }
 
@@ -1140,7 +1157,7 @@ EXPORT INT usermain(void)
     ER sta_ercd = tk_sta_tsk(sim_tskid, 0);
     if(sta_ercd < E_OK)
     {
-        tm_putstring((UB*)"tron: tk_sta_tsk FAILED\n");
+        board_log_puts((const char*)"tron: tk_sta_tsk FAILED\n");
         return 1;
     }
 
