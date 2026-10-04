@@ -893,6 +893,9 @@ LOCAL void sim_task(INT stacd, void *exinf)
         comms_transport_dispatch_pending();
         board_report_link_diagnostics();
         board_boot_wait_discard_stale_frames();
+        /* Yield: this wait used to spin flat out, which would starve the
+           logger task (lowest priority) of CPU for as long as it lasts. */
+        tk_dly_tsk(BOARD_CLOCK_IDLE_POLL_MS);
     }
 
     board_log_puts((const char*)"tron: handshake ready\n");
@@ -930,6 +933,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
         comms_transport_dispatch_pending();
         board_report_link_diagnostics();
         board_boot_wait_discard_stale_frames();
+        tk_dly_tsk(BOARD_CLOCK_IDLE_POLL_MS); /* yield, see the handshake wait */
 
         /* mission_link_apply_roster() rejects a bad team_id or an
            out-of-grid location silently, so without this the loop below
