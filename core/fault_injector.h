@@ -66,6 +66,12 @@ const CausalTeamTruth_t *fault_injector_causal_truth(uint8_t team_id);
  * tick's step (a noisy, visible symptom of hidden wear). */
 int fault_injector_causal_symptom_skip(uint8_t team_id);
 
+/* Laptop-only inspection of the causal link model (used by main.c's
+ * --link-margin-map): margin and the shadowing component alone, in dB, at
+ * the current tick. */
+float fault_injector_causal_link_margin_at(int x, int y);
+float fault_injector_causal_shadow_at(int x, int y);
+
 /* Causal profile mission model, for result reporting. */
 typedef struct
 {

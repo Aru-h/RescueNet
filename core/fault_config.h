@@ -55,7 +55,8 @@ typedef struct
     float pl0_db;                  /* free-space path loss at d0 */
     float d0_m;
     float path_loss_exponent;      /* n */
-    float shadow_sigma_db;         /* log-normal shadowing sigma, fixed per cell */
+    float shadow_sigma_db;         /* log-normal shadowing sigma */
+    float shadow_lattice_cells;    /* spacing of the hashed noise lattice; sets the decorrelation distance */
     float building_penalty_db;     /* at district_density == 100 */
     float rubble_penalty_db;       /* at infrastructure_damage == 100 */
     float rx_sensitivity_dbm;      /* SF7 / BW125 */

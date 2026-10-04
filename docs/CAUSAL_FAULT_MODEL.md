@@ -65,17 +65,28 @@ PL(d)  = PL0 + 10 * n * log10(d / d0)
 ```
 
 `d` is the distance to the nearest receiver (evacuation gateway or safe zone).
-`shadow` is zero-mean Gaussian with sigma 7.9 dB, drawn from a hash of
-`(seed, cell)`, so dead zones are stable across ticks and visits. `fade` is a
-slow time-varying term of +/-2.5 dB: a hash value per (cell, 20-tick window),
-interpolated linearly between window boundaries, so it drifts instead of
-jumping. A fault starts when the margin falls below 0 dB and clears only when
-it is back above +3 dB. Fault severity (heartbeat cadence) is
+
+`shadow` is spatially correlated log-normal shadowing with sigma 7.9 dB,
+built as hashed value noise (a stand-in for Gudmundson exponential
+decorrelation): independent Gaussian values sit on a lattice of spacing 3
+cells, drawn from a hash of `(seed, node)`; the value at a cell is a
+smoothstep interpolation of the four surrounding nodes, divided by the root of
+the summed squared weights so the standard deviation stays 7.9 dB everywhere.
+Nearby cells share most of their shadowing and a dead zone is a contiguous
+patch, stable across ticks and visits. Measured on seeds 1001-1020
+(`--link-margin-map`): standard deviation 7.90 dB, spatial autocorrelation 0.83
+at 1 cell, 0.50 at 2, 0.20 at 3 and about 0 from 4, i.e. a 1/e decorrelation
+distance of about 2.4 cells (target: 2-3, assumed). On average 2.0% of cells
+are dead zones (margin < 0 dB at tick 0), 0.3% to 7.6% depending on the seed.
+
+`fade` is a slow time-varying term of +/-2.5 dB: a hash value per (cell,
+20-tick window), interpolated linearly between window boundaries, so it drifts
+instead of jumping. A fault starts when the margin falls below 0 dB and clears
+only when it is back above +3 dB. Fault severity (heartbeat cadence) is
 `1 + deficit_dB / 6`, capped at 4.
 
-Hysteresis and fading did **not** remove short comms faults (see Results and
-Known limitations): shadowing is independent from one cell to the next, so a
-team crossing one bad cell gets a 1-tick fault.
+`tron <seed> 1 10 --fault-profile=causal --link-margin-map` prints the margin
+and shadowing grids of a seed's world (rows are y, columns are x) and exits.
 
 ### Mobility: hidden wear
 
@@ -108,6 +119,11 @@ level toward CRITICAL every 12 h of incident age (assumed). Both are
 irreversible, and the old "restore the original priority and victim count on
 recovery" is disabled under causal.
 
+Mission handling is evaluated through victims lost and incidents resolved, not
+through mission-fault counts. The mission-fault rate is low by design (a fault
+requires a victim death or an escalation on the incident a team is working) and
+that low rate is accepted as realistic.
+
 Time-scale mapping: exactly 36 s per tick (`TICK_TIME_SEC`), no compression
 and no stress scaling. A 3000-tick run is 30 h, so an incident that waits the
 whole run reaches an age of 30 h.
@@ -129,6 +145,7 @@ depletion that raises the next resource hazard.
 | PL0 (free space at d0 = 1 m, 865 MHz) | 31.2 dB | derived: `20 log10(4 pi d0 / lambda)` |
 | path-loss exponent n | 2.35 | task specification (range 2.3-2.4), midpoint |
 | shadowing sigma | 7.9 dB | task specification |
+| shadowing lattice spacing | 3 cells (1/e decorrelation measured at ~2.4 cells) | assumed; target decorrelation 2-3 cells |
 | body/antenna loss | 5 dB | assumed |
 | building penalty | 20 dB at density 100 | assumed |
 | rubble penalty | 10 dB at infrastructure damage 100 | assumed |
@@ -190,30 +207,29 @@ Rows are per class: `mobility`, `communication`, `resource`, `environment`,
 
 Onset is episodes per team per 1000 ticks; exposure is the share of
 team-ticks with the class active; durations are in ticks. Causal numbers are
-from the Phase 2.1 model.
+from the Phase 2.2 model.
 
 | Class | combined: onset / exposure / mean dur | causal x7 (recommended): onset / exposure / mean dur | causal x1: onset / exposure / mean dur |
 |---|---|---|---|
-| mobility | 5.5 / 0.234 / 42.5 | 5.8 / 0.044 / 7.6 | 1.3 / 0.010 / 7.7 |
-| communication | 5.5 / 0.235 / 42.5 | 8.1 / 0.012 / 1.5 | 8.8 / 0.013 / 1.5 |
-| resource | 5.5 / 0.234 / 42.5 | 4.8 / 0.038 / 7.9 | 0.7 / 0.006 / 8.4 |
-| environment | 6.6 / 0.056 / 8.4 | 2.2 / 0.019 / 8.5 | 0.3 / 0.003 / 8.5 |
-| mission | 2.9 / 0.119 / 41.4 | 0.1 / 0.000 / 7.1 | 0.1 / 0.001 / 7.4 |
-| any fault (exposure) | 0.577 | 0.108 | 0.032 |
-| victims lost / seed | n/a (no survival model) | 10.8 of 228.4 (4.7%) | 10.7 of 236.4 (4.5%) |
-| incidents resolved / seed | 36.45 | 44.95 | 46.55 |
+| mobility | 5.5 / 0.234 / 42.5 | 5.8 / 0.044 / 7.6 | 1.2 / 0.009 / 7.5 |
+| communication | 5.5 / 0.235 / 42.5 | 3.5 / 0.011 / 3.1 | 4.0 / 0.012 / 3.0 |
+| resource | 5.5 / 0.234 / 42.5 | 4.9 / 0.039 / 7.9 | 0.8 / 0.006 / 8.2 |
+| environment | 6.6 / 0.056 / 8.4 | 2.3 / 0.019 / 8.5 | 0.4 / 0.003 / 8.6 |
+| mission | 2.9 / 0.119 / 41.4 | 0.1 / 0.001 / 6.5 | 0.1 / 0.001 / 7.7 |
+| any fault (exposure) | 0.577 | 0.107 | 0.030 |
+| victims lost / seed | n/a (no survival model) | 12.9 of 231.7 (5.6%) | 10.5 of 241.9 (4.3%) |
+| incidents resolved / seed | 36.45 | 44.60 | 46.75 |
 
 Victims lost is almost independent of stress because the mission clock is
-real time and no longer scales with `--fault-stress`.
+real time and does not scale with `--fault-stress`. The run-to-run difference
+between 4.3% and 5.6% is within what different trajectories produce.
 
 ### Mobility onset attribution (share of mobility onsets by dominant hazard term)
 
 | Stress | wear | baseline | roughness |
 |---|---|---|---|
-| 1 | 86% | 6% | 8% |
-| 6 | 55% | 25% | 20% |
-| 7 (recommended) | 53% | 27% | 21% |
-| 8 | 49% | 29% | 22% |
+| 1 | 86% | 7% | 8% |
+| 7 (recommended) | 52% | 28% | 20% |
 
 The Phase 2 constants gave wear 10% at stress 8. The per-wear hazard was
 raised from 0.0002 to 0.0008 and repair changed from a reset to a 60%/30%
@@ -221,32 +237,79 @@ reduction; this was tuned to the 30-60% target, on the first attempt, so it is
 a tuned value and not a measured one. Resource onsets: battery 60%, baseline
 40% (time since rest never dominates).
 
-### Communication before and after hysteresis and fading (stress 8, seeds 1001-1020)
+### Communication before and after spatially correlated shadowing (stress 7, seeds 1001-1020)
 
-| | Phase 2 (clear at margin > 0, no fading) | Phase 2.1 (clear at > +3 dB, +/-2.5 dB fading) |
+Both columns keep the 0 / +3 dB hysteresis and the slow fading.
+
+| | Phase 2.1 (independent per-cell shadowing) | Phase 2.2 (correlated, 3-cell lattice) |
 |---|---|---|
-| mean fault duration (ticks) | 1.4 | 1.6 |
-| share of faults lasting 1-2 ticks | 97% | 94% |
-| longest fault (ticks) | 32 | 41 |
+| comm fault episodes | 4860 | 2099 |
+| mean fault duration (ticks) | 1.5 | 3.1 |
+| share of faults lasting 1-2 ticks | 94% | 57% |
+| longest fault (ticks) | 41 | 50 |
 
-The change was not effective. On seed 1001, 243 of 248 faults of 2 ticks or
-fewer occurred while the team was moving, and the median link-margin step
-between adjacent cells is 7.4 dB. Shadowing is drawn independently per cell,
-so a team that crosses one bad cell gets a 1-tick fault. Spatially correlated
-shadowing would address the cause; it is not implemented.
+Correlation removed most of the 1-tick blips, but 57% of faults still last 1-2
+ticks. That residue was not investigated; plausible sources are teams clipping
+the edge of a dead patch and the +/-2.5 dB fading near the 0 dB line.
+
+Margin field, seed 1018 (the seed with the most dead-zone cells, 7.6%), at
+tick 0. Rows are y, columns are x. `#` margin < 0 dB (fault), `+` 0 to +3 dB
+(hysteresis band: stays faulted if already faulted), `.` above +3 dB:
+
+```
+.......................###....+.....
+......................+###....+.....
+.........................+#.+.......
+..........................###.......
+...........................+#.......
+....................................
+....................................
+................................+...
+....................................
+....................................
+....................................
+...........................+........
+....................................
+....................................
+...................................+
+...................................+
+...................................#
+...........................+........
+............+#......................
+.............++............+#.......
+.....................##.....####+...
+.....................#+....#####+...
+.....................##.....+####...
+.........++.................+###....
+..........+....................+...#
+.........##+.................+.+...+
+...........##+...............+.....+
+...........##+.............+........
+...........++#.....+.........#+.....
+...................+######...###+...
+....................######...+###...
+...................+######+..#####..
+....................######...+###..+
+....................++####+.+####++.
+......................####+.+####+..
+....................................
+```
+
+Across seeds 1001-1020 the share of dead-zone cells ranges from 0.3% to 7.6%
+(mean 2.0%).
 
 ### Are the onset levels comparable?
 
 At stress 7, partly.
 
-* Mobility (1.05x) and resource (0.87x) onsets are close to `combined`.
-* Communication onsets are 1.5x higher than `combined` and cannot be tuned
-  with stress; most are 1-2 tick blips (above).
-* Environment (0.33x) and mission (0.03x) onsets are well below `combined`.
+* Mobility (1.05x) and resource (0.89x) onsets are close to `combined`.
+* Communication onsets are 0.64x of `combined` and cannot be tuned with
+  stress; they depend on where dead patches lie relative to routes.
+* Environment (0.35x) and mission (0.03x) onsets are well below `combined`.
   Matching them would push mobility and resource far past `combined`.
 * Exposure is not comparable at any stress: causal faults clear in about 8
-  ticks, `combined` faults last about 42, so exposure is several times lower
-  even where onsets match.
+  ticks (communication about 3), `combined` faults last about 42, so exposure
+  is several times lower even where onsets match.
 
 The difference in incidents resolved should not be read as the effect of
 "realism": it comes from lower exposure, a different mission model (victims
@@ -254,17 +317,19 @@ now die; incidents escalate) and different onset mixes at once.
 
 ## Known limitations
 
-* Mission faults are almost absent (0.1 onsets per team per 1000 ticks, vs 2.9
-  in `combined`) now that the survival clock runs in real time: a mission
-  fault needs a victim death or an escalation on the incident a team is
-  working. A model trained on this profile will see very few mission faults.
-* Most communication faults are 1-2 tick blips caused by uncorrelated
-  per-cell shadowing; hysteresis and fading did not change that.
+* Mission faults are rare (0.1 onsets per team per 1000 ticks, vs 2.9 in
+  `combined`) because the survival clock runs in real time. This is accepted as
+  realistic; mission handling should be judged by victims lost and incidents
+  resolved, and a model trained on this profile will see very few mission
+  faults.
+* 57% of communication faults still last only 1-2 ticks after the shadowing
+  was made spatially correlated (94% before); the remainder was not
+  investigated.
 * The wear hazard constants were tuned to hit a target attribution share.
 * Time since rest never dominated a resource onset; battery depletion and
   baseline account for all of them.
-* Link-margin shadowing is static per cell (fading aside) and there is no
-  multi-hop mesh.
+* Link-margin shadowing is static (fading aside), its decorrelation distance
+  is an assumed 2-3 cells, and there is no multi-hop mesh.
 * The cell size, building and rubble penalties, and most hazard constants are
   assumed, not measured.
 * The MacIntyre 2006 survival points are unverified against the paper.

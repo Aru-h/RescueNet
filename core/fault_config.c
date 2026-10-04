@@ -13,6 +13,7 @@ CausalFaultParams_t g_causal_params = {
     .d0_m = 1.0f,
     .path_loss_exponent = 2.35f,
     .shadow_sigma_db = 7.9f,
+    .shadow_lattice_cells = 3.0f,
     .building_penalty_db = 20.0f,
     .rubble_penalty_db = 10.0f,
     .rx_sensitivity_dbm = -123.0f,

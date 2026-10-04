@@ -629,6 +629,49 @@ static uint8_t causal_active_count(const TeamState_t *team)
     return n;
 }
 
+/* Standard-normal value for one lattice node, from a hash of (seed, node). */
+static float causal_lattice_gauss(int i, int j)
+{
+    uint32_t key = (uint32_t)(i * 64 + j);
+    float u1 = ((float)(causal_hash(key, 0xC0u, 400u) >> 8) + 1.0f) * (1.0f / 16777217.0f);
+    float u2 = (float)(causal_hash(key, 0xC0u, 401u) >> 8) * (1.0f / 16777216.0f);
+    return sqrtf(-2.0f * logf(u1)) * cosf(6.2831853f * u2);
+}
+
+/* Spatially correlated log-normal shadowing: hashed value noise. Independent
+ * Gaussian values sit on a coarse lattice (spacing shadow_lattice_cells) and
+ * are smoothly (smoothstep) interpolated, then divided by the root of the
+ * summed squared weights so the marginal standard deviation stays
+ * shadow_sigma_db everywhere. Nearby cells therefore share most of their
+ * shadowing, as in a Gudmundson exponential-decorrelation model, and a dead
+ * zone is a contiguous patch. Deterministic: a pure function of
+ * (seed, cell), no RNG stream. */
+static float causal_shadow_db(int x, int y)
+{
+    const CausalFaultParams_t *k = &g_causal_params;
+    float fx = (float)x / k->shadow_lattice_cells;
+    float fy = (float)y / k->shadow_lattice_cells;
+    int i0 = (int)fx, j0 = (int)fy;
+    float tx = fx - (float)i0, ty = fy - (float)j0;
+    float sx = tx * tx * (3.0f - 2.0f * tx);
+    float sy = ty * ty * (3.0f - 2.0f * ty);
+    float wx[2] = { 1.0f - sx, sx };
+    float wy[2] = { 1.0f - sy, sy };
+    float sum = 0.0f, norm2 = 0.0f;
+
+    for(int a = 0; a < 2; a++)
+    {
+        for(int b = 0; b < 2; b++)
+        {
+            float w = wx[a] * wy[b];
+            sum += w * causal_lattice_gauss(i0 + a, j0 + b);
+            norm2 += w * w;
+        }
+    }
+
+    return k->shadow_sigma_db * sum / sqrtf(norm2);
+}
+
 /* Receiver-side link margin (dB) for a team standing on cell (x, y):
  *   margin = tx - body - PL(d) - shadow(cell) - building - rubble - rx_sens
  * Receivers are the evacuation gateways and the safe zones. Shadowing is a
@@ -662,9 +705,7 @@ static float causal_link_margin_db(int x, int y)
         d_m = 0.5f * k->cell_size_m;
     float path_loss = k->pl0_db + 10.0f * k->path_loss_exponent * log10f(d_m / k->d0_m);
 
-    float u1 = ((float)(causal_hash((uint32_t)(x * 64 + y), 0xC0u, 400u) >> 8) + 1.0f) * (1.0f / 16777217.0f);
-    float u2 = (float)(causal_hash((uint32_t)(x * 64 + y), 0xC0u, 401u) >> 8) * (1.0f / 16777216.0f);
-    float shadow = k->shadow_sigma_db * sqrtf(-2.0f * logf(u1)) * cosf(6.2831853f * u2);
+    float shadow = causal_shadow_db(x, y);
 
     float building = 0.0f, rubble = 0.0f;
 #if ENVIRONMENT_HAS_WORLD_STORAGE
@@ -1135,6 +1176,16 @@ static void causal_step(void)
             }
         }
     }
+}
+
+float fault_injector_causal_link_margin_at(int x, int y)
+{
+    return causal_link_margin_db(x, y);
+}
+
+float fault_injector_causal_shadow_at(int x, int y)
+{
+    return causal_shadow_db(x, y);
 }
 
 #endif /* ENVIRONMENT_HAS_WORLD_STORAGE (causal model) */

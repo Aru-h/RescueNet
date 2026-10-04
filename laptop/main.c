@@ -197,6 +197,7 @@ int main(int argc, char **argv)
     FaultProfile_t fault_profile = FAULT_PROFILE_NONE;
     float fault_stress = 1.0f;
     int fault_stress_given = 0;
+    int link_margin_map = 0;
     int live_mode = 0;
     int mission_feed_mode = 0; /* --mission-feed, see laptop/mission_feed.h */
     int diag_mode = 0;  /* off by default - see --diag below */
@@ -306,6 +307,12 @@ int main(int argc, char **argv)
             continue;
         }
 
+        if(strcmp(argv[i], "--link-margin-map") == 0)
+        {
+            link_margin_map = 1;
+            continue;
+        }
+
         /* Causal-profile evaluation stress multiplier (1 = realistic field
          * rates). Rejected for every other profile rather than ignored. */
         if(strncmp(argv[i], "--fault-stress=", 15) == 0 ||
@@ -343,6 +350,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "--fault-stress only applies to --fault-profile=causal\n");
         return 2;
     }
+    if(link_margin_map && fault_profile != FAULT_PROFILE_CAUSAL)
+    {
+        fprintf(stderr, "--link-margin-map only applies to --fault-profile=causal\n");
+        return 2;
+    }
     fault_config_set_stress(fault_stress);
     fault_config_apply_profile(fault_profile);
     fault_injector_set_profile(fault_profile);
@@ -366,6 +378,26 @@ int main(int argc, char **argv)
         uint32_t seed = first_seed + seed_index;
 
         sim_start_seed(seed, fault_profile);
+
+        if(link_margin_map)
+        {
+            /* Debug aid: print the causal link-margin and shadowing fields
+             * for this seed's world, then stop. */
+            for(int pass = 0; pass < 2; pass++)
+            {
+                printf("# seed=%u %s (dB), rows are y, columns are x\n", seed,
+                       pass == 0 ? "link_margin" : "shadowing");
+                for(int y = 0; y < GRID_HEIGHT; y++)
+                {
+                    for(int x = 0; x < GRID_WIDTH; x++)
+                        printf("%s%.1f", x ? " " : "",
+                               (double)(pass == 0 ? fault_injector_causal_link_margin_at(x, y)
+                                                  : fault_injector_causal_shadow_at(x, y)));
+                    printf("\n");
+                }
+            }
+            return 0;
+        }
 
         if(mission_feed_mode)
         {
