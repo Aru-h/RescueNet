@@ -428,6 +428,7 @@ def _view3d_check(page, console_errors, screenshot_dir):
     _view3d_buildings_check(page, console_errors)
     _view3d_camera_check(page, console_errors, screenshot_dir)
     _view3d_lighting_check(page, console_errors)
+    _view3d_labels_check(page)
 
     # Tilt limits, full rotation, top-down shortcut.
     lim = page.evaluate("""() => {
@@ -791,6 +792,26 @@ def _view3d_lighting_check(page, console_errors):
     check(page.evaluate("() => map3d.lightingState().windowGlow") == 0, "[3d] back to day: windows unlit again")
     real_errors = real_console_errors(console_errors)
     check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the lighting checks (got {real_errors[:5]})")
+
+
+def _view3d_labels_check(page):
+    """Things the dashboard works out itself are labelled as such: routes as
+    'predicted', derived fire intensity as 'estimated'."""
+    text = page.evaluate("() => { openMapLegend(); const t = document.querySelector('#mapLegendModal .legend-modal-body').textContent; closeMapLegend(); return t; }")
+    check("Predicted route" in text and "does not send routes" in text and "prediction" in text,
+          "[3d] the map legend labels routes as predicted - worked out by the dashboard, not sent by the simulator")
+    check("estimated" in text and "burning" in text, "[3d] the map legend marks fire intensity as estimated")
+    card = page.evaluate("""() => {
+      const h = mapHitTargets.find((x) => x.type === 'team');
+      if (!h) return null;
+      const d = Object.assign({}, h.data, { has_dest: 1, dest_x: h.data.x + 3, dest_y: h.data.y });
+      return buildMapCardHTML({ type: 'team', data: d });
+    }""")
+    check(bool(card and "Route" in card and "predicted" in card), "[3d] the team card says its route is predicted")
+    flat = page.evaluate("""() => { const v = mapCamera.state.viewMode; mapCamera.state.viewMode = '2d';
+      const h = mapHitTargets.find((x) => x.type === 'team'); const d = Object.assign({}, h.data, { has_dest: 1, dest_x: h.data.x + 3, dest_y: h.data.y });
+      const html = buildMapCardHTML({ type: 'team', data: d }); mapCamera.state.viewMode = v; return html; }""")
+    check("predicted" not in flat, "the 2D team card is unchanged (no route row)")
 
 
 def _route_accuracy_check(page):

@@ -2149,6 +2149,10 @@ function buildTeamCardHTML(d) {
     mapCardRow("Mobility tier", tierName(tier[0])) +
     mapCardRow("Comm tier", tierName(tier[1]));
   if (activeFaults.length) html += mapCardRow("Injected fault (ground truth)", activeFaults.join(", "));
+  // 3D draws a route for the team; the simulator doesn't send one, so say so.
+  if (mapCamera.state.viewMode === "3d" && d.has_dest && (d.dest_x !== d.x || d.dest_y !== d.y)) {
+    html += mapCardRow("Route", "predicted (drawn by the dashboard)");
+  }
   const overridePhase = window._overridePhase && window._overridePhase[d.i];
   if (overridePhase && overridePhase.kind === "pending") {
     html += mapCardRow("Override (pending)", `→ Incident #${overridePhase.incidentId}`);
@@ -2963,6 +2967,12 @@ DetectionTimeline.init(document.getElementById("timelineCanvas"), document.getEl
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:9px;background:rgba(56,139,253,0.5);vertical-align:-1px;"></span></span><span>Flood / water</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:9px;border-left:1px solid rgba(230,237,243,0.5);vertical-align:-1px;"></span></span><span>District border</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="color:#a371f7;">- - -</span></span><span>Earthquake epicenter</span></div>
+          <div class="legend-row" style="margin-top:8px;"><span class="legend-sym"></span><span><b>3D view only</b> - what the dashboard works out itself rather than receives:</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:14px;border-top:2px solid #58a6ff;vertical-align:3px;"></span></span><span><b>Predicted route</b> (team colour): worked out by the dashboard from the map with the simulator's own pathfinding rules; the simulator does not send routes. It matched the simulator's actual next step on 99.5% of recorded moves, but it is a prediction - in Replay it uses the run's final map.</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:14px;border-top:2px dashed #58a6ff;vertical-align:3px;"></span></span><span>Dashed predicted route: the team is faulted, has just been re-targeted, or no route could be found (a straight line to its target)</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="color:#58a6ff;">&#9650;</span></span><span>Arrow on the ground: direction of travel, taken from the team's last move</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-flex;align-items:center;justify-content:center;width:11px;height:11px;background:#0d1117;border-radius:50%;font-size:8px;vertical-align:-2px;">🔥</span></span><span>Flames and smoke on a burning cell or building: <b>estimated</b> intensity - the simulator sends only whether a cell is burning (intensity here comes from burning neighbours, how long it has burned, or the fire incident's work remaining)</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="color:#b4d63a;">&#9617;</span></span><span>Green haze: gas; sandy / rust / dark rubble on roads: light / heavy / blocked damage; dust and a shake when buildings collapse (an aftershock or an explosion - the data does not say which)</span></div>
     </div>
   </div>
 </div>
