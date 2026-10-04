@@ -1258,9 +1258,9 @@ check-evaluate-determinism:
 	@PYTHON=$(PYTHON) $(TOOLS_DIR)/check-evaluate-determinism.sh
 
 # Evaluation stress multiplier for the causal profile (--fault-stress). 1 is
-# realistic field rate; 8 is the value recommended for evaluation runs (see
+# realistic field rate; 7 is the value recommended for evaluation runs (see
 # docs/CAUSAL_FAULT_MODEL.md). Always recorded in the tool's output.
-CAUSAL_STRESS ?= 8
+CAUSAL_STRESS ?= 7
 
 # Run-level sanity bound on --fault-profile=causal: per-class and per-team
 # fault exposure, episode chattering and the maximum-duration backstops must

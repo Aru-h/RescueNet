@@ -49,6 +49,10 @@ MAX_EPISODE_TICKS = {"mobility": 14 + 2, "resource": 14 + 2,
                      "environment": 12 + 2, "mission": 12 + 2}
 
 
+ONSET_NAMES = ["none", "baseline", "wear", "roughness", "battery", "since_rest",
+               "link_margin", "aftershock", "deterioration"]
+
+
 def parse_seeds(text):
     if "-" in text:
         lo, hi = text.split("-", 1)
@@ -99,8 +103,19 @@ def run_seed(tron, profile, seed, ticks, extra):
         for (team, c), start in open_start.items():
             episodes[c].append(last_cycle[team] + 1 - start)
 
+        attribution = {c: {} for c in CLASSES}
+        sidecar = os.path.join(work, "tron_causal_truth.csv")
+        if os.path.exists(sidecar):
+            with open(sidecar, newline="") as fh:
+                for row in csv.DictReader(fh):
+                    for c in CLASSES:
+                        code = int(row[f"onset_cause_{c}"])
+                        if code:
+                            name = ONSET_NAMES[code]
+                            attribution[c][name] = attribution[c].get(name, 0) + 1
+
         return {
-            "seed": seed, "incidents_resolved": resolved, "team_ticks": team_ticks,
+            "seed": seed, "attribution": attribution, "incidents_resolved": resolved, "team_ticks": team_ticks,
             "active": active, "any_active": any_active,
             "worst_team_any": max((per_team_any.get(t, 0) / n for t, n in per_team_ticks.items()), default=0.0),
             "episodes": episodes, "causal_diag": causal, "world": world,
@@ -126,7 +141,14 @@ def summarise(results):
             "onsets_per_team_ktick": len(eps) / (n * 10.0) / (ticks_per_team_seed / 1000.0),
             "mean_duration": (sum(eps) / len(eps)) if eps else 0.0,
             "max_duration": max(eps) if eps else 0,
+            "short_share": (sum(1 for e in eps if e <= 2) / len(eps)) if eps else 0.0,
         }
+    attr = {c: {} for c in CLASSES}
+    for r in results:
+        for c in CLASSES:
+            for name, v in r["attribution"][c].items():
+                attr[c][name] = attr[c].get(name, 0) + v
+    out["onset_attribution"] = attr
     cause = {c: [0, 0] for c in range(len(CLASSES))}
     for r in results:
         for k, v in r["causal_diag"].items():
@@ -193,11 +215,16 @@ def main():
         print(f"fault_stress used: {summary['fault_stress']:g}")
     print(f"incidents resolved / seed (mean): {summary['incidents_resolved_mean']:.2f}")
     print(f"any-fault exposure: {summary['any_exposure']:.3f}   worst single team: {summary['worst_team_any_exposure']:.3f}")
-    print(f"{'class':<14}{'exposure':>9}{'episodes':>9}{'ep/team/kt':>11}{'mean dur':>9}{'max dur':>8}")
+    print(f"{'class':<14}{'exposure':>9}{'episodes':>9}{'ep/team/kt':>11}{'mean dur':>9}{'max dur':>8}{'<=2tick':>8}")
     for c in CLASSES:
         s = summary["classes"][c]
         print(f"{c:<14}{s['exposure']:>9.3f}{s['episodes']:>9d}{s['onsets_per_team_ktick']:>11.1f}"
-              f"{s['mean_duration']:>9.1f}{s['max_duration']:>8d}")
+              f"{s['mean_duration']:>9.1f}{s['max_duration']:>8d}{100*s['short_share']:>7.0f}%")
+    for c in CLASSES:
+        a = summary["onset_attribution"][c]
+        tot = sum(a.values())
+        if tot:
+            print(f"onset cause {c}: " + ", ".join(f"{k} {100*v/tot:.0f}%" for k, v in sorted(a.items(), key=lambda kv: -kv[1])))
     if "world" in summary:
         w = summary["world"]
         print(f"victims lost / seed: {w['victims_lost']:.1f} of {w['victims_seen']:.1f} ({100*w['victim_loss_fraction']:.1f}%)  "

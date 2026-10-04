@@ -29,6 +29,7 @@ static CausalFaultStats_t s_causal_stats;
 static CausalWorldStats_t s_causal_world;
 static CausalTeamTruth_t s_causal_truth[NUM_TEAMS];
 static uint8_t s_causal_repair_ticks[NUM_TEAMS];
+static uint8_t s_causal_rest_dwell[NUM_TEAMS];
 static float s_causal_wear[NUM_TEAMS];
 static int16_t s_causal_prev_x[NUM_TEAMS];
 static int16_t s_causal_prev_y[NUM_TEAMS];
@@ -675,7 +676,17 @@ static float causal_link_margin_db(int x, int y)
     }
 #endif
 
-    return k->tx_power_dbm - k->body_loss_db - path_loss - shadow - building - rubble -
+    /* Slow fading: a hash value per (cell, time window), interpolated
+     * linearly between window boundaries so it drifts rather than jumps. */
+    float window_pos = (float)g_current_tick / k->fade_window_ticks;
+    uint32_t window = (uint32_t)window_pos;
+    float frac = window_pos - (float)window;
+    uint32_t cell_key = (uint32_t)(x * 64 + y);
+    float f0 = 2.0f * causal_unit(window, cell_key, 410u) - 1.0f;
+    float f1 = 2.0f * causal_unit(window + 1u, cell_key, 410u) - 1.0f;
+    float fade = k->fade_amp_db * (f0 + (f1 - f0) * frac);
+
+    return k->tx_power_dbm - k->body_loss_db - path_loss - shadow - fade - building - rubble -
            k->rx_sensitivity_dbm;
 }
 
@@ -722,10 +733,10 @@ static void causal_clear(uint8_t team_id, OperationalFaultClass_t fault_class,
     s_causal_stats.active_ticks_total[fault_class] += g_current_tick - fs->start_tick[fault_class];
     s_causal_truth[team_id].clear_cause[fault_class] = (uint8_t)how;
 
-    /* Wear is reset by repair only; a fault that merely ran out its
-     * backstop leaves the wear (and so the hazard) where it was. */
+    /* A field repair removes a fraction of the wear; a fault that merely
+     * ran out its backstop leaves the wear (and so the hazard) where it was. */
     if(fault_class == FAULT_CLASS_MOBILITY && how == CAUSAL_CLEAR_CAUSE_REMOVED)
-        s_causal_wear[team_id] = 0.0f;
+        s_causal_wear[team_id] *= 1.0f - g_causal_params.wear_repair_reduction;
 
     recover_fault(team_id, fault_class);
 }
@@ -751,7 +762,9 @@ static uint8_t causal_cause_removed(uint8_t team_id, OperationalFaultClass_t fau
             return s_causal_repair_ticks[team_id] >= CAUSAL_MOBILITY_REPAIR_REST_TICKS;
 
         case FAULT_CLASS_COMMUNICATION:
-            return s_causal_truth[team_id].link_margin_db > 0.0f;
+            /* Hysteresis: the fault starts below 0 dB but only clears once
+             * the margin is back above +comm_clear_hysteresis_db. */
+            return s_causal_truth[team_id].link_margin_db > g_causal_params.comm_clear_hysteresis_db;
 
         case FAULT_CLASS_MISSION:
         {
@@ -870,7 +883,7 @@ static void causal_aftershock_step(void)
 #endif
 
 /* Entrapment survival and escalation. Each open incident ages in real
- * time (TICK_TIME_SEC per tick, times the stress multiplier). Victims die
+ * time (TICK_TIME_SEC per tick; independent of --fault-stress). Victims die
  * at the Weibull hazard fitted to MacIntyre 2006 (74% alive at 24 h, 22% at
  * 72 h) and the priority steps one level toward CRITICAL every
  * escalate_every_h. Both are irreversible. A team working a deteriorating
@@ -897,13 +910,14 @@ static void causal_mission_model_step(void)
 
         if(g_current_tick <= inc->reported_at_tick)
             continue;
-        float age_h = (float)(g_current_tick - inc->reported_at_tick) * tick_h * g_fault_stress;
+        /* Real time: 1 tick = TICK_TIME_SEC. --fault-stress does not apply. */
+        float age_h = (float)(g_current_tick - inc->reported_at_tick) * tick_h;
 
         if(inc->victim_count > 0)
         {
             float hazard_per_h = (k->survival_k / k->survival_lambda_h) *
                                  powf(age_h / k->survival_lambda_h, k->survival_k - 1.0f);
-            float p_die = 1.0f - expf(-hazard_per_h * tick_h * g_fault_stress);
+            float p_die = 1.0f - expf(-hazard_per_h * tick_h);
             float expected = (float)inc->victim_count * p_die;
             uint8_t deaths = (uint8_t)expected;
 
@@ -978,7 +992,20 @@ static float causal_track_team(uint8_t team_id)
     s_causal_prev_valid[team_id] = 1;
 
     if(team->status == STATUS_RESTING)
+    {
         s_causal_last_rest_tick[team_id] = g_current_tick;
+        if(s_causal_rest_dwell[team_id] < 255u)
+            s_causal_rest_dwell[team_id]++;
+
+        /* A rest of at least the repair dwell with no mobility fault open
+         * removes a smaller fraction of wear (routine maintenance). With a
+         * fault open, the field repair above applies instead. */
+        if(s_causal_rest_dwell[team_id] == CAUSAL_MOBILITY_REPAIR_REST_TICKS &&
+           !team->fault_state.active[FAULT_CLASS_MOBILITY])
+            s_causal_wear[team_id] *= 1.0f - k->wear_rest_reduction;
+    }
+    else
+        s_causal_rest_dwell[team_id] = 0;
 
     truth->hidden_wear = s_causal_wear[team_id];
     truth->ticks_since_rest = g_current_tick - s_causal_last_rest_tick[team_id];
@@ -1118,6 +1145,7 @@ void fault_injector_init(uint32_t seed)
     for(uint8_t t = 0; t < NUM_TEAMS; t++)
     {
         s_causal_repair_ticks[t] = 0;
+        s_causal_rest_dwell[t] = 0;
         s_causal_wear[t] = 0.0f;
         s_causal_prev_x[t] = 0;
         s_causal_prev_y[t] = 0;

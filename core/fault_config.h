@@ -61,6 +61,9 @@ typedef struct
     float rx_sensitivity_dbm;      /* SF7 / BW125 */
     float cell_size_m;
     float severity_db_per_level;   /* comm fault severity = 1 + deficit / this, capped at 4 */
+    float comm_clear_hysteresis_db; /* fault at margin < 0; clears only above +this */
+    float fade_amp_db;             /* slow fading: +/- this, per cell and time window */
+    float fade_window_ticks;
 
     /* --- Mobility: hidden cumulative wear -------------------------------- */
     float wear_per_cell;           /* wear added per cell crossed */
@@ -68,6 +71,8 @@ typedef struct
     float mob_hazard_base;         /* per tick */
     float mob_hazard_per_wear;     /* per tick per wear unit */
     float mob_hazard_rough;        /* per tick while crossing a roughness-1 cell */
+    float wear_repair_reduction;   /* fraction of wear removed by a field repair (fault cleared by cause) */
+    float wear_rest_reduction;     /* fraction removed by one safe-zone rest of >= repair dwell, no fault active */
     float wear_symptom_start;      /* wear above which movement visibly slows */
     float wear_symptom_slope;      /* skip probability per wear unit above start */
     float wear_symptom_max;
@@ -101,8 +106,9 @@ typedef struct
 
 extern CausalFaultParams_t g_causal_params;
 /* Evaluation stress multiplier (--fault-stress=<x>, default 1 = realistic
- * field rates). Scales mobility/resource hazards, the Omori rate K and the
- * mission clock; it does not scale the deterministic link-margin model.
+ * field rates). Scales mobility/resource hazards and the Omori rate K ONLY.
+ * It does not scale the deterministic link-margin model or the mission
+ * clock (victim survival/escalation always run in real time).
  * Survives fault_config_apply_profile(), which runs once per seed. */
 extern float g_fault_stress;
 void fault_config_set_stress(float stress);
