@@ -103,6 +103,13 @@ static volatile uint32_t g_rx_hw_error_count;
    tk_set_flg() is one of the calls a kernel-managed interrupt handler may make
    (non-waiting, ISR-safe). The flag is created before the interrupt is enabled
    and the pair is written once at boot, so a plain read in the ISR is enough. */
+/* Wake the consumer only once this many bytes are waiting: a flag set (and a
+   priority-4 task switch) per received byte would cost thousands of switches a
+   second at 115200 baud. The consumer also wakes every 10 ms on its own poll
+   handler, so a short frame (a laptop frame is <= 40 bytes) is picked up
+   within 10 ms, and a 512-byte ring never gets near full from this. */
+#define BOARD_USART1_RX_WAKE_BYTES 32u
+
 static volatile ID g_rx_notify_flg;
 static volatile UINT g_rx_notify_bit;
 
@@ -181,7 +188,8 @@ static void board_usart1_isr(UINT intno)
         }
     }
 
-    if (received != 0u && g_rx_notify_flg > 0)
+    if (received != 0u && g_rx_notify_flg > 0 &&
+        (g_rx_ring_head - g_rx_ring_tail) >= BOARD_USART1_RX_WAKE_BYTES)
     {
         (void)tk_set_flg(g_rx_notify_flg, g_rx_notify_bit);
     }

@@ -666,8 +666,11 @@ uint32_t cbba_now_ms(void)
 
 void cbba_wait_poll(void)
 {
-    (void)tk_set_flg(g_flg_link, FLG_LINK_POLL);
+    /* Unlock BEFORE waking the link task: it has the higher priority and runs
+       the moment the flag is set, so the mutex must already be free for its
+       service pass to take. */
     (void)tk_unl_mtx(g_mtx_comms);
+    (void)tk_set_flg(g_flg_link, FLG_LINK_POLL);
     (void)tk_dly_tsk(CNF_TIMER_PERIOD);
     (void)tk_loc_mtx(g_mtx_comms, TMO_FEVR);
 }
@@ -773,7 +776,6 @@ static void board_link_pass(void)
            simulation state mid-tick. */
         sx1262_poll_rx();
         comms_transport_dispatch_pending();
-        mission_link_task_usart1_pump();
         return;
     }
 
@@ -812,7 +814,27 @@ LOCAL void link_task(INT stacd, void *exinf)
             ptn = 0u; /* timeout: still run a pass */
         }
 
-        (void)tk_loc_mtx(g_mtx_comms, TMO_FEVR);
+        /* 1. Lock-free: empty the USART1 ring into the link's own buffer. The
+              ring is single-producer (ISR) / single-consumer (this task), so
+              this needs no lock and runs at priority 4 even while the sim is
+              in the middle of a tick. */
+        mission_link_task_usart1_pump();
+
+        /* 2. Everything else touches state the sim also uses (comms inbox,
+              radio, mission-link and simulation state) and needs the comms
+              mutex. The pass the sim is waiting for (right after a tick, and
+              the boot waits) takes it, blocking; every other wake-up only
+              tries: if the sim is computing a tick, the pass is skipped, and the
+              post-tick pass (or the sim's own cbba_wait_poll() release) does it. */
+        if((ptn & FLG_LINK_POST_TICK) != 0u || !g_world_ready)
+        {
+            (void)tk_loc_mtx(g_mtx_comms, TMO_FEVR);
+        }
+        else if(tk_loc_mtx(g_mtx_comms, TMO_POL) != E_OK)
+        {
+            continue;
+        }
+
         if(g_world_ready)
         {
             board_link_pass();
