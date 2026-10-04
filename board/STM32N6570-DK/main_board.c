@@ -192,6 +192,7 @@ extern uint32_t board_snapshot_ring_drain(void);
  */
 extern void mission_link_task_init(void);
 extern void mission_link_task_step(void);
+extern void mission_link_task_set_tick_boundary_mode(uint8_t on);
 
 /*
  * sim_tick()-vs-roster-arrival gap (flagged, not designed - see the
@@ -988,6 +989,11 @@ LOCAL void sim_compute_task(INT stacd, void *exinf)
        (mission_link_task.c's g_last_sent_status[]) and doesn't touch
        comms_transport state itself. */
     mission_link_task_init();
+
+    /* Laptop input reaches the simulation in stream order: everything before
+       a tick's clock frame is applied before that tick, nothing behind it (see
+       mission_link_task.c, "Tick-boundary stream order"). */
+    mission_link_task_set_tick_boundary_mode(1u);
 
     /*
      * Boot-side half of the handshake readiness gate — see the extern

@@ -1156,6 +1156,22 @@ check-single-board-dk-harness:
 	@echo "check-single-board-dk-harness: 10 local teams + vbus + consensus + mission link passed, zero relay sends"
 
 
+# Stream order of the board's receive path (tick-boundary mode of the real
+# mission_link_task.c): frames before a tick's clock frame are applied before
+# the tick, frames behind it are not, however often the link step runs.
+# See laptop/tools/mission_link_stream_order_test.c.
+MISSION_LINK_STREAM_ORDER_BIN = build/mission_link_stream_order_test
+.PHONY: check-mission-link-stream-order
+check-mission-link-stream-order:
+	@mkdir -p build
+	@$(CC) -std=gnu11 -Wall -Wextra -Wpedantic $(DK_SINGLE_BOARD_FLAGS) -DTHIS_BOARD_ID=0 \
+		-I$(CORE_DIR) -I$(BOARD_DIR) -I$(LAPTOP_DIR) -I$(TOOLS_DIR)/harness_stubs \
+		-o $(MISSION_LINK_STREAM_ORDER_BIN) $(TOOLS_DIR)/mission_link_stream_order_test.c \
+		$(BOARD_DIR)/mission_link_task.c $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c \
+		$(CORE_SOURCES) -lm
+	@./$(MISSION_LINK_STREAM_ORDER_BIN)
+	@echo "check-mission-link-stream-order: laptop frames apply in stream order, held at each tick authorisation"
+
 # =============================================================================
 # Agent C review-fix tests (board code, dashboard and tooling)
 # =============================================================================
