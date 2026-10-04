@@ -116,8 +116,8 @@
   let _terrainBitmapKey = null;
   let _terrainBitmapSource = null; // the STATICMAP object identity the cached bitmap was rendered from
 
-  function renderTerrainBitmap(view, t) {
-    const dpr = window.devicePixelRatio || 1;
+  function renderTerrainBitmap(view, t, dprOverride) {
+    const dpr = dprOverride || window.devicePixelRatio || 1;
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.round(view.state.viewW * dpr));
     canvas.height = Math.max(1, Math.round(view.state.viewH * dpr));
@@ -704,7 +704,7 @@
       const dmg = b.damage || 0;
       const f = 1 - 0.45 * Math.min(1, dmg / 150); // damage only ever darkens - red stays reserved for P1
       return {
-        b, id: b.id, x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h,
+        b, id: b.id, f, x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h,
         key: b.x + b.y,
         h: buildingHeight(b),
         collapsed: dmg >= ENV_DAMAGE_SEVERE,
@@ -1081,6 +1081,50 @@
     ctx.globalAlpha = 1;
   }
 
+  // The data side of the iso scene, with no drawing: building boxes
+  // (prepareIsoEnv), and for every visible incident cluster and team its
+  // world position, footing/head heights, colour and size. 2.5D
+  // (drawIsoScene) and the WebGL 3D view (map-view3d.js) both draw from
+  // this one model, so heights, grouping, fog-of-war filtering,
+  // ON_SCENE offsets and selection can't drift apart between modes.
+  // `o`: { env, frame, fogViewMode, selectedMarker, teamColors }.
+  const MARKER_WORLD_R = 0.32;
+  function buildSceneModel(o) {
+    const env = o.env, frame = o.frame || {}, selected = o.selectedMarker;
+    const prep = prepareIsoEnv(env);
+    const priorityScale = { 1: 1.25, 2: 1.05, 3: 0.9, 4: 0.75 };
+    const incidents = buildIncidentClusters(frame.incidents, o.fogViewMode).map((cluster) => {
+      const members = cluster.members;
+      const inc = members[0];
+      const building = (inc.building_id !== undefined && inc.building_id >= 0) ? prep.byId.get(inc.building_id) : null;
+      const wx = building ? building.b.x : inc.x, wy = building ? building.b.y : inc.y;
+      const worldSize = Math.min(0.9, (0.32 + inc.victims * 0.045)) * (priorityScale[inc.priority] || 0.85);
+      const foot = footingZ(prep, wx, wy);
+      return {
+        members, inc, wx, wy, worldSize, foot, headZ: foot + ISO_INCIDENT_Z,
+        color: PRIORITY_COLORS[inc.priority] || "#8b98a5",
+        isSel: !!(selected && selected.type === "incident" && members.some((m) => m.id === selected.id)),
+      };
+    });
+    const teams = (frame.teams || []).map((t, i) => {
+      // ON_SCENE teams share the incident's ground point; step them
+      // off to one side so both markers stay visible (~0.9 marker radii).
+      const off = (t.status === 2) ? 0.3 : 0;
+      const foot = footingZ(prep, t.x, t.y);
+      return {
+        t, i, wx: t.x + off, wy: t.y - off, foot, headZ: foot + ISO_TEAM_Z,
+        color: o.teamColors[i % o.teamColors.length],
+        isSel: !!(selected && selected.type === "team" && selected.id === t.id),
+      };
+    });
+    return {
+      prep, incidents, teams,
+      hazardCells: frame.hazard_cells || [],
+      safezones: (frame.safezones || []).filter((sz) => sz.capacity !== 0),
+      epicenter: (env && env.epicenter && env.epicenter.active) ? env.epicenter : null,
+    };
+  }
+
   // The whole iso map above the terrain: ground-plane layers first, then
   // buildings and upright markers back to front. Returns hit targets
   // like the 2D draw* functions do (with wz/rpx added - see
@@ -1090,14 +1134,15 @@
     const hits = [];
     const env = o.env, frame = o.frame || {};
     const selected = o.selectedMarker;
-    const prep = prepareIsoEnv(env);
+    const model = buildSceneModel(o);
+    const prep = model.prep;
     const slope = sightSlope(view);
     const zoom = view.state.zoom;
     const vw = view.state.viewW, vh = view.state.viewH;
 
     // ---------- ground plane ----------
-    if (env && env.epicenter && env.epicenter.active) {
-      const ep = env.epicenter;
+    if (model.epicenter) {
+      const ep = model.epicenter;
       pathPoly(ctx, circlePts(view, ep.x, ep.y, 1.2, 0, 40));
       ctx.strokeStyle = "rgba(163,113,247,0.5)"; // purple, not red - red is reserved
       ctx.lineWidth = 1.5;
@@ -1107,7 +1152,7 @@
     }
 
     const hatchStep = Math.max(2.5, view.groundPxPerUnit() * 0.22);
-    (frame.hazard_cells || []).forEach((c) => {
+    model.hazardCells.forEach((c) => {
       const pts = rectPts(view, c.x - 0.5, c.y - 0.5, c.x + 0.5, c.y + 0.5, 0);
       pathPoly(ctx, pts);
       if (c.blocked) {
@@ -1119,8 +1164,7 @@
       }
     });
 
-    (frame.safezones || []).forEach((sz) => {
-      if (sz.capacity === 0) return;
+    model.safezones.forEach((sz) => {
       const half = 0.42;
       pathPoly(ctx, rectPts(view, sz.x - half, sz.y - half, sz.x + half, sz.y + half, 0));
       ctx.fillStyle = "rgba(63,185,80,0.10)"; ctx.fill();
@@ -1147,19 +1191,9 @@
     const hidden = [];  // markers to re-draw as a faded outline on top
 
     // Incidents.
-    const clusters = buildIncidentClusters(frame.incidents, o.fogViewMode);
-    const priorityScale = { 1: 1.25, 2: 1.05, 3: 0.9, 4: 0.75 };
-    clusters.forEach((cluster) => {
-      const members = cluster.members;
-      const inc = members[0];
-      const building = (inc.building_id !== undefined && inc.building_id >= 0) ? prep.byId.get(inc.building_id) : null;
-      const wx = building ? building.b.x : inc.x, wy = building ? building.b.y : inc.y;
-      const color = PRIORITY_COLORS[inc.priority] || "#8b98a5";
-      const worldSize = Math.min(0.9, (0.32 + inc.victims * 0.045)) * (priorityScale[inc.priority] || 0.85);
+    model.incidents.forEach((mi) => {
+      const { members, inc, wx, wy, worldSize, foot, headZ, color, isSel } = mi;
       const sizePx = worldSize * zoom;
-      const foot = footingZ(prep, wx, wy);
-      const headZ = foot + ISO_INCIDENT_Z;
-      const isSel = !!(selected && selected.type === "incident" && members.some((m) => m.id === selected.id));
       const draw = () => {
         drawShadow(ctx, view, wx, wy, foot, Math.max(0.3, worldSize * 0.6));
         drawStem(ctx, view, wx, wy, foot, headZ, color);
@@ -1202,17 +1236,10 @@
     });
 
     // Teams.
-    const markerWorldR = 0.32;
-    (frame.teams || []).forEach((t, i) => {
-      const color = o.teamColors[i % o.teamColors.length];
+    const markerWorldR = MARKER_WORLD_R;
+    model.teams.forEach((mt) => {
+      const { t, i, wx, wy, foot, headZ, color, isSel } = mt;
       const r = markerWorldR * zoom;
-      // ON_SCENE teams share the incident's ground point; step them
-      // off to one side (screen-right on the iso diagonal) so both
-      // markers stay visible - ~0.9 marker radii, as in 2D.
-      const off = (t.status === 2) ? 0.3 : 0;
-      const wx = t.x + off, wy = t.y - off;
-      const foot = footingZ(prep, t.x, t.y);
-      const headZ = foot + ISO_TEAM_Z;
 
       if (t.has_dest && (t.dest_x !== t.x || t.dest_y !== t.y)) {
         const a = view.worldToScreen(wx, wy, 0), b = view.worldToScreen(t.dest_x, t.dest_y, 0);
@@ -1226,7 +1253,6 @@
         ctx.setLineDash([]);
         ctx.globalAlpha = 1;
       }
-      const isSel = !!(selected && selected.type === "team" && selected.id === t.id);
       if (isSel) {
         pathPoly(ctx, circlePts(view, wx, wy, 0.6, foot, 24));
         ctx.strokeStyle = "rgba(255,255,255,0.7)";
@@ -1318,6 +1344,23 @@
     return { x: c.x, y: c.y, r: hit.rpx !== undefined ? hit.rpx : hit.wr * view.state.zoom };
   }
 
+  // The 2D terrain look (flood, blocked hatch, road network, district
+  // borders) rendered once, top-down, at `pxPerCell` px per cell into a
+  // canvas covering the whole map - by pointing the existing 2D terrain
+  // renderer at a private camera. The WebGL view uses it as the ground
+  // texture, so 3D terrain is the same drawing code as 2D, not a copy.
+  function renderTerrainTexture(terrainMap, pxPerCell) {
+    const t = parseTerrain(terrainMap);
+    if (!t) return null;
+    const cam = global.DashboardCamera.createCamera(t.width, t.height);
+    cam.state.viewW = Math.round(t.width * pxPerCell);
+    cam.state.viewH = Math.round(t.height * pxPerCell);
+    cam.state.zoom = pxPerCell;
+    cam.state.x = t.width / 2 - 0.5;
+    cam.state.y = t.height / 2 - 0.5;
+    return { canvas: renderTerrainBitmap(cam, t, 1), source: t.source, width: t.width, height: t.height };
+  }
+
   // World-space hit test: converts the screen point to world space
   // once, then compares against each target's world-space radius, so
   // hit-testing is correct at any zoom level without per-frame tuning.
@@ -1342,7 +1385,7 @@
       if (h.rpx !== undefined) {
         // Both sides in "world-unit equivalents" (px / ground px per
         // unit) so "nearest wins" stays comparable across target kinds.
-        const d = view.worldDeltaToScreen(dx, dy), g = view.groundPxPerUnit();
+        const d = view.worldDeltaToScreen(dx, dy, h.wx, h.wy, h.wz || 0), g = view.groundPxPerUnit(h.wx, h.wy);
         dist = Math.sqrt(d.x * d.x + d.y * d.y) / g;
         limit = h.rpx / g;
       } else {
@@ -1359,5 +1402,9 @@
     drawSafezones, drawIncidents, drawTeams, hitTestWorld,
     buildingFootprintWorldRect,
     drawIsoScene, markerScreenGeom, buildingHeight, setRedrawCallback,
+    // Shared with the WebGL view (map-view3d.js) so 3D reuses this data
+    // preparation and these marker glyphs instead of re-deriving them.
+    buildSceneModel, renderTerrainTexture, drawTeamGlyph, drawIncidentGlyph,
+    MARKER_WORLD_R, ISO_TEAM_Z, ISO_INCIDENT_Z, PRIORITY_COLORS,
   };
 })(window);

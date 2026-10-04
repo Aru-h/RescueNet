@@ -306,55 +306,13 @@ def _iso_view_check(page, console_errors, screenshot_dir):
     page.locator(".live-map-col").screenshot(path=shot)
     check(os.path.exists(shot) and os.path.getsize(shot) > 2000, f"2.5D map screenshot written ({shot})")
 
-    # Click a team on its drawn head.
-    target = page.evaluate("""() => {
-      const h = mapHitTargets.find(h => h.type === 'team');
-      if (!h) return null;
-      const rect = document.getElementById('mapCanvas').getBoundingClientRect();
-      const p = mapCamera.worldToScreen(h.wx, h.wy, h.wz || 0);
-      return { id: h.id, x: rect.left + p.x, y: rect.top + p.y, hasHeight: !!h.wz };
-    }""")
-    check(bool(target and target["hasHeight"]), f"in 2.5D the team hit targets carry a marker height (got {target})")
-    if target:
-        page.mouse.click(target["x"], target["y"])
-        page.wait_for_timeout(100)
-        sel = page.evaluate("() => selectedMarker")
-        check(bool(sel and sel["type"] == "team" and sel["id"] == target["id"]),
-              f"[iso] clicking a team's marker selects that team (expected id {target['id']}, got {sel})")
-        page.screenshot(path=os.path.join(screenshot_dir, "dashboard_e2e_page_2_5d_selected.png"))
+    page.screenshot(path=os.path.join(screenshot_dir, "dashboard_e2e_page_2_5d.png"))
+    _click_and_drag_markers(page, "iso", screenshot_dir)
 
-    # Drag a team onto an incident -> the override proposal opens.
-    pair = page.evaluate("""() => {
-      const rect = document.getElementById('mapCanvas').getBoundingClientRect();
-      const pt = (h) => { const p = mapCamera.worldToScreen(h.wx, h.wy, h.wz || 0); return { x: rect.left + p.x, y: rect.top + p.y }; };
-      for (const t of mapHitTargets.filter(h => h.type === 'team')) {
-        for (const i of mapHitTargets.filter(h => h.type === 'incident')) {
-          if (i.data.pool !== 1 && i.data.status !== 3 && i.data.id !== t.data.dest_id) {
-            // Only if the incident's marker is not under another team's.
-            const ip = pt(i), tp = pt(t);
-            const hitBack = MapRender.hitTestWorld(mapCamera, mapHitTargets, ip.x - rect.left, ip.y - rect.top, 'incident');
-            if (hitBack && hitBack.id === i.id) return { team: tp, inc: ip, teamId: t.id, incId: i.id };
-          }
-        }
-      }
-      return null;
-    }""")
-    if pair:
-        page.mouse.move(pair["team"]["x"], pair["team"]["y"])
-        page.mouse.down()
-        page.mouse.move(pair["inc"]["x"], pair["inc"]["y"], steps=6)
-        page.mouse.up()
-        page.wait_for_timeout(150)
-        pend = page.evaluate("() => pendingOverride ? { team: pendingOverride.teamIndex, inc: pendingOverride.to.id } : null")
-        check(bool(pend and pend["inc"] == pair["incId"]),
-              f"[iso] dragging a team's marker onto an incident's marker opens the override proposal (got {pend}, expected incident {pair['incId']})")
-        page.evaluate("() => { pendingOverride = null; selectedMarker = null; renderInspector(); }")
-    else:
-        print("INFO: no eligible (team, incident) pair in the current frame to drag-test in 2.5D - skipped that one assertion")
-
-    # Back to 2D: nothing may have been left behind.
-    page.click(btn)
-    page.wait_for_timeout(150)
+    # Back to 2D: nothing may have been left behind. (With the 3D view
+    # offered the button cycles 2D -> 2.5D -> 3D -> 2D, so this may take
+    # more than one click.)
+    _cycle_view_to(page, "2d")
     mode2 = page.evaluate("() => mapCamera.state.viewMode")
     check(mode2 == "2d" and page.eval_on_selector(btn, "el => el.textContent.includes('2D') && !el.textContent.includes('2.5D')"),
           f"toggling back returns the map to 2D (mode {mode2!r})")
@@ -370,6 +328,214 @@ def _iso_view_check(page, console_errors, screenshot_dir):
     page.evaluate("() => { selectedMarker = null; renderInspector(); }")
     real_errors = real_console_errors(console_errors)
     check(len(real_errors) == 0, f"no UNEXPECTED console/page errors while toggling 2D/2.5D (got {real_errors[:5]})")
+
+
+def _cycle_view_to(page, mode):
+    """Clicks the map's view button (2D -> 2.5D -> [3D] -> 2D ...) until
+    the map is in `mode`; at most 4 clicks."""
+    for _ in range(4):
+        if page.evaluate("() => mapCamera.state.viewMode") == mode:
+            break
+        page.click("#viewModeBtn")
+        page.wait_for_timeout(250)
+    page.wait_for_timeout(100)
+
+
+def _view3d_check(page, console_errors, screenshot_dir):
+    """The WebGL 3D view: needs headless WebGL, and SKIPS (with a
+    message) if the browser can't make a context. Checks the raycast
+    projection, picking, orbit/zoom/pan, click and drag-to-reassign in
+    3D, a non-blank render, and the way back to 2D."""
+    if not page.evaluate("() => map3dAvailable"):
+        print("SKIP: 3D view checks - this browser has no usable WebGL (headless without a GL/SwiftShader backend); "
+              "the 3D option is correctly not offered (see the fallback check, which still runs)")
+        check(page.evaluate("() => mapCamera.state.viewMode") != "3d", "without WebGL the map never enters 3D")
+        return
+    _cycle_view_to(page, "3d")
+    mode = page.evaluate("() => mapCamera.state.viewMode")
+    check(mode == "3d" and page.eval_on_selector("#viewModeBtn", "el => el.textContent.includes('3D')"),
+          f"cycling the view button reaches the 3D view (mode {mode!r})")
+    check(page.evaluate("() => localStorage.getItem('dashboard.mapViewMode')") == "3d", "the 3D choice is remembered in localStorage")
+    page.wait_for_timeout(300)
+    painted = page.evaluate("""() => {
+      drawFrame(window._lastFrame, true);
+      const src = document.getElementById('map3dCanvas');
+      const cv = document.createElement('canvas'); cv.width = src.width; cv.height = src.height;
+      const ctx = cv.getContext('2d'); ctx.drawImage(src, 0, 0);
+      const d = ctx.getImageData(0, 0, cv.width, cv.height).data;
+      const colours = new Set();
+      for (let i = 0; i < d.length; i += 4 * 97) colours.add((d[i] >> 4) + ',' + (d[i + 1] >> 4) + ',' + (d[i + 2] >> 4));
+      return { w: src.width, h: src.height, colours: colours.size };
+    }""")
+    check(painted["w"] > 100 and painted["colours"] > 12,
+          f"the WebGL canvas renders a real scene, not a blank one ({painted['colours']} distinct colours at {painted['w']}x{painted['h']})")
+    shot = os.path.join(screenshot_dir, "dashboard_e2e_map_3d.png")
+    page.locator(".live-map-col").screenshot(path=shot)
+    check(os.path.exists(shot) and os.path.getsize(shot) > 2000, f"3D map screenshot written ({shot})")
+
+    # Projection: the raycast is the inverse of the projection at any height, and
+    # pan / zoom-to-cursor keep their contract in 3D too.
+    proj = page.evaluate("""() => {
+      const c = mapCamera, out = {};
+      let worst = 0;
+      for (let wx = 2; wx <= 34; wx += 4) for (let wy = 2; wy <= 34; wy += 4) for (const z of [0, 0.8, 2]) {
+        const p = c.worldToScreen(wx, wy, z), w = c.screenToWorld(p.x, p.y, z);
+        worst = Math.max(worst, Math.abs(w.x - wx), Math.abs(w.y - wy));
+      }
+      out.roundtrip = worst;
+      const w0 = c.screenToWorld(c.state.viewW * 0.4, c.state.viewH * 0.6, 0);
+      c.zoomAt(c.state.viewW * 0.4, c.state.viewH * 0.6, 1.3);
+      const w1 = c.screenToWorld(c.state.viewW * 0.4, c.state.viewH * 0.6, 0);
+      out.zoomfix = Math.abs(w0.x - w1.x) + Math.abs(w0.y - w1.y);
+      // Drag the ground point under (px, py) by (31, -17) px: it must end up under the cursor.
+      const px = c.state.viewW * 0.3, py = c.state.viewH * 0.7;
+      const grabbed = c.screenToWorld(px, py, 0);
+      c.pan(31, -17, px + 31, py - 17);
+      const after = c.worldToScreen(grabbed.x, grabbed.y, 0);
+      out.pan = [after.x - px, after.y - py];
+      c.reset(c.state.viewW, c.state.viewH);
+      return out;
+    }""")
+    check(proj["roundtrip"] < 1e-6, f"[3d] the ground-plane raycast inverts the projection at z=0 and at height z (worst error {proj['roundtrip']:.2e})")
+    check(proj["zoomfix"] < 1e-6, f"[3d] zoom-to-cursor keeps the world point under the cursor fixed (drift {proj['zoomfix']:.2e})")
+    check(abs(proj["pan"][0] - 31) < 1e-6 and abs(proj["pan"][1] + 17) < 1e-6, f"[3d] dragging the ground keeps the grabbed point under the cursor (moved {proj['pan']} px for a (31, -17) drag)")
+
+    # Orbit by dragging empty space, zoom by wheel.
+    page.evaluate("() => drawFrame(window._lastFrame, true)")
+    box = page.evaluate("() => { const r = document.getElementById('mapCanvas').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }")
+    az0 = page.evaluate("() => map3d.state.az")
+    el0 = page.evaluate("() => map3d.state.el")
+    page.mouse.move(box["x"] + 12, box["y"] + 12)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 112, box["y"] + 52, steps=5)
+    page.mouse.up()
+    page.wait_for_timeout(100)
+    az1 = page.evaluate("() => map3d.state.az")
+    el1 = page.evaluate("() => map3d.state.el")
+    check(abs(az1 - az0) > 0.1 and abs(el1 - el0) > 0.05, f"[3d] dragging empty space rotates and tilts the camera (azimuth {az0:.2f}->{az1:.2f}, tilt {el0:.2f}->{el1:.2f})")
+    d0 = page.evaluate("() => map3d.state.dist")
+    page.mouse.move(box["x"] + box["w"] / 2, box["y"] + box["h"] / 2)
+    page.mouse.wheel(0, -300)
+    page.wait_for_timeout(100)
+    d1 = page.evaluate("() => map3d.state.dist")
+    check(d1 < d0 * 0.9, f"[3d] the wheel zooms in (camera distance {d0:.1f}->{d1:.1f})")
+    page.click("#resetViewBtn")
+    page.wait_for_timeout(100)
+    check(abs(page.evaluate("() => map3d.state.az") - 0.7853981633974483) < 1e-6, "[3d] the reset button restores the default camera")
+
+    # Tilt limits, full rotation, top-down shortcut.
+    lim = page.evaluate("""() => {
+      const c = mapCamera, st = map3d.state, out = {};
+      c.orbit(0, 100000); out.maxEl = st.el;
+      c.orbit(0, -100000); out.minEl = st.el;
+      const az0 = st.az; c.orbit(-2000, 0); out.spin = st.az - az0;
+      c.reset(c.state.viewW, c.state.viewH);
+      return out;
+    }""")
+    check(abs(lim["maxEl"] - 3.141592653589793 / 2) < 1e-9, f"[3d] the camera can tilt to straight top-down (max tilt {lim['maxEl']:.3f} rad)")
+    check(abs(lim["minEl"] - 15 * 3.141592653589793 / 180) < 1e-9, f"[3d] the camera tilts down to ~15 degrees above the ground (min tilt {lim['minEl']:.3f} rad)")
+    check(lim["spin"] > 2 * 3.141592653589793, f"[3d] rotation is not clamped - a full 360 degrees and more is possible (turned {lim['spin']:.1f} rad)")
+    page.click("#topDownBtn")
+    page.wait_for_timeout(150)
+    check(abs(page.evaluate("() => map3d.state.el") - 3.141592653589793 / 2) < 1e-9, "[3d] the Top button looks straight down at the map")
+    check(page.evaluate("() => mapHitTargets.some(h => h.type === 'team')"), "[3d] markers are still produced in the top-down view")
+    _click_and_drag_markers(page, "3d top-down", screenshot_dir)
+    page.click("#resetViewBtn")
+    page.wait_for_timeout(100)
+
+    # Picking and drag-to-reassign, same contract as 2D/2.5D.
+    _click_and_drag_markers(page, "3d", screenshot_dir)
+
+    # Back to 2D.
+    _cycle_view_to(page, "2d")
+    check(page.evaluate("() => mapCamera.state.viewMode") == "2d" and page.evaluate("() => getComputedStyle(document.getElementById('map3dCanvas')).display") == "none",
+          "cycling on from 3D returns to 2D and hides the WebGL canvas")
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the 3D checks (got {real_errors[:5]})")
+
+
+def _webgl_fallback_check(browser):
+    """A browser with no WebGL: the page must load without errors, never
+    offer 3D, and keep 2D / 2.5D working."""
+    page = browser.new_page(viewport={"width": 1366, "height": 900})
+    errors = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+    page.add_init_script("""
+      const _gc = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type, ...rest) {
+        if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') return null;
+        return _gc.call(this, type, ...rest);
+      };
+      try { localStorage.setItem('dashboard.mapViewMode', '3d'); } catch (e) {}
+    """)
+    try:
+        page.goto(BASE_URL, wait_until="networkidle")
+        page.click("text=Bypass & Enter Dashboard")
+        page.wait_for_selector("#main-dashboard.active", timeout=5000)
+        page.wait_for_function("() => window.MapView3D !== undefined", timeout=5000)
+        check(page.evaluate("() => MapView3D.available === false && map3dAvailable === false"),
+              "[no WebGL] the 3D view reports itself unavailable")
+        modes = []
+        for _ in range(4):
+            page.click("#viewModeBtn")
+            modes.append(page.evaluate("() => mapCamera.state.viewMode"))
+        check(modes == ["iso", "2d", "iso", "2d"], f"[no WebGL] the view button cycles only 2D <-> 2.5D (got {modes})")
+        check(page.evaluate("() => mapCamera.state.viewMode") == "2d" and
+              page.evaluate("() => getComputedStyle(document.getElementById('map3dCanvas')).display") == "none",
+              "[no WebGL] a saved '3d' preference falls back to 2D with no WebGL canvas shown")
+        check(len(real_console_errors(errors)) == 0, f"[no WebGL] no console/page errors (got {errors[:3]})")
+    finally:
+        page.close()
+
+
+def _click_and_drag_markers(page, tag, screenshot_dir):
+    """Click a team on its drawn head and drag one onto an incident,
+    through real mouse events, in whichever view is active."""
+    target = page.evaluate("""() => {
+      const h = mapHitTargets.find(h => h.type === 'team');
+      if (!h) return null;
+      const rect = document.getElementById('mapCanvas').getBoundingClientRect();
+      const p = mapCamera.worldToScreen(h.wx, h.wy, h.wz || 0);
+      const w = mapCamera.screenToWorld(p.x, p.y, h.wz || 0);
+      return { id: h.id, x: rect.left + p.x, y: rect.top + p.y, hasHeight: !!h.wz, dWorld: Math.hypot(w.x - h.wx, w.y - h.wy) };
+    }""")
+    check(bool(target and target["hasHeight"]), f"[{tag}] team hit targets carry a marker height (got {target})")
+    if target:
+        check(target["dWorld"] < 1e-6, f"[{tag}] clicking a team's drawn head maps back to the team's world position (off by {target['dWorld']:.1e})")
+        page.mouse.click(target["x"], target["y"])
+        page.wait_for_timeout(100)
+        sel = page.evaluate("() => selectedMarker")
+        check(bool(sel and sel["type"] == "team" and sel["id"] == target["id"]),
+              f"[{tag}] clicking a team's marker selects that team (expected id {target['id']}, got {sel})")
+    pair = page.evaluate("""() => {
+      const rect = document.getElementById('mapCanvas').getBoundingClientRect();
+      const pt = (h) => { const p = mapCamera.worldToScreen(h.wx, h.wy, h.wz || 0); return { x: rect.left + p.x, y: rect.top + p.y }; };
+      for (const t of mapHitTargets.filter(h => h.type === 'team')) {
+        for (const i of mapHitTargets.filter(h => h.type === 'incident')) {
+          if (i.data.pool !== 1 && i.data.status !== 3 && i.data.id !== t.data.dest_id) {
+            const ip = pt(i), tp = pt(t);
+            const back = MapRender.hitTestWorld(mapCamera, mapHitTargets, ip.x - rect.left, ip.y - rect.top, 'incident');
+            const tback = MapRender.hitTestWorld(mapCamera, mapHitTargets, tp.x - rect.left, tp.y - rect.top, 'team');
+            if (back && back.id === i.id && tback && tback.id === t.id) return { team: tp, inc: ip, teamId: t.id, incId: i.id };
+          }
+        }
+      }
+      return null;
+    }""")
+    if pair:
+        page.mouse.move(pair["team"]["x"], pair["team"]["y"])
+        page.mouse.down()
+        page.mouse.move(pair["inc"]["x"], pair["inc"]["y"], steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(150)
+        pend = page.evaluate("() => pendingOverride ? { team: pendingOverride.teamIndex, inc: pendingOverride.to.id } : null")
+        check(bool(pend and pend["inc"] == pair["incId"]),
+              f"[{tag}] dragging a team's marker onto an incident's marker opens the override proposal (got {pend}, expected incident {pair['incId']})")
+        page.evaluate("() => { pendingOverride = null; selectedMarker = null; renderInspector(); }")
+    else:
+        print(f"INFO: no eligible (team, incident) pair in the current frame to drag-test in {tag} - skipped that one assertion")
+    page.evaluate("() => { selectedMarker = null; renderInspector(); }")
 
 
 def _run_control_state_check(page, console_errors):
@@ -1303,6 +1469,7 @@ def main():
 
             # 2.5D view: toggle on, screenshot, click/drag a team, toggle off.
             _iso_view_check(page, console_errors, screenshot_dir)
+            _view3d_check(page, console_errors, screenshot_dir)
 
             # Only one theme toggle exists (a UI pass removed the header's
             # duplicate).
@@ -1384,6 +1551,8 @@ def main():
             _replay_takeover_check(page, console_errors)
 
             page.close()
+
+            _webgl_fallback_check(browser)
 
             # One-screen Live Ops layout at the two required sizes.
             for width, height in ONE_SCREEN_VIEWPORTS:

@@ -32,6 +32,7 @@ it, what it is used for, and its license.
 | Flask | Pallets | `pip install flask` | Dashboard web server | BSD-3-Clause |
 | pySerial | Chris Liechti | `pip install pyserial` | Serial connection to the board | BSD-3-Clause |
 | Chart.js 4.5.0 (`laptop/tools/static/chart.umd.min.js`) | Chart.js contributors | Included; https://www.chartjs.org | Dashboard charts | MIT |
+| three.js 0.186.1 (`laptop/tools/static/three/`, unmodified `three.module.js` + `three.core.js`) | three.js authors | Included; https://threejs.org, npm package `three@0.186.1`; licence text in `laptop/tools/static/three/LICENSE` | Optional WebGL "3D" view of the dashboard's region map (served locally, no CDN) | MIT |
 | NumPy | NumPy developers | `pip install numpy` | Analysis and ML arrays | BSD-3-Clause |
 | pandas | pandas developers | `pip install pandas` | Reading the simulator dataset | BSD-3-Clause |
 | scikit-learn | scikit-learn developers | `pip install scikit-learn` | Data splitting, metrics, scaler base class | BSD-3-Clause |

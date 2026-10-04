@@ -23,6 +23,14 @@
  * and hit-testing never look at the mode: they only call the two
  * conversion functions, so they behave identically in both.
  *
+ * "3d" is the WebGL view (map-view3d.js). It has a real perspective
+ * camera that the user can orbit, so this file can't compute the
+ * projection itself; the view installs a `projector` with the same
+ * methods (worldToScreen/screenToWorld with a height, pan, zoomAt,
+ * orbit, ...) and every function below simply forwards to it in that
+ * mode. Callers - hit-testing, drag-to-reassign, the hover card - are
+ * therefore identical in all three modes.
+ *
  * World space: grid units, 0..worldW / 0..worldH (36x36 for the
  * region map, but this file doesn't hardcode that). Screen space: CSS
  * pixels within the canvas's on-page box - NOT device pixels. The
@@ -42,7 +50,8 @@
       y: worldH / 2,
       zoom: 1,         // screen pixels per world unit
       rotation: 0,     // radians; always 0 today - see file header
-      viewMode: "2d",  // "2d" (top-down, default) | "iso" (2:1 isometric 2.5D) - see setViewMode()
+      viewMode: "2d",  // "2d" (top-down, default) | "iso" (2:1 isometric 2.5D) | "3d" (WebGL) - see setViewMode()
+      projector: null, // "3d" only: the WebGL view's projection (installed by map-view3d.js)
       viewW: 0,
       viewH: 0,        // last-known CSS pixel size of the canvas box
       minZoom: 0.1,
@@ -71,6 +80,7 @@
     function reset(viewW, viewH) {
       if (viewW !== undefined) state.viewW = viewW;
       if (viewH !== undefined) state.viewH = viewH;
+      if (state.viewMode === "3d" && state.projector) state.projector.reset();
       const fit = fitZoom(state.viewW, state.viewH);
       state.zoom = fit;
       state.minZoom = fit * 0.4;
@@ -123,6 +133,7 @@
     function isoA() { return state.zoom * ISO_HALF; } // screen px per world unit along each iso axis
 
     function worldToScreen(wx, wy, z) {
+      if (state.viewMode === "3d" && state.projector) return state.projector.worldToScreen(wx, wy, z || 0);
       // Rotation is 0 today (state.rotation is always 0). When it
       // isn't, this becomes a standard rotate-then-translate:
       //   const dx = wx - state.x, dy = wy - state.y;
@@ -145,6 +156,7 @@
     }
 
     function screenToWorld(sx, sy, z) {
+      if (state.viewMode === "3d" && state.projector) return state.projector.screenToWorld(sx, sy, z || 0);
       // Inverse of worldToScreen() on the plane at height z (default 0);
       // same note about rotation applies (rotate the delta backwards by
       // -state.rotation before scaling).
@@ -162,7 +174,12 @@
     // Moves the world point under the screen origin by the screen
     // delta, using the inverse above so it is exact in either mode (a
     // plain "delta / zoom" is only right for the top-down projection).
-    function pan(dxScreen, dyScreen) {
+    // (atSx, atSy): where the cursor is NOW, while dragging. Only the
+    // perspective "3d" view uses it - there a uniform shift doesn't
+    // exist, but the ground point that was under the cursor can be made
+    // to stay under it exactly. 2D and iso are uniform and ignore it.
+    function pan(dxScreen, dyScreen, atSx, atSy) {
+      if (state.viewMode === "3d" && state.projector) { state.projector.pan(dxScreen, dyScreen, atSx, atSy); return; }
       const a = screenToWorld(0, 0);
       const b = screenToWorld(dxScreen, dyScreen);
       state.x -= b.x - a.x;
@@ -170,6 +187,7 @@
     }
 
     function zoomAt(sx, sy, factor) {
+      if (state.viewMode === "3d" && state.projector) { state.projector.zoomAt(sx, sy, factor); return; }
       const before = screenToWorld(sx, sy);
       state.zoom = Math.max(state.minZoom, Math.min(state.maxZoom, state.zoom * factor));
       const after = screenToWorld(sx, sy);
@@ -179,7 +197,23 @@
     }
 
     function setViewMode(mode) {
-      state.viewMode = (mode === "iso") ? "iso" : "2d";
+      state.viewMode = (mode === "iso") ? "iso" : (mode === "3d" && state.projector) ? "3d" : "2d";
+    }
+
+    // Rotate/tilt the 3D camera by a screen drag. Only the "3d" mode
+    // has anything to rotate; elsewhere it does nothing.
+    function orbit(dxScreen, dyScreen) {
+      if (state.viewMode === "3d" && state.projector) state.projector.orbit(dxScreen, dyScreen);
+    }
+
+    // 3D only: look straight down at the whole map.
+    function topDown() {
+      if (state.viewMode === "3d" && state.projector && state.projector.topDown) state.projector.topDown();
+    }
+
+    function setProjector(p) {
+      state.projector = p || null;
+      if (!p && state.viewMode === "3d") state.viewMode = "2d";
     }
 
     // Screen px per world unit measured along a grid axis on the
@@ -187,7 +221,11 @@
     // length is a*sqrt(1.25). Drawing code sizes markers with this
     // rather than state.zoom so a marker's footprint looks the same
     // size in both modes.
-    function groundPxPerUnit() {
+    function groundPxPerUnit(wx, wy) {
+      // (wx, wy): where on the map - only the perspective "3d" view
+      // cares, since there a world unit is a different size near the
+      // camera than far from it.
+      if (state.viewMode === "3d" && state.projector) return state.projector.groundPxPerUnit(wx, wy);
       return state.viewMode === "iso" ? isoA() * Math.sqrt(1.25) : state.zoom;
     }
 
@@ -197,7 +235,8 @@
     // distance, so a billboard marker's hit area is the disc you see
     // rather than a squashed ellipse (a world circle is an ellipse on
     // an iso screen).
-    function worldDeltaToScreen(dx, dy) {
+    function worldDeltaToScreen(dx, dy, atX, atY, atZ) {
+      if (state.viewMode === "3d" && state.projector) return state.projector.worldDeltaToScreen(dx, dy, atX, atY, atZ || 0);
       if (state.viewMode === "iso") {
         const a = isoA();
         return { x: (dx - dy) * a, y: (dx + dy) * a * 0.5 };
@@ -208,6 +247,7 @@
     // Screen px per world unit of height (0 in "2d", where height has
     // no meaning).
     function heightPx(z) {
+      if (state.viewMode === "3d" && state.projector) return state.projector.heightPx(z);
       return state.viewMode === "iso" ? z * Z_PX_PER_ZOOM * state.zoom : 0;
     }
 
@@ -215,7 +255,7 @@
     // useful for drag thresholds that should feel the same regardless
     // of zoom level.
     function pxToWorldLength(px) {
-      return px / groundPxPerUnit();
+      return px / groundPxPerUnit(state.x, state.y);
     }
 
     return {
@@ -227,6 +267,9 @@
       pan: pan,
       zoomAt: zoomAt,
       setViewMode: setViewMode,
+      setProjector: setProjector,
+      orbit: orbit,
+      topDown: topDown,
       groundPxPerUnit: groundPxPerUnit,
       worldDeltaToScreen: worldDeltaToScreen,
       heightPx: heightPx,

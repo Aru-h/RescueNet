@@ -489,13 +489,16 @@
               <h2>Region Map (36×36) <span id="liveTickLabel" style="color:var(--muted);font-weight:400;text-transform:none;font-size:11px;">no run yet</span></h2>
               <div style="display:flex;gap:6px;flex-wrap:nowrap;">
                 <button type="button" id="resetViewBtn" class="map-toolbar-btn" title="Recenter and re-fit the pan/zoom">↺</button>
+                <button type="button" id="topDownBtn" class="map-toolbar-btn" style="display:none;" title="3D view: look straight down at the whole map (the ↺ button restores the default angle)">⤓ Top</button>
                 <button type="button" id="viewModeBtn" onclick="toggleMapViewMode()" class="map-toolbar-btn" title="Switch between the flat 2D map and the isometric 2.5D map">◫ 2D</button>
                 <button type="button" id="fogToggleBtn" onclick="toggleFogView()" class="map-toolbar-btn" title="Toggle god mode / operator (fog-of-war) view">🔍 God mode</button>
               </div>
             </div>
             <div class="live-map-canvas-area">
               <div class="live-map-square">
-                <canvas id="mapCanvas" style="width:100%;height:100%;display:block;background:#05080c;border-radius:6px;cursor:grab;"></canvas>
+                <!-- 3D view's WebGL canvas: sits under #mapCanvas, which stays on top (transparent in 3D) for the 2D overlays and all mouse input. Hidden unless the 3D view is active. -->
+                <canvas id="map3dCanvas" style="position:absolute;inset:0;width:100%;height:100%;display:none;border-radius:6px;"></canvas>
+                <canvas id="mapCanvas" style="position:relative;z-index:1;width:100%;height:100%;display:block;background:#05080c;border-radius:6px;cursor:grab;"></canvas>
                 <div id="mapTooltip" class="map-tooltip"></div>
               </div>
             </div>
@@ -708,6 +711,8 @@
 <script src="/static/dashboard/panels.js"></script>
 <script src="/static/dashboard/theme.js"></script>
 <script src="/static/dashboard/replay.js"></script>
+<!-- Optional WebGL "3D" map view (three.js vendored under static/three/). A module, so it runs after the classic scripts and the inline script below; it announces itself with a "mapview3d-ready" event and the 3D option is only offered when WebGL works. -->
+<script type="module" src="/static/dashboard/map-view3d.js"></script>
 
 <script>
 /* --- STARTUP GATE LOGIC --- */
@@ -1524,47 +1529,106 @@ const INCIDENT_TYPE_NAMES = [
 const mapCamera = DashboardCamera.createCamera(GRID_N, GRID_N);
 let mapCtx = null;
 
-// Map view mode: "2d" (default) or "iso" (2.5D). Remembered across
-// reloads in localStorage; storage can be blocked or throw (private
-// windows, cleared site data), so every access is wrapped and the map
-// just falls back to the default.
+// Map view mode: "2d" (default), "iso" (2.5D) or "3d" (WebGL, only
+// offered when the browser can create a WebGL context and the vendored
+// three.js loaded - map-view3d.js announces that with a
+// "mapview3d-ready" event; until then, and if it never comes, the
+// button only cycles 2D <-> 2.5D). Remembered across reloads in
+// localStorage; storage can be blocked or throw (private windows,
+// cleared site data), so every access is wrapped and the map just
+// falls back to the default.
 const MAP_VIEW_MODE_KEY = "dashboard.mapViewMode";
+const MAP_VIEW_MODES = ["2d", "iso", "3d"];
 function loadMapViewMode() {
-  try { return localStorage.getItem(MAP_VIEW_MODE_KEY) === "iso" ? "iso" : "2d"; } catch (e) { return "2d"; }
+  try {
+    const m = localStorage.getItem(MAP_VIEW_MODE_KEY);
+    return MAP_VIEW_MODES.indexOf(m) >= 0 ? m : "2d";
+  } catch (e) { return "2d"; }
 }
 function saveMapViewMode(mode) {
   try { localStorage.setItem(MAP_VIEW_MODE_KEY, mode); } catch (e) { /* storage unavailable - not remembered, still works */ }
 }
-function applyMapViewMode(mode) {
-  mapCamera.setViewMode(mode);
-  const box = document.querySelector(".live-map-square");
-  if (box) box.classList.toggle("iso-view", mode === "iso");
-  const btn = document.getElementById("viewModeBtn");
-  if (btn) {
-    btn.textContent = mode === "iso" ? "◇ 2.5D" : "◫ 2D";
-    btn.title = mode === "iso" ? "Showing the isometric 2.5D map - click for the flat 2D map"
-                               : "Showing the flat 2D map - click for the isometric 2.5D map";
+
+let map3d = null;           // the WebGL view (MapView3D.create), made the first time 3D is shown
+let map3dAvailable = false; // set by the "mapview3d-ready" event
+function ensureMap3d() {
+  if (map3d) return true;
+  if (!map3dAvailable || !window.MapView3D || !window.MapView3D.available) return false;
+  try {
+    map3d = window.MapView3D.create(document.getElementById("map3dCanvas"));
+    mapCamera.setProjector(map3d.projector);
+    sizeMap3d();
+    return true;
+  } catch (e) {
+    console.warn("3D view could not start; staying on 2D/2.5D", e);
+    map3d = null; map3dAvailable = false;
+    return false;
   }
 }
-function toggleMapViewMode() {
-  const next = mapCamera.state.viewMode === "iso" ? "2d" : "iso";
-  applyMapViewMode(next);
-  saveMapViewMode(next);
+function sizeMap3d() {
+  if (map3d) map3d.setSize(mapCamera.state.viewW, mapCamera.state.viewH, window.devicePixelRatio || 1);
+}
+
+function updateMapHint() {
+  const hint = document.getElementById("dragHintText");
+  if (!hint) return;
+  const replay = typeof dashboardMode !== "undefined" && dashboardMode === "replay";
+  const nav = mapCamera.state.viewMode === "3d" ? "drag to rotate · right-drag or shift-drag to pan · wheel to zoom" : "drag to pan · wheel to zoom";
+  hint.textContent = nav + (replay ? " · Replay — switch to Live to reassign tasks" : " · drag a team onto an incident to reassign");
+}
+
+const MAP_VIEW_LABELS = { "2d": "◫ 2D", "iso": "◇ 2.5D", "3d": "⬡ 3D" };
+function nextMapViewMode(mode) {
+  const modes = map3dAvailable ? MAP_VIEW_MODES : MAP_VIEW_MODES.filter((m) => m !== "3d");
+  return modes[(modes.indexOf(mode) + 1) % modes.length];
+}
+function applyMapViewMode(mode) {
+  if (mode === "3d" && !ensureMap3d()) mode = "2d";
+  mapCamera.setViewMode(mode);
+  const box = document.querySelector(".live-map-square");
+  if (box) box.classList.toggle("iso-view", mode !== "2d"); // 2.5D and 3D use the whole panel, not a square
+  const c3 = document.getElementById("map3dCanvas");
+  if (c3) c3.style.display = mode === "3d" ? "block" : "none";
+  const topBtn = document.getElementById("topDownBtn");
+  if (topBtn) topBtn.style.display = mode === "3d" ? "" : "none";
+  mapCanvas.style.background = mode === "3d" ? "transparent" : "#05080c";
+  const btn = document.getElementById("viewModeBtn");
+  if (btn) {
+    btn.textContent = MAP_VIEW_LABELS[mode];
+    const nxt = nextMapViewMode(mode);
+    btn.title = `Showing the ${mode === "2d" ? "flat 2D" : mode === "iso" ? "isometric 2.5D" : "3D"} map - click for ${nxt === "2d" ? "the flat 2D" : nxt === "iso" ? "the isometric 2.5D" : "the 3D"} map`;
+  }
+  return mode;
+}
+function setMapViewMode(mode) {
+  mode = applyMapViewMode(mode);
+  saveMapViewMode(mode);
   hideMapCard();
-  // The two modes frame the map differently (the canvas box changes
-  // shape and the iso diamond is half as tall), so re-fit ONCE here;
-  // after this the user's own pan/zoom is left alone.
+  // The modes frame the map differently (the canvas box changes shape,
+  // the iso diamond is half as tall, 3D has its own camera), so re-fit
+  // ONCE here; after this the user's own pan/zoom is left alone.
   resizeMapCanvas();
   mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH);
+  updateMapHint();
   if (window._lastFrame) drawFrame(window._lastFrame, true);
 }
-applyMapViewMode(loadMapViewMode());
+function toggleMapViewMode() {
+  setMapViewMode(nextMapViewMode(mapCamera.state.viewMode));
+}
+const savedMapViewMode = loadMapViewMode();
+applyMapViewMode(savedMapViewMode === "3d" ? "2d" : savedMapViewMode); // a saved "3d" waits for the ready event below
+window.addEventListener("mapview3d-ready", (evt) => {
+  map3dAvailable = !!(evt.detail && evt.detail.available);
+  if (map3dAvailable && savedMapViewMode === "3d" && mapCamera.state.viewMode === "2d") setMapViewMode("3d");
+  else applyMapViewMode(mapCamera.state.viewMode); // refresh the button's hint now that 3D is (not) offered
+});
 MapRender.setRedrawCallback(() => { if (window._lastFrame) drawFrame(window._lastFrame, true); });
 
 function resizeMapCanvas() {
   const dims = DashboardCamera.resizeCanvasForDPI(mapCanvas);
   mapCtx = dims.ctx;
   mapCamera.setViewSize(dims.width, dims.height);
+  sizeMap3d();
 }
 resizeMapCanvas();
 if (window.ResizeObserver) {
@@ -1598,11 +1662,22 @@ function drawFrame(frame, skipInspector) {
   updateOverridePhases(frame);
   if (!mapCtx) return;
   mapCtx.clearRect(0, 0, mapCamera.state.viewW, mapCamera.state.viewH);
-  MapRender.drawTerrain(mapCtx, mapCamera, terrainMap);
-  drawGrid();
+  const is3d = mapCamera.state.viewMode === "3d" && map3d;
+  if (!is3d) {
+    MapRender.drawTerrain(mapCtx, mapCamera, terrainMap);
+    drawGrid();
+  }
   mapHitTargets = [];
 
-  if (mapCamera.state.viewMode === "iso") {
+  if (is3d) {
+    // 3D: the whole scene is a WebGL render on the canvas underneath;
+    // #mapCanvas (2D) is left clear for the drag/drop overlays. Hit
+    // targets come back in the same shape as every other mode's.
+    mapHitTargets.push(...map3d.render({
+      env: staticEnvironment, terrainMap, frame, fogViewMode, selectedMarker,
+      teamColors: TEAM_COLORS, outlineBuildingId: mapCardBuildingId,
+    }));
+  } else if (mapCamera.state.viewMode === "iso") {
     // 2.5D: ground layers, buildings and markers are interleaved back
     // to front, so one call draws them all (map-render.js's
     // drawIsoScene) instead of the per-layer sequence below.
@@ -1830,13 +1905,16 @@ function handleMapMouseDown(evt) {
   // (click, not drag) is untouched, and Replay itself uses the same
   // core code no reassignment would ever reach in this mode.
   const replayBlocksTeamDrag = window.Replay && window.Replay.isActive();
-  const teamHit = replayBlocksTeamDrag ? null : hitTestAt(sx, sy, "team");
+  // 3D: a right-button or shift drag always pans the camera, even from
+  // on top of a team (plain left-drag on empty space rotates/tilts it).
+  const camPanGesture = mapCamera.state.viewMode === "3d" && (evt.button === 2 || evt.shiftKey);
+  const teamHit = (replayBlocksTeamDrag || camPanGesture) ? null : hitTestAt(sx, sy, "team");
   if (teamHit) {
     dragState = { mode: "team", teamHit, startSx: sx, startSy: sy, curSx: sx, curSy: sy };
   } else {
     // Empty space (or a non-team marker): drag pans the camera rather
     // than proposing a reassignment.
-    dragState = { mode: "pan", startSx: sx, startSy: sy, curSx: sx, curSy: sy, moved: false };
+    dragState = { mode: "pan", startSx: sx, startSy: sy, curSx: sx, curSy: sy, moved: false, camPan: camPanGesture };
   }
   mapCanvas.style.cursor = "grabbing";
 }
@@ -1845,7 +1923,10 @@ function handleMapMouseMove(evt) {
   const { sx, sy } = screenPointFromEvent(evt);
   if (dragState) {
     if (dragState.mode === "pan") {
-      mapCamera.pan(sx - dragState.curSx, sy - dragState.curSy);
+      // 3D: left-drag on empty space orbits (rotate/tilt); a right/shift
+      // drag pans. Every other mode: drag pans, as before.
+      if (mapCamera.state.viewMode === "3d" && !dragState.camPan) mapCamera.orbit(sx - dragState.curSx, sy - dragState.curSy);
+      else mapCamera.pan(sx - dragState.curSx, sy - dragState.curSy, sx, sy);
       if (Math.hypot(sx - dragState.startSx, sy - dragState.startSy) > 3) dragState.moved = true;
       dragState.curSx = sx; dragState.curSy = sy;
       if (window._lastFrame) drawFrame(window._lastFrame, true);
@@ -2067,10 +2148,19 @@ function hideMapCard() {
 }
 
 mapCanvas.addEventListener("click", handleMapClick);
+mapCanvas.addEventListener("contextmenu", (evt) => { if (mapCamera.state.viewMode === "3d") evt.preventDefault(); });
 mapCanvas.addEventListener("mousedown", handleMapMouseDown);
 mapCanvas.addEventListener("mousemove", handleMapMouseMove);
 mapCanvas.addEventListener("wheel", handleMapWheel, { passive: false });
 window.addEventListener("mouseup", handleMapMouseUp);
+
+const topDownBtnEl = document.getElementById("topDownBtn");
+if (topDownBtnEl) {
+  topDownBtnEl.addEventListener("click", () => {
+    mapCamera.topDown();
+    if (window._lastFrame) drawFrame(window._lastFrame, true);
+  });
+}
 
 const resetViewBtnEl = document.getElementById("resetViewBtn");
 if (resetViewBtnEl) {
@@ -2503,12 +2593,7 @@ function setDashboardMode(mode) {
   dashboardMode = mode;
   document.getElementById("liveControlsGroup").classList.toggle("hidden", mode === "replay");
   document.getElementById("replayControlsGroup").classList.toggle("hidden", mode !== "replay");
-  const hint = document.getElementById("dragHintText");
-  if (hint) {
-    hint.textContent = mode === "replay"
-      ? "drag to pan · wheel to zoom · Replay — switch to Live to reassign tasks"
-      : "drag to pan · wheel to zoom · drag a team onto an incident to reassign";
-  }
+  updateMapHint();
   if (mode === "replay") {
     if (liveAbortController) stopLive();
     Replay.refreshList();

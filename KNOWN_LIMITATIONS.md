@@ -85,3 +85,12 @@ accepted code-audit findings, implementation notes) is in
     off); otherwise the dashboard refuses rather than show a diverging run.
 15. **Tested on macOS and Linux.** Windows is not tested. Absolute results
     differ slightly between platforms for the same seed.
+16. **The bundled demo recording does not replay exactly on Linux.** The
+    simulator is deterministic on a given platform, but not across platforms.
+    `demo_seed1002_combined_600ticks.jsonl.gz` was recorded on macOS (arm64,
+    clang) and replays exactly there. On Linux x86_64 the same seed diverges
+    at frame 88 (team 8 picks a different slot and incident), so "Take over
+    from here" refuses it, and the take-over step of
+    `make check-dashboard-e2e` is expected to fail on Linux. Everything else
+    in that check passes. This is believed to be cross-platform
+    floating-point divergence; the cause has not been confirmed.
