@@ -13,6 +13,16 @@
  * these two functions, not a rewrite of the map drawing code that
  * calls them.
  *
+ * View modes: "2d" is the original top-down projection. "iso" is a 2:1
+ * isometric projection (a world cell is a diamond twice as wide as it
+ * is tall) with an optional height argument: worldToScreen(wx, wy, z)
+ * lifts a point z world-units straight up the screen, and
+ * screenToWorld(sx, sy, z) is its exact inverse on the horizontal
+ * plane at height z (z = 0 is the ground). In "2d" the z argument is
+ * ignored, so callers can pass it unconditionally. Pan, zoom-to-cursor
+ * and hit-testing never look at the mode: they only call the two
+ * conversion functions, so they behave identically in both.
+ *
  * World space: grid units, 0..worldW / 0..worldH (36x36 for the
  * region map, but this file doesn't hardcode that). Screen space: CSS
  * pixels within the canvas's on-page box - NOT device pixels. The
@@ -32,6 +42,7 @@
       y: worldH / 2,
       zoom: 1,         // screen pixels per world unit
       rotation: 0,     // radians; always 0 today - see file header
+      viewMode: "2d",  // "2d" (top-down, default) | "iso" (2:1 isometric 2.5D) - see setViewMode()
       viewW: 0,
       viewH: 0,        // last-known CSS pixel size of the canvas box
       minZoom: 0.1,
@@ -89,7 +100,18 @@
       }
     }
 
-    function worldToScreen(wx, wy) {
+    // Iso constants. At the same camera zoom a world cell is zoom px
+    // wide in "2d" and the iso diamond is also ~zoom px wide (half
+    // that tall), so fit-zoom and the min/max bounds mean the same
+    // thing in both modes. One world unit of HEIGHT is Z_PX_PER_ZOOM *
+    // zoom screen px (a cell's edge, drawn at 30 degrees, is ~0.56 *
+    // zoom px long, so a 1-unit-tall box looks roughly cubic).
+    const ISO_HALF = 0.5;
+    const Z_PX_PER_ZOOM = 0.55;
+
+    function isoA() { return state.zoom * ISO_HALF; } // screen px per world unit along each iso axis
+
+    function worldToScreen(wx, wy, z) {
       // Rotation is 0 today (state.rotation is always 0). When it
       // isn't, this becomes a standard rotate-then-translate:
       //   const dx = wx - state.x, dy = wy - state.y;
@@ -98,23 +120,42 @@
       //   return { x: rx * state.zoom + state.viewW / 2, y: ry * state.zoom + state.viewH / 2 };
       const dx = wx - state.x;
       const dy = wy - state.y;
+      if (state.viewMode === "iso") {
+        const a = isoA();
+        return {
+          x: (dx - dy) * a + state.viewW / 2,
+          y: (dx + dy) * a * 0.5 - (z || 0) * Z_PX_PER_ZOOM * state.zoom + state.viewH / 2,
+        };
+      }
       return {
         x: dx * state.zoom + state.viewW / 2,
         y: dy * state.zoom + state.viewH / 2,
       };
     }
 
-    function screenToWorld(sx, sy) {
-      // Inverse of worldToScreen(); same note about rotation applies
-      // (rotate the delta backwards by -state.rotation before scaling).
+    function screenToWorld(sx, sy, z) {
+      // Inverse of worldToScreen() on the plane at height z (default 0);
+      // same note about rotation applies (rotate the delta backwards by
+      // -state.rotation before scaling).
+      if (state.viewMode === "iso") {
+        const a = isoA();
+        const u = (sx - state.viewW / 2) / a;                                          // dx - dy
+        const v = (sy - state.viewH / 2 + (z || 0) * Z_PX_PER_ZOOM * state.zoom) / (a * 0.5); // dx + dy
+        return { x: (u + v) / 2 + state.x, y: (v - u) / 2 + state.y };
+      }
       const dx = (sx - state.viewW / 2) / state.zoom;
       const dy = (sy - state.viewH / 2) / state.zoom;
       return { x: dx + state.x, y: dy + state.y };
     }
 
+    // Moves the world point under the screen origin by the screen
+    // delta, using the inverse above so it is exact in either mode (a
+    // plain "delta / zoom" is only right for the top-down projection).
     function pan(dxScreen, dyScreen) {
-      state.x -= dxScreen / state.zoom;
-      state.y -= dyScreen / state.zoom;
+      const a = screenToWorld(0, 0);
+      const b = screenToWorld(dxScreen, dyScreen);
+      state.x -= b.x - a.x;
+      state.y -= b.y - a.y;
     }
 
     function zoomAt(sx, sy, factor) {
@@ -126,11 +167,44 @@
       state.y += before.y - after.y;
     }
 
+    function setViewMode(mode) {
+      state.viewMode = (mode === "iso") ? "iso" : "2d";
+    }
+
+    // Screen px per world unit measured along a grid axis on the
+    // ground: zoom in "2d"; in "iso" an axis step is (a, a/2) px, whose
+    // length is a*sqrt(1.25). Drawing code sizes markers with this
+    // rather than state.zoom so a marker's footprint looks the same
+    // size in both modes.
+    function groundPxPerUnit() {
+      return state.viewMode === "iso" ? isoA() * Math.sqrt(1.25) : state.zoom;
+    }
+
+    // The linear part of worldToScreen(): the screen-space vector for a
+    // WORLD-space delta. Lets hit-testing turn "click minus marker, in
+    // world units on the marker's own plane" back into a screen
+    // distance, so a billboard marker's hit area is the disc you see
+    // rather than a squashed ellipse (a world circle is an ellipse on
+    // an iso screen).
+    function worldDeltaToScreen(dx, dy) {
+      if (state.viewMode === "iso") {
+        const a = isoA();
+        return { x: (dx - dy) * a, y: (dx + dy) * a * 0.5 };
+      }
+      return { x: dx * state.zoom, y: dy * state.zoom };
+    }
+
+    // Screen px per world unit of height (0 in "2d", where height has
+    // no meaning).
+    function heightPx(z) {
+      return state.viewMode === "iso" ? z * Z_PX_PER_ZOOM * state.zoom : 0;
+    }
+
     // World-unit length of one screen pixel at the current zoom -
     // useful for drag thresholds that should feel the same regardless
     // of zoom level.
     function pxToWorldLength(px) {
-      return px / state.zoom;
+      return px / groundPxPerUnit();
     }
 
     return {
@@ -141,6 +215,10 @@
       screenToWorld: screenToWorld,
       pan: pan,
       zoomAt: zoomAt,
+      setViewMode: setViewMode,
+      groundPxPerUnit: groundPxPerUnit,
+      worldDeltaToScreen: worldDeltaToScreen,
+      heightPx: heightPx,
       pxToWorldLength: pxToWorldLength,
     };
   }

@@ -234,6 +234,7 @@
   function drawTerrain(ctx, view, terrainMap) {
     const t = parseTerrain(terrainMap);
     if (!t) return;
+    if (view.state.viewMode === "iso") { drawTerrainIso(ctx, view, t); return; }
     const s = view.state;
     const key = `${s.x}|${s.y}|${s.zoom}|${s.viewW}|${s.viewH}`;
     if (_terrainBitmapSource !== t.source || _terrainBitmapKey !== key || !_terrainBitmap) {
@@ -256,6 +257,7 @@
   // against individual cells.
   function drawGrid(ctx, view, gridN) {
     if (view.state.zoom < fitZoomOf(view) * 1.6) return;
+    if (view.state.viewMode === "iso") { drawGridIso(ctx, view, gridN); return; }
     ctx.save();
     ctx.strokeStyle = "#182028";
     ctx.lineWidth = 1;
@@ -394,25 +396,11 @@
     return hits;
   }
 
-  // Markers only, no on-map text (map simplification decision after
-  // c68a1f7): colour is priority, size is victim count, a small corner
-  // badge is the hazard type. Incidents that share a building_id are
-  // collapsed into one marker with a count badge - their full list is
-  // attached to the hit's `groupIncidents` for the hover/click card (see
-  // index.html's incidentSummaryLine / showMapCard) rather than either
-  // drawing N overlapping labels or picking one incident to speak for
-  // the rest.
-  function drawIncidents(ctx, view, list, opts) {
-    const hits = [];
-    const fogViewMode = opts.fogViewMode;
-    const selectedMarker = opts.selectedMarker;
-    // A building-linked incident is drawn AT its building's own marker
-    // (not its own raw x/y, which can sit slightly off the building's
-    // true centre) so the incident and building markers are the same
-    // dot, not two overlapping ones a pixel or two apart.
-    const buildingsById = new Map((opts.buildings || []).map((b) => [b.id, b]));
-    const priorityScale = { 1: 1.25, 2: 1.05, 3: 0.9, 4: 0.75 };
-
+  // Visible incidents (not resolved; in operator view not undiscovered),
+  // grouped one cluster per building_id (incidents with no building are
+  // singleton clusters), members and clusters both sorted worst-first.
+  // Shared by the 2D and iso incident drawing.
+  function buildIncidentClusters(list, fogViewMode) {
     const visible = (list || []).filter((inc) => {
       if (inc.status === 3) return false; // resolved
       if (fogViewMode === "operator" && inc.discovered === 0) return false;
@@ -436,6 +424,90 @@
     // is the one that loses the overlap check.
     clusters.forEach((c) => c.members.sort((a, b) => (a.priority - b.priority) || ((b.victims || 0) - (a.victims || 0))));
     clusters.sort((a, b) => a.members[0].priority - b.members[0].priority);
+    return clusters;
+  }
+
+  // The incident marker proper - square, corner hazard badge, group
+  // count badge, selection outline - drawn around a SCREEN-space centre.
+  // Shared by 2D (centre = the incident's ground point) and iso (centre
+  // = the upright marker's head), so both modes show the same glyph.
+  function drawIncidentGlyph(ctx, center, sizePx, color, inc, members, selectedMarker) {
+    const isGroup = members.length > 1;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = inc.status === 0 ? 1 : 0.55;
+    ctx.fillRect(center.x - sizePx / 2, center.y - sizePx / 2, sizePx, sizePx);
+    ctx.globalAlpha = 1;
+
+    // No on-map text at all (map simplification decision after
+    // c68a1f7: priority is colour, victim count is marker size, a
+    // shared building is a count badge) - full detail (victims,
+    // floor, hazard, status, assigned/support team, work remaining)
+    // lives in the hover/click card (see showMapCard in index.html),
+    // never on the map itself.
+    const icon = INCIDENT_ICONS[inc.type];
+    if (icon && sizePx >= 8) {
+      // A small corner badge, capped at ~40% of the marker's own size
+      // - never the big centered emoji this used to be, which could
+      // grow past the marker and cover a building or another marker.
+      const badgeD = Math.min(14, sizePx * 0.4);
+      const bx = center.x - sizePx / 2 + badgeD / 2;
+      const by = center.y + sizePx / 2 - badgeD / 2;
+      ctx.beginPath();
+      ctx.arc(bx, by, badgeD / 2, 0, Math.PI * 2);
+      ctx.fillStyle = "#0d1117";
+      ctx.fill();
+      ctx.font = `${Math.max(7, badgeD * 0.85)}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(icon, bx, by + 0.5);
+    }
+
+    if (isGroup) {
+      const badgeR = 7;
+      const bx = center.x + sizePx / 2;
+      const by = center.y - sizePx / 2;
+      ctx.beginPath();
+      ctx.arc(bx, by, badgeR, 0, Math.PI * 2);
+      ctx.fillStyle = "#1f6feb";
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 9px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(members.length), bx, by + 0.5);
+    }
+
+    if (selectedMarker && selectedMarker.type === "incident" &&
+        members.some((m) => m.id === selectedMarker.id)) {
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(center.x - sizePx / 2 - 3, center.y - sizePx / 2 - 3, sizePx + 6, sizePx + 6);
+    }
+  }
+
+  // Markers only, no on-map text (map simplification decision after
+  // c68a1f7): colour is priority, size is victim count, a small corner
+  // badge is the hazard type. Incidents that share a building_id are
+  // collapsed into one marker with a count badge - their full list is
+  // attached to the hit's `groupIncidents` for the hover/click card (see
+  // index.html's incidentSummaryLine / showMapCard) rather than either
+  // drawing N overlapping labels or picking one incident to speak for
+  // the rest.
+  function drawIncidents(ctx, view, list, opts) {
+    const hits = [];
+    const fogViewMode = opts.fogViewMode;
+    const selectedMarker = opts.selectedMarker;
+    // A building-linked incident is drawn AT its building's own marker
+    // (not its own raw x/y, which can sit slightly off the building's
+    // true centre) so the incident and building markers are the same
+    // dot, not two overlapping ones a pixel or two apart.
+    const buildingsById = new Map((opts.buildings || []).map((b) => [b.id, b]));
+    const priorityScale = { 1: 1.25, 2: 1.05, 3: 0.9, 4: 0.75 };
+
+    const clusters = buildIncidentClusters(list, fogViewMode);
 
     clusters.forEach((cluster) => {
       const members = cluster.members;
@@ -450,64 +522,92 @@
       const center = view.worldToScreen(worldX, worldY);
       const sizePx = worldSize * view.state.zoom;
 
-      ctx.fillStyle = color;
-      ctx.globalAlpha = inc.status === 0 ? 1 : 0.55;
-      ctx.fillRect(center.x - sizePx / 2, center.y - sizePx / 2, sizePx, sizePx);
-      ctx.globalAlpha = 1;
-
-      // No on-map text at all (map simplification decision after
-      // c68a1f7: priority is colour, victim count is marker size, a
-      // shared building is a count badge) - full detail (victims,
-      // floor, hazard, status, assigned/support team, work remaining)
-      // lives in the hover/click card (see showMapCard in index.html),
-      // never on the map itself.
-      const icon = INCIDENT_ICONS[inc.type];
-      if (icon && sizePx >= 8) {
-        // A small corner badge, capped at ~40% of the marker's own size
-        // - never the big centered emoji this used to be, which could
-        // grow past the marker and cover a building or another marker.
-        const badgeD = Math.min(14, sizePx * 0.4);
-        const bx = center.x - sizePx / 2 + badgeD / 2;
-        const by = center.y + sizePx / 2 - badgeD / 2;
-        ctx.beginPath();
-        ctx.arc(bx, by, badgeD / 2, 0, Math.PI * 2);
-        ctx.fillStyle = "#0d1117";
-        ctx.fill();
-        ctx.font = `${Math.max(7, badgeD * 0.85)}px sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(icon, bx, by + 0.5);
-      }
-
-      if (isGroup) {
-        const badgeR = 7;
-        const bx = center.x + sizePx / 2;
-        const by = center.y - sizePx / 2;
-        ctx.beginPath();
-        ctx.arc(bx, by, badgeR, 0, Math.PI * 2);
-        ctx.fillStyle = "#1f6feb";
-        ctx.fill();
-        ctx.strokeStyle = "#fff";
-        ctx.lineWidth = 1;
-        ctx.stroke();
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 9px sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(String(members.length), bx, by + 0.5);
-      }
-
-      if (selectedMarker && selectedMarker.type === "incident" &&
-          members.some((m) => m.id === selectedMarker.id)) {
-        ctx.strokeStyle = "#fff";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(center.x - sizePx / 2 - 3, center.y - sizePx / 2 - 3, sizePx + 6, sizePx + 6);
-      }
+      drawIncidentGlyph(ctx, center, sizePx, color, inc, members, selectedMarker);
 
       const hitData = isGroup ? Object.assign({}, inc, { groupIncidents: members }) : inc;
       hits.push({ type: "incident", id: inc.id, wx: worldX, wy: worldY, wr: Math.max(worldSize / 2, 0.4), data: hitData });
     });
     return hits;
+  }
+
+  // The team marker proper - status ring, numbered disc, fault dot,
+  // override pin, selection ring - around a SCREEN-space centre, radius
+  // r px. Shared by 2D and iso (see drawIncidentGlyph).
+  function drawTeamGlyph(ctx, center, r, color, t, selectedMarker) {
+    // Status ring (always drawn - not just for resting like the old
+    // single-status-only ring - so "status ring" reads as a real
+    // per-status indicator rather than a resting-only special case).
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, r * 1.55, 0, Math.PI * 2);
+    ctx.strokeStyle = STATUS_RING_COLORS[t.status] || "rgba(139,152,165,0.9)";
+    ctx.lineWidth = 2;
+    if (t.status === 3) ctx.setLineDash([3, 2]); // resting: dashed
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+
+    // Numbered marker.
+    if (r >= 6) {
+      ctx.fillStyle = "#04150a";
+      ctx.font = `bold ${Math.max(8, r)}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(t.id), center.x, center.y + 0.5);
+    }
+
+    if (t.fault_mask) {
+      ctx.beginPath();
+      ctx.arc(center.x + r * 1.1, center.y - r * 1.1, 3, 0, Math.PI * 2);
+      ctx.fillStyle = "#f85149";
+      ctx.fill();
+    }
+
+    // Part 4: a manual override pin, opposite corner from the fault
+    // dot above so the two never collide - a diamond, not another
+    // dot, so it never reads as "another fault" at a glance. Filled
+    // while pending (t.override===1, the pin is still forcing
+    // itself into this team's CBBA bundle); once core/cbba.c's
+    // cbba_apply_override_pin() commits it (t.override drops back
+    // to 0 on its own, normally within a few ticks - see core/
+    // debug.h's pinned/committed/resolved-or-interrupted doc), the
+    // badge switches to outline-only for as long as
+    // window._overridePhase (index.html's updateOverridePhases())
+    // still tracks this team as "committed" - dropping once that
+    // ends, resolved or interrupted either way.
+    const phase = window._overridePhase && window._overridePhase[t.id];
+    if (t.override || (phase && phase.kind === "committed")) {
+      const bx = center.x - r * 1.1, by = center.y + r * 1.1;
+      const s = 4;
+      ctx.beginPath();
+      ctx.moveTo(bx, by - s);
+      ctx.lineTo(bx + s, by);
+      ctx.lineTo(bx, by + s);
+      ctx.lineTo(bx - s, by);
+      ctx.closePath();
+      if (t.override) {
+        ctx.fillStyle = "#a371f7";
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      } else {
+        ctx.strokeStyle = "#a371f7";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    }
+
+    if (selectedMarker && selectedMarker.type === "team" && selectedMarker.id === t.id) {
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, r * 1.9, 0, Math.PI * 2);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
   }
 
   // Teams as distinct numbered markers with a status ring and a line
@@ -547,97 +647,709 @@
         ctx.globalAlpha = 1;
       }
 
-      // Status ring (always drawn - not just for resting like the old
-      // single-status-only ring - so "status ring" reads as a real
-      // per-status indicator rather than a resting-only special case).
-      ctx.beginPath();
-      ctx.arc(center.x, center.y, r * 1.55, 0, Math.PI * 2);
-      ctx.strokeStyle = STATUS_RING_COLORS[t.status] || "rgba(139,152,165,0.9)";
-      ctx.lineWidth = 2;
-      if (t.status === 3) ctx.setLineDash([3, 2]); // resting: dashed
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      ctx.beginPath();
-      ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = color;
-      ctx.fill();
-
-      // Numbered marker.
-      if (r >= 6) {
-        ctx.fillStyle = "#04150a";
-        ctx.font = `bold ${Math.max(8, r)}px sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(String(t.id), center.x, center.y + 0.5);
-      }
-
-      if (t.fault_mask) {
-        ctx.beginPath();
-        ctx.arc(center.x + r * 1.1, center.y - r * 1.1, 3, 0, Math.PI * 2);
-        ctx.fillStyle = "#f85149";
-        ctx.fill();
-      }
-
-      // Part 4: a manual override pin, opposite corner from the fault
-      // dot above so the two never collide - a diamond, not another
-      // dot, so it never reads as "another fault" at a glance. Filled
-      // while pending (t.override===1, the pin is still forcing
-      // itself into this team's CBBA bundle); once core/cbba.c's
-      // cbba_apply_override_pin() commits it (t.override drops back
-      // to 0 on its own, normally within a few ticks - see core/
-      // debug.h's pinned/committed/resolved-or-interrupted doc), the
-      // badge switches to outline-only for as long as
-      // window._overridePhase (index.html's updateOverridePhases())
-      // still tracks this team as "committed" - dropping once that
-      // ends, resolved or interrupted either way.
-      const phase = window._overridePhase && window._overridePhase[t.id];
-      if (t.override || (phase && phase.kind === "committed")) {
-        const bx = center.x - r * 1.1, by = center.y + r * 1.1;
-        const s = 4;
-        ctx.beginPath();
-        ctx.moveTo(bx, by - s);
-        ctx.lineTo(bx + s, by);
-        ctx.lineTo(bx, by + s);
-        ctx.lineTo(bx - s, by);
-        ctx.closePath();
-        if (t.override) {
-          ctx.fillStyle = "#a371f7";
-          ctx.fill();
-          ctx.strokeStyle = "#fff";
-          ctx.lineWidth = 1;
-          ctx.stroke();
-        } else {
-          ctx.strokeStyle = "#a371f7";
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-        }
-      }
-
-      if (selectedMarker && selectedMarker.type === "team" && selectedMarker.id === t.id) {
-        ctx.beginPath();
-        ctx.arc(center.x, center.y, r * 1.9, 0, Math.PI * 2);
-        ctx.strokeStyle = "#fff";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
+      drawTeamGlyph(ctx, center, r, color, t, selectedMarker);
 
       hits.push({ type: "team", id: t.id, wx: t.x, wy: t.y, wr: markerWorldR + 0.18, data: { ...t, i } });
     });
     return hits;
   }
 
+  // ===================================================================
+  // Iso (2.5D) rendering - used when view.state.viewMode === "iso".
+  //
+  // Everything here still goes through view.worldToScreen(x, y, z) /
+  // view.screenToWorld(sx, sy, z); nothing re-implements the
+  // projection. Ground-plane things (tiles, hazard cells, rings, lines)
+  // are drawn at z = 0; upright things (buildings, markers) get a z.
+  // ===================================================================
+
+  const ISO_FLOOR_H = 0.25;        // world units of height per building floor
+  const ISO_TEAM_Z = 1.0;          // team marker head height above its footing
+  const ISO_INCIDENT_Z = 0.75;     // incident marker head height above its footing
+  const ISO_SLAB_T = 0.35;         // thickness of the ground slab's visible sides
+  const ISO_BUILDING_RGB = [139, 152, 165]; // the same neutral grey the 2D dots use
+
+  // core/environment.h's ENV_DAMAGE_* thresholds (damage_state is 0-255
+  // but those four levels are the only named ones). STATICENV has no
+  // "collapsed" flag, so SEVERE and above is what the dashboard treats
+  // as collapsed/rubble.
+  const ENV_DAMAGE_MINOR = 25, ENV_DAMAGE_MODERATE = 50, ENV_DAMAGE_SEVERE = 75;
+
+  // Height in world units. STATICENV carries `floors` per building, so
+  // that is the source (floors * ISO_FLOOR_H); damaged buildings are
+  // shorter, collapsed ones low rubble.
+  function buildingHeight(b) {
+    const floors = Math.max(1, b.floors || 1);
+    const dmg = b.damage || 0;
+    let f = 1;
+    if (dmg >= 150) f = 0.25;
+    else if (dmg >= ENV_DAMAGE_SEVERE) f = 0.45;
+    else if (dmg >= ENV_DAMAGE_MODERATE) f = 0.8;
+    else if (dmg >= ENV_DAMAGE_MINOR) f = 0.93;
+    return floors * ISO_FLOOR_H * f;
+  }
+
+  function rgba(rgb, f, a) {
+    return `rgba(${Math.round(rgb[0] * f)},${Math.round(rgb[1] * f)},${Math.round(rgb[2] * f)},${a})`;
+  }
+
+  // Per-STATICENV-object preparation, memoized on the env object's
+  // identity (same trick as parseTerrain): footprint rects, heights and
+  // face colours are computed once, not per frame.
+  let _isoEnvCache = null;
+  function prepareIsoEnv(env) {
+    if (_isoEnvCache && _isoEnvCache.source === env) return _isoEnvCache;
+    const list = ((env && env.buildings) || []).map((b) => {
+      const r = buildingFootprintWorldRect(b);
+      const dmg = b.damage || 0;
+      const f = 1 - 0.45 * Math.min(1, dmg / 150); // damage only ever darkens - red stays reserved for P1
+      return {
+        b, id: b.id, x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h,
+        key: b.x + b.y,
+        h: buildingHeight(b),
+        collapsed: dmg >= ENV_DAMAGE_SEVERE,
+        damaged: dmg >= ENV_DAMAGE_MODERATE,
+        top: rgba(ISO_BUILDING_RGB, f, 0.97),
+        left: rgba(ISO_BUILDING_RGB, f * 0.68, 0.97),
+        right: rgba(ISO_BUILDING_RGB, f * 0.46, 0.97),
+      };
+    });
+    const byId = new Map(list.map((e) => [e.id, e]));
+    _isoEnvCache = { source: env, list, byId };
+    return _isoEnvCache;
+  }
+
+  function strictlyInside(e, x, y) { return x > e.x0 && x < e.x1 && y > e.y0 && y < e.y1; }
+
+  // Roof height under a ground point (0 if no building is there):
+  // markers standing on a building's footprint are drawn on its roof.
+  function footingZ(prep, x, y) {
+    let z = 0;
+    for (const e of prep.list) if (strictlyInside(e, x, y) && e.h > z) z = e.h;
+    return z;
+  }
+
+  // World height gained per world-unit step toward the viewer along the
+  // line of sight (+1,+1 on the ground), measured from the camera so no
+  // projection constant is repeated here: a point (x+t, y+t, z+k*t)
+  // lands on the same screen pixel as (x, y, z).
+  function sightSlope(view) {
+    const a = view.worldToScreen(0, 0, 0), b = view.worldToScreen(1, 1, 0);
+    const hpx = view.heightPx(1);
+    return hpx > 0 ? (b.y - a.y) / hpx : 0;
+  }
+
+  // Exact test for "is the point (x, y, z) hidden behind a building":
+  // walk the line of sight toward the viewer and see whether it passes
+  // through a building's box. Buildings whose footprint the point is
+  // standing inside are skipped (it is on their roof). Returns the
+  // occluding entries (usually none).
+  function occluders(prep, slope, x, y, z) {
+    const out = [];
+    for (const e of prep.list) {
+      if (strictlyInside(e, x, y)) continue;
+      const tmin = Math.max(e.x0 - x, e.y0 - y, 0);
+      const tmax = Math.min(e.x1 - x, e.y1 - y);
+      if (tmax - tmin <= 1e-6) continue;
+      if (z + slope * tmin < e.h) out.push(e);
+    }
+    return out;
+  }
+
+  function pathPoly(ctx, pts) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+  }
+
+  function rectPts(view, x0, y0, x1, y1, z) {
+    return [view.worldToScreen(x0, y0, z), view.worldToScreen(x1, y0, z),
+            view.worldToScreen(x1, y1, z), view.worldToScreen(x0, y1, z)];
+  }
+
+  // A ground-plane circle: sampled through the camera so it is exactly
+  // the ellipse the projection makes of it.
+  function circlePts(view, cx, cy, r, z, n) {
+    const pts = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      pts[i] = view.worldToScreen(cx + Math.cos(a) * r, cy + Math.sin(a) * r, z);
+    }
+    return pts;
+  }
+
+  // Diagonal hatch as a cached tile pattern: filling a path with a
+  // pattern is far cheaper than clipping to every diamond and stroking
+  // lines, which matters for the many blocked-terrain cells in the
+  // cached bitmap's one-off render.
+  const _hatchPatterns = new Map();
+  function hatchPattern(ctx, strokeStyle, step) {
+    const s = Math.max(2, Math.round(step));
+    const key = strokeStyle + "|" + s;
+    let pat = _hatchPatterns.get(key);
+    if (!pat) {
+      const tile = document.createElement("canvas");
+      tile.width = tile.height = s;
+      const t = tile.getContext("2d");
+      t.strokeStyle = strokeStyle;
+      t.lineWidth = 1;
+      t.beginPath();
+      t.moveTo(-1, s + 1); t.lineTo(s + 1, -1);
+      t.moveTo(-1, 2 * s + 1); t.lineTo(2 * s + 1, -1); // wraps the corner so tiles join up
+      t.moveTo(-s - 1, s + 1); t.lineTo(s + 1, -s - 1);
+      t.stroke();
+      pat = ctx.createPattern(tile, "repeat");
+      _hatchPatterns.set(key, pat);
+    }
+    return pat;
+  }
+
+  function hatchPoly(ctx, pts, strokeStyle, step) {
+    pathPoly(ctx, pts);
+    ctx.fillStyle = hatchPattern(ctx, strokeStyle, step);
+    ctx.fill();
+  }
+
+  // ---- terrain ------------------------------------------------------
+
+  // Paints the whole terrain layer (slab, flood/blocked/road tiles,
+  // district borders) through `view`'s projection. Used twice: into the
+  // cached offscreen bitmap (a private camera, whole map, no culling)
+  // and directly onto the screen when zoomed in too far for a bitmap
+  // (the real camera, cells off-screen skipped).
+  function paintIsoTerrain(octx, view, t) {
+    const vw = view.state.viewW, vh = view.state.viewH;
+    const g = view.groundPxPerUnit();
+    const W = t.width, H = t.height;
+
+    // Slab: top plate plus the two sides facing the viewer.
+    const A = -0.5, B = W - 0.5, C = H - 0.5;
+    const P = (x, y, z) => view.worldToScreen(x, y, z);
+    pathPoly(octx, [P(B, A, 0), P(B, C, 0), P(B, C, -ISO_SLAB_T), P(B, A, -ISO_SLAB_T)]);
+    octx.fillStyle = "rgba(10,14,19,0.95)"; octx.fill();
+    pathPoly(octx, [P(A, C, 0), P(B, C, 0), P(B, C, -ISO_SLAB_T), P(A, C, -ISO_SLAB_T)]);
+    octx.fillStyle = "rgba(14,19,26,0.95)"; octx.fill();
+    pathPoly(octx, [P(A, A, 0), P(B, A, 0), P(B, C, 0), P(A, C, 0)]);
+    octx.fillStyle = "rgba(24,32,42,0.55)"; octx.fill();
+    octx.strokeStyle = "rgba(230,237,243,0.10)";
+    octx.lineWidth = 1;
+    octx.stroke();
+
+    const hatchStep = Math.max(2.5, g * 0.22);
+    const isRoad = (c) => !!(c && c.roadClass > 0);
+
+    for (let gy = 0; gy < H; gy++) {
+      for (let gx = 0; gx < W; gx++) {
+        const cell = t.cells[gy * W + gx];
+        const c = view.worldToScreen(gx, gy, 0);
+        if (c.x < -g || c.x > vw + g || c.y < -g || c.y > vh + g) continue;
+
+        if (cell.flood) {
+          pathPoly(octx, rectPts(view, gx - 0.5, gy - 0.5, gx + 0.5, gy + 0.5, 0));
+          octx.fillStyle = "rgba(56,139,253,0.28)";
+          octx.fill();
+        } else if (!cell.navigable) {
+          const pts = rectPts(view, gx - 0.5, gy - 0.5, gx + 0.5, gy + 0.5, 0);
+          pathPoly(octx, pts);
+          octx.fillStyle = "rgba(6,9,13,0.6)";
+          octx.fill();
+          hatchPoly(octx, pts, "rgba(230,237,243,0.16)", hatchStep);
+        } else if (cell.roadClass > 0 && ROAD_STYLE[cell.roadClass]) {
+          const style = ROAD_STYLE[cell.roadClass];
+          const lw = style.widthFrac / 2;
+          const hasN = isRoad(gy > 0 ? t.cells[(gy - 1) * W + gx] : null);
+          const hasS = isRoad(gy + 1 < H ? t.cells[(gy + 1) * W + gx] : null);
+          const hasW = isRoad(gx > 0 ? t.cells[gy * W + gx - 1] : null);
+          const hasE = isRoad(gx + 1 < W ? t.cells[gy * W + gx + 1] : null);
+          // Hub plus an arm toward each road neighbour, as ONE path so
+          // the overlap isn't double-alpha'd.
+          octx.beginPath();
+          const addRect = (x0, y0, x1, y1) => {
+            const q = rectPts(view, x0, y0, x1, y1, 0);
+            octx.moveTo(q[0].x, q[0].y);
+            for (let i = 1; i < 4; i++) octx.lineTo(q[i].x, q[i].y);
+            octx.closePath();
+          };
+          addRect(gx - lw, gy - lw, gx + lw, gy + lw);
+          if (hasN) addRect(gx - lw, gy - 0.5, gx + lw, gy + lw);
+          if (hasS) addRect(gx - lw, gy - lw, gx + lw, gy + 0.5);
+          if (hasW) addRect(gx - 0.5, gy - lw, gx + lw, gy + lw);
+          if (hasE) addRect(gx - lw, gy - lw, gx + 0.5, gy + lw);
+          octx.fillStyle = `rgba(${ROAD_COLOR_RGB},${style.alpha})`;
+          octx.fill();
+          if (cell.roadClass === 4) {
+            octx.strokeStyle = "rgba(255,255,255,0.5)";
+            octx.lineWidth = 1;
+            octx.beginPath();
+            if (hasW || hasE) {
+              const a = P(hasW ? gx - 0.5 : gx, gy, 0), b = P(hasE ? gx + 0.5 : gx, gy, 0);
+              octx.moveTo(a.x, a.y); octx.lineTo(b.x, b.y);
+            }
+            if (hasN || hasS) {
+              const a = P(gx, hasN ? gy - 0.5 : gy, 0), b = P(gx, hasS ? gy + 0.5 : gy, 0);
+              octx.moveTo(a.x, a.y); octx.lineTo(b.x, b.y);
+            }
+            octx.stroke();
+          }
+          if (cell.roadBlocked) {
+            // Same cue as 2D: dashed outline plus an X, never the
+            // "not navigable" dark hatch.
+            octx.save();
+            octx.strokeStyle = "rgba(248,81,73,0.75)";
+            octx.lineWidth = 1;
+            octx.setLineDash([3, 2]);
+            pathPoly(octx, rectPts(view, gx - 0.44, gy - 0.44, gx + 0.44, gy + 0.44, 0));
+            octx.stroke();
+            octx.setLineDash([]);
+            const xr = Math.min(1, style.widthFrac * 1.4) / 2;
+            const x1 = P(gx - xr, gy - xr, 0), x2 = P(gx + xr, gy + xr, 0);
+            const x3 = P(gx + xr, gy - xr, 0), x4 = P(gx - xr, gy + xr, 0);
+            octx.beginPath();
+            octx.moveTo(x1.x, x1.y); octx.lineTo(x2.x, x2.y);
+            octx.moveTo(x3.x, x3.y); octx.lineTo(x4.x, x4.y);
+            octx.stroke();
+            octx.restore();
+          }
+        }
+      }
+    }
+
+    // District borders - same rule as 2D.
+    octx.save();
+    octx.strokeStyle = "rgba(230,237,243,0.10)";
+    octx.lineWidth = 1;
+    octx.beginPath();
+    for (let gy = 0; gy < H; gy++) {
+      for (let gx = 0; gx < W; gx++) {
+        const cell = t.cells[gy * W + gx];
+        const right = gx + 1 < W ? t.cells[gy * W + gx + 1] : null;
+        const below = gy + 1 < H ? t.cells[(gy + 1) * W + gx] : null;
+        if (right && right.districtId !== cell.districtId) {
+          const a = P(gx + 0.5, gy - 0.5, 0), b = P(gx + 0.5, gy + 0.5, 0);
+          octx.moveTo(a.x, a.y); octx.lineTo(b.x, b.y);
+        }
+        if (below && below.districtId !== cell.districtId) {
+          const a = P(gx - 0.5, gy + 0.5, 0), b = P(gx + 0.5, gy + 0.5, 0);
+          octx.moveTo(a.x, a.y); octx.lineTo(b.x, b.y);
+        }
+      }
+    }
+    octx.stroke();
+    octx.restore();
+  }
+
+  // The iso terrain only depends on the map and the ZOOM - a pan is
+  // just a translation of the already-rendered bitmap - so unlike the
+  // 2D cache (keyed on the camera position too) this re-renders only
+  // when the terrain source changes or the zoom crosses into the next
+  // resolution step (steps of 1.25x, always rendered at least as sharp
+  // as needed so the blit never upscales by more than 1.25x).
+  const ISO_BITMAP_MAX_RES = 40; // device px per world unit along an iso axis; beyond this, draw directly
+  const ISO_BITMAP_BASE_RES = 4;
+  const ISO_REFINE_DELAY_MS = 140;
+  let _isoTerrainCache = null;   // { source, res, canvas, cam }
+  let _isoRefineTimer = null;
+  let _isoForceRefine = false;
+  let _isoRedraw = null;         // set by setRedrawCallback(): re-draws the map after a deferred refine
+
+  function buildIsoTerrainBitmap(t, res) {
+    // A private camera of the same kind frames the whole plate in the
+    // bitmap, so the bitmap and the live view share one projection.
+    const margin = 4;
+    const bmW = Math.ceil((t.width + t.height) * res) + margin * 2;
+    const bmH = Math.ceil((t.width + t.height) * res * 0.5 + 2 * ISO_SLAB_T * 0.55 * 2 * res) + margin * 2 + Math.ceil(res);
+    const canvas = document.createElement("canvas");
+    canvas.width = bmW; canvas.height = bmH;
+    const cam = global.DashboardCamera.createCamera(t.width, t.height);
+    cam.state.viewW = bmW; cam.state.viewH = bmH;
+    cam.state.zoom = 2 * res;
+    cam.state.x = t.width / 2 - 0.5; cam.state.y = t.height / 2 - 0.5;
+    cam.setViewMode("iso");
+    paintIsoTerrain(canvas.getContext("2d"), cam, t);
+    return { source: t.source, res, canvas, cam, bmW, bmH };
+  }
+
+  // Resolution is quantized in 1.25x steps. A zoom gesture is a stream
+  // of frames, so the bitmap is NOT rebuilt on every step: it keeps
+  // being scaled (accepted between 0.6x and 1.6x of its native size)
+  // and is sharpened once, ISO_REFINE_DELAY_MS after the zoom stops
+  // (see setRedrawCallback). Only a big jump (a >1.6x blow-up or <0.6x
+  // shrink) rebuilds synchronously.
+  function isoTerrainBitmap(view, t) {
+    const dpr = window.devicePixelRatio || 1;
+    const need = view.state.zoom * 0.5 * dpr; // device px per iso-axis world unit on screen
+    if (need > ISO_BITMAP_MAX_RES) return null;
+    const step = Math.max(0, Math.ceil(Math.log(Math.max(need, ISO_BITMAP_BASE_RES) / ISO_BITMAP_BASE_RES) / Math.log(1.25) - 1e-9));
+    const res = ISO_BITMAP_BASE_RES * Math.pow(1.25, step);
+    const c = _isoTerrainCache;
+    if (c && c.source === t.source) {
+      if (c.res === res) return c;
+      const ratio = need / c.res;
+      if (!_isoForceRefine && ratio >= 0.6 && ratio <= 1.6 && _isoRedraw) {
+        if (_isoRefineTimer) clearTimeout(_isoRefineTimer);
+        _isoRefineTimer = setTimeout(() => {
+          _isoRefineTimer = null;
+          _isoForceRefine = true;
+          _isoRedraw();            // redraws through here again and rebuilds the bitmap
+        }, ISO_REFINE_DELAY_MS);
+        return c;
+      }
+    }
+    if (_isoRefineTimer) { clearTimeout(_isoRefineTimer); _isoRefineTimer = null; }
+    _isoForceRefine = false;
+    _isoTerrainCache = buildIsoTerrainBitmap(t, res);
+    return _isoTerrainCache;
+  }
+
+  // index.html registers a function that redraws the current frame;
+  // the refine timer calls it so the sharper bitmap shows up without
+  // waiting for the next tick or mouse move.
+  function setRedrawCallback(fn) { _isoRedraw = fn; }
+
+  function drawTerrainIso(ctx, view, t) {
+    const bm = isoTerrainBitmap(view, t);
+    if (!bm) { paintIsoTerrain(ctx, view, t); return; }
+    // The bitmap holds `res` device px per iso-axis unit; the screen
+    // wants zoom/2 CSS px per unit, so one bitmap px is k CSS px. The
+    // bitmap's centre is the plate's centre, on the ground.
+    const k = (view.state.zoom * 0.5) / bm.res;
+    const o = view.worldToScreen(bm.cam.state.x, bm.cam.state.y, 0);
+    ctx.drawImage(bm.canvas, o.x - k * bm.bmW / 2, o.y - k * bm.bmH / 2, k * bm.bmW, k * bm.bmH);
+  }
+
+  // Cell-edge grid for iso (the 2D grid goes through cell centres,
+  // which would look off on diamond tiles).
+  function drawGridIso(ctx, view, gridN) {
+    ctx.save();
+    ctx.strokeStyle = "#182028";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i <= gridN; i++) {
+      const e = i - 0.5;
+      const a = view.worldToScreen(e, -0.5, 0), b = view.worldToScreen(e, gridN - 0.5, 0);
+      ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      const c = view.worldToScreen(-0.5, e, 0), d = view.worldToScreen(gridN - 0.5, e, 0);
+      ctx.moveTo(c.x, c.y); ctx.lineTo(d.x, d.y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ---- scene --------------------------------------------------------
+
+  function drawBuildingBox(ctx, view, e, outline) {
+    const P = (x, y, z) => view.worldToScreen(x, y, z);
+    const { x0, y0, x1, y1, h } = e;
+    // Right face (x = x1), left face (y = y1), then the top. Those are
+    // the three faces that can face the viewer in this projection.
+    pathPoly(ctx, [P(x1, y0, 0), P(x1, y1, 0), P(x1, y1, h), P(x1, y0, h)]);
+    ctx.fillStyle = e.right; ctx.fill();
+    pathPoly(ctx, [P(x0, y1, 0), P(x1, y1, 0), P(x1, y1, h), P(x0, y1, h)]);
+    ctx.fillStyle = e.left; ctx.fill();
+    const top = [P(x0, y0, h), P(x1, y0, h), P(x1, y1, h), P(x0, y1, h)];
+    pathPoly(ctx, top);
+    ctx.fillStyle = e.top; ctx.fill();
+    ctx.strokeStyle = "rgba(230,237,243,0.16)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    // Same "damaged" visual language as the 2D layer's hatch.
+    if (e.damaged) hatchPoly(ctx, top, e.collapsed ? "rgba(230,237,243,0.32)" : "rgba(230,237,243,0.16)", 4);
+    if (outline) {
+      pathPoly(ctx, top);
+      ctx.strokeStyle = "rgba(255,255,255,0.8)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
+
+  function drawShadow(ctx, view, x, y, z, r) {
+    pathPoly(ctx, circlePts(view, x, y, r, z, 16));
+    ctx.fillStyle = "rgba(0,0,0,0.42)";
+    ctx.fill();
+  }
+
+  function drawStem(ctx, view, x, y, zFoot, zHead, color) {
+    const a = view.worldToScreen(x, y, zFoot), b = view.worldToScreen(x, y, zHead);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.85;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // The whole iso map above the terrain: ground-plane layers first, then
+  // buildings and upright markers back to front. Returns hit targets
+  // like the 2D draw* functions do (with wz/rpx added - see
+  // hitTestWorld). `o`: { env, frame, fogViewMode, selectedMarker,
+  // teamColors, outlineBuildingId }.
+  function drawIsoScene(ctx, view, o) {
+    const hits = [];
+    const env = o.env, frame = o.frame || {};
+    const selected = o.selectedMarker;
+    const prep = prepareIsoEnv(env);
+    const slope = sightSlope(view);
+    const zoom = view.state.zoom;
+    const vw = view.state.viewW, vh = view.state.viewH;
+
+    // ---------- ground plane ----------
+    if (env && env.epicenter && env.epicenter.active) {
+      const ep = env.epicenter;
+      pathPoly(ctx, circlePts(view, ep.x, ep.y, 1.2, 0, 40));
+      ctx.strokeStyle = "rgba(163,113,247,0.5)"; // purple, not red - red is reserved
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    const hatchStep = Math.max(2.5, view.groundPxPerUnit() * 0.22);
+    (frame.hazard_cells || []).forEach((c) => {
+      const pts = rectPts(view, c.x - 0.5, c.y - 0.5, c.x + 0.5, c.y + 0.5, 0);
+      pathPoly(ctx, pts);
+      if (c.blocked) {
+        ctx.fillStyle = "rgba(210,153,34,0.14)"; ctx.fill();
+        hatchPoly(ctx, pts, "rgba(210,153,34,0.45)", hatchStep);
+      } else {
+        ctx.fillStyle = c.hazard_flags ? "rgba(210,153,34,0.20)" : "rgba(210,153,34,0.10)";
+        ctx.fill();
+      }
+    });
+
+    (frame.safezones || []).forEach((sz) => {
+      if (sz.capacity === 0) return;
+      const half = 0.42;
+      pathPoly(ctx, rectPts(view, sz.x - half, sz.y - half, sz.x + half, sz.y + half, 0));
+      ctx.fillStyle = "rgba(63,185,80,0.10)"; ctx.fill();
+      ctx.strokeStyle = "#3fb950";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      hits.push({ type: "safezone", id: sz.id, wx: sz.x, wy: sz.y, wr: 0.5, data: sz });
+    });
+
+    // Where the open incident card's building is: its footprint, on the
+    // ground (the roof outline is added when the box is drawn).
+    if (o.outlineBuildingId !== undefined && o.outlineBuildingId !== null) {
+      const e = prep.byId.get(o.outlineBuildingId);
+      if (e) {
+        pathPoly(ctx, rectPts(view, e.x0, e.y0, e.x1, e.y1, 0));
+        ctx.strokeStyle = "rgba(255,255,255,0.6)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+
+    // ---------- upright objects ----------
+    const markers = []; // { key, z0, draw(), over() , ...} - ordered below
+    const hidden = [];  // markers to re-draw as a faded outline on top
+
+    // Incidents.
+    const clusters = buildIncidentClusters(frame.incidents, o.fogViewMode);
+    const priorityScale = { 1: 1.25, 2: 1.05, 3: 0.9, 4: 0.75 };
+    clusters.forEach((cluster) => {
+      const members = cluster.members;
+      const inc = members[0];
+      const building = (inc.building_id !== undefined && inc.building_id >= 0) ? prep.byId.get(inc.building_id) : null;
+      const wx = building ? building.b.x : inc.x, wy = building ? building.b.y : inc.y;
+      const color = PRIORITY_COLORS[inc.priority] || "#8b98a5";
+      const worldSize = Math.min(0.9, (0.32 + inc.victims * 0.045)) * (priorityScale[inc.priority] || 0.85);
+      const sizePx = worldSize * zoom;
+      const foot = footingZ(prep, wx, wy);
+      const headZ = foot + ISO_INCIDENT_Z;
+      const isSel = !!(selected && selected.type === "incident" && members.some((m) => m.id === selected.id));
+      const draw = () => {
+        drawShadow(ctx, view, wx, wy, foot, Math.max(0.3, worldSize * 0.6));
+        drawStem(ctx, view, wx, wy, foot, headZ, color);
+        drawIncidentGlyph(ctx, view.worldToScreen(wx, wy, headZ), sizePx, color, inc, members, selected);
+      };
+      const occ = occluders(prep, slope, wx, wy, headZ);
+      const m = { key: wx + wy, z0: foot, kind: 1, draw, occ };
+      if (occ.length) {
+        hidden.push(() => {
+          const c = view.worldToScreen(wx, wy, headZ);
+          ctx.save();
+          ctx.globalAlpha = 0.9;
+          ctx.setLineDash([3, 2]);
+          ctx.strokeStyle = color;
+          ctx.fillStyle = color;
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(c.x - sizePx / 2 - 2, c.y - sizePx / 2 - 2, sizePx + 4, sizePx + 4);
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 0.25;
+          ctx.fillRect(c.x - sizePx / 2, c.y - sizePx / 2, sizePx, sizePx);
+          if (isSel) {
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(c.x - sizePx / 2 - 5, c.y - sizePx / 2 - 5, sizePx + 10, sizePx + 10);
+          }
+          ctx.restore();
+        });
+      }
+      markers.push(m);
+      const hitData = members.length > 1 ? Object.assign({}, inc, { groupIncidents: members }) : inc;
+      hits.push({ type: "incident", id: inc.id, wx, wy, wz: headZ, wr: Math.max(worldSize / 2, 0.4),
+                  rpx: Math.max(sizePx / 2, 0.4 * zoom) + 2, data: hitData });
+      if (isSel) {
+        pathPoly(ctx, circlePts(view, wx, wy, Math.max(worldSize / 2, 0.4) + 0.25, foot, 24));
+        ctx.strokeStyle = "rgba(255,255,255,0.7)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    });
+
+    // Teams.
+    const markerWorldR = 0.32;
+    (frame.teams || []).forEach((t, i) => {
+      const color = o.teamColors[i % o.teamColors.length];
+      const r = markerWorldR * zoom;
+      // ON_SCENE teams share the incident's ground point; step them
+      // off to one side (screen-right on the iso diagonal) so both
+      // markers stay visible - ~0.9 marker radii, as in 2D.
+      const off = (t.status === 2) ? 0.3 : 0;
+      const wx = t.x + off, wy = t.y - off;
+      const foot = footingZ(prep, t.x, t.y);
+      const headZ = foot + ISO_TEAM_Z;
+
+      if (t.has_dest && (t.dest_x !== t.x || t.dest_y !== t.y)) {
+        const a = view.worldToScreen(wx, wy, 0), b = view.worldToScreen(t.dest_x, t.dest_y, 0);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.35;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      }
+      const isSel = !!(selected && selected.type === "team" && selected.id === t.id);
+      if (isSel) {
+        pathPoly(ctx, circlePts(view, wx, wy, 0.6, foot, 24));
+        ctx.strokeStyle = "rgba(255,255,255,0.7)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+      const draw = () => {
+        drawShadow(ctx, view, wx, wy, foot, 0.34);
+        drawStem(ctx, view, wx, wy, foot, headZ, color);
+        drawTeamGlyph(ctx, view.worldToScreen(wx, wy, headZ), r, color, t, selected);
+      };
+      const occ = occluders(prep, slope, wx, wy, headZ);
+      markers.push({ key: wx + wy, z0: foot, kind: 2, draw, occ });
+      if (occ.length) {
+        hidden.push(() => {
+          // Faded "x-ray" version of the marker on top of whatever hides it.
+          const c = view.worldToScreen(wx, wy, headZ);
+          ctx.save();
+          ctx.globalAlpha = 0.9;
+          ctx.setLineDash([3, 2]);
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(c.x, c.y, r * 1.55, 0, Math.PI * 2); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 0.3;
+          ctx.fillStyle = color;
+          ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI * 2); ctx.fill();
+          ctx.globalAlpha = 0.9;
+          if (r >= 6) {
+            ctx.fillStyle = "#e6edf3";
+            ctx.font = `bold ${Math.max(8, r)}px sans-serif`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(String(t.id), c.x, c.y + 0.5);
+          }
+          if (isSel) {
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(c.x, c.y, r * 1.9, 0, Math.PI * 2); ctx.stroke();
+          }
+          ctx.restore();
+        });
+      }
+      hits.push({ type: "team", id: t.id, wx, wy, wz: headZ, wr: markerWorldR + 0.18, rpx: 0.5 * zoom, data: { ...t, i } });
+    });
+
+    // ---------- painter's order ----------
+    // Back to front: buildings by x+y (centre) then height. A marker is
+    // ordered against the buildings by the exact line-of-sight test
+    // above rather than by x+y alone (a long building's centre can be
+    // "behind" a marker that is really in front of its face): it is
+    // drawn just before the first building that hides it (so that
+    // building covers it), or after all of them if none does. Markers
+    // among themselves go by x+y, then footing height.
+    const onScreen = [];
+    prep.list.forEach((e) => {
+      const c = view.worldToScreen(e.b.x, e.b.y, 0);
+      const reach = (e.x1 - e.x0 + e.y1 - e.y0) * zoom * 0.5 + view.heightPx(e.h) + 4;
+      if (c.x < -reach || c.x > vw + reach || c.y < -reach - view.heightPx(e.h) || c.y > vh + reach) return;
+      onScreen.push(e);
+    });
+    onScreen.sort((a, b) => (a.key - b.key) || (a.h - b.h));
+    const order = new Map(onScreen.map((e, idx) => [e, idx]));
+    const before = new Map(); // building index -> markers drawn right before it
+    const after = [];
+    markers.forEach((m) => {
+      let first = Infinity;
+      for (const e of m.occ) { const idx = order.get(e); if (idx !== undefined && idx < first) first = idx; }
+      if (first === Infinity) after.push(m);
+      else { if (!before.has(first)) before.set(first, []); before.get(first).push(m); }
+    });
+    const byDepth = (a, b) => (a.key - b.key) || (a.z0 - b.z0) || (a.kind - b.kind);
+    onScreen.forEach((e, idx) => {
+      const list = before.get(idx);
+      if (list) list.sort(byDepth).forEach((m) => m.draw());
+      drawBuildingBox(ctx, view, e, e.id === o.outlineBuildingId);
+    });
+    after.sort(byDepth).forEach((m) => m.draw());
+
+    hidden.forEach((fn) => fn());
+    return hits;
+  }
+
+  // Where a drop-target highlight ring goes for a hit, in screen space:
+  // around the marker as drawn (its head in iso), so index.html needn't
+  // know which mode it is in.
+  function markerScreenGeom(view, hit) {
+    const c = view.worldToScreen(hit.wx, hit.wy, hit.wz || 0);
+    return { x: c.x, y: c.y, r: hit.rpx !== undefined ? hit.rpx : hit.wr * view.state.zoom };
+  }
+
   // World-space hit test: converts the screen point to world space
   // once, then compares against each target's world-space radius, so
   // hit-testing is correct at any zoom level without per-frame tuning.
+  //
+  // A target may carry `wz` (the height of the thing you actually see,
+  // e.g. an upright marker's head in iso): the click is then converted
+  // on THAT plane (screenToWorld's z argument), so clicking the visible
+  // marker lands exactly on its world point. If it also carries `rpx`
+  // (the drawn marker's radius in screen px) the world offset is turned
+  // back into a screen distance through the camera's linear part, so
+  // the hit area is the disc you see rather than a world circle -
+  // which on an iso screen is a squashed ellipse. 2D targets have
+  // neither and take the plain world-radius path, unchanged.
   function hitTestWorld(view, hits, sx, sy, typeFilter) {
-    const w = view.screenToWorld(sx, sy);
+    const w0 = view.screenToWorld(sx, sy);
     let best = null, bestDist = Infinity;
     for (const h of hits) {
       if (typeFilter && h.type !== typeFilter) continue;
+      const w = h.wz ? view.screenToWorld(sx, sy, h.wz) : w0;
       const dx = h.wx - w.x, dy = h.wy - w.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist <= h.wr && dist < bestDist) { best = h; bestDist = dist; }
+      let dist, limit;
+      if (h.rpx !== undefined) {
+        // Both sides in "world-unit equivalents" (px / ground px per
+        // unit) so "nearest wins" stays comparable across target kinds.
+        const d = view.worldDeltaToScreen(dx, dy), g = view.groundPxPerUnit();
+        dist = Math.sqrt(d.x * d.x + d.y * d.y) / g;
+        limit = h.rpx / g;
+      } else {
+        dist = Math.sqrt(dx * dx + dy * dy);
+        limit = h.wr;
+      }
+      if (dist <= limit && dist < bestDist) { best = h; bestDist = dist; }
     }
     return best;
   }
@@ -646,5 +1358,6 @@
     drawGrid, drawTerrain, drawBuildings, drawEpicenter, drawHazardCells,
     drawSafezones, drawIncidents, drawTeams, hitTestWorld,
     buildingFootprintWorldRect,
+    drawIsoScene, markerScreenGeom, buildingHeight, setRedrawCallback,
   };
 })(window);

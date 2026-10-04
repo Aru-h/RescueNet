@@ -169,6 +169,194 @@ def _live_run_scrollheight_check(browser, width, height):
         page.close()
 
 
+def _iso_camera_hit_test_check(page):
+    """Pure-function checks of the 2.5D projection and hit-testing, run
+    in the page against a throwaway camera (no live data needed):
+    screenToWorld inverts worldToScreen at the ground and at height z,
+    pan and zoom-to-cursor behave identically in both modes, a marker
+    drawn with a height is hit where it is VISIBLE (its head), not only
+    at its ground point, and a team hidden behind a building is
+    re-drawn as a faded outline instead of being lost."""
+    res = page.evaluate("""() => {
+      const out = {};
+      const mk = (mode) => {
+        const cam = DashboardCamera.createCamera(36, 36);
+        cam.setViewSize(700, 700);
+        cam.setViewMode(mode);
+        return cam;
+      };
+      for (const mode of ["2d", "iso"]) {
+        const cam = mk(mode);
+        let worst = 0;
+        for (let wx = -2; wx <= 38; wx += 2.5) for (let wy = -2; wy <= 38; wy += 2.5) for (const z of [0, 0.7, 1.9]) {
+          const p = cam.worldToScreen(wx, wy, z);
+          const w = cam.screenToWorld(p.x, p.y, z);
+          worst = Math.max(worst, Math.abs(w.x - wx), Math.abs(w.y - wy));
+        }
+        out[mode + "_roundtrip"] = worst;
+        const before = cam.worldToScreen(10, 12);
+        cam.pan(37, -21);
+        const after = cam.worldToScreen(10, 12);
+        out[mode + "_pan"] = [after.x - before.x, after.y - before.y];
+        const w0 = cam.screenToWorld(123, 456);
+        cam.zoomAt(123, 456, 1.7);
+        const w1 = cam.screenToWorld(123, 456);
+        out[mode + "_zoomfix"] = Math.abs(w0.x - w1.x) + Math.abs(w0.y - w1.y);
+      }
+
+      // Hit-testing in iso: a team drawn 1.0 up (wz) with a 9px-ish disc.
+      const cam = mk("iso");
+      const hit = { type: "team", id: 3, wx: 12, wy: 9, wz: 1.0, wr: 0.5, rpx: 9, data: { id: 3 } };
+      const head = cam.worldToScreen(12, 9, 1.0);
+      const foot = cam.worldToScreen(12, 9, 0);
+      out.iso_hit_head = !!MapRender.hitTestWorld(cam, [hit], head.x + 2, head.y - 2);
+      out.iso_hit_far = !!MapRender.hitTestWorld(cam, [hit], head.x + 40, head.y);
+      out.iso_hit_head_world = (() => { const w = cam.screenToWorld(head.x, head.y, 1.0); return [w.x, w.y]; })();
+      out.iso_foot_head_px = Math.hypot(head.x - foot.x, head.y - foot.y);
+      // A ground-level target (safezone-style, no wz/rpx) still uses its world radius.
+      const sz = { type: "safezone", id: 1, wx: 5, wy: 5, wr: 0.5, data: { id: 1 } };
+      const sp = cam.worldToScreen(5, 5);
+      out.iso_ground_hit = !!MapRender.hitTestWorld(cam, [sz], sp.x, sp.y);
+      out.iso_ground_miss = !!MapRender.hitTestWorld(cam, [sz], sp.x + 60, sp.y);
+      const cam2 = mk("2d");
+      const p2 = cam2.worldToScreen(5, 5);
+      out.flat_hit = !!MapRender.hitTestWorld(cam2, [sz], p2.x + 3, p2.y - 3);
+      out.flat_miss = !!MapRender.hitTestWorld(cam2, [sz], p2.x + 60, p2.y);
+
+      // Occlusion: team at (10,10), 6-floor building at (11,11) in front of it.
+      const draw = (withBuilding) => {
+        const cv = document.createElement("canvas");
+        cv.width = cv.height = 700;
+        const ctx = cv.getContext("2d");
+        const c = mk("iso");
+        MapRender.drawIsoScene(ctx, c, {
+          env: { buildings: withBuilding ? [{ id: 1, x: 11, y: 11, w: 1, h: 1, type: 1, floors: 6, damage: 0 }] : [],
+                 epicenter: { active: 0 } },
+          frame: { teams: [{ id: 0, x: 10.3, y: 10.3, status: 0, has_dest: 0, stamina: 100, fault_mask: 0, override: 0 }],
+                   incidents: [], hazard_cells: [], safezones: [] },
+          fogViewMode: "god", selectedMarker: null, teamColors: ["#ff00ff"], outlineBuildingId: null,
+        });
+        const head = c.worldToScreen(10.3, 10.3, 1.0);
+        const r = 0.32 * c.state.zoom;
+        const magenta = (x, y) => { const d = ctx.getImageData(Math.round(x), Math.round(y), 1, 1).data; return d[0] > 170 && d[2] > 170 && d[1] < 60; };
+        let ring = 0;
+        for (let a = 0; a < 360; a += 5) {
+          const t = a * Math.PI / 180;
+          if (magenta(head.x + Math.cos(t) * r * 1.55, head.y + Math.sin(t) * r * 1.55)) ring++;
+        }
+        return { ring, discSolid: magenta(head.x, head.y + r * 0.6) };
+      };
+      out.occ_with = draw(true);
+      out.occ_without = draw(false);
+      return out;
+    }""")
+    for mode in ("2d", "iso"):
+        check(res[mode + "_roundtrip"] < 1e-9,
+              f"[{mode}] screenToWorld inverts worldToScreen at z=0 and at height z (worst error {res[mode + '_roundtrip']:.2e})")
+        check(abs(res[mode + "_pan"][0] - 37) < 1e-6 and abs(res[mode + "_pan"][1] + 21) < 1e-6,
+              f"[{mode}] pan moves the map by exactly the drag delta on screen (got {res[mode + '_pan']})")
+        check(res[mode + "_zoomfix"] < 1e-9,
+              f"[{mode}] zoom-to-cursor keeps the world point under the cursor fixed (drift {res[mode + '_zoomfix']:.2e})")
+    check(res["iso_hit_head"], "[iso] a click on a team marker's drawn head hits it")
+    check(not res["iso_hit_far"], "[iso] a click well away from the marker misses it")
+    check(abs(res["iso_hit_head_world"][0] - 12) < 1e-9 and abs(res["iso_hit_head_world"][1] - 9) < 1e-9,
+          f"[iso] clicking the head maps (screenToWorld at its height) to the team's world position (got {res['iso_hit_head_world']})")
+    check(res["iso_ground_hit"] and not res["iso_ground_miss"], "[iso] a ground-level target is hit on its tile and missed elsewhere")
+    check(res["flat_hit"] and not res["flat_miss"], "[2d] hit-testing is unchanged for plain world-radius targets")
+    check(res["occ_with"]["ring"] >= 3 and not res["occ_with"]["discSolid"],
+          f"[iso] a team behind a building is redrawn as a faded outline on top (ring px {res['occ_with']['ring']})")
+    check(res["occ_without"]["discSolid"],
+          "[iso] the same team with nothing in front is drawn as the normal solid marker")
+
+
+def _iso_view_check(page, console_errors, screenshot_dir):
+    """Toggles the region map to 2.5D through the toolbar button, takes a
+    screenshot, clicks a team (and drags one onto an incident, when the
+    frame has an eligible pair), then toggles back to 2D - the 2D
+    checks elsewhere in this file all run with the default 2D mode."""
+    btn = "#viewModeBtn"
+    check(page.eval_on_selector(btn, "el => el.textContent.includes('2D')"), "the map toolbar's view button starts on 2D (the default)")
+    mode0 = page.evaluate("() => mapCamera.state.viewMode")
+    check(mode0 == "2d", f"the map camera defaults to the 2d view mode (got {mode0!r})")
+
+    page.click(btn)
+    page.wait_for_timeout(150)
+    mode1 = page.evaluate("() => mapCamera.state.viewMode")
+    check(mode1 == "iso" and page.eval_on_selector(btn, "el => el.textContent.includes('2.5D')"),
+          f"clicking the view button switches the map to 2.5D (mode {mode1!r})")
+    stored = page.evaluate("() => { try { return localStorage.getItem('dashboard.mapViewMode'); } catch (e) { return 'unavailable'; } }")
+    check(stored == "iso", f"the 2.5D choice is remembered in localStorage (got {stored!r})")
+
+    shot = os.path.join(screenshot_dir, "dashboard_e2e_map_2_5d.png")
+    page.locator(".live-map-col").screenshot(path=shot)
+    check(os.path.exists(shot) and os.path.getsize(shot) > 2000, f"2.5D map screenshot written ({shot})")
+
+    # Click a team on its drawn head.
+    target = page.evaluate("""() => {
+      const h = mapHitTargets.find(h => h.type === 'team');
+      if (!h) return null;
+      const rect = document.getElementById('mapCanvas').getBoundingClientRect();
+      const p = mapCamera.worldToScreen(h.wx, h.wy, h.wz || 0);
+      return { id: h.id, x: rect.left + p.x, y: rect.top + p.y, hasHeight: !!h.wz };
+    }""")
+    check(bool(target and target["hasHeight"]), f"in 2.5D the team hit targets carry a marker height (got {target})")
+    if target:
+        page.mouse.click(target["x"], target["y"])
+        page.wait_for_timeout(100)
+        sel = page.evaluate("() => selectedMarker")
+        check(bool(sel and sel["type"] == "team" and sel["id"] == target["id"]),
+              f"[iso] clicking a team's marker selects that team (expected id {target['id']}, got {sel})")
+        page.screenshot(path=os.path.join(screenshot_dir, "dashboard_e2e_page_2_5d_selected.png"))
+
+    # Drag a team onto an incident -> the override proposal opens.
+    pair = page.evaluate("""() => {
+      const rect = document.getElementById('mapCanvas').getBoundingClientRect();
+      const pt = (h) => { const p = mapCamera.worldToScreen(h.wx, h.wy, h.wz || 0); return { x: rect.left + p.x, y: rect.top + p.y }; };
+      for (const t of mapHitTargets.filter(h => h.type === 'team')) {
+        for (const i of mapHitTargets.filter(h => h.type === 'incident')) {
+          if (i.data.pool !== 1 && i.data.status !== 3 && i.data.id !== t.data.dest_id) {
+            // Only if the incident's marker is not under another team's.
+            const ip = pt(i), tp = pt(t);
+            const hitBack = MapRender.hitTestWorld(mapCamera, mapHitTargets, ip.x - rect.left, ip.y - rect.top, 'incident');
+            if (hitBack && hitBack.id === i.id) return { team: tp, inc: ip, teamId: t.id, incId: i.id };
+          }
+        }
+      }
+      return null;
+    }""")
+    if pair:
+        page.mouse.move(pair["team"]["x"], pair["team"]["y"])
+        page.mouse.down()
+        page.mouse.move(pair["inc"]["x"], pair["inc"]["y"], steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(150)
+        pend = page.evaluate("() => pendingOverride ? { team: pendingOverride.teamIndex, inc: pendingOverride.to.id } : null")
+        check(bool(pend and pend["inc"] == pair["incId"]),
+              f"[iso] dragging a team's marker onto an incident's marker opens the override proposal (got {pend}, expected incident {pair['incId']})")
+        page.evaluate("() => { pendingOverride = null; selectedMarker = null; renderInspector(); }")
+    else:
+        print("INFO: no eligible (team, incident) pair in the current frame to drag-test in 2.5D - skipped that one assertion")
+
+    # Back to 2D: nothing may have been left behind.
+    page.click(btn)
+    page.wait_for_timeout(150)
+    mode2 = page.evaluate("() => mapCamera.state.viewMode")
+    check(mode2 == "2d" and page.eval_on_selector(btn, "el => el.textContent.includes('2D') && !el.textContent.includes('2.5D')"),
+          f"toggling back returns the map to 2D (mode {mode2!r})")
+    stored = page.evaluate("() => { try { return localStorage.getItem('dashboard.mapViewMode'); } catch (e) { return 'unavailable'; } }")
+    check(stored == "2d", f"the 2D choice is remembered again (got {stored!r})")
+    flat = page.evaluate("""() => {
+      const h = mapHitTargets.find(h => h.type === 'team');
+      const p = mapCamera.worldToScreen(h.wx, h.wy);
+      const got = MapRender.hitTestWorld(mapCamera, mapHitTargets, p.x, p.y, 'team');
+      return !!got && got.id === h.id && !h.wz;
+    }""")
+    check(flat, "[2d] after toggling back, team hit-testing is the flat world-radius path again")
+    page.evaluate("() => { selectedMarker = null; renderInspector(); }")
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0, f"no UNEXPECTED console/page errors while toggling 2D/2.5D (got {real_errors[:5]})")
+
+
 def _run_control_state_check(page, console_errors):
     """Regression coverage for a real bug report: (a) a failed override
     must never affect the live run itself - frames keep arriving; (b) a
@@ -893,6 +1081,9 @@ def main():
     # exactly one curated demo file tracked in git, and this test would
     # otherwise litter it with a fresh recording on every run.
     recordings_tmpdir = tempfile.mkdtemp(prefix="dashboard_e2e_recordings_")
+    # Screenshots the 2.5D step takes; set DASHBOARD_E2E_SCREENSHOT_DIR to keep them.
+    screenshot_dir = os.environ.get("DASHBOARD_E2E_SCREENSHOT_DIR") or tempfile.mkdtemp(prefix="dashboard_e2e_shots_")
+    os.makedirs(screenshot_dir, exist_ok=True)
     _demo_src = os.path.join(TOOLS_DIR, "recordings", DEMO_RECORDING)
     if os.path.exists(_demo_src):
         shutil.copy(_demo_src, recordings_tmpdir)
@@ -968,6 +1159,8 @@ def main():
 
             has_frame = page.evaluate("() => !!window._lastFrame")
             check(has_frame, "a live frame arrived and was stored")
+
+            _iso_camera_hit_test_check(page)
 
             hit_count = page.evaluate("() => (typeof mapHitTargets !== 'undefined') ? mapHitTargets.length : -1")
             check(hit_count > 0, f"the map produced hit targets for the current frame (got {hit_count})")
@@ -1092,6 +1285,9 @@ def main():
                 check(got_pct is not None and abs(got_pct - expected_pct) < 0.15,
                       f"topbar radio loss ({loss_text!r}) matches dropped/(delivered+dropped) "
                       f"(expected {expected_pct:.1f}%)")
+
+            # 2.5D view: toggle on, screenshot, click/drag a team, toggle off.
+            _iso_view_check(page, console_errors, screenshot_dir)
 
             # Only one theme toggle exists (a UI pass removed the header's
             # duplicate).

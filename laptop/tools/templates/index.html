@@ -487,6 +487,7 @@
               <h2>Region Map (36×36) <span id="liveTickLabel" style="color:var(--muted);font-weight:400;text-transform:none;font-size:11px;">no run yet</span></h2>
               <div style="display:flex;gap:6px;flex-wrap:nowrap;">
                 <button type="button" id="resetViewBtn" class="map-toolbar-btn" title="Recenter and re-fit the pan/zoom">↺</button>
+                <button type="button" id="viewModeBtn" onclick="toggleMapViewMode()" class="map-toolbar-btn" title="Switch between the flat 2D map and the isometric 2.5D map">◫ 2D</button>
                 <button type="button" id="fogToggleBtn" onclick="toggleFogView()" class="map-toolbar-btn" title="Toggle god mode / operator (fog-of-war) view">🔍 God mode</button>
               </div>
             </div>
@@ -1521,6 +1522,36 @@ const INCIDENT_TYPE_NAMES = [
 const mapCamera = DashboardCamera.createCamera(GRID_N, GRID_N);
 let mapCtx = null;
 
+// Map view mode: "2d" (default) or "iso" (2.5D). Remembered across
+// reloads in localStorage; storage can be blocked or throw (private
+// windows, cleared site data), so every access is wrapped and the map
+// just falls back to the default.
+const MAP_VIEW_MODE_KEY = "dashboard.mapViewMode";
+function loadMapViewMode() {
+  try { return localStorage.getItem(MAP_VIEW_MODE_KEY) === "iso" ? "iso" : "2d"; } catch (e) { return "2d"; }
+}
+function saveMapViewMode(mode) {
+  try { localStorage.setItem(MAP_VIEW_MODE_KEY, mode); } catch (e) { /* storage unavailable - not remembered, still works */ }
+}
+function applyMapViewMode(mode) {
+  mapCamera.setViewMode(mode);
+  const btn = document.getElementById("viewModeBtn");
+  if (btn) {
+    btn.textContent = mode === "iso" ? "◇ 2.5D" : "◫ 2D";
+    btn.title = mode === "iso" ? "Showing the isometric 2.5D map - click for the flat 2D map"
+                               : "Showing the flat 2D map - click for the isometric 2.5D map";
+  }
+}
+function toggleMapViewMode() {
+  const next = mapCamera.state.viewMode === "iso" ? "2d" : "iso";
+  applyMapViewMode(next);
+  saveMapViewMode(next);
+  hideMapCard();
+  if (window._lastFrame) drawFrame(window._lastFrame, true);
+}
+applyMapViewMode(loadMapViewMode());
+MapRender.setRedrawCallback(() => { if (window._lastFrame) drawFrame(window._lastFrame, true); });
+
 function resizeMapCanvas() {
   const dims = DashboardCamera.resizeCanvasForDPI(mapCanvas);
   mapCtx = dims.ctx;
@@ -1562,23 +1593,33 @@ function drawFrame(frame, skipInspector) {
   drawGrid();
   mapHitTargets = [];
 
-  // An incident card open on the map (see mapCardBuildingId/showMapCard)
-  // forces that one building's footprint outline open too, regardless of
-  // zoom - drawBuildings() itself decides everything else about when a
-  // footprint shows.
-  MapRender.drawBuildings(mapCtx, mapCamera, staticEnvironment, { outlineBuildingId: mapCardBuildingId });
-  MapRender.drawEpicenter(mapCtx, mapCamera, staticEnvironment);
-  MapRender.drawHazardCells(mapCtx, mapCamera, frame.hazard_cells || []);
-  mapHitTargets.push(...MapRender.drawSafezones(mapCtx, mapCamera, frame.safezones));
-  // Operator view: hide anything the system itself hasn't discovered
-  // yet (mirrors team_can_accept_incident()'s fog-of-war gate in the
-  // allocator - an operator watching this board in real life would
-  // have no way to see a task before some team's sweep/on-scene radius
-  // reveals it). "discovered" defaults to 1 for tasks that were never
-  // part of fog-of-war (system tasks), so this only ever hides real
-  // undiscovered incidents.
-  mapHitTargets.push(...MapRender.drawIncidents(mapCtx, mapCamera, frame.incidents, { fogViewMode, selectedMarker, buildings: (staticEnvironment && staticEnvironment.buildings) || [] }));
-  mapHitTargets.push(...MapRender.drawTeams(mapCtx, mapCamera, frame.teams, { teamColors: TEAM_COLORS, selectedMarker }));
+  if (mapCamera.state.viewMode === "iso") {
+    // 2.5D: ground layers, buildings and markers are interleaved back
+    // to front, so one call draws them all (map-render.js's
+    // drawIsoScene) instead of the per-layer sequence below.
+    mapHitTargets.push(...MapRender.drawIsoScene(mapCtx, mapCamera, {
+      env: staticEnvironment, frame, fogViewMode, selectedMarker,
+      teamColors: TEAM_COLORS, outlineBuildingId: mapCardBuildingId,
+    }));
+  } else {
+    // An incident card open on the map (see mapCardBuildingId/showMapCard)
+    // forces that one building's footprint outline open too, regardless of
+    // zoom - drawBuildings() itself decides everything else about when a
+    // footprint shows.
+    MapRender.drawBuildings(mapCtx, mapCamera, staticEnvironment, { outlineBuildingId: mapCardBuildingId });
+    MapRender.drawEpicenter(mapCtx, mapCamera, staticEnvironment);
+    MapRender.drawHazardCells(mapCtx, mapCamera, frame.hazard_cells || []);
+    mapHitTargets.push(...MapRender.drawSafezones(mapCtx, mapCamera, frame.safezones));
+    // Operator view: hide anything the system itself hasn't discovered
+    // yet (mirrors team_can_accept_incident()'s fog-of-war gate in the
+    // allocator - an operator watching this board in real life would
+    // have no way to see a task before some team's sweep/on-scene radius
+    // reveals it). "discovered" defaults to 1 for tasks that were never
+    // part of fog-of-war (system tasks), so this only ever hides real
+    // undiscovered incidents.
+    mapHitTargets.push(...MapRender.drawIncidents(mapCtx, mapCamera, frame.incidents, { fogViewMode, selectedMarker, buildings: (staticEnvironment && staticEnvironment.buildings) || [] }));
+    mapHitTargets.push(...MapRender.drawTeams(mapCtx, mapCamera, frame.teams, { teamColors: TEAM_COLORS, selectedMarker }));
+  }
 
   // Keep an open card's content (and position, for a moving team) live
   // as new frames arrive, and close it if the marker it names is gone
@@ -1996,7 +2037,7 @@ function showMapCard(hit) {
   if (!card || !hit) return;
   card.innerHTML = buildMapCardHTML(hit);
   card.style.display = "block";
-  positionMapCard(card, mapCamera.worldToScreen(hit.wx, hit.wy));
+  positionMapCard(card, mapCamera.worldToScreen(hit.wx, hit.wy, hit.wz || 0));
   mapCardMarker = { type: hit.type, id: hit.data.id };
   const d = hit.data;
   mapCardBuildingId = (hit.type === "incident" && d.building_id !== undefined && d.building_id >= 0) ? d.building_id : null;
@@ -2060,10 +2101,9 @@ function drawDragOverlay() {
   mapCtx.setLineDash([]);
   const dropHit = hitTestAt(dragState.curSx, dragState.curSy, "incident");
   if (isValidOverrideDropTarget(dropHit)) {
-    const center = mapCamera.worldToScreen(dropHit.wx, dropHit.wy);
-    const r = dropHit.wr * mapCamera.state.zoom;
+    const g = MapRender.markerScreenGeom(mapCamera, dropHit);
     mapCtx.beginPath();
-    mapCtx.arc(center.x, center.y, r + 5, 0, Math.PI * 2);
+    mapCtx.arc(g.x, g.y, g.r + 5, 0, Math.PI * 2);
     mapCtx.strokeStyle = "#d29922";
     mapCtx.lineWidth = 2;
     mapCtx.stroke();
