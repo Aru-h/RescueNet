@@ -92,7 +92,13 @@
   const MR = window.MapRender;
   const GLYPH_PX = 128;          // marker glyph canvas size
   const GLYPH_TEAM_R = 26;       // team glyph radius on that canvas (px)
-  const GLYPH_INC_SIZE = 48;     // incident glyph square size on that canvas (px)
+  // Incident pins (3D only): a compact beacon on a short stem. Urgency is
+  // shown by motion (a pulsing ring for P1, a steady one for P2), not size.
+  const PIN_R_PX = 22;           // pin head radius on its glyph canvas (px)
+  const PIN_R_WORLD = 0.22;      // ... and in world units
+  const PIN_Z = 0.62;            // head height above the footing
+  const PIN_HIT_R = 0.26;        // pick radius (world units, before MARKER_BOOST)
+  const PIN_ICONS = { 6: "\u2622", 7: "\ud83d\udd25" };
   const GROUND_TEX_PX_PER_CELL = 48;
   const FOV = 35;
   // Perspective makes the 3D map's markers read smaller than in 2D/2.5D at the same world size; scale sprites and hit areas up a little.
@@ -420,6 +426,7 @@
     const stemPool = makePool(stemGeo, new THREE.MeshStandardMaterial({ roughness: 0.6, fog: false }), 512, true);
     stemPool.mesh.castShadow = true;
     const blobPool = makePool(discGeo, shadowMat, 512, false);
+    const dotPool = makePool(discGeo, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.95, depthWrite: false, fog: false }), 512, true); // ground dot at each pin's position
 
     // Marker glyph sprites: the 2D glyph drawn on a small canvas, cached
     // by the fields that change how it looks. Each gets a normal sprite
@@ -451,6 +458,67 @@
       return g;
     }
 
+    // The pin: a round beacon head in the priority colour with the priority
+    // label ("P1".."P4") in it, a victim-count badge (top right), a blue
+    // "N incidents" badge for a grouped building (top left) and a hazard icon
+    // (bottom left). Drawn on a small canvas and used as a camera-facing
+    // sprite, so it reads from any angle. `label` is false for the variant
+    // shown when the pin is too small on screen for the text to be legible.
+    function drawPinGlyph(ctx, color, inc, members, selected, label) {
+      const cx = GLYPH_PX / 2, cy = GLYPH_PX / 2, r = PIN_R_PX;
+      const victims = members.reduce((a, m) => a + (m.victims || 0), 0);
+      ctx.save();
+      ctx.globalAlpha = inc.status === 0 ? 1 : 0.62;     // open = solid, assigned / in progress = softer (as in 2D)
+      const grad = ctx.createRadialGradient(cx - r * 0.35, cy - r * 0.4, r * 0.1, cx, cy, r);
+      grad.addColorStop(0, "#ffffff"); grad.addColorStop(0.22, color); grad.addColorStop(1, color);
+      ctx.beginPath(); ctx.arc(cx, cy, r + 3, 0, Math.PI * 2); ctx.fillStyle = "rgba(8,12,18,0.85)"; ctx.fill();   // dark rim for contrast on any ground
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fillStyle = grad; ctx.fill();
+      ctx.restore();
+      if (label) {                                       // the priority, as text: priority never relies on colour alone
+        ctx.fillStyle = inc.priority >= 3 ? "#0d1117" : "#fff"; ctx.font = "bold 26px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("P" + inc.priority, cx, cy + 1);
+      }
+      if (selected) { ctx.beginPath(); ctx.arc(cx, cy, r + 8, 0, Math.PI * 2); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke(); }
+      const badge = (x, y, d, fill, text, fg, font) => {
+        ctx.beginPath(); ctx.arc(x, y, d / 2, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = "rgba(8,12,18,0.9)"; ctx.stroke();
+        ctx.fillStyle = fg; ctx.font = font; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(text, x, y + 1);
+      };
+      if (victims > 0) badge(cx + r * 0.95, cy - r * 0.95, 26, "#f0f3f6", String(victims > 99 ? "99+" : victims), "#0d1117", "bold 15px sans-serif");
+      if (members.length > 1) badge(cx - r * 0.95, cy - r * 0.95, 26, "#1f6feb", String(members.length), "#fff", "bold 15px sans-serif");
+      const icon = PIN_ICONS[inc.type];
+      if (icon) badge(cx - r * 0.9, cy + r * 0.95, 24, "#0d1117", icon, "#fff", "14px sans-serif");
+    }
+
+    // Urgency as motion. P1 and P2 get a soft glow halo behind the pin: P1
+    // pulses slowly, P2 holds steady. With Reduce motion the halo stays but
+    // does not pulse (uMotion = 0). One THREE.Points object holds every halo.
+    const pulseU = { uTime: { value: 0 }, uMotion: { value: 1 } };
+    pulseU.uMotion.value = settings.reduceMotion ? 0 : 1;
+    let haloPts = null;
+    function buildHalos() {
+      if (haloPts) { dynGroup.remove(haloPts); haloPts.geometry.dispose(); haloPts = null; }
+      if (!haloList.length) return;
+      const pos = new Float32Array(haloList.length * 3), seed = new Float32Array(haloList.length * 4);
+      haloList.forEach((h, i) => { pos.set([h.x, h.y, h.z], i * 3); const c = new THREE.Color(h.hex); seed.set([c.r, c.g, c.b, h.p], i * 4); });
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(pos, 3)); g.setAttribute("aSeed", new THREE.BufferAttribute(seed, 4));
+      const m = new THREE.ShaderMaterial({
+        uniforms: { uTime: pulseU.uTime, uMotion: pulseU.uMotion, uScale: { value: 600 } },
+        vertexShader: `attribute vec4 aSeed; uniform float uTime, uMotion, uScale; varying vec4 vC; varying float vA;
+          void main() { float pulse = aSeed.w < 1.5 ? (uMotion > 0.5 ? 0.5 + 0.5 * sin(uTime * 2.4 + position.x) : 0.6) : 1.0;
+            vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv;
+            float size = (aSeed.w < 1.5 ? 1.5 + 0.7 * pulse : 1.35); gl_PointSize = clamp(size * uScale / max(0.1, -mv.z), 22.0 + 6.0 * pulse, 200.0);
+            vC = vec4(aSeed.xyz, 1.0); vA = aSeed.w < 1.5 ? 0.35 + 0.35 * (1.0 - pulse) : 0.4; }`,
+        fragmentShader: "varying vec4 vC; varying float vA; void main() { vec2 c = gl_PointCoord - 0.5; float d = length(c); float ring = smoothstep(0.5, 0.0, d); gl_FragColor = vec4(vC.rgb, ring * ring * vA); }",
+        transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending,
+      });
+      haloPts = new THREE.Points(g, m); haloPts.frustumCulled = false; haloPts.renderOrder = 4;
+      haloPts.onBeforeRender = (r) => { const sz = new THREE.Vector2(); r.getDrawingBufferSize(sz); m.uniforms.uScale.value = sz.y / (2 * Math.tan(FOV * Math.PI / 360)); };
+      dynGroup.add(haloPts);
+    }
+
     // Pixels per world unit at a point (for hit radii: a marker's hit
     // area is the disc you see, as in 2.5D).
     function pxPerWorldAt(wx, wy, z) {
@@ -477,12 +545,12 @@
       dynDisposables.push(geo, mat);
     }
 
-    let incidentHits = [], safezoneHits = [];
+    let incidentHits = [], safezoneHits = [], pinInfo = [], pinSprites = [], pulseCount = 0, haloList = [];
     let lastIncidentSig = null;
 
     function rebuildTickScene(model, o) {
       dynGroup.clear();
-      hazardPools.forEach((p) => p.reset()); stemPool.reset(); blobPool.reset();
+      hazardPools.forEach((p) => p.reset()); stemPool.reset(); blobPool.reset(); dotPool.reset();
       dynDisposables.forEach((d) => d.dispose()); dynDisposables = [];
       incidentHits = []; safezoneHits = [];
 
@@ -504,23 +572,34 @@
         safezoneHits.push({ type: "safezone", id: sz.id, wx: sz.x, wy: sz.y, wr: 0.5, data: sz });
       });
 
+      pinInfo = []; haloList = []; pinSprites = [];
       model.incidents.forEach((mi) => {
-        const { members, inc, wx, wy, worldSize, foot, headZ, color, isSel } = mi;
-        const selArg = isSel ? { type: "incident", id: inc.id } : null;
-        const key = ["I", inc.id, inc.status, inc.type, inc.priority, inc.victims, members.map((m) => m.id + ":" + m.status).join(","), isSel ? 1 : 0].join("|");
-        const mats = glyphSprites(key, (ctx) => MR.drawIncidentGlyph(ctx, { x: GLYPH_PX / 2, y: GLYPH_PX / 2 }, GLYPH_INC_SIZE, color, inc, members, selArg || { type: "none", id: -1 }));
-        stemPool.add(wx, foot + (headZ - foot) / 2, wy, 1, headZ - foot, 1, 0, new THREE.Color(color).getHex());
-        const shadowR = Math.max(0.3, worldSize * 0.6);
-        blobPool.add(wx, foot + 0.012, wy, shadowR, shadowR, 1, FLAT);
-        const scale = (GLYPH_PX / GLYPH_INC_SIZE) * worldSize * MARKER_BOOST;
-        const s = new THREE.Sprite(mats.solid); s.position.set(wx, headZ, wy); s.scale.set(scale, scale, 1); s.renderOrder = 5;
-        const gh = new THREE.Sprite(mats.ghost); gh.position.copy(s.position); gh.scale.copy(s.scale); gh.renderOrder = 6;
+        const { members, inc, wx, wy, foot, headZ, color, isSel } = mi;
+        const victims = members.reduce((a, m) => a + (m.victims || 0), 0);
+        const base = [inc.id, inc.status, inc.type, inc.priority, victims, members.length, isSel ? 1 : 0, color];
+        const withLabel = glyphSprites(["P", "L"].concat(base).join("|"), (ctx) => drawPinGlyph(ctx, color, inc, members, isSel, true));
+        const noLabel = glyphSprites(["P", "N"].concat(base).join("|"), (ctx) => drawPinGlyph(ctx, color, inc, members, isSel, false));
+        const hex = new THREE.Color(color).getHex();
+        stemPool.add(wx, foot + (headZ - foot) / 2, wy, 0.8, headZ - foot, 0.8, 0, hex);           // short stem
+        blobPool.add(wx, foot + 0.012, wy, 0.2, 0.2, 1, FLAT);                                    // soft ground shadow
+        dotPool.add(wx, foot + 0.02, wy, 0.2, 0.2, 1, FLAT, hex);                                 // small ground dot = the exact position
+        const scale = (GLYPH_PX / PIN_R_PX) * PIN_R_WORLD;
+        const s = new THREE.Sprite(withLabel.solid); s.position.set(wx, headZ, wy); s.scale.set(scale, scale, 1); s.renderOrder = 5;
+        const gh = new THREE.Sprite(withLabel.ghost); gh.position.copy(s.position); gh.scale.copy(s.scale); gh.renderOrder = 6;
         dynGroup.add(s, gh);
-        if (isSel) addGroundRing(wx, wy, foot, Math.max(worldSize / 2, 0.4) + 0.25, selMat);
-        incidentHits.push({ type: "incident", id: inc.id, wx, wy, wz: headZ, wr: Math.max(worldSize / 2, 0.4),
+        // Urgency as motion: a glow halo behind P1 (pulsing) and P2 (steady); P3/P4 none.
+        let ring = "none";
+        if (inc.priority <= 2) { haloList.push({ x: wx, y: headZ, z: wy, p: inc.priority, hex }); ring = inc.priority === 1 ? "pulse" : "steady"; }
+        if (isSel) addGroundRing(wx, wy, foot, 0.7, selMat);
+        const info = { id: inc.id, priority: inc.priority, ring, label: true, victims, group: members.length, foot, headZ, scale };
+        pinInfo.push(info);
+        pinSprites.push({ wx, wy, headZ, s, gh, withLabel, noLabel, info });
+        incidentHits.push({ type: "incident", id: inc.id, wx, wy, wz: headZ, wr: PIN_HIT_R,
                             data: members.length > 1 ? Object.assign({}, inc, { groupIncidents: members }) : inc });
       });
-      hazardPools.forEach((p) => p.commit()); stemPool.commit(); blobPool.commit();
+      buildHalos();
+      pulseCount = pinInfo.filter((p) => p.ring === "pulse").length;
+      hazardPools.forEach((p) => p.commit()); stemPool.commit(); blobPool.commit(); dotPool.commit();
     }
 
     // ---------- teams: persistent objects, smooth movement, routes ----------
@@ -729,7 +808,7 @@
     function buildHits() {
       const hits = safezoneHits.slice();
       incidentHits.forEach((h) => {
-        hits.push(Object.assign({}, h, { rpx: Math.max(h.wr * MARKER_BOOST * pxPerWorldAt(h.wx, h.wy, h.wz), 6) + 2 }));
+        hits.push(Object.assign({}, h, { rpx: Math.max(h.wr * MARKER_BOOST * pxPerWorldAt(h.wx, h.wy, h.wz), 9) + 2 }));
       });
       teamViews.forEach((v) => {
         if (!v.data) return;
@@ -806,12 +885,35 @@
       return true;
     }
 
+    // Pin size on screen. Up close a pin keeps its compact world size; zoomed
+    // far out it would shrink to a speck, so its head is held at a minimum
+    // pixel size (MIN_HEAD_PX). The "P1".."P4" text is only drawn while the
+    // head is big enough to read it (LABEL_MIN_PX, with hysteresis); colour,
+    // halo and badges stay at any zoom.
+    const MIN_HEAD_PX = 7, LABEL_MIN_PX = 9, LABEL_HYST = 1.5;
+    function updatePinLabels() {
+      for (const p of pinSprites) {
+        const natural = pxPerWorldAt(p.wx, p.wy, p.headZ) * PIN_R_WORLD;       // head radius in px at its world size
+        const k = Math.max(1, MIN_HEAD_PX / Math.max(natural, 0.01));
+        const sc = p.info.scale * k;
+        p.s.scale.set(sc, sc, 1); p.gh.scale.set(sc, sc, 1);
+        const show = p.info.label ? natural >= LABEL_MIN_PX - LABEL_HYST : natural >= LABEL_MIN_PX + LABEL_HYST;
+        if (show !== p.info.label) {
+          const g = show ? p.withLabel : p.noLabel;
+          p.s.material = g.solid; p.gh.material = g.ghost; p.info.label = show;
+        }
+        p.info.headPx = Math.max(natural, MIN_HEAD_PX);
+      }
+    }
+
     function drawNow(now, notify) {
       const dt = Math.max(0, Math.min(0.1, (now - lastDraw) / 1000));
       lastDraw = now;
       poseTeams(now);
       stepDirector(now, dt);
       applyShake(now);
+      pulseU.uTime.value = now / 1000;
+      updatePinLabels();
       if (fx) {
         renderer.getDrawingBufferSize(_v2);
         fx.update(now / 1000, _v2.y / (2 * Math.tan(FOV * Math.PI / 360)));
@@ -824,7 +926,7 @@
 
     function ambientOnly(now) { return !teamAnimating(now) && !shake && !director; }
     function needsMotion(now) {
-      return teamAnimating(now) || !!shake || !!director || (!!fx && fx.animated(now / 1000));
+      return teamAnimating(now) || !!shake || !!director || (pulseCount > 0 && !settings.reduceMotion) || (!!fx && fx.animated(now / 1000));
     }
 
     // Auto quality: if frames keep taking long at "high"/"low" effects,
@@ -903,8 +1005,10 @@
       // Markers stand on the building as 3D draws it (collapsed ones are lower than in 2.5D).
       if (bld) {
         model.teams.forEach((mt) => { mt.foot = bld.footing(model.prep, mt.t.x, mt.t.y); mt.headZ = mt.foot + MR.ISO_TEAM_Z; });
-        model.incidents.forEach((mi) => { mi.foot = bld.footing(model.prep, mi.wx, mi.wy); mi.headZ = mi.foot + MR.ISO_INCIDENT_Z; });
+        model.incidents.forEach((mi) => { mi.foot = bld.footing(model.prep, mi.wx, mi.wy); });
       }
+      // Incident pins sit on a short stem (PIN_Z), not the taller 2.5D marker.
+      model.incidents.forEach((mi) => { mi.headZ = mi.foot + PIN_Z; });
 
       const tick = o.frame ? o.frame.tick : null;
       const newTick = tick !== lastTick;
@@ -957,6 +1061,7 @@
         if (partial.effects !== undefined) { autoReduced = null; slowFrames = 0; leaveLite(); fx.setLevel(settings.effects); }
         if (partial.reduceMotion !== undefined) fx.setMotion(!settings.reduceMotion);
       }
+      if (partial.reduceMotion !== undefined) pulseU.uMotion.value = settings.reduceMotion ? 0 : 1;
       if (partial.lighting !== undefined) applyLighting();
       if (shake && settings.reduceMotion) { shake = null; updateCamera(); }
       kick();
@@ -1008,6 +1113,9 @@
       follow: followTeam, flyTo, cancelCamera,
       get fx() { return fx; },
       buildingStats() { return bld ? bld.stats : null; },
+      // What each incident pin looks like (ring kind, badges, height), for tests/tooling.
+      incidentPins() { return pinInfo.map((p) => Object.assign({}, p)); },
+      pulseState() { return { pulsing: pulseCount, animating: pulseCount > 0 && !settings.reduceMotion, uTime: pulseU.uTime.value, uMotion: pulseU.uMotion.value }; },
       // Current lighting, for tests/tooling.
       lightingState() {
         return { preset: settings.lighting, background: scene.background.getHex(), fog: scene.fog.color.getHex(), fogNear: scene.fog.near, fogFar: scene.fog.far,

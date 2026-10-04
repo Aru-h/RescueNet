@@ -429,6 +429,7 @@ def _view3d_check(page, console_errors, screenshot_dir):
     _view3d_camera_check(page, console_errors, screenshot_dir)
     _view3d_lighting_check(page, console_errors)
     _view3d_labels_check(page)
+    _view3d_pins_check(page, console_errors)
 
     # Tilt limits, full rotation, top-down shortcut.
     lim = page.evaluate("""() => {
@@ -807,11 +808,85 @@ def _view3d_labels_check(page):
       const d = Object.assign({}, h.data, { has_dest: 1, dest_x: h.data.x + 3, dest_y: h.data.y });
       return buildMapCardHTML({ type: 'team', data: d });
     }""")
-    check(bool(card and "Route" in card and "predicted" in card), "[3d] the team card says its route is predicted")
+    check(bool(card) and "Route" not in card and "predicted" not in card, "[3d] the team hover card has no route row - the explanation lives in the legend only")
     flat = page.evaluate("""() => { const v = mapCamera.state.viewMode; mapCamera.state.viewMode = '2d';
       const h = mapHitTargets.find((x) => x.type === 'team'); const d = Object.assign({}, h.data, { has_dest: 1, dest_x: h.data.x + 3, dest_y: h.data.y });
       const html = buildMapCardHTML({ type: 'team', data: d }); mapCamera.state.viewMode = v; return html; }""")
     check("predicted" not in flat, "the 2D team card is unchanged (no route row)")
+
+
+def _view3d_pins_check(page, console_errors):
+    """Incident pins in 3D: a compact pin on a short stem, urgency shown by a
+    glow halo (pulsing P1, steady P2, none P3/P4), the P1..P4 label in the
+    pin (hidden when zoomed far out), a victim badge, one pin per building; still hoverable, clickable and a drop target."""
+    page.evaluate("() => { map3d.setSettings({ reduceMotion: false }); mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
+    res = page.evaluate("""() => {
+      const pins = map3d.incidentPins();
+      const frame = window._lastFrame;
+      const live = frame.incidents.filter((i) => i.status !== 3 && !(fogViewMode === 'operator' && i.discovered === 0));
+      const byBuilding = new Map();
+      live.forEach((i) => { const k = (i.building_id !== undefined && i.building_id >= 0) ? 'b' + i.building_id : 'i' + i.id; byBuilding.set(k, (byBuilding.get(k) || []).concat([i])); });
+      const expectPins = byBuilding.size;
+      const want = (p) => p === 1 ? 'pulse' : p === 2 ? 'steady' : 'none';
+      let ringsOk = true, badgesOk = true, bad = null;
+      pins.forEach((p) => {
+        const members = Array.from(byBuilding.values()).find((m) => m.some((i) => i.id === p.id));
+        const rep = members.slice().sort((a, b) => (a.priority - b.priority) || ((b.victims || 0) - (a.victims || 0)))[0];
+        if (p.ring !== want(rep.priority) && ringsOk) { ringsOk = false; bad = [p.id, p.priority, p.ring]; }
+        const total = members.reduce((a, m) => a + (m.victims || 0), 0);
+        if ((p.victims !== total || p.group !== members.length) && badgesOk) { badgesOk = false; bad = [p.id, p.victims, total, p.group, members.length]; }
+      });
+      return { n: pins.length, expectPins, ringsOk, badgesOk, bad,
+               kinds: pins.reduce((a, p) => { a[p.ring] = (a[p.ring] || 0) + 1; return a; }, {}),
+               grouped: pins.filter((p) => p.group > 1).length,
+               maxStem: Math.max(0, ...pins.map((p) => p.headZ - p.foot)),
+               scales: Array.from(new Set(pins.map((p) => p.scale.toFixed(4)))),
+               victimsVary: new Set(pins.map((p) => p.victims)).size > 1 };
+    }""")
+    check(res["n"] == res["expectPins"], f"[3d] one pin per building / incident ({res['n']} pins for {res['expectPins']} places) - grouped incidents share one pin")
+    check(res["ringsOk"] and res["badgesOk"], f"[3d] halo follows priority (P1 pulse, P2 steady, P3/P4 none) and badges carry the victim / group totals (first problem: {res['bad']}; rings {res['kinds']})")
+    check(res["maxStem"] <= 0.7 and len(res["scales"]) == 1, f"[3d] pins are compact: stem <= {res['maxStem']:.2f} units, and every pin is the same size ({res['scales']}) even though victims vary ({res['victimsVary']})")
+
+    # Motion: the P1 ring pulses; Reduce motion freezes it (the ring stays).
+    if res["kinds"].get("pulse"):
+        before = page.evaluate("() => map3d.pulseState()")
+        page.wait_for_timeout(400)
+        after = page.evaluate("() => map3d.pulseState()")
+        check(before["animating"] and after["uTime"] > before["uTime"], f"[3d] the P1 halo pulses (animation clock {before['uTime']:.1f} -> {after['uTime']:.1f})")
+        page.evaluate("() => map3d.setSettings({ reduceMotion: true })")
+        frozen = page.evaluate("() => map3d.pulseState()")
+        check(frozen["uMotion"] == 0 and frozen["animating"] is False and frozen["pulsing"] > 0, "[3d] with Reduce motion the P1 halo stops pulsing but is still drawn")
+        page.evaluate("() => map3d.setSettings({ reduceMotion: false })")
+    # Label level of detail: the P1..P4 text is in the pin at normal zoom and
+    # hidden when zoomed far out, while the halo (and badges) stay.
+    far0 = page.evaluate("() => map3d.incidentPins().map((p) => ({ l: p.label, px: p.headPx }))")
+    check(len(far0) > 0 and not any(p["l"] for p in far0) and all(p["px"] >= 7 for p in far0),
+          f"[3d] zoomed out to fit the whole map the P1..P4 text is hidden but every pin head is still >= 7px ({sum(p['l'] for p in far0)} labels shown)")
+    page.evaluate("() => { const c = mapCamera; for (let i = 0; i < 30 && !map3d.incidentPins().every((p) => p.label); i++) { c.zoomAt(c.state.viewW / 2, c.state.viewH / 2, 1.25); drawFrame(window._lastFrame, true); } }")
+    near = page.evaluate("() => map3d.incidentPins().map((p) => p.label)")
+    check(len(near) > 0 and any(near), f"[3d] zoomed in the pins show their P1..P4 label ({sum(near)}/{len(near)} in view or out)")
+    page.evaluate("() => { mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
+    back = page.evaluate("() => map3d.incidentPins().map((p) => p.label)")
+    check(not any(back), "[3d] zooming back out hides the labels again, halos stay")
+    # Hover, click and drop target on the pin itself.
+    pick = page.evaluate("""() => { const h = mapHitTargets.find((x) => x.type === 'incident' && x.data.pool !== 1);
+      if (!h) return null; const r = document.getElementById('mapCanvas').getBoundingClientRect(); const p = mapCamera.worldToScreen(h.wx, h.wy, h.wz);
+      return { id: h.id, x: r.left + p.x, y: r.top + p.y }; }""")
+    if pick:
+        page.mouse.move(pick["x"] - 60, pick["y"] - 60)
+        page.mouse.move(pick["x"], pick["y"], steps=4)
+        page.wait_for_timeout(150)
+        tip = page.evaluate("() => { const t = document.getElementById('mapTooltip'); return { shown: t.style.display === 'block', text: t.textContent }; }")
+        check(tip["shown"] and ("incident" in tip["text"].lower()), f"[3d] hovering an incident pin shows its card ({tip['text'][:40]!r}...)")
+        page.mouse.click(pick["x"], pick["y"])
+        page.wait_for_timeout(100)
+        sel = page.evaluate("() => selectedMarker")
+        check(bool(sel and sel["type"] == "incident"), f"[3d] clicking an incident pin selects it (got {sel})")
+        page.evaluate("() => { DashboardSelection.set(null); hideMapCard(); }")
+    legend = page.evaluate("() => { openMapLegend(); const t = document.querySelector('#mapLegendModal .legend-modal-body').textContent; closeMapLegend(); return t; }")
+    check("Incident pin" in legend and "glow halo" in legend and "slowly pulsing" in legend and "steady" in legend, "[3d] the legend explains the pin, its P1-P4 label, badges and the P1 / P2 halos")
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the pin checks (got {real_errors[:5]})")
 
 
 def _route_accuracy_check(page):

@@ -2149,10 +2149,6 @@ function buildTeamCardHTML(d) {
     mapCardRow("Mobility tier", tierName(tier[0])) +
     mapCardRow("Comm tier", tierName(tier[1]));
   if (activeFaults.length) html += mapCardRow("Injected fault (ground truth)", activeFaults.join(", "));
-  // 3D draws a route for the team; the simulator doesn't send one, so say so.
-  if (mapCamera.state.viewMode === "3d" && d.has_dest && (d.dest_x !== d.x || d.dest_y !== d.y)) {
-    html += mapCardRow("Route", "predicted (drawn by the dashboard)");
-  }
   const overridePhase = window._overridePhase && window._overridePhase[d.i];
   if (overridePhase && overridePhase.kind === "pending") {
     html += mapCardRow("Override (pending)", `→ Incident #${overridePhase.incidentId}`);
@@ -2946,7 +2942,7 @@ DetectionTimeline.init(document.getElementById("timelineCanvas"), document.getEl
   <div class="legend-modal-box" role="dialog" aria-label="Map legend">
     <div class="legend-modal-head"><b>Map legend</b><button type="button" onclick="closeMapLegend()" aria-label="Close">✕</button></div>
     <div class="legend-modal-body">
-          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span></span><span>Priority 1 incident (highest); marker size = number of victims</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;background:#f85149;vertical-align:-1px;"></span></span><span>Priority 1 incident (highest); in 2D / 2.5D marker size = number of victims</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;background:#d29922;vertical-align:-1px;"></span></span><span>Priority 2 incident</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;background:#39c5cf;vertical-align:-1px;"></span></span><span>Priority 3 incident</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;background:#8b98a5;vertical-align:-1px;"></span></span><span>Priority 4 incident (lowest)</span></div>
@@ -2968,6 +2964,9 @@ DetectionTimeline.init(document.getElementById("timelineCanvas"), document.getEl
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:9px;border-left:1px solid rgba(230,237,243,0.5);vertical-align:-1px;"></span></span><span>District border</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="color:#a371f7;">- - -</span></span><span>Earthquake epicenter</span></div>
           <div class="legend-row" style="margin-top:8px;"><span class="legend-sym"></span><span><b>3D view only</b> - what the dashboard works out itself rather than receives:</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff,#f85149 40%);outline:2px solid rgba(8,12,18,0.85);"></span></span><span><b>Incident pin</b> on a short stem, colour = priority (red P1, amber P2, cyan P3, grey P4) and the priority is written in the pin (P1 to P4); the small dot on the ground is its exact position. Pin size does not change with victims. When zoomed far out the text is hidden and colour + glow remain.</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;background:#f0f3f6;color:#0d1117;border-radius:50%;font-size:8px;font-weight:700;">4</span></span><span>White badge on the pin: victims. Blue badge: how many incidents share the building (one pin for the group; the white badge is then their total victims). Dark badge: active hazard (fire / gas).</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:12px;border:2px solid #f85149;border-radius:50%;box-shadow:0 0 0 3px rgba(248,81,73,0.25);"></span></span><span>Urgency is shown by a glow halo behind the pin: slowly pulsing = P1; steady = P2; no halo = P3 / P4. With Reduce motion the P1 halo stops pulsing but stays.</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:14px;border-top:2px solid #58a6ff;vertical-align:3px;"></span></span><span><b>Predicted route</b> (team colour): worked out by the dashboard from the map with the simulator's own pathfinding rules; the simulator does not send routes. It matched the simulator's actual next step on 99.5% of recorded moves, but it is a prediction - in Replay it uses the run's final map.</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:14px;border-top:2px dashed #58a6ff;vertical-align:3px;"></span></span><span>Dashed predicted route: the team is faulted, has just been re-targeted, or no route could be found (a straight line to its target)</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="color:#58a6ff;">&#9650;</span></span><span>Arrow on the ground: direction of travel, taken from the team's last move</span></div>
