@@ -108,6 +108,14 @@ _Static_assert((CBBA_ROUND_TIMEOUT_MS % CBBA_REPLY_WAIT_STEP_MS) == 0u,
                "CBBA_ROUND_TIMEOUT_MS must be a whole number of wait steps");
 
 /*
+ * Overrides the wait-step budget (default CBBA_REPLY_WAIT_STEPS) for a
+ * platform whose real step takes longer than CBBA_REPLY_WAIT_STEP_MS. Call
+ * once at boot, before cbba_run(); 0 is treated as 1. Never called on the
+ * laptop build, so PC results do not depend on it.
+ */
+void cbba_set_reply_wait_steps(uint32_t steps);
+
+/*
  * Elapsed-time source for link-side pacing (the status heartbeat interval,
  * handshake retry/timeout) - NOT used by core/ for CBBA's reply wait any
  * more (see CBBA_REPLY_WAIT_STEPS above), and never to be read inside

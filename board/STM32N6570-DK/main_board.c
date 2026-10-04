@@ -641,19 +641,22 @@ uint32_t cbba_now_ms(void)
    in, then yields for one nominal step. Laptop bytes are only buffered here
    - mission_link_task_step() parses them after sim_tick() returns.
 
-   The wait is bounded in core by a COUNT of these calls
-   (CBBA_REPLY_WAIT_STEPS), so the sleep is what maps the budget onto real
-   time: tk_dly_tsk(CBBA_REPLY_WAIT_STEP_MS) sleeps one 10 ms kernel tick
-   plus the "+1 tick" every kernel timeout gets, i.e. 10-20 ms per step, so
-   a dead-peer round now takes 1.25-2.5 s instead of the 1.25 s the old
-   clock-based spin gave. A live peer's replies end the wait early either
-   way. NOT yet measured on a board (no ARM toolchain here). */
+   The wait is bounded in core by a COUNT of these calls, so the sleep is
+   what maps the budget onto real time. The kernel adds one TIMER_PERIOD to
+   every timeout (timer.c: event time = now + tmout + TIMER_PERIOD), so a
+   call made right after a wake-up sleeps about two ticks:
+   BOARD_CBBA_WAIT_STEP_MS = 2 * CNF_TIMER_PERIOD = 20 ms. sim_task sizes the
+   budget from that (CBBA_ROUND_TIMEOUT_MS / BOARD_CBBA_WAIT_STEP_MS = 62
+   steps, ~1.24 s), so a dead-peer round stays ~1.25 s. A live peer's replies
+   end the wait early either way. NOT yet measured on a board. */
+#define BOARD_CBBA_WAIT_STEP_MS (2u * (uint32_t)CNF_TIMER_PERIOD)
+
 void cbba_wait_poll(void)
 {
     sx1262_poll_rx();
     comms_transport_dispatch_pending();
     mission_link_task_usart1_pump();
-    tk_dly_tsk(CBBA_REPLY_WAIT_STEP_MS);
+    tk_dly_tsk(CNF_TIMER_PERIOD);
 }
 
 LOCAL void sim_task(INT stacd, void *exinf);
@@ -696,6 +699,10 @@ LOCAL void sim_task(INT stacd, void *exinf)
        wiring this assumes. */
     tm_putstring((UB*)"tron: sim_task entered\n");
     sx1262_hal_init();
+
+    /* Size CBBA's reply-wait budget from the kernel tick (see
+       cbba_wait_poll()). */
+    cbba_set_reply_wait_steps(CBBA_ROUND_TIMEOUT_MS / BOARD_CBBA_WAIT_STEP_MS);
 
     /* Real (interrupt-driven) USART1 RX - see usart1_driver.c's own
        top-of-file note for why this has to be a real NVIC interrupt

@@ -1178,6 +1178,18 @@ __attribute__((weak)) uint32_t cbba_now_ms(void)
     return s_sim_clock_ms;
 }
 
+/* Wait-step budget of the reply wait. A runtime value (default
+   CBBA_REPLY_WAIT_STEPS) so a platform whose step takes longer than the
+   nominal CBBA_REPLY_WAIT_STEP_MS can shrink the count and keep the same
+   real-time bound, without a build flag that has to agree across the
+   Makefile and the CubeIDE project. Set once at boot, before cbba_run(). */
+static uint32_t s_reply_wait_steps = CBBA_REPLY_WAIT_STEPS;
+
+void cbba_set_reply_wait_steps(uint32_t steps)
+{
+    s_reply_wait_steps = (steps == 0u) ? 1u : steps;
+}
+
 /* Weak default: nothing to service - see cbba.h. */
 __attribute__((weak)) void cbba_wait_poll(void)
 {
@@ -1475,7 +1487,7 @@ void cbba_ingest_remote_mesh_replies(void)
        the inbox costs no step, so a burst of replies is never cut short
        by the budget; that drain is bounded by the inbox size. */
     while(ingested_replies < expected_replies &&
-          wait_steps < CBBA_REPLY_WAIT_STEPS)
+          wait_steps < s_reply_wait_steps)
     {
         uint8_t sender_team_id;
         uint8_t frame_type;
@@ -1551,10 +1563,10 @@ void cbba_ingest_remote_mesh_replies(void)
     {
         fprintf(stderr,
                 "[cbba] round timeout expired, no reply from peer "
-                "(board=%u, wait_steps=%u, CBBA_REPLY_WAIT_STEPS=%u)\n",
+                "(board=%u, wait_steps=%u, budget=%u)\n",
                 (unsigned)g_comms_transport_this_board_id,
                 (unsigned)wait_steps,
-                (unsigned)CBBA_REPLY_WAIT_STEPS);
+                (unsigned)s_reply_wait_steps);
     }
 #endif
 }
