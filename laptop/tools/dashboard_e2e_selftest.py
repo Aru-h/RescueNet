@@ -284,6 +284,21 @@ def _iso_view_check(page, console_errors, screenshot_dir):
     mode1 = page.evaluate("() => mapCamera.state.viewMode")
     check(mode1 == "iso" and page.eval_on_selector(btn, "el => el.textContent.includes('2.5D')"),
           f"clicking the view button switches the map to 2.5D (mode {mode1!r})")
+    fit = page.evaluate("""() => {
+      const c = mapCamera, W = c.state.viewW, H = c.state.viewH;
+      const pts = [[-0.5, -0.5], [35.5, -0.5], [35.5, 35.5], [-0.5, 35.5]].map(([x, y]) => c.worldToScreen(x, y, 0));
+      const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+      return { W, H, inside: pts.every(p => p.x >= 0 && p.x <= W && p.y >= 0 && p.y <= H),
+               fillX: (Math.max(...xs) - Math.min(...xs)) / W, fillY: (Math.max(...ys) - Math.min(...ys)) / H };
+    }""")
+    check(fit["inside"] and max(fit["fillX"], fit["fillY"]) > 0.85,
+          f"on switching to 2.5D the map is auto-fitted: the diamond is inside the canvas and fills it (fillX {fit['fillX']:.2f}, fillY {fit['fillY']:.2f}, canvas {fit['W']}x{fit['H']})")
+    check(fit["fillY"] > 0.4, f"the 2.5D canvas is not half-empty: the diamond covers {fit['fillY']:.0%} of its height")
+    z_before = page.evaluate("() => { mapCamera.zoomAt(mapCamera.state.viewW / 2, mapCamera.state.viewH / 2, 1.5); return mapCamera.state.zoom; }")
+    page.evaluate("() => drawFrame(window._lastFrame, true)")
+    z_after = page.evaluate("() => mapCamera.state.zoom")
+    check(abs(z_before - z_after) < 1e-9, "after the one-time fit the user's zoom is kept (drawing doesn't re-fit)")
+    page.evaluate("() => { mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
     stored = page.evaluate("() => { try { return localStorage.getItem('dashboard.mapViewMode'); } catch (e) { return 'unavailable'; } }")
     check(stored == "iso", f"the 2.5D choice is remembered in localStorage (got {stored!r})")
 

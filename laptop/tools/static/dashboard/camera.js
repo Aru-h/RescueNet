@@ -53,7 +53,18 @@
       // Fill the available box with a small margin so edge markers
       // (teams/incidents near the grid boundary) aren't clipped.
       const margin = 0.92;
-      const z = Math.min(viewW / state.worldW, viewH / state.worldH) * margin;
+      let z;
+      if (state.viewMode === "iso") {
+        // The iso plate is a diamond (W+H)/2 zoom-units wide and half
+        // that tall; add headroom above for tall buildings and the
+        // markers standing on them (~2.5 height units), so fitting
+        // the box means the whole scene, not just the ground.
+        const span = state.worldW + state.worldH;
+        const halfH = span * 0.125 + 2.5 * 0.55;
+        z = Math.min(viewW / (span * 0.5), viewH / (2 * halfH)) * margin;
+      } else {
+        z = Math.min(viewW / state.worldW, viewH / state.worldH) * margin;
+      }
       return z > 0 ? z : 1;
     }
 
