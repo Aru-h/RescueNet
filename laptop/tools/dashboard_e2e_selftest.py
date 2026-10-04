@@ -424,6 +424,7 @@ def _view3d_check(page, console_errors, screenshot_dir):
     check(abs(page.evaluate("() => map3d.state.az") - 0.7853981633974483) < 1e-6, "[3d] the reset button restores the default camera")
 
     _view3d_motion_check(page, console_errors)
+    _view3d_effects_check(page, console_errors)
 
     # Tilt limits, full rotation, top-down shortcut.
     lim = page.evaluate("""() => {
@@ -539,6 +540,66 @@ def _view3d_motion_check(page, console_errors):
           f"[3d] routes are solid when healthy, dashed when faulted or just re-targeted (healthy {res['dashed']}, faulted {res['faultDashed']}, recovered {res['healthyDashed']}, rerouted {res['reroutedDashed']})")
     check(res["routeLen"] > 2 and res["routeStart"] == res["cell"] and res["routeEnd"] == [20, 20] and res["routeStepsOk"] and res["routeNavigable"],
           f"[3d] the drawn route runs cell to cell over navigable terrain from the team to its destination ({res['routeLen']} cells)")
+
+
+def _view3d_effects_check(page, console_errors):
+    """C2: hazard effects - levels (off / low / high), caps, reduce-motion,
+    the settings popover and the aftershock hook."""
+    st = page.evaluate("() => map3d.settingsState()")
+    check(st["fxAvailable"], "[3d] the hazard-effects module loaded")
+    page.evaluate("() => map3d.setSettings({ autoQuality: false, reduceMotion: false, effects: 'off' })")
+    page.evaluate("() => drawFrame(window._lastFrame, true)")
+    off = page.evaluate("() => map3d.fx.counts()")
+    page.evaluate("() => map3d.setSettings({ effects: 'low' })")
+    low = page.evaluate("() => map3d.fx.counts()")
+    page.evaluate("() => map3d.setSettings({ effects: 'high' })")
+    high = page.evaluate("() => map3d.fx.counts()")
+    frame = page.evaluate("""() => {
+      const hc = window._lastFrame.hazard_cells, tm = MapRender.parseTerrain(terrainMap);
+      return { fire: hc.filter(c => c.hazard_flags & 1).length, gas: hc.filter(c => c.hazard_flags & 2).length,
+               flood: tm.cells.filter(c => c.flood).length, damaged: hc.filter(c => c.blocked || Math.max(c.road_damage, c.infra_damage) >= 50).length };
+    }""")
+    check(off["flames"] == 0 and off["smoke"] == 0 and off["haze"] == 0, f"[3d] effects off draws no particles ({off})")
+    if frame["fire"]:
+        check(0 < low["flames"] < high["flames"] and 0 < low["smoke"] < high["smoke"],
+              f"[3d] fire: low has fewer flames/smoke particles than high, both more than off (low {low['flames']}/{low['smoke']}, high {high['flames']}/{high['smoke']})")
+        check(off["embers"] > 0 and off["fires"] >= frame["fire"], f"[3d] a burning cell is still marked at 'off' (embers {off['embers']}, fires {off['fires']} for {frame['fire']} burning cells)")
+    check(high["flames"] <= 760 and high["smoke"] <= 480 and high["haze"] <= 420 and high["debris"] <= 2600, f"[3d] particle counts stay under their caps ({high})")
+    if frame["gas"]:
+        check(off["haze"] == 0 and high["haze"] > 0, f"[3d] gas shows as a ground haze when effects are on ({high['haze']} particles for {frame['gas']} gas cells)")
+    check(high["waterCells"] == frame["flood"], f"[3d] every flooded cell has water ({high['waterCells']} of {frame['flood']})")
+    if frame["damaged"]:
+        check(off["debris"] > 0 and high["debris"] >= off["debris"], f"[3d] blocked/damaged road cells get debris at every level (off {off['debris']}, high {high['debris']})")
+
+    # Reduce motion freezes particles and disables the shake / dust burst.
+    page.evaluate("() => map3d.setSettings({ reduceMotion: true })")
+    check(page.evaluate("() => map3d.fx.motion === false && map3d.fx.animated(performance.now() / 1000) === false"),
+          "[3d] reduce motion stops the ambient animation (the loop goes idle)")
+    check(page.evaluate("() => map3d.triggerAftershock([{ x: 10, y: 10 }])") is False, "[3d] reduce motion suppresses the aftershock shake and dust")
+    page.evaluate("() => map3d.setSettings({ reduceMotion: false })")
+    fired = page.evaluate("() => { const ok = map3d.triggerAftershock([{ x: 10, y: 10 }, { x: 11, y: 10 }, { x: 10, y: 11 }]); return { ok, dust: map3d.fx.counts().dust, anim: map3d.fx.animated(performance.now() / 1000) }; }")
+    check(fired["ok"] and fired["dust"] > 0 and fired["anim"], f"[3d] the aftershock hook raises a dust burst ({fired['dust']} particles)")
+    page.wait_for_timeout(2200)
+    check(page.evaluate("() => map3d.fx.counts().dust") == 0, "[3d] the dust burst clears itself")
+
+    # Settings popover: opens, changes the level, persists.
+    check(page.is_visible("#map3dSettingsBtn"), "[3d] the settings button is shown in 3D")
+    page.click("#map3dSettingsBtn")
+    check(page.is_visible("#map3dSettings"), "[3d] the settings popover opens")
+    page.select_option("#map3dFx", "low")
+    check(page.evaluate("() => map3d.fx.level") == "low" and page.evaluate("() => JSON.parse(localStorage.getItem('dashboard.map3dSettings')).effects") == "low",
+          "[3d] choosing 'low' in the popover applies it and remembers it")
+    page.click("#map3dReduce")
+    check(page.evaluate("() => map3d.settingsState().reduceMotion") is True, "[3d] the reduce-motion checkbox applies")
+    page.click("#map3dReduce")
+    page.select_option("#map3dFx", "off")
+    check(page.evaluate("() => map3d.fx.counts().flames") == 0, "[3d] the effects toggle takes effect at once (off -> no flames)")
+    page.select_option("#map3dFx", "low")
+    page.keyboard.press("Escape")
+    page.mouse.click(5, 5)
+    check(not page.is_visible("#map3dSettings"), "[3d] clicking elsewhere closes the popover")
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the effects checks (got {real_errors[:5]})")
 
 
 def _route_accuracy_check(page):

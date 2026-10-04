@@ -77,6 +77,12 @@
     console.warn("map-view3d: line addon failed to load; routes drawn as plain lines", e);
   }
 
+  // Hazard effects (flames, smoke, water, debris, haze, dust): a separate
+  // module so the core view still works if it can't load.
+  let FXMOD = null;
+  try { FXMOD = await import("/static/dashboard/map-view3d-fx.js"); }
+  catch (e) { console.warn("map-view3d: effects module failed to load; no hazard effects", e); }
+
   const MR = window.MapRender;
   const GLYPH_PX = 128;          // marker glyph canvas size
   const GLYPH_TEAM_R = 26;       // team glyph radius on that canvas (px)
@@ -119,6 +125,10 @@
     canvas.addEventListener("webglcontextrestored", () => { lost = false; });
 
     const settings = loadSettings();
+    const fx = FXMOD ? FXMOD.createFx(THREE, { scene, MR }) : null;
+    if (fx) { fx.setLevel(settings.effects); fx.setMotion(!settings.reduceMotion); }
+    let autoReduced = null;     // effects level the auto-quality fallback dropped to, if it did
+    const _v2 = new THREE.Vector2();
 
     // ---------- lights ----------
     const hemi = new THREE.HemisphereLight(0xc9d8ee, 0x1b2430, 1.15);
@@ -493,7 +503,7 @@
     scene.add(teamGroup);
     const teamStates = new Map(); // id -> motion state
     const teamViews = new Map();  // id -> scene objects
-    let lastTick = null, lastSyncAt = 0, emaGap = 150;
+    let lastTick = null, lastSyncAt = 0, emaGap = 150, fxSynced = false;
     const SNAP_CELLS = 2.6;       // a bigger jump than this is a teleport/seek, not a move
 
     function ensureTeamView(id) {
@@ -702,24 +712,62 @@
     let rafId = 0, lastDraw = 0, curModel = null, curOpts = null;
     const api = { onHits: null };
 
+    // Camera shake (aftershock): a decaying jitter on top of the user's camera.
+    let shake = null; // { t0, dur, amp }
+    function applyShake(now) {
+      if (!shake) return false;
+      const k = (now - shake.t0) / shake.dur;
+      if (k >= 1) { shake = null; updateCamera(); return false; }
+      updateCamera();
+      const a = shake.amp * (1 - k) * (1 - k);
+      camera.position.x += Math.sin(now * 0.09) * a; camera.position.y += Math.sin(now * 0.13 + 1) * a * 0.7; camera.position.z += Math.cos(now * 0.11) * a;
+      camera.updateMatrixWorld(true);
+      return true;
+    }
+
     function drawNow(now, notify) {
       lastDraw = now;
       poseTeams(now);
+      applyShake(now);
+      if (fx) {
+        renderer.getDrawingBufferSize(_v2);
+        fx.update(now / 1000, _v2.y / (2 * Math.tan(FOV * Math.PI / 360)));
+      }
       renderer.render(scene, camera);
       const hits = buildHits();
       if (notify && api.onHits) api.onHits(hits);
       return hits;
     }
 
+    function ambientOnly(now) { return !teamAnimating(now) && !shake; }
     function needsMotion(now) {
-      return teamAnimating(now);
+      return teamAnimating(now) || !!shake || (!!fx && fx.animated(now / 1000));
+    }
+
+    // Auto quality: if frames keep taking long at "high"/"low" effects,
+    // step the effects down rather than make the whole dashboard sluggish.
+    let slowFrames = 0, prevLoopAt = 0;
+    function watchFrameRate(now) {
+      const dt = prevLoopAt ? now - prevLoopAt : 0;
+      prevLoopAt = now;
+      if (!settings.autoQuality || !fx || fx.level === "off" || dt <= 0 || dt > 250) { slowFrames = 0; return; }
+      slowFrames = dt > 26 ? slowFrames + 1 : Math.max(0, slowFrames - 2);
+      if (slowFrames > 90) {
+        slowFrames = 0;
+        const next = fx.level === "high" ? "low" : "off";
+        fx.setLevel(next); autoReduced = next;
+        if (api.onSettings) api.onSettings(api.settingsState());
+      }
     }
 
     function loop(now) {
       rafId = 0;
       if (!active || lost) return;
-      drawNow(now, true);
-      if (needsMotion(now)) rafId = requestAnimationFrame(loop);
+      // Ambient effects alone (water shimmer, flames) run at ~30 fps;
+      // team glides, camera moves and shakes run at the display rate.
+      const skip = ambientOnly(now) && now - lastDraw < 30;
+      if (!skip) { watchFrameRate(now); drawNow(now, true); }
+      if (needsMotion(now)) rafId = requestAnimationFrame(loop); else prevLoopAt = 0;
     }
     let active = true;
     function kick() { if (active && !rafId) rafId = requestAnimationFrame(loop); }
@@ -735,7 +783,9 @@
       const model = MR.buildSceneModel(o);
       curModel = model; curOpts = o;
 
+      let terrainChanged = false;
       if (o.terrainMap && o.terrainMap !== terrainSource) {
+        terrainChanged = true;
         const first = terrainSource === null;
         terrainSource = o.terrainMap;
         terrainParsed = MR.parseTerrain(o.terrainMap);
@@ -748,6 +798,11 @@
       const newTick = tick !== lastTick;
       if (newTick) advanceTeams(model, tick, now, !!o.snap);
       syncTeamViews(model);
+
+      if (fx && (newTick || terrainChanged || !fxSynced)) {
+        fx.sync({ terrain: terrainParsed, hazardCells: model.hazardCells, incidents: model.incidents, prep: model.prep, tick: tick || 0 });
+        fxSynced = true;
+      }
 
       const sig = [tick, o.selectedMarker ? o.selectedMarker.type + ":" + o.selectedMarker.id : "", o.fogViewMode].join("|");
       if (newTick || sig !== lastIncidentSig) { rebuildTickScene(model, o); lastIncidentSig = sig; }
@@ -778,8 +833,38 @@
       if (first) projector.reset(); else { view.dist = Math.min(view.dist, 170); updateCamera(); }
     }
 
+    function settingsState() {
+      return Object.assign({}, settings, { effectsApplied: fx ? fx.level : "off", autoReduced, fxAvailable: !!fx });
+    }
+    function applySettings(partial) {
+      Object.assign(settings, partial);
+      saveSettings({ effects: settings.effects, reduceMotion: settings.reduceMotion, lighting: settings.lighting, autoQuality: settings.autoQuality });
+      if (fx) {
+        if (partial.effects !== undefined) { autoReduced = null; slowFrames = 0; fx.setLevel(settings.effects); }
+        if (partial.reduceMotion !== undefined) fx.setMotion(!settings.reduceMotion);
+      }
+      if (shake && settings.reduceMotion) { shake = null; updateCamera(); }
+      kick();
+      drawNow(performance.now(), false);
+      if (api.onSettings) api.onSettings(settingsState());
+    }
+    // An aftershock: brief camera shake plus a dust burst over the affected
+    // cells ([{x, y}]). Both are skipped with "reduce motion". The
+    // simulator does not send aftershock events today, so nothing in the
+    // dashboard calls this yet - it is the hook for when one is sent.
+    function triggerAftershock(cells) {
+      if (settings.reduceMotion) return false;
+      const now = performance.now();
+      if (fx) fx.burst(cells, now / 1000);
+      shake = { t0: now, dur: 650, amp: 0.35 };
+      kick();
+      return true;
+    }
+
     projector.reset();
     Object.assign(api, {
+      setSettings: applySettings, settingsState, triggerAftershock,
+      get fx() { return fx; },
       projector, render, setSize,
       setActive(on) { active = !!on; if (!active && rafId) { cancelAnimationFrame(rafId); rafId = 0; } else kick(); },
       // Read-only snapshot of one team's drawn state (for tests and tooling).
