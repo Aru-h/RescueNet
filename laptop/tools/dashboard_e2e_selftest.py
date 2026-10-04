@@ -432,6 +432,7 @@ def _view3d_check(page, console_errors, screenshot_dir):
     _view3d_pins_check(page, console_errors)
     _view3d_pin_details_check(page, console_errors)
     _view3d_card_follow_check(page, console_errors)
+    _card_modes_check(page, console_errors)
 
     # Tilt limits, full rotation, top-down shortcut.
     lim = page.evaluate("""() => {
@@ -878,13 +879,15 @@ def _view3d_pins_check(page, console_errors):
         page.mouse.move(pick["x"] - 60, pick["y"] - 60)
         page.mouse.move(pick["x"], pick["y"], steps=4)
         page.wait_for_timeout(150)
-        tip = page.evaluate("() => { const t = document.getElementById('mapTooltip'); return { shown: t.style.display === 'block', text: t.textContent }; }")
-        check(tip["shown"] and ("incident" in tip["text"].lower()), f"[3d] hovering an incident pin shows its card ({tip['text'][:40]!r}...)")
+        tip = page.evaluate("() => { const t = document.getElementById('mapHoverTip'); return { shown: t.style.display === 'block', text: t.textContent, pinned: document.getElementById('mapTooltip').style.display }; }")
+        check(tip["shown"] and tip["pinned"] != "block" and ("incident" in tip["text"].lower()), f"[3d] hovering an incident pin shows a temporary card, not a pinned one ({tip['text'][:40]!r}...)")
         page.mouse.click(pick["x"], pick["y"])
         page.wait_for_timeout(100)
         sel = page.evaluate("() => selectedMarker")
         check(bool(sel and sel["type"] == "incident"), f"[3d] clicking an incident pin selects it (got {sel})")
-        page.evaluate("() => { DashboardSelection.set(null); hideMapCard(); }")
+        page.mouse.move(5, 5)      # cursor off the map, so no hover card is left resting on the pin
+        page.evaluate("() => { DashboardSelection.set(null); selectedMarker = null; hideMapCard(); }")
+        page.wait_for_timeout(450)
     legend = page.evaluate("() => { openMapLegend(); const t = document.querySelector('#mapLegendModal .legend-modal-body').textContent; closeMapLegend(); return t; }")
     check("Incident pin" in legend and "glow halo" in legend and "slowly pulsing" in legend and "steady" in legend, "[3d] the legend explains the pin, its P1-P4 label, badges and the P1 / P2 halos")
     real_errors = real_console_errors(console_errors)
@@ -1033,19 +1036,23 @@ def _view3d_card_follow_check(page, console_errors):
         const c = document.getElementById('mapTooltip'), r = rect();
         const mx = cv.left + p.x, my = cv.top + p.y;
         const dx = Math.max(r.left - mx, 0, mx - r.right), dy = Math.max(r.top - my, 0, my - r.bottom);
-        samples.push({ px: p.x, py: p.y, hidden: c.style.visibility === 'hidden', gap: Math.hypot(dx, dy) });
+        samples.push({ px: p.x, py: p.y, hidden: !map3d.isVisible(h.wx, h.wy, h.wz || 0), gap: Math.hypot(dx, dy) });
       }
       return samples; }""")
     vis = [a for a in anch if not a["hidden"]]
     travel = max(abs(a["px"] - vis[0]["px"]) + abs(a["py"] - vis[0]["py"]) for a in vis) if vis else 0
     check(len(vis) >= 3 and travel > 20 and all(a["gap"] < 40 for a in vis),
           f"[3d] an open card stays anchored to its marker while the camera swings and moves it {travel:.0f}px across the screen (gaps {[round(a['gap']) for a in vis]})")
-    # 2b. marker off-screen: the card hides but stays open
+    # 2b. marker off-screen: the pinned card is never hidden; it docks to the map edge, and undocks when the marker is back
     page.evaluate("() => { map3d.cancelCamera(); mapCamera.pan(-4000, 0); drawFrame(window._lastFrame, true); }")
-    off = page.evaluate("() => ({ vis: document.getElementById('mapTooltip').style.visibility, disp: window.__cardDisplay() })")
-    check(off["vis"] == "hidden" and off["disp"] == "block", f"[3d] a card whose marker is off-screen is hidden ({off})")
+    off = page.evaluate("""() => { const c = document.getElementById('mapTooltip'), r = c.getBoundingClientRect(), cv = document.getElementById('mapCanvas').getBoundingClientRect(), d = c.querySelector('.map-card-dock');
+      return { disp: c.style.display, vis: c.style.visibility, docked: c.classList.contains('docked'), label: d ? d.textContent : null,
+               inside: r.left >= cv.left - 1 && r.top >= cv.top - 1 && r.right <= cv.right + 1 && r.bottom <= cv.bottom + 1 }; }""")
+    check(off["disp"] == "block" and off["vis"] == "" and off["docked"] and off["inside"] and off["label"] and "Incident" in off["label"],
+          f"[3d] a pinned card whose marker is off-screen is not hidden: it docks to the map edge with an arrow and label ({off})")
     page.evaluate("() => { mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
-    check(page.evaluate("() => document.getElementById('mapTooltip').style.visibility") == "", "[3d] ... and reappears when the marker is back on screen")
+    back = page.evaluate("() => ({ docked: document.getElementById('mapTooltip').classList.contains('docked'), dock: !!document.querySelector('#mapTooltip .map-card-dock') })")
+    check(not back["docked"] and not back["dock"], "[3d] ... and it undocks by itself when the marker is back in view")
     # 3. the x button and Esc close the card without ending a follow
     page.evaluate("() => { const t = mapHitTargets.find((h) => h.type === 'team'); map3d.follow(t.data.id); showMapCard(mapHitTargets.find((h) => h.type === 'incident' && h.data.pool !== 1)); }")
     page.wait_for_timeout(150)
@@ -1094,6 +1101,83 @@ def _view3d_card_follow_check(page, console_errors):
     page.evaluate("() => setMapViewMode('3d')"); page.wait_for_timeout(300)
     real_errors = real_console_errors(console_errors)
     check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the card / follow checks (got {real_errors[:5]})")
+
+
+def _card_modes_check(page, console_errors):
+    """Hover = temporary card (hides ~300 ms after the cursor leaves); click =
+    pinned card; a pinned card survives camera moves and docks to the map
+    edge, with an arrow that brings the camera back, when its marker is out of
+    view. Same in 2D, 2.5D and 3D."""
+    for mode in ("3d", "iso", "2d"):
+        page.evaluate("""(m) => { setMapViewMode(m); if (map3d) map3d.cancelCamera(); hideMapCard(); DashboardSelection.set(null); selectedMarker = null;
+          mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }""", mode)
+        page.wait_for_timeout(500)
+        pos = lambda kind, idx=0: page.evaluate("""([kind, idx]) => { const hs = mapHitTargets.filter((h) => h.type === kind && (kind !== 'incident' || h.data.pool !== 1)); const h = hs[idx]; if (!h) return null;
+          const r = document.getElementById('mapCanvas').getBoundingClientRect(); const p = mapCamera.worldToScreen(h.wx, h.wy, h.wz || 0); return { id: h.data.id, x: r.left + p.x, y: r.top + p.y }; }""", [kind, idx])
+        st = lambda: page.evaluate("() => ({ hov: document.getElementById('mapHoverTip').style.display, pin: document.getElementById('mapTooltip').style.display })")
+        t0 = pos("team")
+        # 1. hover: shows while over the marker; hides after the grace period once the cursor leaves
+        page.mouse.move(t0["x"] - 80, t0["y"] - 80)
+        page.mouse.move(t0["x"], t0["y"], steps=4); page.wait_for_timeout(120)
+        over = st()
+        check(over["hov"] == "block" and over["pin"] != "block", f"[{mode}] hovering a marker shows a temporary card (not a pinned one) ({over})")
+        page.mouse.move(t0["x"] - 90, t0["y"] - 90, steps=3); page.wait_for_timeout(120)
+        grace = st()
+        page.wait_for_timeout(450)
+        gone = st()
+        check(grace["hov"] == "block" and gone["hov"] != "block", f"[{mode}] the hover card is still there right after leaving (grace) and gone ~300 ms later ({grace['hov']} -> {gone['hov']})")
+        # 2. click pins; hovering another marker shows a temporary card without replacing it; hovering the pinned one adds nothing
+        page.mouse.move(t0["x"] - 5, t0["y"] - 5); page.mouse.click(t0["x"], t0["y"]); page.wait_for_timeout(150)
+        t0 = pos("team")
+        pinned = page.evaluate("() => ({ pin: document.getElementById('mapTooltip').style.display, marker: mapCardMarker })")
+        check(pinned["pin"] == "block" and pinned["marker"]["type"] == "team", f"[{mode}] clicking a marker pins its card ({pinned})")
+        inc = pos("incident")
+        page.mouse.move(inc["x"] - 40, inc["y"] - 40); page.mouse.move(inc["x"], inc["y"], steps=4); page.wait_for_timeout(150)
+        both = page.evaluate("() => ({ pin: document.getElementById('mapTooltip').style.display, hov: document.getElementById('mapHoverTip').style.display, pm: mapCardMarker, hm: mapHoverMarker })")
+        check(both["pin"] == "block" and both["hov"] == "block" and both["pm"]["type"] == "team" and both["hm"]["type"] == "incident",
+              f"[{mode}] hovering another marker shows its temporary card and keeps the pinned one ({both['pm']}, {both['hm']})")
+        page.mouse.move(t0["x"] - 40, t0["y"] - 40); page.mouse.move(t0["x"], t0["y"], steps=4); page.wait_for_timeout(450)
+        again = st()
+        check(again["pin"] == "block" and again["hov"] != "block", f"[{mode}] hovering the pinned marker shows no second card ({again})")
+        # 3. a pinned card survives camera moves (zoom, pan / orbit by dragging, a follow of another team)
+        page.mouse.move(40, 40)
+        page.evaluate("() => { const c = mapCamera; c.zoomAt(c.state.viewW / 2, c.state.viewH / 2, 1.4); drawFrame(window._lastFrame, true); }")
+        cv = page.evaluate("() => { const r = document.getElementById('mapCanvas').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }")
+        page.mouse.move(cv[0] + 30, cv[1] + cv[3] - 30); page.mouse.down()
+        for i in range(1, 8):
+            page.mouse.move(cv[0] + 30 + 8 * i, cv[1] + cv[3] - 30 - 3 * i)
+        page.mouse.up(); page.wait_for_timeout(100)
+        if mode == "3d":
+            page.evaluate("() => map3d.follow(mapHitTargets.filter((h) => h.type === 'team')[1].data.id)"); page.wait_for_timeout(400)
+        alive = page.evaluate("() => ({ pin: document.getElementById('mapTooltip').style.display, marker: mapCardMarker })")
+        check(alive["pin"] == "block" and alive["marker"] is not None, f"[{mode}] the pinned card survives zoom, drag and (3D) following another team ({alive['pin']})")
+        page.evaluate("() => { if (map3d) map3d.cancelCamera(); mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
+        page.wait_for_timeout(200)
+        # 4. dock when the marker leaves view; undock when it returns; the arrow brings the camera to it
+        gone_from_view = page.evaluate("""() => { const h = () => mapHitTargets.find((x) => x.type === mapCardMarker.type && x.data.id === mapCardMarker.id);
+          const vis = () => { const m = h(); const p = mapCamera.worldToScreen(m.wx, m.wy, m.wz || 0);
+            return (mapCamera.state.viewMode === '3d' && map3d) ? map3d.isVisible(m.wx, m.wy, m.wz || 0) : (p.x >= 0 && p.y >= 0 && p.x <= mapCamera.state.viewW && p.y <= mapCamera.state.viewH); };
+          const m0 = h(), p0 = mapCamera.worldToScreen(m0.wx, m0.wy, m0.wz || 0), w = mapCamera.state.viewW, hh = mapCamera.state.viewH;
+          const fx = p0.x < w / 2 ? w - 4 : 4, fy = p0.y < hh / 2 ? hh - 4 : 4;       // zoom in on the far corner: the marker slides out the other way
+          for (let i = 0; i < 12 && vis(); i++) { mapCamera.zoomAt(fx, fy, 1.6); drawFrame(window._lastFrame, true); }
+          return !vis(); }""")
+        check(gone_from_view, f"[{mode}] test setup: the pinned marker has left the view")
+        page.wait_for_timeout(200)
+        d = page.evaluate("""() => { const c = document.getElementById('mapTooltip'), dk = c.querySelector('.map-card-dock'), r = c.getBoundingClientRect(), cv = document.getElementById('mapCanvas').getBoundingClientRect();
+          return { disp: c.style.display, vis: c.style.visibility, docked: c.classList.contains('docked'), label: dk ? dk.textContent : null,
+                   inside: r.left >= cv.left - 1 && r.top >= cv.top - 1 && r.right <= cv.right + 1 && r.bottom <= cv.bottom + 1 }; }""")
+        check(d["disp"] == "block" and d["vis"] == "" and d["docked"] and d["inside"] and d["label"] and "Team" in d["label"],
+              f"[{mode}] a pinned card whose marker is out of view docks to the map edge with an arrow and label ({d})")
+        page.evaluate("() => { const dk = document.querySelector('#mapTooltip .map-card-dock'); dk.click(); }")
+        page.wait_for_timeout(1900 if mode == "3d" else 300)
+        arrived = page.evaluate("""() => { const h = mapHitTargets.find((x) => x.type === mapCardMarker.type && x.data.id === mapCardMarker.id); const p = mapCamera.worldToScreen(h.wx, h.wy, h.wz || 0);
+          const c = document.getElementById('mapTooltip'); return { x: p.x, y: p.y, w: mapCamera.state.viewW, h: mapCamera.state.viewH, docked: c.classList.contains('docked'), disp: c.style.display }; }""")
+        near_centre = abs(arrived["x"] - arrived["w"] / 2) < arrived["w"] * 0.3 and abs(arrived["y"] - arrived["h"] / 2) < arrived["h"] * 0.3
+        check(near_centre and not arrived["docked"] and arrived["disp"] == "block", f"[{mode}] clicking the dock arrow brings the camera to the marker, and the card undocks ({arrived})")
+        page.evaluate("() => { hideMapCard(); mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
+    page.evaluate("() => setMapViewMode('3d')"); page.wait_for_timeout(300)
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the card-mode checks (got {real_errors[:5]})")
 
 
 def _route_accuracy_check(page):

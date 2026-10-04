@@ -48,6 +48,10 @@
   }
   .map-card-close { position: absolute; top: 3px; right: 4px; width: 20px; height: 20px; padding: 0; line-height: 18px; text-align: center;
     background: transparent; color: #8b98a5; border: 0; border-radius: 4px; font-size: 16px; cursor: pointer; pointer-events: auto; }
+  .map-card-dock { display: flex; align-items: center; gap: 6px; width: 100%; margin: 0 0 6px; padding: 3px 6px; background: #1f6feb; color: #fff; border: 0; border-radius: 4px;
+    font-size: 12px; font-weight: 600; cursor: pointer; pointer-events: auto; text-align: left; }
+  .map-card-dock:hover { background: #388bfd; }
+  .map-tooltip.docked { box-shadow: 0 0 0 2px #1f6feb, 0 6px 16px rgba(0,0,0,.4); }
   .map-card-close:hover { background: #21262d; color: #e6edf3; }
   .map-tooltip { padding-right: 26px; }
   .map-card-header { font-weight: 700; font-size: 13px; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -522,6 +526,7 @@
                 <canvas id="map3dCanvas" style="position:absolute;inset:0;width:100%;height:100%;display:none;border-radius:6px;"></canvas>
                 <canvas id="mapCanvas" style="position:relative;z-index:1;width:100%;height:100%;display:block;background:#05080c;border-radius:6px;cursor:grab;"></canvas>
                 <div id="mapTooltip" class="map-tooltip"></div>
+                <div id="mapHoverTip" class="map-tooltip map-hover-tip"></div>
               </div>
             </div>
             <div class="live-map-legend">
@@ -1584,7 +1589,7 @@ function ensureMap3d() {
     mapCamera.setProjector(map3d.projector);
     // While markers are still gliding between ticks the 3D view keeps
     // drawing on its own and reports fresh hit targets here.
-    map3d.onHits = (hits) => { mapHitTargets = hits; anchorMapCard(); };   // card follows its marker every frame
+    map3d.onHits = (hits) => { mapHitTargets = hits; anchorMapCard(); updateHoverFromCursor(); };   // cards follow their markers every frame
     map3d.onSettings = refreshMap3dSettingsUI;
     map3d.onCamera = updateCamButton;
     refreshMap3dSettingsUI();
@@ -1631,7 +1636,7 @@ function incidentHitFor(id) {
 function runCamAction(action) {
   if (!map3d) return;
   if (action === "stop") map3d.cancelCamera();
-  else if (action === "follow" && selectedMarker) { map3d.follow(selectedMarker.id); hideMapCard(); }
+  else if (action === "follow" && selectedMarker) { map3d.follow(selectedMarker.id); dropFollowedCard(selectedMarker.id); }
   else if (action === "fly" && selectedMarker) { const h = incidentHitFor(selectedMarker.id); if (h) map3d.flyTo(h.wx, h.wy); }
   updateCamButton();
   if (window._lastFrame) drawFrame(window._lastFrame, true);
@@ -1645,7 +1650,7 @@ function runCamAction(action) {
     closeMap3dSettings();
     // Esc closes an open card first and leaves the camera alone; with no card
     // open it stops a follow / fly.
-    if (mapCardMarker) { hideMapCard(); return; }
+    if (mapCardMarker || mapHoverMarker) { hideMapCard(); return; }
     if (map3d && mapCamera.state.viewMode === "3d" && map3d.cancelCamera()) { updateCamButton(); }
   });
 })();
@@ -1835,8 +1840,12 @@ function drawFrame(frame, skipInspector) {
   // from this frame (e.g. a resolved incident) - see mapCardMarker's
   // own comment.
   if (mapCardMarker) {
-    const stillThere = mapHitTargets.find((h) => h.type === mapCardMarker.type && h.data.id === mapCardMarker.id);
-    if (stillThere) showMapCard(stillThere); else hideMapCard();
+    const stillThere = findMarkerHit(mapCardMarker);
+    if (stillThere) showMapCard(stillThere); else hidePinnedCard();
+  }
+  if (mapHoverMarker) {
+    const stillThere = findMarkerHit(mapHoverMarker);
+    if (stillThere) showHoverCard(stillThere); else hideHoverCard();
   }
 
   if (!skipInspector) renderInspector();
@@ -2013,9 +2022,7 @@ function handleMapClick(evt) {
   if (window.DashboardSelection) DashboardSelection.set(selectedMarker);
   renderInspector();
   updateCamButton();
-  // A click on a marker pins its card open the same as a hover would;
-  // a click on empty space is the one thing that actually closes it.
-  if (best) showMapCard(best); else hideMapCard();
+  if (best) showMapCard(best); else hidePinnedCard();     // click = pin; click on empty map unpins
   if (window._lastFrame) drawFrame(window._lastFrame, true);
 }
 
@@ -2048,7 +2055,9 @@ function handleMapMouseDown(evt) {
 
 function handleMapMouseMove(evt) {
   const { sx, sy } = screenPointFromEvent(evt);
+  lastCursor = { sx, sy };
   if (dragState) {
+    hideHoverCard();
     if (dragState.mode === "pan") {
       // 3D: a press that only wobbles a few pixels is a click, not a drag - it must
       // never orbit or pan (which would end a follow). The first move past the
@@ -2070,14 +2079,9 @@ function handleMapMouseMove(evt) {
       dragState.curSx = sx; dragState.curSy = sy;
       drawDragOverlay();
     }
-    hideMapCard();
     return;
   }
-  const hit = hitTestAt(sx, sy);
-  // Only shows on an actual hit - moving onto empty space does NOT hide
-  // whatever card is already open (see mapCardMarker's own comment);
-  // only a click on empty space or the marker itself disappearing does.
-  if (hit) showMapCard(hit);
+  updateHoverFromCursor();     // hover = temporary card; it hides shortly after the cursor leaves the marker
 }
 
 // System tasks (pool 1 - sector sweeps, equipment runs, etc.) are not
@@ -2242,65 +2246,123 @@ function positionMapCard(card, screenPt) {
   card.style.top = `${Math.round(top)}px`;
 }
 
-// The marker currently shown in the floating card (hover OR click), if
-// any - drawFrame() re-shows it every tick so the card's content (team
-// stamina, incident status, ...) stays live while it's open, and hides
-// it once the marker it names is no longer in the current frame (e.g.
-// a resolved incident). Trackpad-friendly by design: showing a card
-// this way does NOT get cleared just because the mouse later hovers
-// empty space - only a click elsewhere (handleMapClick) or the marker
-// disappearing closes it (see file header discussion this was written
-// in response to).
-let mapCardMarker = null;
-// Set alongside mapCardMarker whenever the open card is a building-
-// linked incident, so drawFrame() can force that one building's
-// footprint outline open for as long as the card stays up (map
-// simplification's item 8: "outline the footprint while the card is
-// open").
-let mapCardBuildingId = null;
+// Two floating cards, and only the user ever decides whether they show:
+//  * PINNED (#mapTooltip): click a marker (a tap on touch). It stays until its x,
+//    Esc or a click on empty map; none of these end a camera follow.
+//  * HOVER (#mapHoverTip): shown while the cursor is over a marker and hidden
+//    HOVER_GRACE_MS after it leaves (so a gliding marker does not flicker it).
+//    At most one of each; a hover card never replaces the pinned one.
+// The camera only affects where a card is DRAWN: it tracks its marker every
+// frame, and a pinned card whose marker is off-screen or behind the camera
+// docks to the nearest map edge with an arrow that flies / pans to the marker.
+// Data decides the rest: a card closes when its marker is gone from the frame
+// (e.g. a resolved incident).
+let mapCardMarker = null;     // the pinned card's marker: { type, id }
+let mapHoverMarker = null;    // the hover card's marker
+let mapCardBuildingId = null; // the open card's building (its footprint outline is forced open)
+let pinnedBuildingId = null, hoverBuildingId = null;
+let hoverHideTimer = null;
+let lastCursor = null;        // { sx, sy } while the cursor is over the canvas
+const HOVER_GRACE_MS = 300;
 
-// Screen point for a card's marker, and whether the marker can be seen at
-// all (on the canvas and, in 3D, in front of the camera).
+const markerOf = (hit) => (hit ? { type: hit.type, id: hit.data.id } : null);
+const sameMarker = (a, b) => !!(a && b && a.type === b.type && a.id === b.id);
+const findMarkerHit = (m) => (m ? mapHitTargets.find((h) => h.type === m.type && h.data.id === m.id) : null);
+function cardBuildingOf(hit) {
+  const d = hit.data;
+  return (hit.type === "incident" && d.building_id !== undefined && d.building_id >= 0) ? d.building_id : null;
+}
+function syncCardState() {
+  mapCardBuildingId = pinnedBuildingId !== null ? pinnedBuildingId : hoverBuildingId;
+  // 3D: the hovered (else pinned) incident's pin shows full detail and its tether.
+  if (typeof map3d !== "undefined" && map3d && map3d.setHoverIncident) {
+    const m = mapHoverMarker && mapHoverMarker.type === "incident" ? mapHoverMarker : (mapCardMarker && mapCardMarker.type === "incident" ? mapCardMarker : null);
+    map3d.setHoverIncident(m ? m.id : null);
+  }
+}
+
+// Screen point for a card's marker, and whether it is on the canvas and (3D) in front of the camera.
 function mapCardScreenPoint(hit) {
   const pt = mapCamera.worldToScreen(hit.wx, hit.wy, hit.wz || 0);
   let visible = pt.x >= 0 && pt.y >= 0 && pt.x <= mapCamera.state.viewW && pt.y <= mapCamera.state.viewH;
   if (mapCamera.state.viewMode === "3d" && map3d && map3d.isVisible) visible = map3d.isVisible(hit.wx, hit.wy, hit.wz || 0);
   return { pt, visible };
 }
-function placeMapCard(card, hit) {
-  const { pt, visible } = mapCardScreenPoint(hit);
-  card.style.visibility = visible ? "" : "hidden";      // marker off-screen / behind the camera: hide the card, keep it open
-  if (visible) positionMapCard(card, pt);
+// Which way (and where on the map edge) an off-screen marker lies, from the screen centre.
+function mapCardDockInfo(hit) {
+  const w = mapCamera.state.viewW, h = mapCamera.state.viewH, cx = w / 2, cy = h / 2;
+  const c = mapCamera.screenToWorld(cx, cy, 0);
+  const a = mapCamera.worldToScreen(c.x, c.y, 0), b = mapCamera.worldToScreen(c.x + (hit.wx - c.x) * 0.05, c.y + (hit.wy - c.y) * 0.05, 0);  // a short step toward it stays in front of the camera
+  let dx = b.x - a.x, dy = b.y - a.y; const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n;
+  const m = 10;
+  const s = Math.min(Math.abs(dx) > 1e-6 ? (dx > 0 ? w - m - cx : cx - m) / Math.abs(dx) : 1e9, Math.abs(dy) > 1e-6 ? (dy > 0 ? h - m - cy : cy - m) / Math.abs(dy) : 1e9);
+  const arrows = ["\u2192", "\u2198", "\u2193", "\u2199", "\u2190", "\u2196", "\u2191", "\u2197"];
+  const idx = ((Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) % 8) + 8) % 8;
+  return { x: cx + dx * s, y: cy + dy * s, arrow: arrows[idx] };
 }
-// Re-anchor the open card to its marker. Called every rendered frame in 3D
+function mapCardLabel(hit) {
+  const d = hit.data;
+  return hit.type === "team" ? `Team ${d.i !== undefined ? d.i : d.id}` : hit.type === "incident" ? `Incident #${d.id}` : "Safe zone";
+}
+// Bring the camera to a marker: fly in 3D, pan in 2D / 2.5D.
+function goToMarker(hit) {
+  if (!hit) return;
+  if (mapCamera.state.viewMode === "3d" && map3d) map3d.flyTo(hit.wx, hit.wy);
+  else {
+    const w = mapCamera.state.viewW, h = mapCamera.state.viewH, p = mapCamera.worldToScreen(hit.wx, hit.wy, hit.wz || 0);
+    mapCamera.pan(w / 2 - p.x, h / 2 - p.y, w / 2, h / 2);
+    if (window._lastFrame) drawFrame(window._lastFrame, true);
+  }
+  updateCamButton();
+  anchorMapCard();
+}
+function placeMapCard(card, hit, pinned) {
+  const { pt, visible } = mapCardScreenPoint(hit);
+  if (!pinned) { card.style.visibility = visible ? "" : "hidden"; if (visible) positionMapCard(card, pt); return; }
+  let dock = card.querySelector(".map-card-dock");
+  if (visible) {                                  // marker in view: the card sits next to it
+    card.classList.remove("docked"); if (dock) dock.remove();
+    positionMapCard(card, pt);
+    return;
+  }
+  const info = mapCardDockInfo(hit);              // marker out of view: dock to the edge in its direction
+  card.classList.add("docked");
+  if (!dock) {
+    dock = document.createElement("button"); dock.type = "button"; dock.className = "map-card-dock";
+    dock.addEventListener("click", (evt) => { evt.stopPropagation(); goToMarker(findMarkerHit(mapCardMarker)); });
+    card.insertBefore(dock, card.firstChild);
+  }
+  dock.title = "Go to it";
+  dock.textContent = `${info.arrow} ${mapCardLabel(hit)}`;
+  positionMapCard(card, info);
+}
+// Re-anchor both cards to their markers. Called every rendered frame in 3D
 // (map3d.onHits) and on pan / zoom / orbit in 2D and 2.5D.
 function anchorMapCard() {
-  if (!mapCardMarker) return;
-  const card = document.getElementById("mapTooltip");
-  if (!card || card.style.display === "none") return;
-  const hit = mapHitTargets.find((h) => h.type === mapCardMarker.type && h.data.id === mapCardMarker.id);
-  if (hit) placeMapCard(card, hit);
+  const pin = document.getElementById("mapTooltip"), hov = document.getElementById("mapHoverTip");
+  if (mapCardMarker && pin && pin.style.display !== "none") { const h = findMarkerHit(mapCardMarker); if (h) placeMapCard(pin, h, true); }
+  if (mapHoverMarker && hov && hov.style.display !== "none") { const h = findMarkerHit(mapHoverMarker); if (h) placeMapCard(hov, h, false); }
 }
-// True while the 3D camera is following this team (its card is not shown then).
+// True while the 3D camera is following this team.
+function dropFollowedCard(teamId) {   // starting a follow: the team's own card goes away (the user can pin it again)
+  const t = { type: "team", id: teamId };
+  if (sameMarker(mapCardMarker, t)) hidePinnedCard();
+  if (sameMarker(mapHoverMarker, t)) hideHoverCard();
+}
 function isFollowingTeam(id) {
   const cam = map3d && mapCamera.state.viewMode === "3d" ? map3d.cameraMode : null;
   return !!(cam && cam.mode === "follow" && (id === undefined || cam.teamId === id));
 }
 
-function showMapCard(hit) {
-  const card = document.getElementById("mapTooltip");
-  if (!card || !hit) return;
-  // Following a team: its card stays hidden (the follow button and the team's highlight remain).
-  if (hit.type === "team" && isFollowingTeam(hit.data.id)) { hideMapCard(); return; }
-  card.innerHTML = `<button type="button" class="map-card-close" id="mapCardClose" aria-label="Close card" title="Close (Esc)">&times;</button>` + buildMapCardHTML(hit);
+function renderMapCard(card, hit, pinned) {
+  let html = buildMapCardHTML(hit);
+  if (!pinned) html = html.replace(/<div style="margin-top:6px;text-align:right;">\s*<button id="liveOverrideReleaseBtn"[\s\S]*?<\/button>\s*<\/div>/, "");   // no buttons on a hover card
+  card.innerHTML = (pinned ? `<button type="button" class="map-card-close" id="mapCardClose" aria-label="Close card" title="Close (Esc)">&times;</button>` : "") + html;
   card.style.display = "block";
-  placeMapCard(card, hit);
-  mapCardMarker = { type: hit.type, id: hit.data.id };
-  if (typeof map3d !== "undefined" && map3d && map3d.setHoverIncident) map3d.setHoverIncident(hit.type === "incident" ? hit.data.id : null);   // 3D: show full pin detail + tether
-  const d = hit.data;
-  mapCardBuildingId = (hit.type === "incident" && d.building_id !== undefined && d.building_id >= 0) ? d.building_id : null;
+  placeMapCard(card, hit, pinned);
+  if (!pinned) return;
   const closeBtn = document.getElementById("mapCardClose");
-  if (closeBtn) closeBtn.addEventListener("click", (evt) => { evt.stopPropagation(); hideMapCard(); });   // closing the card never ends a follow
+  if (closeBtn) closeBtn.addEventListener("click", (evt) => { evt.stopPropagation(); hidePinnedCard(); });   // closing the card never ends a follow
   const releaseBtn = document.getElementById("liveOverrideReleaseBtn");
   if (releaseBtn) {
     releaseBtn.addEventListener("click", (evt) => {
@@ -2310,22 +2372,64 @@ function showMapCard(hit) {
   }
 }
 
-function hideMapCard() {
+// Pin a card (click / tap, or refreshed on every tick).
+function showMapCard(hit) {
   const card = document.getElementById("mapTooltip");
-  if (card) { card.style.display = "none"; card.style.visibility = ""; }
-  mapCardMarker = null;
-  mapCardBuildingId = null;
-  if (typeof map3d !== "undefined" && map3d && map3d.setHoverIncident) map3d.setHoverIncident(null);
+  if (!card || !hit) return;
+  renderMapCard(card, hit, true);
+  mapCardMarker = markerOf(hit);
+  pinnedBuildingId = cardBuildingOf(hit);
+  if (sameMarker(mapHoverMarker, mapCardMarker)) hideHoverCard();    // already shown pinned
+  syncCardState();
 }
+function hidePinnedCard() {
+  const card = document.getElementById("mapTooltip");
+  if (card) { card.style.display = "none"; card.style.visibility = ""; card.classList.remove("docked"); }
+  mapCardMarker = null; pinnedBuildingId = null;
+  syncCardState();
+}
+// Temporary card while the cursor is over a marker.
+function showHoverCard(hit) {
+  const card = document.getElementById("mapHoverTip");
+  if (!card || !hit) return;
+  if (sameMarker(markerOf(hit), mapCardMarker)) { hideHoverCard(); return; }   // the pinned card already shows it
+  clearTimeout(hoverHideTimer); hoverHideTimer = null;
+  renderMapCard(card, hit, false);
+  mapHoverMarker = markerOf(hit);
+  hoverBuildingId = cardBuildingOf(hit);
+  syncCardState();
+}
+function hideHoverCard() {
+  clearTimeout(hoverHideTimer); hoverHideTimer = null;
+  const card = document.getElementById("mapHoverTip");
+  if (card) { card.style.display = "none"; card.style.visibility = ""; }
+  mapHoverMarker = null; hoverBuildingId = null;
+  syncCardState();
+}
+function scheduleHoverHide() {
+  if (!mapHoverMarker || hoverHideTimer) return;
+  hoverHideTimer = setTimeout(hideHoverCard, HOVER_GRACE_MS);
+}
+// Hover follows whatever is under the cursor right now (markers glide, so this also runs every 3D frame).
+function updateHoverFromCursor() {
+  if (dragState || !lastCursor) return;
+  const hit = hitTestAt(lastCursor.sx, lastCursor.sy);
+  if (!hit || sameMarker(markerOf(hit), mapCardMarker)) { scheduleHoverHide(); return; }
+  clearTimeout(hoverHideTimer); hoverHideTimer = null;
+  if (sameMarker(markerOf(hit), mapHoverMarker)) return;
+  showHoverCard(hit);
+}
+function hideMapCard() { hidePinnedCard(); hideHoverCard(); }
 
 mapCanvas.addEventListener("click", handleMapClick);
+mapCanvas.addEventListener("mouseleave", () => { lastCursor = null; scheduleHoverHide(); });
 // 3D: double-click a team to follow it, an incident to fly to it.
 mapCanvas.addEventListener("dblclick", (evt) => {
   if (!map3d || mapCamera.state.viewMode !== "3d") return;
   const { sx, sy } = screenPointFromEvent(evt);
   const hit = hitTestAt(sx, sy);
   if (!hit) return;
-  if (hit.type === "team") { map3d.follow(hit.id); hideMapCard(); }
+  if (hit.type === "team") { map3d.follow(hit.id); dropFollowedCard(hit.id); }
   else if (hit.type === "incident") map3d.flyTo(hit.wx, hit.wy);
   updateCamButton();
 });
