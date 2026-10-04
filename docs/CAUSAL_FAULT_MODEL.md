@@ -249,8 +249,9 @@ Both columns keep the 0 / +3 dB hysteresis and the slow fading.
 | longest fault (ticks) | 41 | 50 |
 
 Correlation removed most of the 1-tick blips, but 57% of faults still last 1-2
-ticks. That residue was not investigated; plausible sources are teams clipping
-the edge of a dead patch and the +/-2.5 dB fading near the 0 dB line.
+ticks. These are likely dead-zone edge clipping (a team grazing the edge of a
+dead patch, with the +/-2.5 dB fading near the 0 dB line); this has not been
+investigated and is left as is for now.
 
 Margin field, seed 1018 (the seed with the most dead-zone cells, 7.6%), at
 tick 0. Rows are y, columns are x. `#` margin < 0 dB (fault), `+` 0 to +3 dB
@@ -323,8 +324,8 @@ now die; incidents escalate) and different onset mixes at once.
   resolved, and a model trained on this profile will see very few mission
   faults.
 * 57% of communication faults still last only 1-2 ticks after the shadowing
-  was made spatially correlated (94% before); the remainder was not
-  investigated.
+  was made spatially correlated (94% before); likely dead-zone edge
+  clipping, not investigated.
 * The wear hazard constants were tuned to hit a target attribution share.
 * Time since rest never dominated a resource onset; battery depletion and
   baseline account for all of them.
