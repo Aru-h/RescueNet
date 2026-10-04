@@ -1278,6 +1278,7 @@ check-state-hash: $(TARGET)
 	@cmp build/state-hash/a.hash build/state-hash/b.hash || { echo "check-state-hash: same seed gave different hashes"; exit 1; }
 	@if cmp -s build/state-hash/a.hash build/state-hash/c.hash; then echo "check-state-hash: different seeds gave identical hashes"; exit 1; fi
 	@$(PYTHON) $(TOOLS_DIR)/statehash_compare.py build/state-hash/a.hash build/state-hash/b.hash
+	@$(PYTHON) $(TOOLS_DIR)/statehash_compare_selftest.py
 	@mkdir -p build
 	@$(CC) $(CFLAGS) -I$(CORE_DIR) -I$(LAPTOP_DIR) -o build/state_hash_selftest $(TOOLS_DIR)/state_hash_selftest.c \
 		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LAPTOP_DIR)/mission_feed.c $(LAPTOP_DIR)/mission_mirror.c $(CORE_SOURCES) $(LDFLAGS)
