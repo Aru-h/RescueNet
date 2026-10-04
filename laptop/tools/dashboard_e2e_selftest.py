@@ -635,6 +635,43 @@ def _route_accuracy_check(page):
           f"the reconstructed route's first step matches the simulator's actual move {rate:.1%} of the time ({res['match']}/{res['moves']} recorded moves)")
 
 
+def _replay_env_history_check(page, console_errors):
+    """Replay shows building damage as of the replayed frame (the simulator
+    re-sends the building list when buildings are destroyed), identically in
+    2D, 2.5D and 3D; Live is unchanged."""
+    page.select_option("#modeSelect", "replay")
+    page.click("#replayRefreshBtn")
+    page.wait_for_timeout(300)
+    page.select_option("#replaySelect", DEMO_RECORDING)
+    page.click("#replayLoadBtn")
+    page.wait_for_function("() => Replay.frameCount > 0 && Replay.currentIndex === 0", timeout=10000)
+    count = """(env) => env ? env.buildings.filter(b => (b.damage || 0) >= 100).length : -1"""
+    page.evaluate("() => Replay.seekToIndex(0)")
+    first = page.evaluate(f"() => ({count})(currentEnvironment())")
+    last_index = page.evaluate("() => Replay.frameCount - 1")
+    page.evaluate("(i) => Replay.seekToIndex(i)", last_index)
+    last = page.evaluate(f"() => ({count})(currentEnvironment())")
+    check(0 <= first < last,
+          f"replayed building damage grows over the run: {first} destroyed buildings at tick 0 < {last} at the last frame")
+    # Same city in every view at a given frame, and it really is that frame's.
+    page.evaluate("() => Replay.seekToIndex(0)")
+    same = []
+    for mode in ("2d", "iso", "3d"):
+        _cycle_view_to(page, mode) if (mode != "3d" or page.evaluate("() => map3dAvailable")) else None
+        if page.evaluate("() => mapCamera.state.viewMode") != mode:
+            continue
+        same.append(page.evaluate("() => currentEnvironment() === Replay.envAt(Replay.currentIndex) && currentEnvironment() === Replay.envAt(0)"))
+    check(len(same) >= 2 and all(same), f"2D, 2.5D and 3D draw the same, frame-0 building list at tick 0 (views checked: {len(same)})")
+    page.evaluate("(i) => Replay.seekToIndex(i)", last_index)
+    check(page.evaluate("() => currentEnvironment() === Replay.envAt(Replay.currentIndex) && currentEnvironment() !== Replay.envAt(0)"),
+          "scrubbing to the end swaps in the later building list in every view")
+    _cycle_view_to(page, "2d")
+    # Live is untouched: back in Live mode the latest received list is used.
+    page.select_option("#modeSelect", "live")
+    page.wait_for_timeout(150)
+    check(page.evaluate("() => currentEnvironment() === staticEnvironment"), "in Live mode the map still uses the latest received building list")
+
+
 def _webgl_fallback_check(browser):
     """A browser with no WebGL: the page must load without errors, never
     offer 3D, and keep 2D / 2.5D working."""
@@ -1730,6 +1767,7 @@ def main():
             _replay_check(page, console_errors)
             _replay_timeline_check(page, console_errors, recordings_tmpdir)
             _route_accuracy_check(page)
+            _replay_env_history_check(page, console_errors)
             _replay_takeover_check(page, console_errors)
 
             page.close()

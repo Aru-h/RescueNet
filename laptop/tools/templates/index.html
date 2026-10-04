@@ -1718,8 +1718,21 @@ let terrainMap = null; // Part 3: latest STATICMAP payload, or null before one h
 function setReplayStaticEnvironment(env) { staticEnvironment = env; }
 function setReplayTerrainMap(map) { terrainMap = map; }
 
+// The building list every view draws. Live: the latest one received (the
+// simulator re-sends it when buildings are destroyed). Replay: the one that
+// was current at the frame being replayed (Replay.envAt), so scrubbing shows
+// damage as it was then - and 2D, 2.5D and 3D always show the same city.
+function currentEnvironment() {
+  if (window.Replay && Replay.isActive() && Replay.envAt) {
+    const env = Replay.envAt(Replay.currentIndex);
+    if (env) return env;
+  }
+  return staticEnvironment;
+}
+
 function drawFrame(frame, skipInspector) {
   window._lastFrame = frame;
+  const env = currentEnvironment();
   updateOverridePhases(frame);
   if (!mapCtx) return;
   mapCtx.clearRect(0, 0, mapCamera.state.viewW, mapCamera.state.viewH);
@@ -1735,7 +1748,7 @@ function drawFrame(frame, skipInspector) {
     // #mapCanvas (2D) is left clear for the drag/drop overlays. Hit
     // targets come back in the same shape as every other mode's.
     mapHitTargets.push(...map3d.render({
-      env: staticEnvironment, terrainMap, frame, fogViewMode, selectedMarker,
+      env, terrainMap, frame, fogViewMode, selectedMarker,
       teamColors: TEAM_COLORS, outlineBuildingId: mapCardBuildingId,
     }));
   } else if (mapCamera.state.viewMode === "iso") {
@@ -1743,7 +1756,7 @@ function drawFrame(frame, skipInspector) {
     // to front, so one call draws them all (map-render.js's
     // drawIsoScene) instead of the per-layer sequence below.
     mapHitTargets.push(...MapRender.drawIsoScene(mapCtx, mapCamera, {
-      env: staticEnvironment, frame, fogViewMode, selectedMarker,
+      env, frame, fogViewMode, selectedMarker,
       teamColors: TEAM_COLORS, outlineBuildingId: mapCardBuildingId,
     }));
   } else {
@@ -1751,8 +1764,8 @@ function drawFrame(frame, skipInspector) {
     // forces that one building's footprint outline open too, regardless of
     // zoom - drawBuildings() itself decides everything else about when a
     // footprint shows.
-    MapRender.drawBuildings(mapCtx, mapCamera, staticEnvironment, { outlineBuildingId: mapCardBuildingId });
-    MapRender.drawEpicenter(mapCtx, mapCamera, staticEnvironment);
+    MapRender.drawBuildings(mapCtx, mapCamera, env, { outlineBuildingId: mapCardBuildingId });
+    MapRender.drawEpicenter(mapCtx, mapCamera, env);
     MapRender.drawHazardCells(mapCtx, mapCamera, frame.hazard_cells || []);
     mapHitTargets.push(...MapRender.drawSafezones(mapCtx, mapCamera, frame.safezones));
     // Operator view: hide anything the system itself hasn't discovered
@@ -1762,7 +1775,7 @@ function drawFrame(frame, skipInspector) {
     // reveals it). "discovered" defaults to 1 for tasks that were never
     // part of fog-of-war (system tasks), so this only ever hides real
     // undiscovered incidents.
-    mapHitTargets.push(...MapRender.drawIncidents(mapCtx, mapCamera, frame.incidents, { fogViewMode, selectedMarker, buildings: (staticEnvironment && staticEnvironment.buildings) || [] }));
+    mapHitTargets.push(...MapRender.drawIncidents(mapCtx, mapCamera, frame.incidents, { fogViewMode, selectedMarker, buildings: (env && env.buildings) || [] }));
     mapHitTargets.push(...MapRender.drawTeams(mapCtx, mapCamera, frame.teams, { teamColors: TEAM_COLORS, selectedMarker }));
   }
 

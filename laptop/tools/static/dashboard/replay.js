@@ -34,6 +34,7 @@
   let playing = false;
   let speed = 1;
   let playTimer = null;
+  let envHistory = [];    // [{index, env}]: every STATICENV in the recording, with the index of the first frame it applies to
   let currentFile = null; // filename of the loaded recording (for take-over)
   let active = false;     // true once a recording is loaded - gates map drag-drop (index.html reads this)
 
@@ -85,13 +86,21 @@
   function parseRecordingText(text) {
     const outFrames = [];
     let outHeader = null, outEnv = null, outMap = null;
+    const outEnvHistory = [];
     const lines = text.split("\n");
     for (const raw of lines) {
       if (!raw) continue;
       if (raw.startsWith("RECORDING ")) {
         try { outHeader = JSON.parse(raw.slice("RECORDING ".length)); } catch (e) { /* skip malformed line */ }
       } else if (raw.startsWith("STATICENV ")) {
-        try { outEnv = JSON.parse(raw.slice("STATICENV ".length)); } catch (e) { /* skip malformed line */ }
+        try {
+          outEnv = JSON.parse(raw.slice("STATICENV ".length));
+          // The simulator re-sends the building list when an aftershock
+          // destroys buildings, so a recording holds several; remember
+          // where each one starts (the 3D view shows the city as of the
+          // frame being replayed - see envAt()).
+          outEnvHistory.push({ index: outFrames.length, env: outEnv });
+        } catch (e) { /* skip malformed line */ }
       } else if (raw.startsWith("STATICMAP ")) {
         // Only the LAST STATICMAP line matters for replay - it can be
         // re-emitted mid-recording (terrain damage accumulating), and a
@@ -105,7 +114,7 @@
       // OVERRIDE / OVERRIDEACK lines (Part 4+) aren't emitted into a
       // Part-2/3 recording yet, so there is nothing to parse for them here.
     }
-    return { header: outHeader, env: outEnv, map: outMap, frames: outFrames };
+    return { header: outHeader, env: outEnv, map: outMap, frames: outFrames, envHistory: outEnvHistory };
   }
 
   function setButtonsVisible(visible) {
@@ -127,6 +136,7 @@
     const parsed = parseRecordingText(text);
     header = parsed.header;
     frames = parsed.frames;
+    envHistory = parsed.envHistory || [];
     currentFile = filename;
     currentIndex = -1;
 
@@ -267,6 +277,7 @@
     active = false;
     currentIndex = -1;
     frames = [];
+    envHistory = [];
     header = null;
     setButtonsVisible(false);
   }
@@ -320,5 +331,13 @@
     // dashboard's history when a live run takes over at `index`.
     framesBefore(index) { return frames.slice(0, Math.max(0, index)); },
     frameTick(i) { return frames[i] ? frames[i].tick : null; },
+    // The building list as it stood at frame `i` (the latest STATICENV at or
+    // before it), or null if there are none. The classic 2D / 2.5D map keeps
+    // using the final one, as before; only the 3D view uses this.
+    envAt(i) {
+      let env = null;
+      for (const h of envHistory) { if (h.index <= i) env = h.env; else break; }
+      return env;
+    },
   };
 })(window);
