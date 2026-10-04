@@ -32,6 +32,8 @@
 #include <tm/tmonitor.h>
 #include "mtkernel/lib/libtm/libtm.h"   /* tm_com_init() */
 #include "sim_runner.h"
+#include "state_hash.h"      /* per-tick determinism fingerprint */
+#include "cbba.h"            /* CBBA_REPLY_WAIT_STEP_MS - cbba_wait_poll() */
 #include "fault_config.h"
 #include "mission_state.h"       /* g_current_tick - clock-driven tick loop */
 #include "mission_link_codec.h" /* mission_link_roster_reject_count() -
@@ -124,6 +126,16 @@ _Static_assert(BOARD_SEED_COUNT == 1u,
  * demo and a faster rehearsal are the same firmware. Between allowed
  * ticks the board keeps the link serviced and sleeps this long per
  * pass, which bounds how late it notices a new clock frame. */
+/* Determinism fingerprint (core/state_hash.h): every this-many ticks the
+   board prints a STATEHASH line, same fields and format as the PC build's
+   `--state-hash=N`, so the lines can be diffed between runs and between
+   firmware versions. 0 turns it off. Printing one line holds interrupts
+   masked for ~10 ms (tm_putstring, see KNOWN_LIMITATIONS), which is why it
+   is periodic and not per tick. */
+#ifndef BOARD_STATE_HASH_INTERVAL
+#define BOARD_STATE_HASH_INTERVAL 50u
+#endif
+
 #ifndef BOARD_CLOCK_IDLE_POLL_MS
 #define BOARD_CLOCK_IDLE_POLL_MS 5u
 #endif
@@ -521,20 +533,33 @@ void board_usart1_write(const uint8_t *bytes, uint32_t len)
    16-byte hardware FIFO holds a whole laptop frame; it can only be
    switched on while the peripheral is disabled, so wait for any
    transmission in progress to finish first. */
-static void board_usart1_enable_rx_fifo(void)
+/* USART1_S, never the plain USART1 macro: stm32n657xx.h maps USART1 to the
+   SECURE alias (0x52001000) only when CPU_IN_SECURE_STATE is defined, and
+   that comes from -mcmse (both the CubeIDE .cproject and the Makefile pass
+   it today). Without it the macro is the NON-secure alias (0x42001000), a
+   different view of the same UART that does not see the secure side's
+   state, and these writes would land on the wrong register file with no
+   fault. tm_com.c and usart1_driver.c address the secure alias explicitly;
+   this does the same so FIFO enable cannot depend on a compiler flag.
+   Returns the CR1 value read back, so boot can print whether FIFOEN stuck. */
+static uint32_t board_usart1_enable_rx_fifo(void)
 {
     UINT imask;
     uint32_t spins = 1000000u;
+    uint32_t cr1;
 
     DI(imask);
-    while ((USART1->ISR & USART_ISR_TC) == 0u && spins > 0u)
+    while ((USART1_S->ISR & USART_ISR_TC) == 0u && spins > 0u)
     {
         spins--;
     }
-    USART1->CR1 &= ~USART_CR1_UE;
-    USART1->CR1 |= USART_CR1_FIFOEN;
-    USART1->CR1 |= USART_CR1_UE;
+    USART1_S->CR1 &= ~USART_CR1_UE;
+    USART1_S->CR1 |= USART_CR1_FIFOEN;
+    USART1_S->CR1 |= USART_CR1_UE;
+    cr1 = USART1_S->CR1;
     EI(imask);
+
+    return cr1;
 }
 
 /*
@@ -590,11 +615,13 @@ static uint32_t board_dwt_cycles(void)
 static uint32_t g_tick_cycles_last;
 static uint32_t g_tick_cycles_max;
 
-/* Real milliseconds for CBBA's reply timeout and the status heartbeat
-   (cbba.h requires this on hardware). Neither board used to define it, so
-   both ran on cbba.c's simulated clock - 10 ms per call - and a "530 ms"
-   CBBA wait took microseconds (found by review). If the kernel call ever
-   fails, time still advances so no wait can spin forever. */
+/* Real milliseconds for the status heartbeat and handshake pacing (link
+   side only - CBBA's reply wait is bounded by a step count, see
+   cbba_wait_poll() below, and the simulation reads no clock). Without this
+   override the link would run on cbba.c's simulated clock - 10 ms per call
+   - and a heartbeat "interval" would pass in microseconds (found by
+   review). If the kernel call ever fails, time still advances so no wait
+   can spin forever. */
 uint32_t cbba_now_ms(void)
 {
     SYSTIM now;
@@ -609,15 +636,24 @@ uint32_t cbba_now_ms(void)
     return s_fallback_ms;
 }
 
-/* Services the radio and USART1 through CBBA's reply wait (see cbba.h):
-   this board's queued bids go out and the peer's replies come in. Laptop
-   bytes are only buffered here - mission_link_task_step() parses them
-   after sim_tick() returns. */
+/* One idle wait step of CBBA's reply wait (see cbba.h): services the radio
+   and USART1 so this board's queued bids go out and the peer's replies come
+   in, then yields for one nominal step. Laptop bytes are only buffered here
+   - mission_link_task_step() parses them after sim_tick() returns.
+
+   The wait is bounded in core by a COUNT of these calls
+   (CBBA_REPLY_WAIT_STEPS), so the sleep is what maps the budget onto real
+   time: tk_dly_tsk(CBBA_REPLY_WAIT_STEP_MS) sleeps one 10 ms kernel tick
+   plus the "+1 tick" every kernel timeout gets, i.e. 10-20 ms per step, so
+   a dead-peer round now takes 1.25-2.5 s instead of the 1.25 s the old
+   clock-based spin gave. A live peer's replies end the wait early either
+   way. NOT yet measured on a board (no ARM toolchain here). */
 void cbba_wait_poll(void)
 {
     sx1262_poll_rx();
     comms_transport_dispatch_pending();
     mission_link_task_usart1_pump();
+    tk_dly_tsk(CBBA_REPLY_WAIT_STEP_MS);
 }
 
 LOCAL void sim_task(INT stacd, void *exinf);
@@ -691,7 +727,21 @@ LOCAL void sim_task(INT stacd, void *exinf)
     g_comms_transport_this_board_id = THIS_BOARD_ID;
     comms_transport_init();
     board_seed_lora_session_epoch();
-    board_usart1_enable_rx_fifo();
+    {
+        uint32_t cr1 = board_usart1_enable_rx_fifo();
+
+        /* Proof, on the console, that the FIFO enable reached the real
+           (secure) USART1: expect usart1=0x52001000 fifoen=1 ue=1 re=1
+           rxneie=1. fifoen=0 would mean the write missed the peripheral
+           the BSP's console runs on. */
+        tm_printf((UB*)"tron: USART1 addr=0x%08lx fifoen=%u ue=%u re=%u rxneie=%u cr1=0x%08lx\n",
+                  (unsigned long)(uintptr_t)USART1_S,
+                  (unsigned)((cr1 & USART_CR1_FIFOEN) != 0u),
+                  (unsigned)((cr1 & USART_CR1_UE) != 0u),
+                  (unsigned)((cr1 & USART_CR1_RE) != 0u),
+                  (unsigned)((cr1 & USART_CR1_RXNEIE_RXFNEIE) != 0u),
+                  (unsigned long)cr1);
+    }
 
 #ifdef LORA_RAW_RX_CHECK
     /*
@@ -942,6 +992,25 @@ LOCAL void sim_task(INT stacd, void *exinf)
                 }
             }
             tick = g_current_tick;
+
+#if BOARD_STATE_HASH_INTERVAL > 0u
+            if((tick % BOARD_STATE_HASH_INTERVAL) == 0u)
+            {
+                StateHash_t sh;
+
+                state_hash_compute(&sh);
+                /* tm_printf has no 64-bit conversions: each hash goes out
+                   as two zero-padded 32-bit halves, which concatenate to
+                   the same 16 hex digits the PC prints. */
+                tm_printf((UB*)"STATEHASH tick=%lu all=%08lx%08lx teams=%08lx%08lx inc=%08lx%08lx flt=%08lx%08lx rec=%08lx%08lx\n",
+                          (unsigned long)tick,
+                          (unsigned long)(sh.all >> 32), (unsigned long)(uint32_t)sh.all,
+                          (unsigned long)(sh.teams >> 32), (unsigned long)(uint32_t)sh.teams,
+                          (unsigned long)(sh.incidents >> 32), (unsigned long)(uint32_t)sh.incidents,
+                          (unsigned long)(sh.faults >> 32), (unsigned long)(uint32_t)sh.faults,
+                          (unsigned long)(sh.recovery >> 32), (unsigned long)(uint32_t)sh.recovery);
+            }
+#endif
 
             /* Heartbeat trigger hook (this prompt's addition - see the
                extern declarations above for scope). Every tick, not

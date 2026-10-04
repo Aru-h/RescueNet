@@ -563,11 +563,16 @@ static void test_round_finalizes_without_hanging(void)
        failure signal for "blocking indefinitely" (see cbba.h's
        CBBA_ROUND_TIMEOUT_MS doc comment). Reaching the CHECK below at
        all is the pass condition. */
+    g_wait_poll_calls = 0u;
+    g_wait_poll_inject_at = -1;
     cbba_ingest_remote_mesh_replies();
-    CHECK(1);
+    /* Deterministic bound: with nothing arriving, the wait makes exactly
+       CBBA_REPLY_WAIT_STEPS idle polls - a count, not a clock reading, so
+       it is the same on every host. */
+    CHECK(g_wait_poll_calls == (uint32_t)CBBA_REPLY_WAIT_STEPS);
     printf("PASS: cbba_ingest_remote_mesh_replies() returned with an empty inbox "
-           "(bounded by CBBA_ROUND_TIMEOUT_MS=%u via cbba.c's weak cbba_now_ms())\n",
-           (unsigned)CBBA_ROUND_TIMEOUT_MS);
+           "(bounded by CBBA_REPLY_WAIT_STEPS=%u wait steps, no clock read)\n",
+           (unsigned)CBBA_REPLY_WAIT_STEPS);
 }
 
 int main(void)

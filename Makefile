@@ -1256,3 +1256,26 @@ check-eval-metrics-unittest:
 # laptop/tools/check-evaluate-determinism.sh.
 check-evaluate-determinism:
 	@PYTHON=$(PYTHON) $(TOOLS_DIR)/check-evaluate-determinism.sh
+
+# Determinism fingerprint (core/state_hash.h, `tron --state-hash=N`):
+# (1) the flag is read-only - the C1 md5 of docs/evaluation/AI_EVALUATION_BRIEF.md
+# (`./tron 1 3 1500 --fault-profile=combined` -> tron_snapshot_dataset.csv) is the
+# same with it on as the committed value; (2) two runs of the same seed print
+# identical hashes on every line; (3) a different seed does not (the hash
+# actually sees the state). Compare board logs with
+# laptop/tools/statehash_compare.py.
+STATE_HASH_C1_MD5 = b248bea72ce2ceb81389762dccc0a749
+.PHONY: check-state-hash
+check-state-hash: $(TARGET)
+	@rm -rf build/state-hash && mkdir -p build/state-hash/a build/state-hash/b build/state-hash/c
+	@cd build/state-hash/a && ../../../$(TARGET) 1 3 1500 --fault-profile=combined --state-hash=100 >out.txt 2>err.txt
+	@cd build/state-hash/b && ../../../$(TARGET) 1 3 1500 --fault-profile=combined --state-hash=100 >out.txt 2>err.txt
+	@cd build/state-hash/c && ../../../$(TARGET) 2 1 1500 --fault-profile=combined --state-hash=100 >out.txt 2>err.txt
+	@md5=$$(md5sum build/state-hash/a/tron_snapshot_dataset.csv | cut -d' ' -f1); \
+	 if [ "$$md5" != "$(STATE_HASH_C1_MD5)" ]; then echo "check-state-hash: C1 md5 is $$md5, expected $(STATE_HASH_C1_MD5)"; exit 1; fi
+	@grep STATEHASH build/state-hash/a/err.txt > build/state-hash/a.hash; grep STATEHASH build/state-hash/b/err.txt > build/state-hash/b.hash; grep STATEHASH build/state-hash/c/err.txt > build/state-hash/c.hash
+	@test -s build/state-hash/a.hash || { echo "check-state-hash: no STATEHASH lines printed"; exit 1; }
+	@cmp build/state-hash/a.hash build/state-hash/b.hash || { echo "check-state-hash: same seed gave different hashes"; exit 1; }
+	@if cmp -s build/state-hash/a.hash build/state-hash/c.hash; then echo "check-state-hash: different seeds gave identical hashes"; exit 1; fi
+	@$(PYTHON) $(TOOLS_DIR)/statehash_compare.py build/state-hash/a.hash build/state-hash/b.hash
+	@echo "check-state-hash: C1 md5 unchanged with --state-hash on; same seed -> identical hashes; different seed -> different hashes"

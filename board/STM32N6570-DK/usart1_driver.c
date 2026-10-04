@@ -19,9 +19,11 @@
  * Bug fix #1: originally used the plain `USART1` macro from the CMSIS
  * header. That macro resolves to the SECURE alias (USART1_S,
  * 0x52001000) only when CPU_IN_SECURE_STATE is defined at compile
- * time - it isn't, in this project's build (no such define in either
- * build config) - so it silently resolved to the NON-secure alias
- * (USART1_NS, 0x42001000) instead. tm_com_init() (and every other
+ * time, and the header defines that only under -mcmse
+ * (__ARM_FEATURE_CMSE == 3). When this bug was found the build did not
+ * pass -mcmse (today both the Makefile and the CubeIDE .cproject do), so
+ * it silently resolved to the NON-secure alias (USART1_NS, 0x42001000)
+ * instead; the explicit _S below keeps it correct whatever the flags. tm_com_init() (and every other
  * read/write this board does of this peripheral) targets the SECURE
  * alias directly, unconditionally, because TRUSTZONE_SECURE=1 for
  * this target (see vendor/mtk3_bsp2's own sysdef.h) - it doesn't key

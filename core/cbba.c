@@ -1159,13 +1159,14 @@ static uint8_t cbba_communication_link_up(uint8_t team_id)
  */
 
 /* Weak default: no real clock behind it - see cbba.h's cbba_now_ms()
-   doc comment for the full explanation and the real-hardware
-   override contract (same weak-default pattern as
-   comms_transport.c's lora_spi_transmit). Advances a simulated
-   millisecond counter by a fixed step every call, purely so the
-   bounded wait loop below always terminates in a small, deterministic
-   number of calls even with nothing to poll - never an infinite
-   spin, and never an instant (zero-wait) timeout either. */
+   doc comment. core/cbba.c itself no longer calls it: the reply wait
+   below is bounded by a count of wait steps, not by elapsed time, so a
+   simulation result can never depend on how fast a CPU or a kernel
+   timer happens to run. It stays as the shared elapsed-time source for
+   the board's link-side pacing (heartbeat interval, handshake
+   timeouts), which are real-time by nature and never feed sim state.
+   Advances a simulated millisecond counter by a fixed step every call
+   so those callers still make progress on a host with no clock. */
 #ifndef CBBA_SIM_CLOCK_STEP_MS
 #define CBBA_SIM_CLOCK_STEP_MS 10u
 #endif
@@ -1419,7 +1420,8 @@ static int cbba_decode_wire_message(const uint8_t *payload, uint8_t payload_len,
    no stub needed) wire message instead of an in-memory outbox[]
    entry.
 
-   Actively waits up to CBBA_ROUND_TIMEOUT_MS for something to arrive:
+   Actively waits up to CBBA_REPLY_WAIT_STEPS wait steps (nominally
+   CBBA_ROUND_TIMEOUT_MS of platform time) for something to arrive:
    comms_transport_poll_received() is itself non-blocking (returns 0
    immediately on an empty inbox), so without an explicit wait this
    function would finalize optimistically with zero wait - exactly
@@ -1454,7 +1456,7 @@ static int cbba_decode_wire_message(const uint8_t *payload, uint8_t payload_len,
 /* Not static - see cbba_team_is_local()'s comment above for why. */
 void cbba_ingest_remote_mesh_replies(void)
 {
-    uint32_t round_start = cbba_now_ms();
+    uint32_t wait_steps = 0u;
     uint8_t expected_replies = 0;
     uint8_t ingested_replies = 0;
 #ifdef CBBA_DEBUG_TIMING
@@ -1467,8 +1469,13 @@ void cbba_ingest_remote_mesh_replies(void)
             expected_replies++;
     }
 
+    /* Bounded by wait STEPS (CBBA_REPLY_WAIT_STEPS), not by a clock read:
+       one step is one idle cbba_wait_poll() call, and the platform decides
+       how long a step takes (cbba.h). Draining frames that are already in
+       the inbox costs no step, so a burst of replies is never cut short
+       by the budget; that drain is bounded by the inbox size. */
     while(ingested_replies < expected_replies &&
-          (cbba_now_ms() - round_start) < CBBA_ROUND_TIMEOUT_MS)
+          wait_steps < CBBA_REPLY_WAIT_STEPS)
     {
         uint8_t sender_team_id;
         uint8_t frame_type;
@@ -1492,6 +1499,7 @@ void cbba_ingest_remote_mesh_replies(void)
                 break;
 
             cbba_wait_poll();
+            wait_steps++;
             continue;
         }
 
@@ -1543,10 +1551,10 @@ void cbba_ingest_remote_mesh_replies(void)
     {
         fprintf(stderr,
                 "[cbba] round timeout expired, no reply from peer "
-                "(board=%u, waited=%ums, CBBA_ROUND_TIMEOUT_MS=%ums)\n",
+                "(board=%u, wait_steps=%u, CBBA_REPLY_WAIT_STEPS=%u)\n",
                 (unsigned)g_comms_transport_this_board_id,
-                (unsigned)(cbba_now_ms() - round_start),
-                (unsigned)CBBA_ROUND_TIMEOUT_MS);
+                (unsigned)wait_steps,
+                (unsigned)CBBA_REPLY_WAIT_STEPS);
     }
 #endif
 }
