@@ -70,7 +70,7 @@ must equal the baseline.
 
 ## 4. If something is off: bisect order
 
-Each commit builds and boots on its own (`git checkout <hash>`, rebuild).
+Every commit below compiles for the board (checked with `make check-board-compile check-board-single-compile`); whether each one boots is what this table is for (`git checkout <hash>`, rebuild).
 
 | Commit | Adds | If the board breaks here |
 |---|---|---|
