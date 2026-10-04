@@ -17,6 +17,9 @@
  * to print it every N ticks on every platform and diff the lines: same
  * seed + same inputs must give the same hashes (docs/RTOS_DESIGN.md).
  *
+ * Incidents are hashed in incident_id order over occupied slots only, so
+ * link-arrival order (which slot an incident landed in) cannot change the hash.
+ *
  * Sub-hashes are kept separate so a mismatch says WHICH part diverged.
  * `all` folds the four sub-hashes and the tick together.
  */

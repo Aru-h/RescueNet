@@ -144,8 +144,39 @@ void state_hash_compute(StateHash_t *out)
         hash_team_faults(&hf, &g_teams[t].fault_state);
     }
 
-    for(uint32_t i = 0; i < NUM_INCIDENTS; i++)
-        hash_incident(&hi, &g_incidents[i]);
+    /* Incidents in incident_id order, not slot order: a board fills g_incidents[]
+       in the order incidents arrive over the mission link, so the same world
+       can sit in different slots from run to run. Only occupied slots count
+       (an empty slot is the same on every run anyway), and the occupied count
+       goes in first so a missing incident cannot hide. The sort is stable on
+       the slot index, so the result is deterministic even if two slots ever
+       held the same id. g_system_tasks[] is local, never link-filled, and
+       stays in slot order. */
+    {
+        uint8_t order[NUM_INCIDENTS];
+        uint32_t n = 0;
+
+        for(uint32_t i = 0; i < NUM_INCIDENTS; i++)
+        {
+            if(g_incidents[i].slot_occupied)
+                order[n++] = (uint8_t)i;
+        }
+        for(uint32_t a = 1; a < n; a++)
+        {
+            uint8_t cur = order[a];
+            uint32_t b = a;
+
+            while(b > 0u && g_incidents[order[b - 1u]].incident_id > g_incidents[cur].incident_id)
+            {
+                order[b] = order[b - 1u];
+                b--;
+            }
+            order[b] = cur;
+        }
+        fnv_u32(&hi, n);
+        for(uint32_t k = 0; k < n; k++)
+            hash_incident(&hi, &g_incidents[order[k]]);
+    }
     for(uint32_t i = 0; i < NUM_SYSTEM_TASKS; i++)
         hash_incident(&hi, &g_system_tasks[i]);
 
