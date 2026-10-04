@@ -204,6 +204,7 @@ int main(int argc, char **argv)
     uint8_t causal_env_min = 0, causal_env_max = 0;
     uint8_t causal_env_delay = 0;
     int roads_flag_given = 0;
+    int causal_fixes_mask = -1;   /* -1 = not given (default: all fixes on under causal) */
     int causal_reroute_penalty = -1;
     int live_mode = 0;
     int mission_feed_mode = 0; /* --mission-feed, see laptop/mission_feed.h */
@@ -399,6 +400,39 @@ int main(int argc, char **argv)
             continue;
         }
 
+        /* Step 3.2 plumbing fixes, causal only: on | off | label,rtb,cost */
+        if(strncmp(argv[i], "--causal-fixes=", 15) == 0)
+        {
+            const char *v = argv[i] + 15;
+            char buf[64];
+            char *tok;
+            unsigned mask = 0;
+
+            if(strcmp(v, "on") == 0)
+                mask = CAUSAL_FIXES_ALL;
+            else if(strcmp(v, "off") != 0)
+            {
+                strncpy(buf, v, sizeof(buf) - 1);
+                buf[sizeof(buf) - 1] = 0;
+                for(tok = strtok(buf, ","); tok != NULL; tok = strtok(NULL, ","))
+                {
+                    if(strcmp(tok, "label") == 0)
+                        mask |= CAUSAL_FIX_LABEL;
+                    else if(strcmp(tok, "rtb") == 0)
+                        mask |= CAUSAL_FIX_ENV_NO_RTB;
+                    else if(strcmp(tok, "cost") == 0)
+                        mask |= CAUSAL_FIX_TRUE_COST;
+                    else
+                    {
+                        fprintf(stderr, "invalid --causal-fixes '%s' (need on, off, or a list of label,rtb,cost)\n", v);
+                        exit(2);
+                    }
+                }
+            }
+            causal_fixes_mask = (int)mask;
+            continue;
+        }
+
         /* Consequential roads (Step 3.1), causal only. */
         if(strncmp(argv[i], "--causal-roads=", 15) == 0)
         {
@@ -511,6 +545,13 @@ int main(int argc, char **argv)
         fprintf(stderr, "--causal-env-crossing-delay only applies to --fault-profile=causal\n");
         return 2;
     }
+    if(causal_fixes_mask >= 0 && fault_profile != FAULT_PROFILE_CAUSAL)
+    {
+        fprintf(stderr, "--causal-fixes only applies to --fault-profile=causal\n");
+        return 2;
+    }
+    if(causal_fixes_mask >= 0)
+        fault_config_set_causal_fixes((uint8_t)causal_fixes_mask);
     if(roads_flag_given && fault_profile != FAULT_PROFILE_CAUSAL)
     {
         fprintf(stderr, "--causal-roads / --roads-* only apply to --fault-profile=causal\n");
@@ -550,6 +591,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "[FAULT] profile=causal fault_stress=%g causal_actions=%s env_backstop=%u-%u env_crossing_delay=%u roads=%s\n", (double)fault_stress,
                 causal_actions_flag == (int)CAUSAL_ACTIONS_ALL ? "on" : (causal_actions_flag ? "partial" : "off"), causal_env_max ? causal_env_min : 5u, causal_env_max ? causal_env_max : 12u, (unsigned)causal_env_delay,
                 g_causal_roads.enabled ? "on" : "off");
+    if(fault_profile == FAULT_PROFILE_CAUSAL)
+        fprintf(stderr, "[FAULT] fixes label=%d env_no_rtb=%d true_cost=%d\n",
+                fault_profile_causal_fix(CAUSAL_FIX_LABEL), fault_profile_causal_fix(CAUSAL_FIX_ENV_NO_RTB), fault_profile_causal_fix(CAUSAL_FIX_TRUE_COST));
     if(fault_profile == FAULT_PROFILE_CAUSAL && g_causal_roads.enabled)
         fprintf(stderr, "[FAULT] roads partial_pct=%u delay=%u persist=%u-%u clear_work=%u-%u cost_per_tick=%u astar=%s\n",
                 g_causal_roads.partial_pct, g_causal_roads.crossing_delay_ticks,
@@ -762,6 +806,8 @@ int main(int argc, char **argv)
                 fprintf(stderr, "[DIAG ROADS] enabled=%d partial=%u blocked=%u block_downgraded=%u max_blocked_cells=%u audit_ticks=%u audit_violations=%u\n",
                     g_causal_roads.enabled, rs->partial_injected, rs->blocked_injected, rs->block_downgraded,
                     rs->max_blocked_cells, rs->audit_ticks, rs->audit_violations);
+                fprintf(stderr, "[DIAG ENVLABEL] fix=%d label_ticks=%u label_episodes=%u\n",
+                    fault_profile_causal_fix(CAUSAL_FIX_LABEL), rs->label_ticks, rs->label_episodes);
             }
             for(uint8_t a = 0; a < NUM_CAUSAL_ACTIONS; a++)
                 fprintf(stderr, "[DIAG ACTION] name=%s dispatched=%u resolved=%u abandoned=%u active_ticks=%u from_detector=%u\n",

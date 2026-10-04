@@ -11,7 +11,7 @@ duration ranges remain only as maximum backstops (communication has none).
 
 Consequential roads (damaged cells that stall or block movement; **on by
 default** under this profile, `--causal-roads=off` restores the previous
-behaviour) are described in `docs/CONSEQUENTIAL_ROADS.md`.
+behaviour) are described in `docs/CONSEQUENTIAL_ROADS.md`; the Step 3.2 label and routing-only response mapping are in `docs/CAUSAL_PLUMBING_FIXES.md`.
 
 Recovery actions that act on environment faults, incidents and the radio link
 (reroute, clear road, reinforce, relay) are described in
@@ -208,7 +208,8 @@ trained on it, add these columns to `GROUND_TRUTH_COLUMNS` in
 | `onset_cause_<class>` | cause of a fault that started this tick, else 0 |
 | `clear_cause_<class>` | how a fault ended this tick: 0 none, 1 cause removed, 2 backstop |
 | `action_mask` | bit i set when recovery action i involves this team this tick (0 reroute, 1 clear_road, 2 reinforce_incident, 3 relay_reposition); 0 unless `--causal-actions` enables them (`docs/RECOVERY_ACTIONS.md`) |
-| `route_touch` | bit 0: the team's route (next 8 steps toward its destination) crosses a partially blocked road cell; bit 1: it passes within one cell of a fully blocked cell; 0 when it is not en route or consequential roads are off (`docs/CONSEQUENTIAL_ROADS.md`). Truth for future retraining; never in the main dataset |
+| `route_touch` | bit 0: the team's route (next 8 steps toward its destination) crosses a partially blocked road cell; bit 1: it passes within one cell of a fully blocked cell; 0 when it is not en route or consequential roads are off (`docs/CONSEQUENTIAL_ROADS.md`). Since Step 3.2 this is also the dataset's environment label (`fault_active_environment`, with the default `--causal-fixes`; `docs/CAUSAL_PLUMBING_FIXES.md`) |
+| `env_hold` | the pre-Step-3.2 per-team environment flag: 1 while the team holds an environment fault (lasts as long as the road damage). Read at row time, like the dataset's flag. Kept so the old and new labels can be compared; with `--causal-fixes=off` it equals the dataset's `fault_active_environment` |
 
 `onset_cause` codes: 0 none, 1 baseline, 2 wear, 3 roughness, 4 battery,
 5 time since rest, 6 link margin, 7 aftershock, 8 incident deterioration.

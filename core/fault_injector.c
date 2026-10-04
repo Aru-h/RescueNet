@@ -262,6 +262,8 @@ static uint8_t s_env_fault_base_navigable[GRID_WIDTH][GRID_HEIGHT];
 #define ROAD_BLOCKED 2u
 static uint8_t s_road_kind[GRID_WIDTH][GRID_HEIGHT];
 static CausalRoadStats_t s_road_stats;
+static uint8_t s_label_now[NUM_TEAMS];
+static uint8_t s_label_prev[NUM_TEAMS];
 
 uint8_t fault_injector_causal_road_kind(int x, int y)
 {
@@ -1410,7 +1412,29 @@ static void causal_step(void)
     if(fault_profile_causal_roads_on())
         road_audit();
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+    {
+        uint8_t label;
+
         s_causal_truth[team_id].route_touch = causal_actions_route_touch(&g_teams[team_id]);
+        label = s_causal_truth[team_id].route_touch != 0u;
+        s_label_now[team_id] = label;
+        if(label)
+        {
+            s_road_stats.label_ticks++;
+            if(!s_label_prev[team_id])
+                s_road_stats.label_episodes++;
+        }
+        s_label_prev[team_id] = label;
+    }
+}
+
+uint8_t fault_injector_causal_env_label(uint8_t team_id)
+{
+    if(team_id >= NUM_TEAMS)
+        return 0u;
+    if(fault_profile_causal_fix(CAUSAL_FIX_LABEL))
+        return s_label_now[team_id];
+    return g_teams[team_id].fault_state.active[FAULT_CLASS_ENVIRONMENT];
 }
 
 /* CLEAR_ROAD completion: the cell goes back to its pre-fault state and every
@@ -1489,6 +1513,10 @@ void fault_injector_init(uint32_t seed)
         s_causal_prev_valid[t] = 0;
         s_causal_last_rest_tick[t] = 0;
         memset(&s_causal_truth[t], 0, sizeof(s_causal_truth[t]));
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+        s_label_now[t] = 0;
+        s_label_prev[t] = 0;
+#endif
     }
     causal_actions_reset();
 #if ENVIRONMENT_HAS_WORLD_STORAGE

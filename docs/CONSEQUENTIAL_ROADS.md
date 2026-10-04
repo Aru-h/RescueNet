@@ -167,6 +167,11 @@ reads `navigable` and `travelCost` only, matching `core/path.c`.
 
 ## Results
 
+> Step 3.2 note: the tables below were measured with the Step 3.1 plumbing. The three
+> fixes in `docs/CAUSAL_PLUMBING_FIXES.md` leave every AI-off row unchanged and remove
+> the oracle-detector collapse and about two thirds of the blind-A* REROUTE loss;
+> the investigations at the end of this file describe what they fix.
+
 Causal profile, `--fault-stress=7`, 3000 ticks, AI predictor off unless stated.
 Development seeds 1001-1020 (where `cost_per_tick` was tuned), held-out seeds
 2001-2020, and the pooled 40. Every difference is paired by seed with a 95%

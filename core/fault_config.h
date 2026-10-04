@@ -156,6 +156,17 @@ typedef struct
 } CausalRoadParams_t;
 
 extern CausalRoadParams_t g_causal_roads;
+
+/* Step 3.2 plumbing fixes (causal profile only; docs/CAUSAL_PLUMBING_FIXES.md).
+ * --causal-fixes=off restores the Step 3.1 behaviour exactly. */
+#define CAUSAL_FIX_LABEL        0x01u  /* environment label = "this team's route touches a damaged cell" */
+#define CAUSAL_FIX_ENV_NO_RTB   0x02u  /* an environment detection never drives a team-level reaction (RETURN_TO_SAFE_ZONE, ...) */
+#define CAUSAL_FIX_TRUE_COST    0x04u  /* the progress tracker's remaining cost ignores the REROUTE overlay */
+#define CAUSAL_FIXES_ALL        0x07u
+extern uint8_t g_causal_fixes;
+void fault_config_set_causal_fixes(uint8_t mask);
+/* 1 under the causal profile when this fix is enabled. CAUSAL_FIX_LABEL also needs consequential roads (the label is the route-touch signal). */
+int fault_profile_causal_fix(unsigned fix);
 /* 1 only under the causal profile with consequential roads enabled. */
 int fault_profile_causal_roads_on(void);
 

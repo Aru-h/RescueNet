@@ -60,6 +60,8 @@ float causal_actions_survival_factor(uint8_t incident_slot);
 void causal_actions_road_cleared(const IncidentState_t *task);
 /* Sidecar truth: bit 0 route crosses partial debris, bit 1 route passes next to a blocked cell. */
 uint8_t causal_actions_route_touch(const TeamState_t *team);
+/* 1 while this team's path searches carry the REROUTE overlay. */
+int causal_actions_overlay_active(const TeamState_t *team);
 
 /* Bit i set = action i currently involves this team. */
 uint8_t causal_actions_team_mask(uint8_t team_id);

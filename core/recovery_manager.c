@@ -1329,6 +1329,20 @@ static RecoverySignal_t evaluate_fault_predictor(
 
         for(uint8_t fault_class = 0u; fault_class < NUM_OPERATIONAL_FAULT_CLASSES; fault_class++)
         {
+            /* Causal profile, Step 3.2: going home does not fix a road, so a
+             * flagged environment class never drives a team-level reaction
+             * (RETURN_TO_SAFE_ZONE, LOCAL_RECOVERY, reallocation). It maps to
+             * routing responses only - REROUTE and a CLEAR_ROAD request when
+             * those actions are enabled (causal_actions_detector_flag), and
+             * otherwise to "wait" (CONTINUE_MONITORING): the team crosses or
+             * stalls at the debris under the movement rules. */
+            if(fault_class == FAULT_CLASS_ENVIRONMENT && fault_profile_causal_fix(CAUSAL_FIX_ENV_NO_RTB))
+            {
+                if(scores.score[fault_class] >= class_threshold[fault_class] && fault_profile_causal_actions_on())
+                    causal_actions_detector_flag(team->team_id, (OperationalFaultClass_t)fault_class);
+                continue;
+            }
+
             /* Causal profile: a flagged environment/mission class drives its
              * own map/incident action (reroute, clear road, reinforce)
              * instead of a team-level action, which is what made these

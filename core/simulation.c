@@ -242,6 +242,18 @@ void simulation_step(void) //simulation
 }
 
 unsigned long g_probe_no_path_hits = 0;
+/* Remaining route cost from (x, y) at the true terrain costs, with no REROUTE
+ * overlay (the caller has just finished its overlay-steered search). */
+static uint16_t simulation_true_remaining_cost(int x, int y, int dest_x, int dest_y)
+{
+    int cost;
+
+    if(x == dest_x && y == dest_y)
+        return 0u;
+    cost = find_next_path_step_remaining(x, y, dest_x, dest_y, NULL, NULL, NULL);
+    return cost > 0 ? (uint16_t)cost : 0u;
+}
+
 void move_team(TeamState_t *team) //simulation
 {
     if(team->status != STATUS_EN_ROUTE)
@@ -274,6 +286,7 @@ void move_team(TeamState_t *team) //simulation
 
         int next_x, next_y;
         uint16_t remaining_after_step = 0;
+        int overlay_on = fault_profile_is_causal() && causal_actions_overlay_active(team);
         causal_actions_path_begin(team);
         int pre_step_cost = find_next_path_step_remaining(team->loc_x, team->loc_y, safezone->loc_x, safezone->loc_y, &next_x, &next_y, &remaining_after_step);
         causal_actions_path_end();
@@ -320,6 +333,8 @@ void move_team(TeamState_t *team) //simulation
         if(g_simulation_trace_enabled) debug_trace(" -> (%d,%d)", team->loc_x, team->loc_y);
         /* From the pathfinder, not pre_step_cost minus the cell's travel
          * cost: a diagonal step costs more than the cell it enters. */
+        if(overlay_on && fault_profile_causal_fix(CAUSAL_FIX_TRUE_COST))
+            remaining_after_step = simulation_true_remaining_cost(team->loc_x, team->loc_y, safezone->loc_x, safezone->loc_y);
         team->cached_remaining_path_cost = remaining_after_step;
         team->cached_remaining_path_cost_tick = g_current_tick;
 
@@ -356,6 +371,7 @@ void move_team(TeamState_t *team) //simulation
 
     int next_x, next_y;
     uint16_t remaining_after_step = 0;
+    int overlay_on = fault_profile_is_causal() && causal_actions_overlay_active(team);
     causal_actions_path_begin(team);
     int pre_step_cost = find_next_path_step_remaining(team->loc_x, team->loc_y, task->loc_x, task->loc_y, &next_x, &next_y, &remaining_after_step);
     causal_actions_path_end();
@@ -367,6 +383,10 @@ void move_team(TeamState_t *team) //simulation
         team->loc_x = next_x;
         team->loc_y = next_y;
         if(g_simulation_trace_enabled) debug_trace(" -> (%d,%d)", team->loc_x, team->loc_y);
+        /* Step 3.2: the REROUTE overlay steers the step but must not inflate
+         * the remaining cost the progress tracker compares against the plan. */
+        if(overlay_on && fault_profile_causal_fix(CAUSAL_FIX_TRUE_COST))
+            remaining_after_step = simulation_true_remaining_cost(team->loc_x, team->loc_y, task->loc_x, task->loc_y);
         team->cached_remaining_path_cost = remaining_after_step;
         team->cached_remaining_path_cost_tick = g_current_tick;
     }

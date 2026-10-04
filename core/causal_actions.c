@@ -45,6 +45,9 @@ static uint8_t s_pending_env[NUM_TEAMS];
 static uint32_t s_relay_cooldown_until[NUM_TEAMS];  /* tick + 1 */
 static uint8_t s_stall[NUM_TEAMS];
 static uint32_t s_stall_total;
+/* The damaged cell that makes a team's route-touch label true (-1 = none). */
+static int16_t s_label_x[NUM_TEAMS];
+static int16_t s_label_y[NUM_TEAMS];
 
 static int cell_index(int x, int y)
 {
@@ -553,10 +556,16 @@ void causal_actions_detector_flag(uint8_t team_id, OperationalFaultClass_t fault
         return;
     team = &g_teams[team_id];
 
-    if(fault_class == FAULT_CLASS_ENVIRONMENT && team->fault_state.active[FAULT_CLASS_ENVIRONMENT])
+    if(fault_class == FAULT_CLASS_ENVIRONMENT &&
+       (fault_profile_causal_fix(CAUSAL_FIX_LABEL) ? fault_injector_causal_env_label(team_id) != 0u
+                                                   : team->fault_state.active[FAULT_CLASS_ENVIRONMENT]))
     {
-        int x = team->fault_state.target_x[FAULT_CLASS_ENVIRONMENT];
-        int y = team->fault_state.target_y[FAULT_CLASS_ENVIRONMENT];
+        /* Label fix: the cell is the damaged cell the team's route touches;
+         * otherwise the cell the team's own environment fault sits on. */
+        int x = fault_profile_causal_fix(CAUSAL_FIX_LABEL) ? s_label_x[team_id]
+                                                           : team->fault_state.target_x[FAULT_CLASS_ENVIRONMENT];
+        int y = fault_profile_causal_fix(CAUSAL_FIX_LABEL) ? s_label_y[team_id]
+                                                           : team->fault_state.target_y[FAULT_CLASS_ENVIRONMENT];
 
         s_pending_env[team_id] = 1;
         if(in_grid(x, y) && fault_profile_causal_action_enabled(CAUSAL_ACTION_CLEAR_ROAD))
@@ -631,6 +640,11 @@ uint32_t causal_actions_stall_ticks(void)
     return s_stall_total;
 }
 
+int causal_actions_overlay_active(const TeamState_t *team)
+{
+    return fault_profile_causal_action_enabled(CAUSAL_ACTION_REROUTE) && team->team_id < NUM_TEAMS && s_reroute_on[team->team_id];
+}
+
 void causal_actions_path_begin(const TeamState_t *team)
 {
     if(fault_profile_causal_action_enabled(CAUSAL_ACTION_REROUTE) && team->team_id < NUM_TEAMS && s_reroute_on[team->team_id])
@@ -695,7 +709,14 @@ uint8_t causal_actions_route_touch(const TeamState_t *team)
 {
     int x = team->loc_x, y = team->loc_y, dx, dy;
     uint8_t bits = 0;
+    int cx = -1, cy = -1;
+    int have_partial = 0;
 
+    if(team->team_id < NUM_TEAMS)
+    {
+        s_label_x[team->team_id] = -1;
+        s_label_y[team->team_id] = -1;
+    }
     if(!fault_profile_causal_roads_on() || !team_destination(team, &dx, &dy))
         return 0;
 
@@ -710,11 +731,31 @@ uint8_t causal_actions_route_touch(const TeamState_t *team)
         x = nx;
         y = ny;
         if(fault_injector_causal_road_kind(x, y) == 1u)
+        {
             bits |= 1u;
+            if(!have_partial)
+            {
+                have_partial = 1;
+                cx = x;
+                cy = y;
+            }
+        }
         for(int ax = -1; ax <= 1; ax++)
             for(int ay = -1; ay <= 1; ay++)
                 if(fault_injector_causal_road_kind(x + ax, y + ay) == 2u)
+                {
                     bits |= 2u;
+                    if(cx < 0)
+                    {
+                        cx = x + ax;
+                        cy = y + ay;
+                    }
+                }
+    }
+    if(team->team_id < NUM_TEAMS)
+    {
+        s_label_x[team->team_id] = (int16_t)cx;
+        s_label_y[team->team_id] = (int16_t)cy;
     }
     return bits;
 }
@@ -759,6 +800,7 @@ uint8_t causal_actions_boost_work(const IncidentState_t *incident, uint8_t work_
 float causal_actions_survival_factor(uint8_t incident_slot) { (void)incident_slot; return 1.0f; }
 void causal_actions_road_cleared(const IncidentState_t *task) { (void)task; }
 uint8_t causal_actions_route_touch(const TeamState_t *team) { (void)team; return 0; }
+int causal_actions_overlay_active(const TeamState_t *team) { (void)team; return 0; }
 uint8_t causal_actions_team_mask(uint8_t team_id) { (void)team_id; return 0; }
 const CausalActionStats_t *causal_actions_stats(void) { return &s_stats; }
 

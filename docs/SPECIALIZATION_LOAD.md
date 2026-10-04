@@ -117,3 +117,8 @@ Caveats: one seed set (20 seeds), AI off, a descriptive measurement with no
 intervention, so it shows where load sits, not what adding a team would change.
 Mean queue and wait are per-stage; the stage-by-stage chain means an incident's
 total time in queue is the sum over its stages.
+
+Step 3.2 re-run with the plumbing fixes on (same seeds, same default configuration): every
+figure above is unchanged, because no detector acts in that configuration. With a perfect
+environment detector the fixes restore teams' working time from 10.8% to the baseline's
+35.4% (`docs/CAUSAL_PLUMBING_FIXES.md`).

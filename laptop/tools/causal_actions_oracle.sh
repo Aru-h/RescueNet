@@ -33,9 +33,16 @@ for v in env mis em; do
   case $v in env) K="3";; mis) K="4";; em) K="3 4";; esac
   rm -rf "$W/oc_$v"; mkdir -p "$W/oc_$v"; cp -r "$W/oc/core" "$W/oc/laptop" "$W/oc_$v/"
   PATCH=""
-  for k in $K; do PATCH="$PATCH scores.score[$k] = team->fault_state.active[$k] ? 1.0f : 0.0f;"; done
+  for k in $K; do
+    # Environment (3): the label (fault_injector_causal_env_label: "the route touches a damaged cell"
+    # under the Step 3.2 label fix, the per-team fault flag with --causal-fixes=off). Others: the fault flag.
+    if [ "$k" = 3 ]; then PATCH="$PATCH scores.score[3] = fault_injector_causal_env_label(team->team_id) ? 1.0f : 0.0f;"
+    else PATCH="$PATCH scores.score[$k] = team->fault_state.active[$k] ? 1.0f : 0.0f;"; fi
+  done
   sed -i "s|scores = fault_predictor_run(feature_vector);|&\n       $PATCH|" "$W/oc_$v/core/recovery_manager.c"
-  grep -q "team->fault_state.active\[" "$W/oc_$v/core/recovery_manager.c"
+  sed -i '1i unsigned char fault_injector_causal_env_label(unsigned char team_id);' "$W/oc_$v/core/recovery_manager.c"
+  grep -q "scores.score\[" "$W/oc_$v/core/recovery_manager.c"
+  grep -q "fault_injector_causal_env_label(team->team_id)\|team->fault_state.active\[" "$W/oc_$v/core/recovery_manager.c"
   case $v in env) T="$SHIP,0.5f,$OFF";; mis) T="$SHIP,$OFF,0.5f";; em) T="$SHIP,0.5f,0.5f";; esac
   (cd "$W/oc_$v" && cc $F -Icore -Ilaptop "-DFAULT_PREDICTOR_CLASS_THRESHOLDS={$T}" -o "$W/bin/oracle_$v" core/*.c $LAP -lm)
 done

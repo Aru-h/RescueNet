@@ -36,6 +36,7 @@ ACTION_RE = re.compile(
 ROADS_RE = re.compile(
     r"\[DIAG ROADS\] enabled=(\d+) partial=(\d+) blocked=(\d+) block_downgraded=(\d+) "
     r"max_blocked_cells=(\d+) audit_ticks=(\d+) audit_violations=(\d+)")
+ENVLABEL_RE = re.compile(r"\[DIAG ENVLABEL\] fix=(\d+) label_ticks=(\d+) label_episodes=(\d+)")
 FAULT_RE = re.compile(
     r"\[DIAG FAULT\] class=(\d+) onsets=(\d+) cleared_by_cause=(\d+) "
     r"cleared_by_backstop=(\d+) exposure_ticks=(\d+) episode_ticks=(\d+)")
@@ -77,6 +78,8 @@ def run_seed(tron, profile, seed, ticks, extra):
         actions = {m.group(1): [int(g) for g in m.groups()[1:]] for m in ACTION_RE.finditer(proc.stderr)}
         roads = ROADS_RE.search(proc.stderr)
         roads = [int(g) for g in roads.groups()] if roads else None
+        envlabel = ENVLABEL_RE.search(proc.stderr)
+        envlabel = [int(g) for g in envlabel.groups()] if envlabel else None
         world = CAUSAL_RE.search(proc.stderr)
         world = [float(world.group(1))] + [int(g) for g in world.groups()[1:]] if world else None
 
@@ -126,7 +129,7 @@ def run_seed(tron, profile, seed, ticks, extra):
             "seed": seed, "attribution": attribution, "incidents_resolved": resolved, "team_ticks": team_ticks,
             "active": active, "any_active": any_active,
             "worst_team_any": max((per_team_any.get(t, 0) / n for t, n in per_team_ticks.items()), default=0.0),
-            "episodes": episodes, "causal_diag": causal, "world": world, "actions": actions, "roads": roads,
+            "episodes": episodes, "causal_diag": causal, "world": world, "actions": actions, "roads": roads, "envlabel": envlabel,
         }
 
 
@@ -172,6 +175,22 @@ def summarise(results):
     if acts:
         out["actions"] = {name: dict(zip(["dispatched", "resolved", "abandoned", "active_ticks", "from_detector"],
                                          [x / n for x in v])) for name, v in acts.items()}
+    labels = [r["envlabel"] for r in results if r["envlabel"]]
+    if labels:
+        # Step 3.2: with the label fix the dataset's environment class IS the
+        # route-touch label; the old per-team flag is still counted by the
+        # injector ("DIAG FAULT class=3": onsets, exposure ticks).
+        hold_eps = sum(r["causal_diag"][3][0] for r in results if 3 in r["causal_diag"])
+        hold_ticks = sum(r["causal_diag"][3][3] for r in results if 3 in r["causal_diag"])
+        lt = sum(x[1] for x in labels)
+        le = sum(x[2] for x in labels)
+        out["env_label"] = {
+            "fix_on": bool(labels[0][0]),
+            "label_exposure": lt / team_ticks, "label_episodes_per_seed": le / n,
+            "label_mean_episode_ticks": (lt / le) if le else 0.0,
+            "old_flag_exposure": hold_ticks / team_ticks, "old_flag_episodes_per_seed": hold_eps / n,
+            "old_flag_mean_episode_ticks": (hold_ticks / hold_eps) if hold_eps else 0.0,
+        }
     out["per_seed"] = {str(r["seed"]): {"incidents_resolved": r["incidents_resolved"],
                                         "victims_lost": (r["world"][2] if r["world"] else None)} for r in results}
     roads = [r["roads"] for r in results if r["roads"] and r["roads"][0]]
@@ -201,12 +220,14 @@ def summarise(results):
 def check(summary):
     problems = []
     roads_on = "roads" in summary
+    label_fix = summary.get("env_label", {}).get("fix_on", False)
+    relaxed = roads_on and not label_fix   # the old per-team flag holds for hours by design; the label does not
     if roads_on and summary["roads"]["audit_violations"] > 0:
         problems.append(f"{summary['roads']['audit_violations']} cells cut off from every safe zone by road blocks")
     for c, s in summary["classes"].items():
         # Consequential roads: damage persists for hours by design, so the
         # environment class legitimately holds a fault most of the time.
-        if roads_on and c == "environment":
+        if relaxed and c == "environment":
             if s["exposure"] > 0.95:
                 problems.append(f"environment: exposure {s['exposure']:.3f} > 0.95")
             if s["max_duration"] > 2400 + 2:
@@ -216,10 +237,15 @@ def check(summary):
             problems.append(f"{c}: exposure {s['exposure']:.3f} > {MAX_CLASS_EXPOSURE}")
         if s["onsets_per_team_ktick"] > MAX_ONSETS_PER_TEAM_KTICK:
             problems.append(f"{c}: {s['onsets_per_team_ktick']:.1f} episodes/team/1000 ticks > {MAX_ONSETS_PER_TEAM_KTICK}")
+        if label_fix and c == "environment":
+            # The label is route exposure, not a timed fault: bounded by the damage lifetime, not the legacy backstop.
+            if s["max_duration"] > 2400 + 2:
+                problems.append(f"environment: longest label episode {s['max_duration']} ticks > 2402")
+            continue
         if c in MAX_EPISODE_TICKS and s["max_duration"] > MAX_EPISODE_TICKS[c]:
             problems.append(f"{c}: longest episode {s['max_duration']} ticks > backstop {MAX_EPISODE_TICKS[c]}")
-    any_bound = 0.97 if roads_on else MAX_ANY_EXPOSURE
-    team_bound = 0.99 if roads_on else MAX_TEAM_ANY_EXPOSURE
+    any_bound = 0.97 if relaxed else MAX_ANY_EXPOSURE
+    team_bound = 0.99 if relaxed else MAX_TEAM_ANY_EXPOSURE
     if summary["any_exposure"] > any_bound:
         problems.append(f"any-fault exposure {summary['any_exposure']:.3f} > {any_bound}")
     if summary["worst_team_any_exposure"] > team_bound:
@@ -271,6 +297,11 @@ def main():
         w = summary["world"]
         print(f"victims lost / seed: {w['victims_lost']:.1f} of {w['victims_seen']:.1f} ({100*w['victim_loss_fraction']:.1f}%)  "
               f"escalations: {w['escalations']:.1f}  aftershocks: {w['aftershock_events']:.1f} (team hits {w['aftershock_team_hits']:.1f})")
+    if "env_label" in summary:
+        el = summary["env_label"]
+        print(f"environment label ({'route touches a damaged cell' if el['fix_on'] else 'old per-team flag'}; the 'environment' row above): "
+              f"exposure {100*el['label_exposure']:.1f}%, {el['label_episodes_per_seed']:.1f} episodes/seed, mean episode {el['label_mean_episode_ticks']:.1f} ticks | "
+              f"old per-team flag: exposure {100*el['old_flag_exposure']:.1f}%, {el['old_flag_episodes_per_seed']:.1f} episodes/seed, mean episode {el['old_flag_mean_episode_ticks']:.0f} ticks")
     if "roads" in summary:
         rd = summary["roads"]
         print(f"roads per seed: partial {rd['partial_per_seed']:.1f}, blocked {rd['blocked_per_seed']:.1f}, "

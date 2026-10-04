@@ -294,7 +294,7 @@ void snapshot_begin_run(uint32_t seed)
                 "onset_cause_mobility,onset_cause_communication,onset_cause_resource,"
                 "onset_cause_environment,onset_cause_mission,"
                 "clear_cause_mobility,clear_cause_communication,clear_cause_resource,"
-                "clear_cause_environment,clear_cause_mission,action_mask,route_touch\n");
+                "clear_cause_environment,clear_cause_mission,action_mask,route_touch,env_hold\n");
     }
 
     if(g_snapshot_file != NULL)
@@ -508,6 +508,31 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
      * layout. */
     env_raw_travel_cost = environment_cell_travel_cost(team->loc_x, team->loc_y);
 
+    /* Causal profile, label fix: the environment class is labelled by "this
+     * team's route touches a damaged cell", not by the team holding a fault
+     * for the fault's lifetime (docs/CAUSAL_PLUMBING_FIXES.md). Every other
+     * profile reads the fault state unchanged. */
+    uint8_t env_label_active = team->fault_state.active[FAULT_CLASS_ENVIRONMENT];
+    uint8_t env_label_severity = team->fault_state.severity[FAULT_CLASS_ENVIRONMENT];
+    uint32_t env_label_remaining =
+        (team->fault_state.active[FAULT_CLASS_ENVIRONMENT] &&
+         team->fault_state.recovery_tick[FAULT_CLASS_ENVIRONMENT] > cycle
+            ? team->fault_state.recovery_tick[FAULT_CLASS_ENVIRONMENT] - cycle : 0u);
+    uint32_t env_label_mask = team->fault_state.active_mask;
+
+    if(fault_profile_causal_fix(CAUSAL_FIX_LABEL))
+    {
+        env_label_active = fault_injector_causal_env_label(team_id);
+        if(!env_label_active)
+        {
+            env_label_severity = 0u;
+            env_label_remaining = 0u;
+        }
+        env_label_mask &= ~(1u << FAULT_CLASS_ENVIRONMENT);
+        if(env_label_active)
+            env_label_mask |= (1u << FAULT_CLASS_ENVIRONMENT);
+    }
+
     fprintf(g_snapshot_file,
         "%u,%u,%u,%u,%d,%d,%.9g,%u,%u,%d,%d,%d,%d,%d,%d,%u,%u,%u,%u,%u,%u,%d,%d,%u,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u,%u,%u,%u,%d,%d,%u,%.9g,%u,%u,%u,%u,%u,%.9g,%u,%u,%u,%u,%u,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d",
         g_run_id,
@@ -533,7 +558,7 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
         selected_team,
         team->equipment_level,
         support_team,
-        team->fault_state.active_mask,
+        env_label_mask,
         twin->expected_progress,
         twin->actual_progress,
         twin->progress_error,
@@ -565,12 +590,12 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
         team->fault_state.active[FAULT_CLASS_MOBILITY],
         team->fault_state.active[FAULT_CLASS_COMMUNICATION],
         team->fault_state.active[FAULT_CLASS_RESOURCE],
-        team->fault_state.active[FAULT_CLASS_ENVIRONMENT],
+        env_label_active,
         team->fault_state.active[FAULT_CLASS_MISSION],
         team->fault_state.severity[FAULT_CLASS_MOBILITY],
         team->fault_state.severity[FAULT_CLASS_COMMUNICATION],
         team->fault_state.severity[FAULT_CLASS_RESOURCE],
-        team->fault_state.severity[FAULT_CLASS_ENVIRONMENT],
+        env_label_severity,
         team->fault_state.severity[FAULT_CLASS_MISSION],
         /* recovery_tick > cycle guard: active[] stays 1 through the
          * whole repair-confirmation window in fault_injector.c (past
@@ -588,9 +613,7 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
         (team->fault_state.active[FAULT_CLASS_RESOURCE] &&
          team->fault_state.recovery_tick[FAULT_CLASS_RESOURCE] > cycle
             ? team->fault_state.recovery_tick[FAULT_CLASS_RESOURCE] - cycle : 0u),
-        (team->fault_state.active[FAULT_CLASS_ENVIRONMENT] &&
-         team->fault_state.recovery_tick[FAULT_CLASS_ENVIRONMENT] > cycle
-            ? team->fault_state.recovery_tick[FAULT_CLASS_ENVIRONMENT] - cycle : 0u),
+        env_label_remaining,
         (team->fault_state.active[FAULT_CLASS_MISSION] &&
          team->fault_state.recovery_tick[FAULT_CLASS_MISSION] > cycle
             ? team->fault_state.recovery_tick[FAULT_CLASS_MISSION] - cycle : 0u),
@@ -616,14 +639,15 @@ void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)
     {
         const CausalTeamTruth_t *t = fault_injector_causal_truth(team_id);
         fprintf(g_causal_truth_file,
-            "%u,%u,%u,%u,%g,%.4f,%.3f,%.6f,%.6f,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+            "%u,%u,%u,%u,%g,%.4f,%.3f,%.6f,%.6f,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
             g_run_id, g_dataset_seed, cycle, team_id, (double)g_fault_stress,
             (double)t->hidden_wear, (double)t->link_margin_db,
             (double)t->hazard_mobility, (double)t->hazard_resource,
             t->ticks_since_rest, t->aftershock_hit,
             t->onset_cause[0], t->onset_cause[1], t->onset_cause[2], t->onset_cause[3], t->onset_cause[4],
             t->clear_cause[0], t->clear_cause[1], t->clear_cause[2], t->clear_cause[3], t->clear_cause[4],
-            causal_actions_team_mask(team_id), t->route_touch);
+            causal_actions_team_mask(team_id), t->route_touch,
+            g_teams[team_id].fault_state.active[FAULT_CLASS_ENVIRONMENT]);   /* env_hold: the pre-Step-3.2 flag, read at row time like the dataset's */
     }
 
     TeamState_t *team;

@@ -87,9 +87,15 @@ typedef struct
     uint32_t audit_ticks;           /* ticks the connectivity audit ran */
     uint32_t audit_violations;      /* cells cut off from every safe zone by road blocks: must stay 0 */
     uint32_t max_blocked_cells;     /* most fully blocked cells at once */
+    uint32_t label_ticks;           /* team-ticks the environment label (route touches damage) was on */
+    uint32_t label_episodes;        /* distinct label-on episodes; mean length = label_ticks / label_episodes */
 } CausalRoadStats_t;
 
 const CausalRoadStats_t *fault_injector_causal_road_stats(void);
+/* The environment-fault label: under the causal profile with the label fix
+ * (and roads on) 1 while the team's route touches a damaged cell; otherwise
+ * the team's per-team environment fault flag, unchanged. */
+uint8_t fault_injector_causal_env_label(uint8_t team_id);
 /* 0 none, 1 partial debris, 2 fully blocked. */
 uint8_t fault_injector_causal_road_kind(int x, int y);
 

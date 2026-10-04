@@ -1284,13 +1284,15 @@ check-causal-profile: $(TARGET)
 	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-roads=bogus >/dev/null 2>&1; then echo "FAIL: unknown --causal-roads value accepted"; exit 1; fi
 	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-roads=off >/dev/null 2>&1; then echo "FAIL: --causal-roads accepted without causal"; exit 1; fi
 	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-env-duration=60-150 >/dev/null 2>&1; then echo "FAIL: Step 3 env override accepted with consequential roads on"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-fixes=bogus >/dev/null 2>&1; then echo "FAIL: unknown --causal-fixes value accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-fixes=off >/dev/null 2>&1; then echo "FAIL: --causal-fixes accepted without causal"; exit 1; fi
 	@cd $(CAUSAL_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-actions=on >/dev/null 2>&1
 	@cd $(CAUSAL_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-actions=on >/dev/null 2>&1
 	@cmp $(CAUSAL_DET_DIR)/a/tron_snapshot_dataset.csv $(CAUSAL_DET_DIR)/b/tron_snapshot_dataset.csv
 	@cmp $(CAUSAL_DET_DIR)/a/tron_causal_truth.csv $(CAUSAL_DET_DIR)/b/tron_causal_truth.csv
 	@echo "check-causal-profile: unknown profile rejected, causal-only flags gated, causal dataset + truth sidecar reproducible (recovery actions on)"
 
-.PHONY: check-causal-fault-exposure check-causal-profile check-causal-roads-connectivity
+.PHONY: check-causal-fault-exposure check-causal-profile check-causal-roads-connectivity check-causal-fixes check-causal-env-no-rtb
 
 # Consequential roads (Step 3.1): over full causal runs, no passable cell may
 # be cut off from every safe zone by a full road blockage (the connectivity
@@ -1311,3 +1313,18 @@ check-causal-roads-connectivity: $(TARGET)
 	[ $$v -eq 0 ] || { echo "FAIL: $$v cells cut off from every safe zone"; exit 1; }; \
 	[ $$ex -gt 0 ] || { echo "FAIL: no blockage was created or refused, the guard was never exercised"; exit 1; }; \
 	echo "check-causal-roads-connectivity: 0 cells cut off over 8 full causal runs ($$ex blockages created or refused)"
+
+# Step 3.2 plumbing fixes (causal profile only). (1) The dataset's environment
+# label is exactly the sidecar's route_touch (and, with --causal-fixes=off, the
+# old per-team flag env_hold); the two differ, so the check is not vacuous.
+check-causal-fixes: $(TARGET)
+	@rm -rf build/causal-fixes && mkdir -p build/causal-fixes/new build/causal-fixes/old
+	@cd build/causal-fixes/new && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-actions=on >/dev/null 2>&1
+	@cd build/causal-fixes/old && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-actions=on --causal-fixes=off >/dev/null 2>&1
+	@python3 laptop/tools/check_causal_label.py build/causal-fixes/new/tron_snapshot_dataset.csv build/causal-fixes/new/tron_causal_truth.csv label
+	@python3 laptop/tools/check_causal_label.py build/causal-fixes/old/tron_snapshot_dataset.csv build/causal-fixes/old/tron_causal_truth.csv hold
+	@echo "check-causal-fixes: environment label == route_touch with the fixes on, == the old per-team flag with --causal-fixes=off"
+
+# Step 3.2 fix 2: a perfect environment detector changes nothing (actions off).
+check-causal-env-no-rtb: $(TARGET)
+	@bash laptop/tools/check_env_no_rtb.sh

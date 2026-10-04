@@ -70,6 +70,22 @@ CausalRoadParams_t g_causal_roads = {
     .route_cost_visible = 1,
 };
 
+uint8_t g_causal_fixes = CAUSAL_FIXES_ALL;
+
+void fault_config_set_causal_fixes(uint8_t mask)
+{
+    g_causal_fixes = (uint8_t)(mask & CAUSAL_FIXES_ALL);
+}
+
+int fault_profile_causal_fix(unsigned fix)
+{
+    if(g_fault_config.profile != FAULT_PROFILE_CAUSAL || !(g_causal_fixes & fix))
+        return 0;
+    if(fix == CAUSAL_FIX_LABEL)
+        return g_causal_roads.enabled;
+    return 1;
+}
+
 int fault_profile_causal_roads_on(void)
 {
     return g_fault_config.profile == FAULT_PROFILE_CAUSAL && g_causal_roads.enabled;
