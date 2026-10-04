@@ -1259,7 +1259,7 @@ void complete_incident_stage(IncidentState_t *incident) //incident
      * the task resolves and its team is released. */
     if(incident->incident_type == INCIDENT_CLEAR_ROAD)
     {
-        causal_actions_road_cleared(incident->loc_x, incident->loc_y);
+        causal_actions_road_cleared(incident);
         complete_task(TASK_POOL_SYSTEM, incident);
         cbba_sync_mission_execution_twin();
         return;

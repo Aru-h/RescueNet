@@ -137,6 +137,28 @@ typedef struct
     uint16_t relay_max_ticks;           /* a reposition never lasts longer than this */
 } CausalActionParams_t;
 
+/* Consequential roads (Step 3.1): under the causal profile an environment
+ * fault damages a road cell for real. Partial debris makes a team stall
+ * before stepping onto the cell; full blockage makes it impassable. See
+ * docs/CONSEQUENTIAL_ROADS.md for the grounding ("to verify" / "assumed"
+ * marked per value). --causal-roads=off restores the Step 3 behaviour. */
+typedef struct
+{
+    uint8_t  enabled;               /* default on under the causal profile */
+    uint8_t  partial_pct;           /* share of damage that is partial debris; the rest blocks the road */
+    uint8_t  crossing_delay_ticks;  /* extra ticks to step onto a partially blocked cell */
+    uint16_t persist_min_ticks;     /* unattended damage lasts this long at least ... */
+    uint16_t persist_max_ticks;     /* ... and at most this long (uniform) */
+    uint16_t clear_work_partial;    /* CLEAR_ROAD work units, partial debris */
+    uint16_t clear_work_full;       /* CLEAR_ROAD work units, full blockage */
+    uint8_t  cost_per_tick;         /* A* cost units that one stall tick is worth */
+    uint8_t  route_cost_visible;    /* 1: the stall cost is in the cell's travel_cost (A* and the map frames see it); 0: A* sees only the fault's own +severity */
+} CausalRoadParams_t;
+
+extern CausalRoadParams_t g_causal_roads;
+/* 1 only under the causal profile with consequential roads enabled. */
+int fault_profile_causal_roads_on(void);
+
 extern CausalActionParams_t g_causal_actions;
 extern uint8_t g_causal_actions_enabled;     /* bit mask, one bit per CausalAction_t; --causal-actions=on|off|<list>, default off */
 void fault_config_set_causal_actions(uint8_t mask);

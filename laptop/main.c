@@ -203,6 +203,7 @@ int main(int argc, char **argv)
     int causal_actions_given = 0;
     uint8_t causal_env_min = 0, causal_env_max = 0;
     uint8_t causal_env_delay = 0;
+    int roads_flag_given = 0;
     int causal_reroute_penalty = -1;
     int live_mode = 0;
     int mission_feed_mode = 0; /* --mission-feed, see laptop/mission_feed.h */
@@ -398,6 +399,65 @@ int main(int argc, char **argv)
             continue;
         }
 
+        /* Consequential roads (Step 3.1), causal only. */
+        if(strncmp(argv[i], "--causal-roads=", 15) == 0)
+        {
+            const char *v = argv[i] + 15;
+
+            if(strcmp(v, "on") == 0)
+                g_causal_roads.enabled = 1;
+            else if(strcmp(v, "off") == 0)
+                g_causal_roads.enabled = 0;
+            else
+            {
+                fprintf(stderr, "invalid --causal-roads '%s' (need on or off)\n", v);
+                exit(2);
+            }
+            roads_flag_given = 1;
+            continue;
+        }
+
+        if(strncmp(argv[i], "--roads-", 8) == 0)
+        {
+            const char *a = argv[i] + 8;
+            unsigned u1 = 0, u2 = 0;
+            int ok = 0;
+
+            if(strncmp(a, "partial-fraction=", 17) == 0 && sscanf(a + 17, "%u", &u1) == 1 && u1 <= 100)
+            {
+                g_causal_roads.partial_pct = (uint8_t)u1; ok = 1;
+            }
+            else if(strncmp(a, "delay=", 6) == 0 && sscanf(a + 6, "%u", &u1) == 1 && u1 >= 1 && u1 <= 20)
+            {
+                g_causal_roads.crossing_delay_ticks = (uint8_t)u1; ok = 1;
+            }
+            else if(strncmp(a, "persist=", 8) == 0 && sscanf(a + 8, "%u-%u", &u1, &u2) == 2 && u1 >= 1 && u2 >= u1 && u2 <= 65535)
+            {
+                g_causal_roads.persist_min_ticks = (uint16_t)u1;
+                g_causal_roads.persist_max_ticks = (uint16_t)u2; ok = 1;
+            }
+            else if(strncmp(a, "clear-work=", 11) == 0 && sscanf(a + 11, "%u-%u", &u1, &u2) == 2 && u1 >= 1 && u2 >= 1 && u1 <= 65535 && u2 <= 65535)
+            {
+                g_causal_roads.clear_work_partial = (uint16_t)u1;
+                g_causal_roads.clear_work_full = (uint16_t)u2; ok = 1;
+            }
+            else if(strncmp(a, "cost-per-tick=", 14) == 0 && sscanf(a + 14, "%u", &u1) == 1 && u1 >= 1 && u1 <= 50)
+            {
+                g_causal_roads.cost_per_tick = (uint8_t)u1; ok = 1;
+            }
+            else if(strncmp(a, "astar=", 6) == 0 && (strcmp(a + 6, "true") == 0 || strcmp(a + 6, "blind") == 0))
+            {
+                g_causal_roads.route_cost_visible = strcmp(a + 6, "true") == 0 ? 1u : 0u; ok = 1;
+            }
+            if(!ok)
+            {
+                fprintf(stderr, "invalid %s (see docs/CONSEQUENTIAL_ROADS.md for the --roads-* flags)\n", argv[i]);
+                exit(2);
+            }
+            roads_flag_given = 1;
+            continue;
+        }
+
         if(strcmp(argv[i], "--link-margin-map") == 0)
         {
             link_margin_map = 1;
@@ -451,6 +511,16 @@ int main(int argc, char **argv)
         fprintf(stderr, "--causal-env-crossing-delay only applies to --fault-profile=causal\n");
         return 2;
     }
+    if(roads_flag_given && fault_profile != FAULT_PROFILE_CAUSAL)
+    {
+        fprintf(stderr, "--causal-roads / --roads-* only apply to --fault-profile=causal\n");
+        return 2;
+    }
+    if(g_causal_roads.enabled && (causal_env_max != 0 || causal_env_delay != 0))
+    {
+        fprintf(stderr, "--causal-env-duration / --causal-env-crossing-delay are the Step 3 sensitivity overrides: use --causal-roads=off with them, or --roads-persist / --roads-delay\n");
+        return 2;
+    }
     fault_config_set_causal_env_duration(causal_env_min, causal_env_max);
     fault_config_set_causal_env_crossing_delay(causal_env_delay);
     if(causal_reroute_penalty >= 0)
@@ -477,8 +547,16 @@ int main(int argc, char **argv)
     fault_config_apply_profile(fault_profile);
     fault_injector_set_profile(fault_profile);
     if(fault_profile == FAULT_PROFILE_CAUSAL)
-        fprintf(stderr, "[FAULT] profile=causal fault_stress=%g causal_actions=%s env_backstop=%u-%u env_crossing_delay=%u\n", (double)fault_stress,
-                causal_actions_flag == (int)CAUSAL_ACTIONS_ALL ? "on" : (causal_actions_flag ? "partial" : "off"), causal_env_max ? causal_env_min : 5u, causal_env_max ? causal_env_max : 12u, (unsigned)causal_env_delay);
+        fprintf(stderr, "[FAULT] profile=causal fault_stress=%g causal_actions=%s env_backstop=%u-%u env_crossing_delay=%u roads=%s\n", (double)fault_stress,
+                causal_actions_flag == (int)CAUSAL_ACTIONS_ALL ? "on" : (causal_actions_flag ? "partial" : "off"), causal_env_max ? causal_env_min : 5u, causal_env_max ? causal_env_max : 12u, (unsigned)causal_env_delay,
+                g_causal_roads.enabled ? "on" : "off");
+    if(fault_profile == FAULT_PROFILE_CAUSAL && g_causal_roads.enabled)
+        fprintf(stderr, "[FAULT] roads partial_pct=%u delay=%u persist=%u-%u clear_work=%u-%u cost_per_tick=%u astar=%s\n",
+                g_causal_roads.partial_pct, g_causal_roads.crossing_delay_ticks,
+                g_causal_roads.persist_min_ticks, g_causal_roads.persist_max_ticks,
+                g_causal_roads.clear_work_partial, g_causal_roads.clear_work_full,
+                g_causal_roads.cost_per_tick, g_causal_roads.route_cost_visible ? "true" : "blind");
+    (void)0;
 
     if(fast_forward_ticks > 0 && (!live_mode || mission_feed_mode))
     {
@@ -679,6 +757,12 @@ int main(int argc, char **argv)
             const CausalActionStats_t *as = causal_actions_stats();
 
             fprintf(stderr, "[DIAG ACTIONS] enabled_mask=%d crossing_stall_ticks=%u\n", g_causal_actions_enabled, causal_actions_stall_ticks());
+            {
+                const CausalRoadStats_t *rs = fault_injector_causal_road_stats();
+                fprintf(stderr, "[DIAG ROADS] enabled=%d partial=%u blocked=%u block_downgraded=%u max_blocked_cells=%u audit_ticks=%u audit_violations=%u\n",
+                    g_causal_roads.enabled, rs->partial_injected, rs->blocked_injected, rs->block_downgraded,
+                    rs->max_blocked_cells, rs->audit_ticks, rs->audit_violations);
+            }
             for(uint8_t a = 0; a < NUM_CAUSAL_ACTIONS; a++)
                 fprintf(stderr, "[DIAG ACTION] name=%s dispatched=%u resolved=%u abandoned=%u active_ticks=%u from_detector=%u\n",
                     action_names[a], as->dispatched[a], as->resolved[a], as->abandoned[a],

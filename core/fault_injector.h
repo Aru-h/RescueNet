@@ -58,6 +58,9 @@ typedef struct
     uint8_t onset_cause[NUM_OPERATIONAL_FAULT_CLASSES];  /* CausalOnsetCause_t, this tick */
     uint8_t clear_cause[NUM_OPERATIONAL_FAULT_CLASSES];  /* CausalClearCause_t, this tick */
     uint8_t aftershock_hit;
+    /* Bit 0: the team's route (next 8 steps) crosses a partially blocked cell;
+     * bit 1: it passes within one cell of a fully blocked cell. Sidecar only. */
+    uint8_t route_touch;
 } CausalTeamTruth_t;
 
 const CausalTeamTruth_t *fault_injector_causal_truth(uint8_t team_id);
@@ -74,6 +77,21 @@ float fault_injector_causal_shadow_at(int x, int y);
 /* Causal REROUTE/CLEAR_ROAD: ends every environment fault on cell (x, y) and
  * restores the cell. Returns the number of faults ended. Laptop only. */
 int fault_injector_clear_cell_faults(int x, int y);
+
+/* Consequential roads (Step 3.1), laptop only. */
+typedef struct
+{
+    uint32_t partial_injected;      /* partial-debris damages created */
+    uint32_t blocked_injected;      /* full blockages created */
+    uint32_t block_downgraded;      /* blockages refused by the connectivity guard (made partial) */
+    uint32_t audit_ticks;           /* ticks the connectivity audit ran */
+    uint32_t audit_violations;      /* cells cut off from every safe zone by road blocks: must stay 0 */
+    uint32_t max_blocked_cells;     /* most fully blocked cells at once */
+} CausalRoadStats_t;
+
+const CausalRoadStats_t *fault_injector_causal_road_stats(void);
+/* 0 none, 1 partial debris, 2 fully blocked. */
+uint8_t fault_injector_causal_road_kind(int x, int y);
 
 /* Causal profile mission model, for result reporting. */
 typedef struct

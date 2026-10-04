@@ -56,7 +56,10 @@ uint32_t causal_actions_stall_ticks(void);
 int causal_actions_reinforce_wanted(uint8_t incident_slot);
 uint8_t causal_actions_boost_work(const IncidentState_t *incident, uint8_t work_rate);
 float causal_actions_survival_factor(uint8_t incident_slot);
-void causal_actions_road_cleared(int16_t x, int16_t y);
+/* A CLEAR_ROAD task finished: clear the road cell it was for. */
+void causal_actions_road_cleared(const IncidentState_t *task);
+/* Sidecar truth: bit 0 route crosses partial debris, bit 1 route passes next to a blocked cell. */
+uint8_t causal_actions_route_touch(const TeamState_t *team);
 
 /* Bit i set = action i currently involves this team. */
 uint8_t causal_actions_team_mask(uint8_t team_id);

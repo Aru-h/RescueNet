@@ -1281,10 +1281,33 @@ check-causal-profile: $(TARGET)
 	@if ./$(TARGET) 1 1 10 --fault-profile=combined --fault-stress=2 >/dev/null 2>&1; then echo "FAIL: --fault-stress accepted without causal"; exit 1; fi
 	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-actions=off >/dev/null 2>&1; then echo "FAIL: --causal-actions accepted without causal"; exit 1; fi
 	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-actions=bogus >/dev/null 2>&1; then echo "FAIL: unknown --causal-actions value accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-roads=bogus >/dev/null 2>&1; then echo "FAIL: unknown --causal-roads value accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-roads=off >/dev/null 2>&1; then echo "FAIL: --causal-roads accepted without causal"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-env-duration=60-150 >/dev/null 2>&1; then echo "FAIL: Step 3 env override accepted with consequential roads on"; exit 1; fi
 	@cd $(CAUSAL_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-actions=on >/dev/null 2>&1
 	@cd $(CAUSAL_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-actions=on >/dev/null 2>&1
 	@cmp $(CAUSAL_DET_DIR)/a/tron_snapshot_dataset.csv $(CAUSAL_DET_DIR)/b/tron_snapshot_dataset.csv
 	@cmp $(CAUSAL_DET_DIR)/a/tron_causal_truth.csv $(CAUSAL_DET_DIR)/b/tron_causal_truth.csv
 	@echo "check-causal-profile: unknown profile rejected, causal-only flags gated, causal dataset + truth sidecar reproducible (recovery actions on)"
 
-.PHONY: check-causal-fault-exposure check-causal-profile
+.PHONY: check-causal-fault-exposure check-causal-profile check-causal-roads-connectivity
+
+# Consequential roads (Step 3.1): over full causal runs, no passable cell may
+# be cut off from every safe zone by a full road blockage (the connectivity
+# audit in core/fault_injector.c runs every tick and counts violations), and
+# the runs must actually exercise the guard (some blockage was created or
+# refused), so a green result cannot mean "never blocked anything".
+check-causal-roads-connectivity: $(TARGET)
+	@v=0; ex=0; for s in 1001 1002 1003 1004 1005 1006 1007 1008; do \
+		out=$$(./$(TARGET) $$s 1 3000 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --diag 2>&1 >/dev/null | grep '^\[DIAG ROADS\]'); \
+		viol=$$(echo "$$out" | sed -n 's/.*audit_violations=\([0-9]*\).*/\1/p'); \
+		blk=$$(echo "$$out" | sed -n 's/.* blocked=\([0-9]*\) .*/\1/p'); \
+		dg=$$(echo "$$out" | sed -n 's/.*block_downgraded=\([0-9]*\).*/\1/p'); \
+		ticks=$$(echo "$$out" | sed -n 's/.*audit_ticks=\([0-9]*\).*/\1/p'); \
+		echo "seed $$s: blocked=$$blk downgraded=$$dg audit_ticks=$$ticks audit_violations=$$viol"; \
+		[ "$$ticks" -gt 0 ] || { echo "FAIL: audit never ran"; exit 1; }; \
+		v=$$((v + viol)); ex=$$((ex + blk + dg)); \
+	done; \
+	[ $$v -eq 0 ] || { echo "FAIL: $$v cells cut off from every safe zone"; exit 1; }; \
+	[ $$ex -gt 0 ] || { echo "FAIL: no blockage was created or refused, the guard was never exercised"; exit 1; }; \
+	echo "check-causal-roads-connectivity: 0 cells cut off over 8 full causal runs ($$ex blockages created or refused)"

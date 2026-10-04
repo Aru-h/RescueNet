@@ -33,6 +33,9 @@ CAUSAL_RE = re.compile(
     r"aftershock_events=(\d+) aftershock_team_hits=(\d+)")
 ACTION_RE = re.compile(
     r"\[DIAG ACTION\] name=(\S+) dispatched=(\d+) resolved=(\d+) abandoned=(\d+) active_ticks=(\d+) from_detector=(\d+)")
+ROADS_RE = re.compile(
+    r"\[DIAG ROADS\] enabled=(\d+) partial=(\d+) blocked=(\d+) block_downgraded=(\d+) "
+    r"max_blocked_cells=(\d+) audit_ticks=(\d+) audit_violations=(\d+)")
 FAULT_RE = re.compile(
     r"\[DIAG FAULT\] class=(\d+) onsets=(\d+) cleared_by_cause=(\d+) "
     r"cleared_by_backstop=(\d+) exposure_ticks=(\d+) episode_ticks=(\d+)")
@@ -72,6 +75,8 @@ def run_seed(tron, profile, seed, ticks, extra):
         resolved = sum(int(m.group(2)) for m in THROUGHPUT_RE.finditer(proc.stderr))
         causal = {int(m.group(1)): tuple(int(g) for g in m.groups()[1:]) for m in FAULT_RE.finditer(proc.stderr)}
         actions = {m.group(1): [int(g) for g in m.groups()[1:]] for m in ACTION_RE.finditer(proc.stderr)}
+        roads = ROADS_RE.search(proc.stderr)
+        roads = [int(g) for g in roads.groups()] if roads else None
         world = CAUSAL_RE.search(proc.stderr)
         world = [float(world.group(1))] + [int(g) for g in world.groups()[1:]] if world else None
 
@@ -121,7 +126,7 @@ def run_seed(tron, profile, seed, ticks, extra):
             "seed": seed, "attribution": attribution, "incidents_resolved": resolved, "team_ticks": team_ticks,
             "active": active, "any_active": any_active,
             "worst_team_any": max((per_team_any.get(t, 0) / n for t, n in per_team_ticks.items()), default=0.0),
-            "episodes": episodes, "causal_diag": causal, "world": world, "actions": actions,
+            "episodes": episodes, "causal_diag": causal, "world": world, "actions": actions, "roads": roads,
         }
 
 
@@ -169,6 +174,16 @@ def summarise(results):
                                          [x / n for x in v])) for name, v in acts.items()}
     out["per_seed"] = {str(r["seed"]): {"incidents_resolved": r["incidents_resolved"],
                                         "victims_lost": (r["world"][2] if r["world"] else None)} for r in results}
+    roads = [r["roads"] for r in results if r["roads"] and r["roads"][0]]
+    if roads:
+        out["roads"] = {
+            "partial_per_seed": sum(r[1] for r in roads) / n,
+            "blocked_per_seed": sum(r[2] for r in roads) / n,
+            "downgraded_per_seed": sum(r[3] for r in roads) / n,
+            "max_blocked_cells": max(r[4] for r in roads),
+            "audit_ticks": sum(r[5] for r in roads),
+            "audit_violations": sum(r[6] for r in roads),
+        }
     worlds = [r["world"] for r in results if r["world"]]
     if worlds:
         seen = sum(w[1] for w in worlds)
@@ -185,17 +200,30 @@ def summarise(results):
 
 def check(summary):
     problems = []
+    roads_on = "roads" in summary
+    if roads_on and summary["roads"]["audit_violations"] > 0:
+        problems.append(f"{summary['roads']['audit_violations']} cells cut off from every safe zone by road blocks")
     for c, s in summary["classes"].items():
+        # Consequential roads: damage persists for hours by design, so the
+        # environment class legitimately holds a fault most of the time.
+        if roads_on and c == "environment":
+            if s["exposure"] > 0.95:
+                problems.append(f"environment: exposure {s['exposure']:.3f} > 0.95")
+            if s["max_duration"] > 2400 + 2:
+                problems.append(f"environment: longest episode {s['max_duration']} ticks > 2402")
+            continue
         if s["exposure"] > MAX_CLASS_EXPOSURE:
             problems.append(f"{c}: exposure {s['exposure']:.3f} > {MAX_CLASS_EXPOSURE}")
         if s["onsets_per_team_ktick"] > MAX_ONSETS_PER_TEAM_KTICK:
             problems.append(f"{c}: {s['onsets_per_team_ktick']:.1f} episodes/team/1000 ticks > {MAX_ONSETS_PER_TEAM_KTICK}")
         if c in MAX_EPISODE_TICKS and s["max_duration"] > MAX_EPISODE_TICKS[c]:
             problems.append(f"{c}: longest episode {s['max_duration']} ticks > backstop {MAX_EPISODE_TICKS[c]}")
-    if summary["any_exposure"] > MAX_ANY_EXPOSURE:
-        problems.append(f"any-fault exposure {summary['any_exposure']:.3f} > {MAX_ANY_EXPOSURE}")
-    if summary["worst_team_any_exposure"] > MAX_TEAM_ANY_EXPOSURE:
-        problems.append(f"worst team any-fault exposure {summary['worst_team_any_exposure']:.3f} > {MAX_TEAM_ANY_EXPOSURE}")
+    any_bound = 0.97 if roads_on else MAX_ANY_EXPOSURE
+    team_bound = 0.99 if roads_on else MAX_TEAM_ANY_EXPOSURE
+    if summary["any_exposure"] > any_bound:
+        problems.append(f"any-fault exposure {summary['any_exposure']:.3f} > {any_bound}")
+    if summary["worst_team_any_exposure"] > team_bound:
+        problems.append(f"worst team any-fault exposure {summary['worst_team_any_exposure']:.3f} > {team_bound}")
     total_onsets = sum(s["episodes"] for s in summary["classes"].values())
     if total_onsets == 0:
         problems.append("no fault episodes at all - the profile injected nothing")
@@ -243,6 +271,11 @@ def main():
         w = summary["world"]
         print(f"victims lost / seed: {w['victims_lost']:.1f} of {w['victims_seen']:.1f} ({100*w['victim_loss_fraction']:.1f}%)  "
               f"escalations: {w['escalations']:.1f}  aftershocks: {w['aftershock_events']:.1f} (team hits {w['aftershock_team_hits']:.1f})")
+    if "roads" in summary:
+        rd = summary["roads"]
+        print(f"roads per seed: partial {rd['partial_per_seed']:.1f}, blocked {rd['blocked_per_seed']:.1f}, "
+              f"blocks refused by the connectivity guard {rd['downgraded_per_seed']:.1f}; most blocked cells at once {rd['max_blocked_cells']}; "
+              f"audit {rd['audit_ticks']} ticks, {rd['audit_violations']} violations")
     if "actions" in summary:
         print("actions per seed (mean): " + "; ".join(
             f"{k}: started {v['dispatched']:.1f}, resolved {v['resolved']:.1f}, abandoned {v['abandoned']:.1f}, "

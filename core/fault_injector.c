@@ -85,6 +85,18 @@ static float causal_unit(uint32_t tick, uint32_t a, uint32_t salt)
 
 static uint32_t fault_duration_for_class(uint8_t team_id, OperationalFaultClass_t fault_class)
 {
+    /* Consequential roads: unattended damage persists for hours (uint16
+     * ticks; the shared duration ranges below are 8-bit). */
+    if(fault_class == FAULT_CLASS_ENVIRONMENT && fault_profile_causal_roads_on())
+    {
+        uint32_t lo = g_causal_roads.persist_min_ticks;
+        uint32_t hi = g_causal_roads.persist_max_ticks;
+
+        if(hi < lo)
+            hi = lo;
+        return lo + causal_hash(g_current_tick, team_id, CAUSAL_SALT_DURATION(fault_class)) % (hi - lo + 1u);
+    }
+
     uint8_t min_ticks = g_fault_config.duration_min_ticks[fault_class];
     uint8_t max_ticks = g_fault_config.duration_max_ticks[fault_class];
 
@@ -238,6 +250,188 @@ static void inject_resource_fault(uint8_t team_id)
 static uint8_t s_env_fault_base_road_blocked[GRID_WIDTH][GRID_HEIGHT];
 static uint8_t s_env_fault_base_navigable[GRID_WIDTH][GRID_HEIGHT];
 
+/* ------------------------------------------------------------------
+ * Consequential roads (Step 3.1). Each damaged cell is either PARTIAL
+ * debris (passable: a team stalls before stepping onto it, and A* sees the
+ * cost in the cell's travel_cost) or BLOCKED (navigable = 0). Both live in
+ * g_environment itself, so the map frames and the dashboard's STATICMAP
+ * carry them with no wire change.
+ * ------------------------------------------------------------------ */
+#define ROAD_NONE    0u
+#define ROAD_PARTIAL 1u
+#define ROAD_BLOCKED 2u
+static uint8_t s_road_kind[GRID_WIDTH][GRID_HEIGHT];
+static CausalRoadStats_t s_road_stats;
+
+uint8_t fault_injector_causal_road_kind(int x, int y)
+{
+    if(x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT)
+        return ROAD_NONE;
+    return s_road_kind[x][y];
+}
+
+static int road_in_grid(int x, int y)
+{
+    return x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT;
+}
+
+/* Navigability for the connectivity checks. lift = 1 ignores road blocks
+ * (the cell's pre-fault navigability); skip_* treats one more cell as
+ * blocked (a block being considered). */
+static int road_nav(int x, int y, int lift, int skip_x, int skip_y)
+{
+    if(!road_in_grid(x, y) || (x == skip_x && y == skip_y))
+        return 0;
+    if(lift && s_road_kind[x][y] == ROAD_BLOCKED)
+        return s_env_fault_base_navigable[x][y] != 0;
+    return g_environment[x][y].navigable != 0;
+}
+
+/* Cells that can reach a safe zone, searched outward from the safe zones
+ * with the pathfinder's own move rules (8-way, no corner cutting). seen[]
+ * is filled; returns the count. A safe zone's own cell is a source even if
+ * it is not navigable. */
+static int road_reach(uint8_t *seen, int lift, int skip_x, int skip_y)
+{
+    static const int DX[8] = { 1, -1, 0, 0, 1, 1, -1, -1 };
+    static const int DY[8] = { 0, 0, 1, -1, 1, -1, 1, -1 };
+    static int queue[GRID_WIDTH * GRID_HEIGHT];
+    int head = 0, tail = 0, count = 0;
+
+    memset(seen, 0, (size_t)GRID_WIDTH * GRID_HEIGHT);
+
+    for(uint8_t i = 0; i < MAX_SAFE_ZONES; i++)
+    {
+        int x, y;
+
+        if(g_safezones[i].capacity == 0)
+            continue;
+        x = g_safezones[i].loc_x;
+        y = g_safezones[i].loc_y;
+        if(!road_in_grid(x, y) || seen[x * GRID_HEIGHT + y])
+            continue;
+        seen[x * GRID_HEIGHT + y] = 1;
+        queue[tail++] = x * GRID_HEIGHT + y;
+        count++;
+    }
+
+    while(head < tail)
+    {
+        int cur = queue[head++];
+        int cx = cur / GRID_HEIGHT, cy = cur % GRID_HEIGHT;
+
+        for(int d = 0; d < 8; d++)
+        {
+            int nx = cx + DX[d], ny = cy + DY[d];
+
+            if(!road_nav(nx, ny, lift, skip_x, skip_y) || seen[nx * GRID_HEIGHT + ny])
+                continue;
+            if(DX[d] != 0 && DY[d] != 0 &&
+               (!road_nav(nx, cy, lift, skip_x, skip_y) || !road_nav(cx, ny, lift, skip_x, skip_y)))
+                continue;
+            seen[nx * GRID_HEIGHT + ny] = 1;
+            queue[tail++] = nx * GRID_HEIGHT + ny;
+            count++;
+        }
+    }
+    return count;
+}
+
+/* A full blockage is allowed only if every passable cell that could reach a
+ * safe zone before still can afterwards (the blocked cell itself aside), and
+ * the cell is not a place something has to be reached at. */
+static int road_block_allowed(int x, int y)
+{
+    static uint8_t before[GRID_WIDTH * GRID_HEIGHT], after[GRID_WIDTH * GRID_HEIGHT];
+    int n_before, n_after;
+
+    for(uint8_t i = 0; i < MAX_SAFE_ZONES; i++)
+        if(g_safezones[i].capacity != 0 && g_safezones[i].loc_x == x && g_safezones[i].loc_y == y)
+            return 0;
+    for(uint8_t i = 0; i < NUM_EVACUATION_GATEWAYS; i++)
+        if(g_evacuation_gateways[i].loc_x == x && g_evacuation_gateways[i].loc_y == y)
+            return 0;
+    for(uint8_t i = 0; i < NUM_INCIDENTS; i++)
+        if(g_incidents[i].slot_occupied && g_incidents[i].status != INC_RESOLVED &&
+           g_incidents[i].loc_x == x && g_incidents[i].loc_y == y)
+            return 0;
+    for(uint8_t i = 0; i < NUM_SYSTEM_TASKS; i++)
+        if(g_system_tasks[i].slot_occupied && g_system_tasks[i].status != INC_RESOLVED &&
+           g_system_tasks[i].loc_x == x && g_system_tasks[i].loc_y == y)
+            return 0;
+
+    n_before = road_reach(before, 0, -1, -1);
+    n_after = road_reach(after, 0, x, y);
+    return n_after == n_before - (before[x * GRID_HEIGHT + y] ? 1 : 0);
+}
+
+/* Every tick: no cell that could reach a safe zone with all road blocks
+ * lifted may be cut off by them. Counts violations (the check target
+ * asserts zero over a full run). */
+static void road_audit(void)
+{
+    static uint8_t actual[GRID_WIDTH * GRID_HEIGHT], lifted[GRID_WIDTH * GRID_HEIGHT];
+    uint32_t blocked_now = 0;
+
+    road_reach(actual, 0, -1, -1);
+    road_reach(lifted, 1, -1, -1);
+    s_road_stats.audit_ticks++;
+
+    for(int x = 0; x < GRID_WIDTH; x++)
+    {
+        for(int y = 0; y < GRID_HEIGHT; y++)
+        {
+            int i = x * GRID_HEIGHT + y;
+
+            if(s_road_kind[x][y] == ROAD_BLOCKED)
+            {
+                blocked_now++;
+                continue;
+            }
+            if(lifted[i] && !actual[i])
+                s_road_stats.audit_violations++;
+        }
+    }
+    if(blocked_now > s_road_stats.max_blocked_cells)
+        s_road_stats.max_blocked_cells = blocked_now;
+}
+
+/* Applies the cell damage for a new environment fault on (x, y). The first
+ * owner decides partial vs blocked from a hash of (seed, tick, team). */
+static void road_apply(uint8_t team_id, int x, int y, uint8_t severity)
+{
+    EnvironmentCell_t *cell = &g_environment[x][y];
+    uint8_t kind;
+
+    if(cell->env_fault_ref_count > 1)
+        return;     /* another fault already damaged this cell; damage is per cell */
+
+    kind = (causal_hash(g_current_tick, team_id, 600u) % 100u) < g_causal_roads.partial_pct
+               ? ROAD_PARTIAL : ROAD_BLOCKED;
+    if(kind == ROAD_BLOCKED && !road_block_allowed(x, y))
+    {
+        kind = ROAD_PARTIAL;
+        s_road_stats.block_downgraded++;
+    }
+    s_road_kind[x][y] = kind;
+
+    if(kind == ROAD_PARTIAL)
+    {
+        uint16_t add = g_causal_roads.route_cost_visible
+                           ? (uint16_t)((uint16_t)g_causal_roads.crossing_delay_ticks * g_causal_roads.cost_per_tick)
+                           : (uint16_t)severity;
+        uint16_t cost = (uint16_t)cell->env_fault_base_cost + add;
+
+        environment_set_cell_operational_state(x, y, cost > 255u ? 255u : (uint8_t)cost, cell->navigable, 1);
+        s_road_stats.partial_injected++;
+    }
+    else
+    {
+        environment_set_cell_operational_state(x, y, cell->travel_cost, 0, 1);
+        s_road_stats.blocked_injected++;
+    }
+}
+
 /* Raises the cost of one cell on this team's behalf and starts its
  * environment fault. Split out of inject_environment_fault() unchanged so
  * the causal aftershock model can pick the cell itself. */
@@ -289,6 +483,12 @@ static void apply_environment_fault(uint8_t team_id, int next_x, int next_y)
      * road_blocked=1 is kept: it is used by scoring/telemetry only and
      * does not affect pathfinding. */
     uint8_t severity = fault_state->severity[FAULT_CLASS_ENVIRONMENT];
+    if(fault_profile_causal_roads_on())
+    {
+        road_apply(team_id, next_x, next_y, severity);
+    }
+    else
+    {
     uint8_t new_cost = cell->travel_cost + severity;
     if(new_cost < cell->travel_cost)   /* uint8_t overflow guard */
         new_cost = 255u;
@@ -298,6 +498,7 @@ static void apply_environment_fault(uint8_t team_id, int next_x, int next_y)
         new_cost,
         cell->navigable,   /* preserve — do not sever the graph */
         1);                /* road_blocked=1 for telemetry/scoring */
+    }
 
     fault_state->active_mask |= (1u << FAULT_CLASS_ENVIRONMENT);
     mark_last_fault(fault_state, FAULT_CLASS_ENVIRONMENT);
@@ -452,6 +653,12 @@ static void recover_environment_fault(uint8_t team_id)
             cell->env_fault_base_cost,
             s_env_fault_base_navigable[x][y],
             s_env_fault_base_road_blocked[x][y]);
+        s_road_kind[x][y] = ROAD_NONE;
+    }
+    else if(fault_profile_causal_roads_on())
+    {
+        /* Consequential roads: the damage belongs to the cell, not to one
+         * team's fault; it stays until the last fault on the cell ends. */
     }
     else
     {
@@ -1196,6 +1403,14 @@ static void causal_step(void)
             }
         }
     }
+
+    /* Consequential roads: audit global connectivity after this tick's
+     * damage, and record which teams' routes touch damaged cells (sidecar
+     * truth only). */
+    if(fault_profile_causal_roads_on())
+        road_audit();
+    for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+        s_causal_truth[team_id].route_touch = causal_actions_route_touch(&g_teams[team_id]);
 }
 
 /* CLEAR_ROAD completion: the cell goes back to its pre-fault state and every
@@ -1219,6 +1434,7 @@ int fault_injector_clear_cell_faults(int x, int y)
         s_env_fault_base_navigable[x][y],
         s_env_fault_base_road_blocked[x][y]);
     cell->env_fault_ref_count = 0;
+    s_road_kind[x][y] = ROAD_NONE;
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
@@ -1241,6 +1457,11 @@ int fault_injector_clear_cell_faults(int x, int y)
     }
 
     return ended;
+}
+
+const CausalRoadStats_t *fault_injector_causal_road_stats(void)
+{
+    return &s_road_stats;
 }
 
 float fault_injector_causal_link_margin_at(int x, int y)
@@ -1270,6 +1491,9 @@ void fault_injector_init(uint32_t seed)
         memset(&s_causal_truth[t], 0, sizeof(s_causal_truth[t]));
     }
     causal_actions_reset();
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+    memset(s_road_kind, 0, sizeof(s_road_kind));
+#endif
     for(uint8_t i = 0; i < NUM_INCIDENTS; i++)
     {
         s_causal_inc_id[i] = 0;

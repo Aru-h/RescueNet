@@ -9,6 +9,10 @@ Faults under `causal` are consequences of simulated state rather than
 per-tick dice rolls, and they end when their cause is removed. The old
 duration ranges remain only as maximum backstops (communication has none).
 
+Consequential roads (damaged cells that stall or block movement; **on by
+default** under this profile, `--causal-roads=off` restores the previous
+behaviour) are described in `docs/CONSEQUENTIAL_ROADS.md`.
+
 Recovery actions that act on environment faults, incidents and the radio link
 (reroute, clear road, reinforce, relay) are described in
 `docs/RECOVERY_ACTIONS.md`. They are **off by default** under this profile
@@ -55,7 +59,7 @@ not match.
 | mobility | hazard `h = base + k_wear * wear + k_rough * roughness(cell)` per tick, `p = 1 - exp(-h * stress)` | field repair (4 ticks RESTING at a safe zone), or the backstop. A field repair removes 60% of wear; a backstop clear removes none. |
 | communication | link margin < 0 dB at the team's cell (deterministic) | link margin > +3 dB (hysteresis). Nothing else; no backstop. |
 | resource | hazard `h = base + k_batt * (1 - equip/100)^2 + k_rest * min(since_rest/800, 2)`, times 1.5 while a mobility fault is active | resting with equipment >= 90 and stamina >= the soft floor, or the backstop |
-| environment | Omori-Utsu aftershock on the team's route | backstop only (no action removes the cause yet) |
+| environment | Omori-Utsu aftershock on the team's route | its duration (5-12 ticks with `--causal-roads=off`; 600-2400 ticks with consequential roads, the default), or `CLEAR_ROAD` finishing when recovery actions are enabled |
 | mission | the team's assigned incident loses a victim or escalates | the incident resolves or the team leaves it, or the backstop |
 
 No PAR confirmation delay and no post-repair immunity apply in the causal
@@ -203,6 +207,8 @@ trained on it, add these columns to `GROUND_TRUTH_COLUMNS` in
 | `aftershock_hit` | 1 if an aftershock fault was raised on this team this tick |
 | `onset_cause_<class>` | cause of a fault that started this tick, else 0 |
 | `clear_cause_<class>` | how a fault ended this tick: 0 none, 1 cause removed, 2 backstop |
+| `action_mask` | bit i set when recovery action i involves this team this tick (0 reroute, 1 clear_road, 2 reinforce_incident, 3 relay_reposition); 0 unless `--causal-actions` enables them (`docs/RECOVERY_ACTIONS.md`) |
+| `route_touch` | bit 0: the team's route (next 8 steps toward its destination) crosses a partially blocked road cell; bit 1: it passes within one cell of a fully blocked cell; 0 when it is not en route or consequential roads are off (`docs/CONSEQUENTIAL_ROADS.md`). Truth for future retraining; never in the main dataset |
 
 `onset_cause` codes: 0 none, 1 baseline, 2 wear, 3 roughness, 4 battery,
 5 time since rest, 6 link margin, 7 aftershock, 8 incident deterioration.
@@ -210,6 +216,11 @@ Rows are per class: `mobility`, `communication`, `resource`, `environment`,
 `mission`.
 
 ## Results (seeds 1001-1020, 3000 ticks, AI off)
+
+**These results are for the profile before Step 3.1** (equivalently
+`--causal-roads=off --causal-actions=off`). Consequential roads, now the
+default, change the environment rows and cost incidents resolved; see
+`docs/CONSEQUENTIAL_ROADS.md` for the numbers.
 
 Onset is episodes per team per 1000 ticks; exposure is the share of
 team-ticks with the class active; durations are in ticks. Causal numbers are

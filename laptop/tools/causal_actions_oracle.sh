@@ -14,9 +14,12 @@
 # incidents resolved, victims lost, and the paired difference vs
 # "ai_ship, actions on" (bootstrap 95% CI, 10000 resamples, seed 0).
 #
-# usage (repo root): STRESS=7 EXTRA="--causal-env-duration=60-150" bash laptop/tools/causal_actions_oracle.sh
+# usage (repo root): STRESS=7 SEED_FROM=1001 SEED_COUNT=20 EXTRA="--causal-roads=off --causal-env-duration=60-150" bash laptop/tools/causal_actions_oracle.sh
+# (consequential roads are on by default under causal; EXTRA can pass any causal flag)
 set -e
 STRESS=${STRESS:-7}
+SEED_FROM=${SEED_FROM:-1001}
+SEED_COUNT=${SEED_COUNT:-20}
 EXTRA=${EXTRA:-}
 R=$(pwd); W=$R/build/causal-actions-oracle; rm -rf "$W"; mkdir -p "$W/bin" "$W/oc"
 F="-std=gnu11 -O0 -w -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=1 -DFAULT_MODEL_LOADED=1"
@@ -43,7 +46,7 @@ d=$W/runs/\$1_\$2/\$3; mkdir -p \$d; cd \$d
 $W/bin/\$1 \$3 1 3000 --fault-profile=causal --fault-stress=$STRESS --causal-actions=\$2 $EXTRA --diag > out.log 2> diag.log; rm -f tron_snapshot_dataset.csv tron_causal_truth.csv; echo done > ok
 EOS
 chmod +x "$W/run1.sh"
-(for s in $(seq 1001 1020); do for c in ai_ship oracle_env oracle_mis oracle_em; do for a in on off; do echo "$c $a $s"; done; done; done) \
+(for s in $(seq $SEED_FROM $((SEED_FROM + SEED_COUNT - 1))); do for c in ai_ship oracle_env oracle_mis oracle_em; do for a in on off; do echo "$c $a $s"; done; done; done) \
   | xargs -P"$(getconf _NPROCESSORS_ONLN)" -L1 "$W/run1.sh"
 python3 - "$W/runs" <<'PY'
 import glob, os, re, sys, random

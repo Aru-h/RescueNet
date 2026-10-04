@@ -294,7 +294,7 @@ void snapshot_begin_run(uint32_t seed)
                 "onset_cause_mobility,onset_cause_communication,onset_cause_resource,"
                 "onset_cause_environment,onset_cause_mission,"
                 "clear_cause_mobility,clear_cause_communication,clear_cause_resource,"
-                "clear_cause_environment,clear_cause_mission,action_mask\n");
+                "clear_cause_environment,clear_cause_mission,action_mask,route_touch\n");
     }
 
     if(g_snapshot_file != NULL)
@@ -616,14 +616,14 @@ void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)
     {
         const CausalTeamTruth_t *t = fault_injector_causal_truth(team_id);
         fprintf(g_causal_truth_file,
-            "%u,%u,%u,%u,%g,%.4f,%.3f,%.6f,%.6f,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+            "%u,%u,%u,%u,%g,%.4f,%.3f,%.6f,%.6f,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
             g_run_id, g_dataset_seed, cycle, team_id, (double)g_fault_stress,
             (double)t->hidden_wear, (double)t->link_margin_db,
             (double)t->hazard_mobility, (double)t->hazard_resource,
             t->ticks_since_rest, t->aftershock_hit,
             t->onset_cause[0], t->onset_cause[1], t->onset_cause[2], t->onset_cause[3], t->onset_cause[4],
             t->clear_cause[0], t->clear_cause[1], t->clear_cause[2], t->clear_cause[3], t->clear_cause[4],
-            causal_actions_team_mask(team_id));
+            causal_actions_team_mask(team_id), t->route_touch);
     }
 
     TeamState_t *team;

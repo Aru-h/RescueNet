@@ -17,10 +17,16 @@ static CausalActionStats_t s_stats;
 static uint8_t s_reroute_on[NUM_TEAMS];
 static uint32_t s_reroute_start[NUM_TEAMS];
 static uint8_t s_avoid[CELLS];                 /* per-cell overlay handed to the pathfinder */
+static uint8_t s_damaged[CELLS];               /* 1 = faulted or blocked road cell (the overlay may be 0) */
 static uint8_t s_blockers[CELLS];              /* teams whose route crosses the cell this tick */
 static uint32_t s_faulted_since[CELLS];        /* tick + 1 the cell became faulted; 0 = not faulted */
 /* CLEAR_ROAD */
 static uint8_t s_clear_requested[CELLS];       /* the detector asked for this cell */
+/* CLEAR_ROAD task slot -> the road cell it clears (the task itself stands on a
+ * navigable cell, which for a fully blocked road is a neighbour). */
+static int16_t s_clear_tx[NUM_SYSTEM_TASKS];
+static int16_t s_clear_ty[NUM_SYSTEM_TASKS];
+static uint32_t s_clear_id[NUM_SYSTEM_TASKS];
 /* REINFORCE_INCIDENT, per incident slot, valid while the id matches */
 static uint32_t s_inc_id[NUM_INCIDENTS];
 static uint8_t s_prev_victims[NUM_INCIDENTS];
@@ -65,9 +71,16 @@ void causal_actions_reset(void)
     for(int i = 0; i < CELLS; i++)
     {
         s_avoid[i] = 0;
+        s_damaged[i] = 0;
         s_blockers[i] = 0;
         s_faulted_since[i] = 0;
         s_clear_requested[i] = 0;
+    }
+    for(uint8_t i = 0; i < NUM_SYSTEM_TASKS; i++)
+    {
+        s_clear_tx[i] = 0;
+        s_clear_ty[i] = 0;
+        s_clear_id[i] = 0;
     }
     for(uint8_t i = 0; i < NUM_INCIDENTS; i++)
     {
@@ -135,7 +148,7 @@ static int route_crosses_faulted(const TeamState_t *team, int *hit_x, int *hit_y
             break;
         x = nx;
         y = ny;
-        if(in_grid(x, y) && s_avoid[cell_index(x, y)] != 0)
+        if(in_grid(x, y) && s_damaged[cell_index(x, y)] != 0)
         {
             *hit_x = x;
             *hit_y = y;
@@ -149,6 +162,15 @@ static void refresh_cell_state(void)
 {
     uint16_t penalty = g_causal_actions.reroute_cost_penalty;
 
+    /* Consequential roads: when A* already sees a damaged cell's true stall
+     * cost in its travel_cost (route_cost_visible), a rerouting team needs no
+     * extra penalty (it would double-count); when A* is blind to it, a
+     * rerouting team gets the cost the stall is worth. */
+    if(fault_profile_causal_roads_on())
+        penalty = g_causal_roads.route_cost_visible
+                      ? 0u
+                      : (uint16_t)((uint16_t)g_causal_roads.crossing_delay_ticks * g_causal_roads.cost_per_tick);
+
     if(penalty > 255u)
         penalty = 255u;
 
@@ -160,7 +182,8 @@ static void refresh_cell_state(void)
             int i = cell_index(x, y);
             uint8_t faulted = cell->env_fault_ref_count > 0;
 
-            s_avoid[i] = (faulted || cell->road_blocked) ? (uint8_t)penalty : 0;
+            s_damaged[i] = (faulted || cell->road_blocked) ? 1u : 0u;
+            s_avoid[i] = s_damaged[i] ? (uint8_t)penalty : 0;
             s_blockers[i] = 0;
             if(faulted)
             {
@@ -226,13 +249,34 @@ static void step_reroute(void)
     }
 }
 
+/* The road cell a CLEAR_ROAD task slot is for. */
+static void clear_task_target(uint8_t slot, int *tx, int *ty)
+{
+    const IncidentState_t *task = &g_system_tasks[slot];
+
+    if(s_clear_id[slot] == task->incident_id)
+    {
+        *tx = s_clear_tx[slot];
+        *ty = s_clear_ty[slot];
+    }
+    else
+    {
+        *tx = task->loc_x;
+        *ty = task->loc_y;
+    }
+}
+
 static int clear_task_at(int x, int y)
 {
     for(uint8_t i = 0; i < NUM_SYSTEM_TASKS; i++)
     {
         const IncidentState_t *task = &g_system_tasks[i];
-        if(task->slot_occupied && task->incident_type == INCIDENT_CLEAR_ROAD &&
-           task->loc_x == x && task->loc_y == y)
+        int tx, ty;
+
+        if(!task->slot_occupied || task->incident_type != INCIDENT_CLEAR_ROAD)
+            continue;
+        clear_task_target(i, &tx, &ty);
+        if(tx == x && ty == y)
             return 1;
     }
     return 0;
@@ -256,11 +300,13 @@ static void step_clear_road(void)
     {
         IncidentState_t *task = &g_system_tasks[i];
 
+        int tx, ty;
+
         if(!task->slot_occupied || task->incident_type != INCIDENT_CLEAR_ROAD)
             continue;
         s_stats.active_ticks[CAUSAL_ACTION_CLEAR_ROAD]++;
-        if(in_grid(task->loc_x, task->loc_y) &&
-           g_environment[task->loc_x][task->loc_y].env_fault_ref_count == 0)
+        clear_task_target(i, &tx, &ty);
+        if(in_grid(tx, ty) && g_environment[tx][ty].env_fault_ref_count == 0)
         {
             s_stats.abandoned[CAUSAL_ACTION_CLEAR_ROAD]++;
             incident_cancel_system_task(task);
@@ -287,11 +333,52 @@ static void step_clear_road(void)
             if(clear_task_at(x, y))
                 continue;
 
-            if(create_clear_road_task((int16_t)x, (int16_t)y, k->clear_road_work) != NO_ASSIGNMENT)
             {
-                s_stats.dispatched[CAUSAL_ACTION_CLEAR_ROAD]++;
-                if(s_clear_requested[i])
-                    s_stats.from_detector[CAUSAL_ACTION_CLEAR_ROAD]++;
+                uint8_t kind = fault_injector_causal_road_kind(x, y);
+                uint16_t work = k->clear_road_work;
+                int sx = x, sy = y;
+                int id;
+
+                if(fault_profile_causal_roads_on())
+                    work = (kind == 2u) ? g_causal_roads.clear_work_full : g_causal_roads.clear_work_partial;
+
+                /* A fully blocked cell is not a valid place to stand (a route
+                 * destination must be navigable): work from a neighbour. */
+                if(!environment_cell_is_navigable(x, y))
+                {
+                    static const int NX[4] = { 1, -1, 0, 0 };
+                    static const int NY[4] = { 0, 0, 1, -1 };
+                    int found = 0;
+
+                    for(int d = 0; d < 4 && !found; d++)
+                    {
+                        if(in_grid(x + NX[d], y + NY[d]) && environment_cell_is_navigable(x + NX[d], y + NY[d]))
+                        {
+                            sx = x + NX[d];
+                            sy = y + NY[d];
+                            found = 1;
+                        }
+                    }
+                    if(!found)
+                        continue;
+                }
+
+                id = create_clear_road_task((int16_t)sx, (int16_t)sy, work);
+                if(id != NO_ASSIGNMENT)
+                {
+                    for(uint8_t t = 0; t < NUM_SYSTEM_TASKS; t++)
+                    {
+                        if(g_system_tasks[t].slot_occupied && (int)g_system_tasks[t].incident_id == id)
+                        {
+                            s_clear_tx[t] = (int16_t)x;
+                            s_clear_ty[t] = (int16_t)y;
+                            s_clear_id[t] = g_system_tasks[t].incident_id;
+                        }
+                    }
+                    s_stats.dispatched[CAUSAL_ACTION_CLEAR_ROAD]++;
+                    if(s_clear_requested[i])
+                        s_stats.from_detector[CAUSAL_ACTION_CLEAR_ROAD]++;
+                }
             }
         }
     }
@@ -510,12 +597,23 @@ int causal_actions_crossing_stall(const TeamState_t *team, int next_x, int next_
 {
     uint8_t t = team->team_id;
     uint8_t delay = g_causal_actions.env_crossing_delay_ticks;
+    int stalls_here;
+
+    if(fault_profile_causal_roads_on())
+        delay = g_causal_roads.crossing_delay_ticks;
 
     if(!fault_profile_is_causal() || delay == 0 || t >= NUM_TEAMS)
         return 0;
 
-    if(in_grid(next_x, next_y) && g_environment[next_x][next_y].env_fault_ref_count > 0 &&
-       (next_x != team->loc_x || next_y != team->loc_y))
+    /* Consequential roads: only partial debris stalls a team (a fully blocked
+     * cell is not navigable, so A* never steps onto it). Otherwise any cell
+     * with an active fault does, as in the Step 3 sensitivity override. */
+    stalls_here = in_grid(next_x, next_y) &&
+                  (fault_profile_causal_roads_on()
+                       ? fault_injector_causal_road_kind(next_x, next_y) == 1u
+                       : g_environment[next_x][next_y].env_fault_ref_count > 0);
+
+    if(stalls_here && (next_x != team->loc_x || next_y != team->loc_y))
     {
         if(s_stall[t] < delay)
         {
@@ -579,10 +677,46 @@ float causal_actions_survival_factor(uint8_t slot)
     return reinforced_on_scene(&g_incidents[slot]) ? g_causal_actions.reinforce_survival_factor : 1.0f;
 }
 
-void causal_actions_road_cleared(int16_t x, int16_t y)
+void causal_actions_road_cleared(const IncidentState_t *task)
 {
-    if(fault_injector_clear_cell_faults(x, y) > 0)
+    uint8_t slot = (uint8_t)(task - g_system_tasks);
+    int tx, ty;
+
+    if(slot >= NUM_SYSTEM_TASKS)
+        return;
+    clear_task_target(slot, &tx, &ty);
+    if(fault_injector_clear_cell_faults(tx, ty) > 0)
         s_stats.resolved[CAUSAL_ACTION_CLEAR_ROAD]++;
+}
+
+/* Sidecar truth: does this team's route (next 8 steps) cross partial debris
+ * (bit 0) or pass within one cell of a fully blocked cell (bit 1)? */
+uint8_t causal_actions_route_touch(const TeamState_t *team)
+{
+    int x = team->loc_x, y = team->loc_y, dx, dy;
+    uint8_t bits = 0;
+
+    if(!fault_profile_causal_roads_on() || !team_destination(team, &dx, &dy))
+        return 0;
+
+    for(uint8_t step = 0; step < 8; step++)
+    {
+        int nx = x, ny = y;
+
+        if(x == dx && y == dy)
+            break;
+        if(find_next_path_step(x, y, dx, dy, 0, &nx, &ny) <= 0)
+            break;
+        x = nx;
+        y = ny;
+        if(fault_injector_causal_road_kind(x, y) == 1u)
+            bits |= 1u;
+        for(int ax = -1; ax <= 1; ax++)
+            for(int ay = -1; ay <= 1; ay++)
+                if(fault_injector_causal_road_kind(x + ax, y + ay) == 2u)
+                    bits |= 2u;
+    }
+    return bits;
 }
 
 uint8_t causal_actions_team_mask(uint8_t t)
@@ -623,7 +757,8 @@ void causal_actions_path_end(void) {}
 int causal_actions_reinforce_wanted(uint8_t incident_slot) { (void)incident_slot; return 0; }
 uint8_t causal_actions_boost_work(const IncidentState_t *incident, uint8_t work_rate) { (void)incident; return work_rate; }
 float causal_actions_survival_factor(uint8_t incident_slot) { (void)incident_slot; return 1.0f; }
-void causal_actions_road_cleared(int16_t x, int16_t y) { (void)x; (void)y; }
+void causal_actions_road_cleared(const IncidentState_t *task) { (void)task; }
+uint8_t causal_actions_route_touch(const TeamState_t *team) { (void)team; return 0; }
 uint8_t causal_actions_team_mask(uint8_t team_id) { (void)team_id; return 0; }
 const CausalActionStats_t *causal_actions_stats(void) { return &s_stats; }
 

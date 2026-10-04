@@ -57,6 +57,24 @@ CausalFaultParams_t g_causal_params = {
     .max_concurrent_faults = 3,
 };
 
+/* Consequential roads. Grounding and "assumed" markers: docs/CONSEQUENTIAL_ROADS.md. */
+CausalRoadParams_t g_causal_roads = {
+    .enabled = 1,
+    .partial_pct = 70,
+    .crossing_delay_ticks = 4,
+    .persist_min_ticks = 600,
+    .persist_max_ticks = 2400,
+    .clear_work_partial = 120,
+    .clear_work_full = 240,
+    .cost_per_tick = 3,   /* tuned on seeds 1001-1020 from {1,2,3,5}: see docs/CONSEQUENTIAL_ROADS.md */
+    .route_cost_visible = 1,
+};
+
+int fault_profile_causal_roads_on(void)
+{
+    return g_fault_config.profile == FAULT_PROFILE_CAUSAL && g_causal_roads.enabled;
+}
+
 CausalActionParams_t g_causal_actions = {
     .reroute_cost_penalty = 3,
     .env_crossing_delay_ticks = 0,
