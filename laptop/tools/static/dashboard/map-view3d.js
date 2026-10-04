@@ -133,9 +133,28 @@
     const settings = loadSettings();
     const fx = FXMOD ? FXMOD.createFx(THREE, { scene, MR }) : null;
     if (fx) { fx.setLevel(settings.effects); fx.setMotion(!settings.reduceMotion); }
+    function applyLighting() {
+      const L = LIGHTING[settings.lighting] || LIGHTING.day;
+      scene.background.set(L.bg); scene.fog.color.set(L.fog);
+      hemi.color.set(L.sky); hemi.groundColor.set(L.ground); hemi.intensity = L.hemi;
+      sun.color.set(L.sun); sun.intensity = L.sunI; sunOff = L.sunOff;
+      if (bld) bld.setNight(L.night);
+      if (fx) fx.setNight(L.night);
+    }
     const bld = BLDMOD ? BLDMOD.createBuildings(THREE, { scene, MR, maxAniso }) : null;
     let autoReduced = null;     // effects level the auto-quality fallback dropped to, if it did
     const _v2 = new THREE.Vector2();
+
+    // ---------- lighting presets (day / night) ----------
+    // Soft ambient (hemisphere) + one directional light with soft shadows,
+    // and light distance fog so the far side of the map recedes. Markers,
+    // routes and highlights ignore fog so they stay readable at any distance.
+    const LIGHTING = {
+      day:   { bg: 0x05080c, fog: 0x0b1119, sky: 0xc9d8ee, ground: 0x1b2430, hemi: 1.15, sun: 0xfff3df, sunI: 2.3, sunOff: [-22, 38, -14], night: false },
+      night: { bg: 0x03050a, fog: 0x070b16, sky: 0x4a5c92, ground: 0x0b0f18, hemi: 0.75, sun: 0x9bb2ff, sunI: 0.9, sunOff: [16, 34, -22], night: true },
+    };
+    let sunOff = LIGHTING.day.sunOff;
+    scene.fog = new THREE.Fog(LIGHTING.day.fog, 60, 200);
 
     // ---------- lights ----------
     const hemi = new THREE.HemisphereLight(0xc9d8ee, 0x1b2430, 1.15);
@@ -150,6 +169,7 @@
     sun.shadow.normalBias = 0.03;
     scene.add(sun);
     scene.add(sun.target);
+    applyLighting();
 
     // ---------- view state / projector ----------
     const view = { w: 1, h: 1, mapW: 36, mapH: 36, tx: 18, tz: 18, az: Math.PI / 4, el: 50 * Math.PI / 180, dist: 80 };
@@ -193,7 +213,8 @@
       camera.lookAt(view.tx, 0, view.tz);
       camera.updateProjectionMatrix();
       camera.updateMatrixWorld(true);
-      sun.position.set(view.tx - 22, 38, view.tz - 14);
+      sun.position.set(view.tx + sunOff[0], sunOff[1], view.tz + sunOff[2]);
+      scene.fog.near = view.dist * 0.9; scene.fog.far = view.dist * 2.6;
       sun.target.position.set(view.tx, 0, view.tz);
     }
 
@@ -347,7 +368,7 @@
       if (!m) {
         const c = new THREE.Color(hex);
         m = {
-          stem: new THREE.MeshStandardMaterial({ color: c, roughness: 0.6 }),
+          stem: new THREE.MeshStandardMaterial({ color: c, roughness: 0.6, fog: false }),
           arrow: new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.95, depthWrite: false, side: THREE.DoubleSide, fog: false }),
           ring: new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide, fog: false }),
           solid: new THREE.LineBasicMaterial({ color: c, transparent: true, opacity: 0.85, fog: false }),
@@ -396,7 +417,7 @@
       };
     }
     const hazardPools = [0.38, 0.24, 0.12].map((o) => makePool(planeGeo, colorMat(0xd29922, o), 2048, false));
-    const stemPool = makePool(stemGeo, new THREE.MeshStandardMaterial({ roughness: 0.6 }), 512, true);
+    const stemPool = makePool(stemGeo, new THREE.MeshStandardMaterial({ roughness: 0.6, fog: false }), 512, true);
     stemPool.mesh.castShadow = true;
     const blobPool = makePool(discGeo, shadowMat, 512, false);
 
@@ -759,7 +780,7 @@
       if (director.mode === "follow") {
         const v = teamViews.get(director.teamId);
         if (!v) { cancelCamera(); return; }
-        const k = 1 - Math.exp(-dt * 5.5);
+        const k = 1 - Math.exp(-dt * 9);
         view.tx += (v.pos.x - view.tx) * k; view.tz += (v.pos.y - view.tz) * k;
         if (view.dist > director.goalDist) view.dist += (director.goalDist - view.dist) * (1 - Math.exp(-dt * 3));
         updateCamera();
@@ -916,6 +937,7 @@
         if (partial.effects !== undefined) { autoReduced = null; slowFrames = 0; fx.setLevel(settings.effects); }
         if (partial.reduceMotion !== undefined) fx.setMotion(!settings.reduceMotion);
       }
+      if (partial.lighting !== undefined) applyLighting();
       if (shake && settings.reduceMotion) { shake = null; updateCamera(); }
       kick();
       drawNow(performance.now(), false);
@@ -966,6 +988,11 @@
       follow: followTeam, flyTo, cancelCamera,
       get fx() { return fx; },
       buildingStats() { return bld ? bld.stats : null; },
+      // Current lighting, for tests/tooling.
+      lightingState() {
+        return { preset: settings.lighting, background: scene.background.getHex(), fog: scene.fog.color.getHex(), fogNear: scene.fog.near, fogFar: scene.fog.far,
+                 dist: view.dist, hemi: hemi.intensity, sun: sun.intensity, windowGlow: bld ? bld.glow() : 0, markersFogged: markerMat(0xffffff).stem.fog };
+      },
       // Height the 3D view gives a building (where markers stand on it), for tests/tooling.
       buildingHeight(id) { const e = curModel && curModel.prep.byId.get(id); return e && bld ? bld.heightOf(e) : null; },
       projector, render, setSize,

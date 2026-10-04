@@ -427,6 +427,7 @@ def _view3d_check(page, console_errors, screenshot_dir):
     _view3d_effects_check(page, console_errors)
     _view3d_buildings_check(page, console_errors)
     _view3d_camera_check(page, console_errors, screenshot_dir)
+    _view3d_lighting_check(page, console_errors)
 
     # Tilt limits, full rotation, top-down shortcut.
     lim = page.evaluate("""() => {
@@ -761,6 +762,35 @@ def _view3d_camera_check(page, console_errors, screenshot_dir):
     page.evaluate("() => { DashboardSelection.set(null); mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
     real_errors = real_console_errors(console_errors)
     check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the camera checks (got {real_errors[:5]})")
+
+
+def _view3d_lighting_check(page, console_errors):
+    """C5: soft ambient + directional light with light distance fog, and an
+    optional night tint with lit windows."""
+    page.evaluate("() => map3d.setSettings({ lighting: 'day' })")
+    day = page.evaluate("() => map3d.lightingState()")
+    check(0 < day["hemi"] and day["sun"] > day["hemi"] and day["windowGlow"] == 0, f"[3d] day lighting: ambient + stronger directional light, windows unlit ({day['hemi']}, {day['sun']})")
+    check(day["fogNear"] > 0.5 * day["dist"] and day["fogFar"] > 2 * day["dist"] and day["fogFar"] < 4 * day["dist"],
+          f"[3d] light distance fog starts near the map and stays gentle (near {day['fogNear']:.0f}, far {day['fogFar']:.0f} for camera distance {day['dist']:.0f})")
+    check(day["markersFogged"] is False, "[3d] teams and incidents ignore fog, so they stay fully readable at any distance")
+    page.evaluate("() => { const c = mapCamera; c.zoomAt(c.state.viewW / 2, c.state.viewH / 2, 2); }")
+    closer = page.evaluate("() => map3d.lightingState()")
+    check(closer["dist"] < day["dist"] and closer["fogFar"] < day["fogFar"], "[3d] the fog follows the camera distance (zoom in -> it moves in with it)")
+    page.evaluate("() => mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH)")
+    page.click("#map3dSettingsBtn")
+    page.select_option("#map3dLight", "night")
+    night = page.evaluate("() => map3d.lightingState()")
+    check(night["preset"] == "night" and night["background"] != day["background"] and night["fog"] != day["fog"] and night["hemi"] < day["hemi"] and night["sun"] < day["sun"],
+          "[3d] night is darker: lower ambient and directional light, darker background and fog")
+    check(night["windowGlow"] > 0, f"[3d] windows light up at night (glow {night['windowGlow']})")
+    check(page.evaluate("() => JSON.parse(localStorage.getItem('dashboard.map3dSettings')).lighting") == "night", "[3d] the lighting choice is remembered")
+    page.evaluate("() => drawFrame(window._lastFrame, true)")
+    check(page.evaluate("() => mapHitTargets.some(h => h.type === 'team')"), "[3d] markers are still drawn and pickable at night")
+    page.select_option("#map3dLight", "day")
+    page.keyboard.press("Escape")
+    check(page.evaluate("() => map3d.lightingState().windowGlow") == 0, "[3d] back to day: windows unlit again")
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the lighting checks (got {real_errors[:5]})")
 
 
 def _route_accuracy_check(page):

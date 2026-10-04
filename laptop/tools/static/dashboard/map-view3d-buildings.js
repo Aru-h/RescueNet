@@ -241,6 +241,7 @@ export function createBuildings(THREE, ctx) {
     return z;
   }
   function setNight(on) { facadeMat.emissiveIntensity = on ? 1.15 : 0; }
+  function glow() { return facadeMat.emissiveIntensity; }
 
-  return { build, dispose, heightOf, footing, setNight, get stats() { return Object.assign({}, stats); }, group };
+  return { build, dispose, heightOf, footing, setNight, glow, get stats() { return Object.assign({}, stats); }, group };
 }
