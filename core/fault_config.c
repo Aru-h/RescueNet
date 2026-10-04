@@ -81,29 +81,76 @@ void fault_config_apply_profile(FaultProfile_t profile)
             set_duration_range(FAULT_CLASS_MISSION, 5, 16);
             break;
 
+        case FAULT_PROFILE_CAUSAL:
+            /* Phase 1 placeholder onset rates, in PER-MILLE per team-tick
+             * (every other profile uses percent). Combined's percent rates
+             * are unusable here: combined survives them only because of the
+             * 33-tick confirm delay and 80-tick immunity this profile drops
+             * (measured: any-fault exposure 0.88, incidents resolved 6 vs
+             * 36). Phase 2 replaces these with the hazard model. Recovery is
+             * cause-driven (fault_injector.c); the duration range is only
+             * the maximum backstop. */
+            g_fault_config.class_probability[FAULT_CLASS_MOBILITY] = 12;
+            g_fault_config.class_probability[FAULT_CLASS_COMMUNICATION] = 12;
+            g_fault_config.class_probability[FAULT_CLASS_RESOURCE] = 12;
+            g_fault_config.class_probability[FAULT_CLASS_ENVIRONMENT] = 10;
+            g_fault_config.class_probability[FAULT_CLASS_MISSION] = 3;
+            g_fault_config.effect_strength[FAULT_CLASS_MOBILITY] = 3;
+            g_fault_config.effect_strength[FAULT_CLASS_COMMUNICATION] = 2;
+            g_fault_config.effect_strength[FAULT_CLASS_RESOURCE] = 2;
+            g_fault_config.effect_strength[FAULT_CLASS_ENVIRONMENT] = 3;
+            g_fault_config.effect_strength[FAULT_CLASS_MISSION] = 2;
+            set_duration_range(FAULT_CLASS_MOBILITY, 6, 14);
+            set_duration_range(FAULT_CLASS_COMMUNICATION, 6, 14);
+            set_duration_range(FAULT_CLASS_RESOURCE, 6, 14);
+            set_duration_range(FAULT_CLASS_ENVIRONMENT, 5, 12);
+            set_duration_range(FAULT_CLASS_MISSION, 5, 12);
+            break;
+
         case FAULT_PROFILE_NONE:
         default:
             break;
     }
 }
 
+int fault_profile_parse(const char *name, FaultProfile_t *out)
+{
+    static const struct { const char *name; FaultProfile_t profile; } table[] = {
+        { "none", FAULT_PROFILE_NONE },
+        { "mobility", FAULT_PROFILE_MOBILITY },
+        { "communication", FAULT_PROFILE_COMMUNICATION },
+        { "resource", FAULT_PROFILE_RESOURCE },
+        { "combined", FAULT_PROFILE_COMBINED },
+        { "random", FAULT_PROFILE_RANDOM },
+        { "causal", FAULT_PROFILE_CAUSAL },
+    };
+
+    if(name == NULL || out == NULL)
+        return 0;
+
+    for(size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++)
+    {
+        if(strcmp(name, table[i].name) == 0)
+        {
+            *out = table[i].profile;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 FaultProfile_t fault_profile_from_string(const char *name)
 {
-    if(name == NULL)
-        return FAULT_PROFILE_NONE;
+    FaultProfile_t profile = FAULT_PROFILE_NONE;
 
-    if(strcmp(name, "mobility") == 0)
-        return FAULT_PROFILE_MOBILITY;
-    if(strcmp(name, "communication") == 0)
-        return FAULT_PROFILE_COMMUNICATION;
-    if(strcmp(name, "resource") == 0)
-        return FAULT_PROFILE_RESOURCE;
-    if(strcmp(name, "combined") == 0)
-        return FAULT_PROFILE_COMBINED;
-    if(strcmp(name, "random") == 0)
-        return FAULT_PROFILE_RANDOM;
+    (void)fault_profile_parse(name, &profile);
+    return profile;
+}
 
-    return FAULT_PROFILE_NONE;
+int fault_profile_is_causal(void)
+{
+    return g_fault_config.profile == FAULT_PROFILE_CAUSAL;
 }
 
 const char *fault_profile_to_string(FaultProfile_t profile)
@@ -115,6 +162,7 @@ const char *fault_profile_to_string(FaultProfile_t profile)
         case FAULT_PROFILE_RESOURCE: return "resource";
         case FAULT_PROFILE_COMBINED: return "combined";
         case FAULT_PROFILE_RANDOM: return "random";
+        case FAULT_PROFILE_CAUSAL: return "causal";
         case FAULT_PROFILE_NONE:
         default:
             return "none";

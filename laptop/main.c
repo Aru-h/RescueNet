@@ -105,15 +105,31 @@ static int is_fault_profile_flag(const char *arg)
             strncmp(arg, "--fault-profile=", 16) == 0);
 }
 
+/* An unknown name used to silently become "none", so a typo ran a
+ * fault-free simulation that looked like a valid result. */
+static FaultProfile_t require_fault_profile(const char *name)
+{
+    FaultProfile_t profile = FAULT_PROFILE_NONE;
+
+    if(name == NULL || !fault_profile_parse(name, &profile))
+    {
+        fprintf(stderr,
+            "unknown --fault-profile '%s' (valid: none, mobility, communication, "
+            "resource, combined, random, causal)\n",
+            name != NULL ? name : "");
+        exit(2);
+    }
+
+    return profile;
+}
+
 static FaultProfile_t parse_fault_profile_value(const char *arg)
 {
-    if(arg == NULL)
-        return FAULT_PROFILE_NONE;
+    if(arg != NULL && strncmp(arg, "--fault-profile=", 16) == 0)
+        return require_fault_profile(arg + 16);
 
-    if(strncmp(arg, "--fault-profile=", 16) == 0)
-        return fault_profile_from_string(arg + 16);
-
-    return FAULT_PROFILE_NONE;
+    /* Bare "--fault-profile" with nothing after it. */
+    return require_fault_profile(NULL);
 }
 
 static int is_number_arg(const char *arg)
@@ -169,7 +185,7 @@ int main(int argc, char **argv)
                 if(is_fault_profile_flag(argv[j]))
                 {
                     sweep_profile = strcmp(argv[j], "--fault-profile") == 0 && j + 1 < argc
-                                         ? fault_profile_from_string(argv[j + 1])
+                                         ? require_fault_profile(argv[j + 1])
                                          : parse_fault_profile_value(argv[j]);
                 }
             }
@@ -284,7 +300,7 @@ int main(int argc, char **argv)
 
         if(strcmp(argv[i], "--fault-profile") == 0 && i + 1 < argc)
         {
-            fault_profile = fault_profile_from_string(argv[++i]);
+            fault_profile = require_fault_profile(argv[++i]);
             continue;
         }
 
@@ -475,6 +491,15 @@ int main(int argc, char **argv)
         for(uint8_t t = 0; t < NUM_TEAMS; t++)
             fprintf(stderr, "[DIAG THROUGHPUT] team=%u incidents_resolved=%u stage_completions=%u resting=%u working=%u available=%u\n",
                 t, g_diag_incidents_resolved[t], g_diag_stage_completions[t], g_diag_ticks_resting[t], g_diag_ticks_working[t], g_diag_ticks_available[t]);
+
+        if(g_fault_config.profile == FAULT_PROFILE_CAUSAL)
+        {
+            const CausalFaultStats_t *cs = fault_injector_causal_stats();
+            for(uint8_t c = 0; c < NUM_OPERATIONAL_FAULT_CLASSES; c++)
+                fprintf(stderr, "[DIAG FAULT] class=%u onsets=%u cleared_by_cause=%u cleared_by_backstop=%u exposure_ticks=%u episode_ticks=%u\n",
+                    c, cs->onsets[c], cs->cleared_by_cause[c], cs->cleared_by_backstop[c],
+                    cs->exposure_ticks[c], cs->active_ticks_total[c]);
+        }
 
         extern uint32_t g_diag_discovered_by_type[NUM_INCIDENT_TYPES];
         extern uint32_t g_diag_resolved_by_type[NUM_INCIDENT_TYPES];

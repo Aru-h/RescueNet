@@ -1256,3 +1256,12 @@ check-eval-metrics-unittest:
 # laptop/tools/check-evaluate-determinism.sh.
 check-evaluate-determinism:
 	@PYTHON=$(PYTHON) $(TOOLS_DIR)/check-evaluate-determinism.sh
+
+# Run-level sanity bound on --fault-profile=causal: per-class and per-team
+# fault exposure, episode chattering and the maximum-duration backstop must
+# stay within laptop/tools/fault_exposure.py's bounds over 8 seeds x 3000
+# ticks (AI off). Catches a fault -> drain -> fault loop pinning teams in a
+# faulted state. Bounds are assumed guard rails, not calibrated values.
+check-causal-fault-exposure: $(TARGET)
+	@$(PYTHON) $(TOOLS_DIR)/fault_exposure.py --tron ./$(TARGET) --profile causal --seeds 1001-1008 --ticks 3000 --check
+.PHONY: check-causal-fault-exposure
