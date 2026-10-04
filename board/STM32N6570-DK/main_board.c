@@ -1201,7 +1201,7 @@ EXPORT INT usermain(void)
 
         if (log_rc != 0)
         {
-            BOARD_LOG((UB*)"tron: board_log_start FAILED rc=%d (console stays direct)\n", log_rc);
+            BOARD_LOG_N(96, (UB*)"tron: board_log_start FAILED rc=%d (console stays direct)\n", log_rc);
         }
     }
 
@@ -1219,7 +1219,10 @@ EXPORT INT usermain(void)
        that macro's default lives in comms_transport.c, private to
        that file (see its own comment), not something this file should
        reach into. */
-    BOARD_LOG((UB*)"tron: CONFIG teams_per_board=%u vbus=%u consensus_enforce=%u radio=%u model_loaded=%u cpu_hz=%lu icache=%u dcache=%u\n",
+    /* Static buffer, not the stack: this task has only 1 KB. */
+    {
+        static UB cfg_line[BOARD_LOG_LINE_MAX];
+        INT cfg_len = tm_sprintf(cfg_line, (const UB*)"tron: CONFIG teams_per_board=%u vbus=%u consensus_enforce=%u radio=%u model_loaded=%u cpu_hz=%lu icache=%u dcache=%u\n",
                (unsigned)(NUM_TEAMS / comms_transport_board_count()),
                (unsigned)VIRTUAL_BUS_ENABLED,
                (unsigned)CONSENSUS_ENFORCE,
@@ -1228,13 +1231,15 @@ EXPORT INT usermain(void)
                (unsigned long)SystemCoreClock,
                (unsigned)((SCB->CCR & SCB_CCR_IC_Msk) != 0u),
                (unsigned)((SCB->CCR & SCB_CCR_DC_Msk) != 0u));
+        board_log_emit(cfg_line, cfg_len);
+    }
 
     {
         int rtos_rc = board_rtos_create();
 
         if (rtos_rc != 0)
         {
-            BOARD_LOG((UB*)"tron: board_rtos_create FAILED rc=%d\n", rtos_rc);
+            BOARD_LOG_N(96, (UB*)"tron: board_rtos_create FAILED rc=%d\n", rtos_rc);
             return 1;
         }
     }
@@ -1247,10 +1252,10 @@ EXPORT INT usermain(void)
                                   sizeof(g_link_stack), 0);
     if(link_tskid <= 0)
     {
-        BOARD_LOG((UB*)"tron: link task start FAILED (%d)\n", (int)link_tskid);
+        BOARD_LOG_N(96, (UB*)"tron: link task start FAILED (%d)\n", (int)link_tskid);
         return 1;
     }
-    BOARD_LOG((UB*)"tron: link task created (pri %d)\n", BOARD_PRI_LINK);
+    BOARD_LOG_N(96, (UB*)"tron: link task created (pri %d)\n", BOARD_PRI_LINK);
 
     /* Bug fix (kept from the single-task version): a failed start used to go
        unnoticed and leave the board silently parked below. */
@@ -1258,10 +1263,10 @@ EXPORT INT usermain(void)
                                  sizeof(g_sim_stack), 0);
     if(sim_tskid <= 0)
     {
-        BOARD_LOG((UB*)"tron: sim compute task start FAILED (%d)\n", (int)sim_tskid);
+        BOARD_LOG_N(96, (UB*)"tron: sim compute task start FAILED (%d)\n", (int)sim_tskid);
         return 1;
     }
-    BOARD_LOG((UB*)"tron: sim compute task created (pri %d)\n", BOARD_PRI_SIM);
+    BOARD_LOG_N(96, (UB*)"tron: sim compute task created (pri %d)\n", BOARD_PRI_SIM);
 
     if(board_rtos_start_cyclics() != 0)
     {

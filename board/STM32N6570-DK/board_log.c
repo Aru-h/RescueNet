@@ -60,8 +60,12 @@ void board_log_emit(const UB *text, INT len)
 
     if (!g_log_running)
     {
-        /* Early boot (or the logger could not start): direct, as before. */
+        /* Early boot (or the logger could not start): direct, as before, but
+           under the UART lock so tasks that print at boot cannot interleave
+           characters. */
+        board_uart_tx_lock();
         board_log_write(text, len);
+        board_uart_tx_unlock();
         return;
     }
 

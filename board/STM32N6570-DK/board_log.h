@@ -42,13 +42,19 @@ void board_log_emit(const UB *text, INT len);
 /* Queues a NUL-terminated string. */
 void board_log_puts(const char *text);
 
-/* printf-style: the call sites keep the (UB*)"..." form tm_printf used. */
-#define BOARD_LOG(...)                                              \
+/* printf-style: the call sites keep the (UB*)"..." form tm_printf used. The
+   line buffer lives on the caller's stack: BOARD_LOG() uses BOARD_LOG_LINE_MAX
+   bytes, BOARD_LOG_N(n, ...) a smaller buffer for a task with a small stack.
+   usermain() runs on the BSP's 1 KB init task stack (INITTASK_STKSZ), so it
+   must use BOARD_LOG_N(96, ...) or board_log_puts(), never BOARD_LOG(). */
+#define BOARD_LOG_N(n, ...)                                         \
     do {                                                            \
-        UB board_log_line_[BOARD_LOG_LINE_MAX];                     \
+        UB board_log_line_[(n)];                                    \
         INT board_log_len_ = tm_sprintf(board_log_line_, __VA_ARGS__); \
         board_log_emit(board_log_line_, board_log_len_);            \
     } while (0)
+
+#define BOARD_LOG(...) BOARD_LOG_N(BOARD_LOG_LINE_MAX, __VA_ARGS__)
 
 /* Lines dropped because the buffer was full, since boot. */
 uint32_t board_log_dropped(void);
