@@ -337,7 +337,7 @@ extern uint32_t mission_link_task_peer_reboot_count(void);
 extern int sx1262_hal_get_random_u32(uint32_t *out);
 
 /* USART1 receive errors: hardware ORE/FE/NE plus RX-ring-full drops,
-   both counted in usart1_driver.c's USART1_IRQHandler(). */
+   both counted in usart1_driver.c's board_usart1_isr(). */
 extern uint32_t board_usart1_rx_error_count(void);
 extern uint32_t board_usart1_rx_drop_count(void);
 static uint32_t g_reported_usart1_rx_errors;

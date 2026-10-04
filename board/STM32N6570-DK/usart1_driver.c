@@ -59,17 +59,18 @@
  * at the actual point of loss: RXNE now drives a real NVIC interrupt
  * into a small software ring buffer, so a byte is captured within
  * interrupt latency of arriving regardless of how long anything else
- * (SPI busy-waits included) blocks the main loop. Safe to hook a bare
- * NVIC interrupt here despite mtk3_bsp2 not exposing tk_def_int() for
- * USART1 (see vendor/README.md - only I2C/ADC have device wrappers):
- * this ISR never calls any tk_* kernel service and touches nothing
- * but this file's own ring buffer, so it cannot corrupt kernel state
- * no matter what priority it runs at or what DI()-protected critical
- * section it preempts - the concern that blocked this approach the
- * first time this file was written doesn't apply to a leaf ISR this
- * plain.
+ * (SPI busy-waits included) blocks the main loop.
+ *
+ * Bug fix #3 (RTOS work): the handler used to be a bare NVIC vector
+ * (USART1_IRQHandler) because the BSP was thought not to expose tk_def_int()
+ * for USART1. It does - tk_def_int() works for any interrupt number - so the
+ * handler is now registered with the kernel (TA_HLNG, IRQ 159, level 15) and
+ * may wake a task with tk_set_flg() (board_usart1_set_rx_notify()). It still
+ * calls nothing but non-waiting kernel services and touches only this file's
+ * own ring buffer and counters.
  */
 
+#include <tk/tkernel.h>
 #include "stm32n657xx.h"
 
 /* Sized for the laptop's real traffic, not a single frame: the bridge
@@ -97,8 +98,29 @@ static volatile uint32_t g_rx_ring_drop_count;
    g_rx_ring_drop_count. */
 static volatile uint32_t g_rx_hw_error_count;
 
-void USART1_IRQHandler(void)
+/* Optional wake-up for a consumer task: when set (board_usart1_set_rx_notify),
+   the ISR ORs `bit` into event flag `id` after it has put bytes in the ring.
+   tk_set_flg() is one of the calls a kernel-managed interrupt handler may make
+   (non-waiting, ISR-safe). The flag is created before the interrupt is enabled
+   and the pair is written once at boot, so a plain read in the ISR is enough. */
+static volatile ID g_rx_notify_flg;
+static volatile UINT g_rx_notify_bit;
+
+void board_usart1_set_rx_notify(ID flgid, UINT bit)
 {
+    g_rx_notify_bit = bit;
+    g_rx_notify_flg = flgid;
+}
+
+/* Kernel-managed handler: registered with tk_def_int() (TA_HLNG), so the
+   BSP's knl_hll_inthdr() enters task-independent context around it and passes
+   the interrupt number; no hand-patched vector. */
+static void board_usart1_isr(UINT intno)
+{
+    uint32_t received = 0u;
+
+    (void)intno;
+
     for (;;)
     {
         uint32_t isr = USART1_S->ISR;
@@ -151,23 +173,50 @@ void USART1_IRQHandler(void)
         {
             g_rx_ring[g_rx_ring_head % USART1_RX_RING_CAPACITY] = byte;
             g_rx_ring_head++;
+            received++;
         }
         else
         {
             g_rx_ring_drop_count++;
         }
     }
+
+    if (received != 0u && g_rx_notify_flg > 0)
+    {
+        (void)tk_set_flg(g_rx_notify_flg, g_rx_notify_bit);
+    }
 }
+
+/* Interrupt number and priority. USART1_IRQn is 159 on the STM32N657; the
+   BSP's level is 1 (highest allowed for an external interrupt, 0 is reserved
+   for the kernel) to 15. 15 is the lowest and what this ISR ran at before it
+   moved under the kernel: it never contends with kernel-managed interrupts
+   for correctness, only for CPU time, and it is a handful of instructions per
+   byte. */
+#define BOARD_USART1_IRQ_NO    159u
+#define BOARD_USART1_IRQ_LEVEL 15
+
+_Static_assert((unsigned)USART1_IRQn == BOARD_USART1_IRQ_NO,
+               "BOARD_USART1_IRQ_NO must match the CMSIS USART1_IRQn");
 
 void board_usart1_rx_init(void)
 {
+    T_DINT dint;
+    ER er;
+
     USART1_S->CR1 |= USART_CR1_RXNEIE;
 
-    NVIC_SetPriority(USART1_IRQn, 15u); /* lowest priority - this ISR
-        never contends with kernel-managed interrupts for correctness,
-        only for CPU time, and it's a handful of instructions per
-        byte */
-    NVIC_EnableIRQ(USART1_IRQn);
+    dint.intatr = TA_HLNG;
+    dint.inthdr = (FP)board_usart1_isr;
+    er = tk_def_int(BOARD_USART1_IRQ_NO, &dint);
+    if (er < E_OK)
+    {
+        /* Nothing can be printed from here reliably before the logger exists;
+           leave RX unarmed and let the missing-bytes symptom show it. */
+        return;
+    }
+
+    EnableInt(BOARD_USART1_IRQ_NO, BOARD_USART1_IRQ_LEVEL);
 }
 
 int board_usart1_read_byte(void)
@@ -194,7 +243,7 @@ uint32_t board_usart1_rx_drop_count(void)
 }
 
 /* Running total of laptop bytes lost or damaged on USART1 receive:
-   hardware errors (ORE/FE/NE, counted in USART1_IRQHandler()) plus
+   hardware errors (ORE/FE/NE, counted in board_usart1_isr()) plus
    ring-full drops (board_usart1_rx_drop_count()). Read by main_board.c's
    board_report_link_diagnostics(). Monotonic; wraps at 2^32. */
 uint32_t board_usart1_rx_error_count(void)
