@@ -3,6 +3,58 @@
 #include <string.h>
 
 FaultConfig_t g_fault_config;
+float g_fault_stress = 1.0f;
+
+/* Defaults; see docs/CAUSAL_FAULT_MODEL.md for the source of each value. */
+CausalFaultParams_t g_causal_params = {
+    .tx_power_dbm = 14.0f,
+    .body_loss_db = 5.0f,
+    .pl0_db = 31.2f,
+    .d0_m = 1.0f,
+    .path_loss_exponent = 2.35f,
+    .shadow_sigma_db = 7.9f,
+    .building_penalty_db = 20.0f,
+    .rubble_penalty_db = 10.0f,
+    .rx_sensitivity_dbm = -123.0f,
+    .cell_size_m = 100.0f,
+    .severity_db_per_level = 6.0f,
+
+    .wear_per_cell = 0.002f,
+    .wear_per_cell_rough = 0.010f,
+    .mob_hazard_base = 1.0f / 3000.0f,
+    .mob_hazard_per_wear = 0.0002f,
+    .mob_hazard_rough = 0.002f,
+    .wear_symptom_start = 3.0f,
+    .wear_symptom_slope = 0.10f,
+    .wear_symptom_max = 0.5f,
+
+    .res_hazard_base = 1.0f / 3000.0f,
+    .res_hazard_battery = 0.004f,
+    .res_hazard_since_rest = 0.0005f,
+    .res_since_rest_horizon = 800.0f,
+    .res_mobility_cascade = 1.5f,
+    .res_drain_stamina_floor = 25.0f,
+    .res_drain_equipment_floor = 25.0f,
+
+    .omori_k = 28.0f,
+    .omori_c_ticks = 10.0f,
+    .omori_p = 1.1f,
+    .omori_t_offset_ticks = 200.0f,
+    .aftershock_radius_cells = 3,
+    .aftershock_route_lookahead = 8,
+
+    .survival_lambda_h = 54.9f,
+    .survival_k = 1.47f,
+    .escalate_every_h = 12.0f,
+
+    .hazard_cap = 0.25f,
+    .max_concurrent_faults = 3,
+};
+
+void fault_config_set_stress(float stress)
+{
+    g_fault_stress = stress;
+}
 
 static void set_duration_range(
     OperationalFaultClass_t fault_class,
@@ -82,19 +134,12 @@ void fault_config_apply_profile(FaultProfile_t profile)
             break;
 
         case FAULT_PROFILE_CAUSAL:
-            /* Phase 1 placeholder onset rates, in PER-MILLE per team-tick
-             * (every other profile uses percent). Combined's percent rates
-             * are unusable here: combined survives them only because of the
-             * 33-tick confirm delay and 80-tick immunity this profile drops
-             * (measured: any-fault exposure 0.88, incidents resolved 6 vs
-             * 36). Phase 2 replaces these with the hazard model. Recovery is
-             * cause-driven (fault_injector.c); the duration range is only
-             * the maximum backstop. */
-            g_fault_config.class_probability[FAULT_CLASS_MOBILITY] = 12;
-            g_fault_config.class_probability[FAULT_CLASS_COMMUNICATION] = 12;
-            g_fault_config.class_probability[FAULT_CLASS_RESOURCE] = 12;
-            g_fault_config.class_probability[FAULT_CLASS_ENVIRONMENT] = 10;
-            g_fault_config.class_probability[FAULT_CLASS_MISSION] = 3;
+            /* Onset is not a per-class probability here: mobility/resource
+             * come from the hazard model, communication from the link
+             * margin, environment from Omori aftershocks and mission from
+             * the survival model (fault_injector.c), so class_probability
+             * stays 0. The duration ranges are only the maximum backstops
+             * (communication has none). */
             g_fault_config.effect_strength[FAULT_CLASS_MOBILITY] = 3;
             g_fault_config.effect_strength[FAULT_CLASS_COMMUNICATION] = 2;
             g_fault_config.effect_strength[FAULT_CLASS_RESOURCE] = 2;

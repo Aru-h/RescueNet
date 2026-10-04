@@ -195,6 +195,8 @@ int main(int argc, char **argv)
     }
 
     FaultProfile_t fault_profile = FAULT_PROFILE_NONE;
+    float fault_stress = 1.0f;
+    int fault_stress_given = 0;
     int live_mode = 0;
     int mission_feed_mode = 0; /* --mission-feed, see laptop/mission_feed.h */
     int diag_mode = 0;  /* off by default - see --diag below */
@@ -304,6 +306,25 @@ int main(int argc, char **argv)
             continue;
         }
 
+        /* Causal-profile evaluation stress multiplier (1 = realistic field
+         * rates). Rejected for every other profile rather than ignored. */
+        if(strncmp(argv[i], "--fault-stress=", 15) == 0 ||
+           (strcmp(argv[i], "--fault-stress") == 0 && i + 1 < argc))
+        {
+            const char *text = argv[i][14] == '=' ? argv[i] + 15 : argv[++i];
+            char *end = NULL;
+            double value = strtod(text, &end);
+
+            if(end == text || *end != '\0' || !(value > 0.0) || value > 1000.0)
+            {
+                fprintf(stderr, "invalid --fault-stress '%s' (need 0 < x <= 1000)\n", text);
+                exit(2);
+            }
+            fault_stress = (float)value;
+            fault_stress_given = 1;
+            continue;
+        }
+
         if(is_fault_profile_flag(argv[i]))
         {
             fault_profile = parse_fault_profile_value(argv[i]);
@@ -317,8 +338,16 @@ int main(int argc, char **argv)
             positional_args[positional_count++] = (uint32_t)strtoul(argv[i], NULL, 10);
     }
 
+    if(fault_stress_given && fault_profile != FAULT_PROFILE_CAUSAL)
+    {
+        fprintf(stderr, "--fault-stress only applies to --fault-profile=causal\n");
+        return 2;
+    }
+    fault_config_set_stress(fault_stress);
     fault_config_apply_profile(fault_profile);
     fault_injector_set_profile(fault_profile);
+    if(fault_profile == FAULT_PROFILE_CAUSAL)
+        fprintf(stderr, "[FAULT] profile=causal fault_stress=%g\n", (double)fault_stress);
 
     if(fast_forward_ticks > 0 && (!live_mode || mission_feed_mode))
     {
@@ -492,6 +521,13 @@ int main(int argc, char **argv)
             fprintf(stderr, "[DIAG THROUGHPUT] team=%u incidents_resolved=%u stage_completions=%u resting=%u working=%u available=%u\n",
                 t, g_diag_incidents_resolved[t], g_diag_stage_completions[t], g_diag_ticks_resting[t], g_diag_ticks_working[t], g_diag_ticks_available[t]);
 
+        if(g_fault_config.profile == FAULT_PROFILE_CAUSAL)
+        {
+            const CausalWorldStats_t *ws = fault_injector_causal_world_stats();
+            fprintf(stderr, "[DIAG CAUSAL] fault_stress=%g victims_seen=%u victims_lost=%u escalations=%u aftershock_events=%u aftershock_team_hits=%u\n",
+                (double)g_fault_stress, ws->victims_seen, ws->victims_lost, ws->escalations,
+                ws->aftershock_events, ws->aftershock_team_hits);
+        }
         if(g_fault_config.profile == FAULT_PROFILE_CAUSAL)
         {
             const CausalFaultStats_t *cs = fault_injector_causal_stats();

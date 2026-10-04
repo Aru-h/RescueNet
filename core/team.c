@@ -479,13 +479,22 @@ void update_team(TeamState_t *team) //team
          * drain (up to 0.36/tick at severity 3) can exceed the recovery rate
          * itself (0.108-0.168/tick), permanently trapping a team near 0
          * stamina. Equipment can still degrade from the fault either way. */
-        if(team->status != STATUS_RESTING)
+        if(team->status != STATUS_RESTING &&
+           (!fault_profile_is_causal() || team->stamina > g_causal_params.res_drain_stamina_floor))
         {
             float extra_stamina_drain = (float)team->fault_state.severity[FAULT_CLASS_RESOURCE] * 0.12f;
             change_stamina(team, -extra_stamina_drain);
         }
 
-        if(team->equipment_level > team->fault_state.severity[FAULT_CLASS_RESOURCE])
+        /* Causal profile: the fault's own drain stops at a floor, so a
+         * resource fault cannot push a team further into the depletion
+         * that raises the next resource hazard (fault -> drain -> fault). */
+        if(fault_profile_is_causal() &&
+           team->equipment_level <= g_causal_params.res_drain_equipment_floor)
+        {
+            /* floor reached: no further equipment drain */
+        }
+        else if(team->equipment_level > team->fault_state.severity[FAULT_CLASS_RESOURCE])
             team->equipment_level -= team->fault_state.severity[FAULT_CLASS_RESOURCE];
         else
             team->equipment_level = 0;

@@ -1,7 +1,10 @@
 #include "fault_injector.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 #include "allocator.h"
 #include "environment.h"
 #include "incident.h"
@@ -23,9 +26,18 @@ static uint32_t g_fault_seed = 1;
  * reproducible per seed regardless of what else consumes those streams.
  * ------------------------------------------------------------------ */
 static CausalFaultStats_t s_causal_stats;
-static uint8_t s_causal_onset_x[NUM_TEAMS];
-static uint8_t s_causal_onset_y[NUM_TEAMS];
+static CausalWorldStats_t s_causal_world;
+static CausalTeamTruth_t s_causal_truth[NUM_TEAMS];
 static uint8_t s_causal_repair_ticks[NUM_TEAMS];
+static float s_causal_wear[NUM_TEAMS];
+static int16_t s_causal_prev_x[NUM_TEAMS];
+static int16_t s_causal_prev_y[NUM_TEAMS];
+static uint8_t s_causal_prev_valid[NUM_TEAMS];
+static uint32_t s_causal_last_rest_tick[NUM_TEAMS];
+/* Mission model bookkeeping, per incident slot (valid while the stored id
+ * matches the slot's current incident_id). */
+static uint32_t s_causal_inc_id[NUM_INCIDENTS];
+static uint8_t s_causal_inc_escalations[NUM_INCIDENTS];
 
 static uint32_t causal_hash(uint32_t tick, uint32_t team_id, uint32_t salt)
 {
@@ -51,6 +63,22 @@ static uint32_t causal_hash(uint32_t tick, uint32_t team_id, uint32_t salt)
 const CausalFaultStats_t *fault_injector_causal_stats(void)
 {
     return &s_causal_stats;
+}
+
+const CausalWorldStats_t *fault_injector_causal_world_stats(void)
+{
+    return &s_causal_world;
+}
+
+const CausalTeamTruth_t *fault_injector_causal_truth(uint8_t team_id)
+{
+    return &s_causal_truth[team_id < NUM_TEAMS ? team_id : 0];
+}
+
+/* Uniform in [0, 1). */
+static float causal_unit(uint32_t tick, uint32_t a, uint32_t salt)
+{
+    return (float)(causal_hash(tick, a, salt) >> 8) * (1.0f / 16777216.0f);
 }
 
 static uint32_t fault_duration_for_class(uint8_t team_id, OperationalFaultClass_t fault_class)
@@ -208,40 +236,13 @@ static void inject_resource_fault(uint8_t team_id)
 static uint8_t s_env_fault_base_road_blocked[GRID_WIDTH][GRID_HEIGHT];
 static uint8_t s_env_fault_base_navigable[GRID_WIDTH][GRID_HEIGHT];
 
-static void inject_environment_fault(uint8_t team_id)
+/* Raises the cost of one cell on this team's behalf and starts its
+ * environment fault. Split out of inject_environment_fault() unchanged so
+ * the causal aftershock model can pick the cell itself. */
+static void apply_environment_fault(uint8_t team_id, int next_x, int next_y)
 {
     TeamState_t *team = &g_teams[team_id];
     TeamFaultState_t *fault_state = &team->fault_state;
-    int next_x = team->loc_x;
-    int next_y = team->loc_y;
-
-    /* M3: resolve the task through the pool it actually lives in. This
-     * used to index g_incidents[] for ANY non-NONE pool, so a team on a
-     * TASK_POOL_SYSTEM task (sweep, evacuation, equipment cache) got its
-     * choke point computed toward whatever unrelated incident happened
-     * to share that slot number (or none at all). */
-    IncidentState_t *task = NULL;
-    if(team->assigned_task_pool == TASK_POOL_INCIDENT &&
-       team->assigned_task_slot < NUM_INCIDENTS)
-    {
-        task = &g_incidents[team->assigned_task_slot];
-    }
-    else if(team->assigned_task_pool == TASK_POOL_SYSTEM &&
-            team->assigned_task_slot < NUM_SYSTEM_TASKS)
-    {
-        task = &g_system_tasks[team->assigned_task_slot];
-    }
-
-    if(task != NULL)
-    {
-        if(task->slot_occupied &&
-           find_next_path_step(team->loc_x, team->loc_y,
-                               task->loc_x, task->loc_y,
-                               0, &next_x, &next_y) > 0)
-        {
-            /* use the next path step as the choke point */
-        }
-    }
 
     fault_state->active[FAULT_CLASS_ENVIRONMENT] = 1;
     fault_state->start_tick[FAULT_CLASS_ENVIRONMENT] = g_current_tick;
@@ -300,6 +301,43 @@ static void inject_environment_fault(uint8_t team_id)
     mark_last_fault(fault_state, FAULT_CLASS_ENVIRONMENT);
     snapshot_record(g_sim_step_tick, EVENT_FAULT_INJECTED, team_id);
 }
+
+static void inject_environment_fault(uint8_t team_id)
+{
+    TeamState_t *team = &g_teams[team_id];
+    int next_x = team->loc_x;
+    int next_y = team->loc_y;
+
+    /* M3: resolve the task through the pool it actually lives in. This
+     * used to index g_incidents[] for ANY non-NONE pool, so a team on a
+     * TASK_POOL_SYSTEM task (sweep, evacuation, equipment cache) got its
+     * choke point computed toward whatever unrelated incident happened
+     * to share that slot number (or none at all). */
+    IncidentState_t *task = NULL;
+    if(team->assigned_task_pool == TASK_POOL_INCIDENT &&
+       team->assigned_task_slot < NUM_INCIDENTS)
+    {
+        task = &g_incidents[team->assigned_task_slot];
+    }
+    else if(team->assigned_task_pool == TASK_POOL_SYSTEM &&
+            team->assigned_task_slot < NUM_SYSTEM_TASKS)
+    {
+        task = &g_system_tasks[team->assigned_task_slot];
+    }
+
+    if(task != NULL)
+    {
+        if(task->slot_occupied &&
+           find_next_path_step(team->loc_x, team->loc_y,
+                               task->loc_x, task->loc_y,
+                               0, &next_x, &next_y) > 0)
+        {
+            /* use the next path step as the choke point */
+        }
+    }
+
+    apply_environment_fault(team_id, next_x, next_y);
+}
 #endif /* ENVIRONMENT_HAS_WORLD_STORAGE */
 
 
@@ -339,6 +377,18 @@ static void inject_mission_fault(uint8_t team_id)
     fault_state->target_x[FAULT_CLASS_MISSION]           = task->loc_x;
     fault_state->target_y[FAULT_CLASS_MISSION]           = task->loc_y;
     fault_state->target_incident_id[FAULT_CLASS_MISSION] = task->incident_id; 
+
+    /* Causal profile: the fault only records that the team's incident is
+     * deteriorating. The deterioration itself (victim loss, priority
+     * escalation) is made by the survival/escalation model in
+     * causal_mission_model_step(), so nothing is edited here. */
+    if(fault_profile_is_causal())
+    {
+        fault_state->active_mask |= (1u << FAULT_CLASS_MISSION);
+        mark_last_fault(fault_state, FAULT_CLASS_MISSION);
+        snapshot_record(g_sim_step_tick, EVENT_FAULT_INJECTED, team_id);
+        return;
+    }
 
     /* Remember the incident's true pre-fault state exactly once - the
      * first time any mission fault lands on it while none is already
@@ -434,7 +484,9 @@ static void recover_mission_fault(uint8_t team_id)
     OperationalFaultClass_t fault_class = FAULT_CLASS_MISSION;
     uint32_t target_id = fault_state->target_incident_id[fault_class];
 
-    for(uint8_t i = 0; i < NUM_INCIDENTS; i++)
+    /* Causal profile: nothing was edited on the incident at onset (the
+     * survival model owns its state), so there is nothing to undo. */
+    for(uint8_t i = 0; i < NUM_INCIDENTS && !fault_profile_is_causal(); i++)
     {
         IncidentState_t *task = &g_incidents[i];
 
@@ -529,22 +581,157 @@ static void inject_fault(uint8_t team_id, OperationalFaultClass_t fault_class)
     }
 }
 
-static uint8_t roll_injection(uint8_t team_id, uint8_t fault_class, uint8_t probability)
+static uint8_t roll_injection(uint8_t probability)
 {
     if(probability == 0)
         return 0;
 
-    if(fault_profile_is_causal())
-        /* per-mille under the causal profile */
-        return (1u + causal_hash(g_current_tick, team_id,
-                                 CAUSAL_SALT_ONSET(fault_class)) % 1000u) <= probability;
-
     return random_range_stream(STREAM_FAULTS, 1, 100) <= probability;
 }
 
-/* Has the cause of this fault been removed? Mobility/communication/
- * resource only; environment and mission have no actions that remove
- * their cause yet. */
+static float clampf(float v, float lo, float hi)
+{
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+int fault_injector_causal_symptom_skip(uint8_t team_id)
+{
+    const CausalFaultParams_t *k = &g_causal_params;
+
+    if(!fault_profile_is_causal() || team_id >= NUM_TEAMS)
+        return 0;
+    if(s_causal_wear[team_id] <= k->wear_symptom_start)
+        return 0;
+
+    float p = clampf(k->wear_symptom_slope * (s_causal_wear[team_id] - k->wear_symptom_start),
+                     0.0f, k->wear_symptom_max);
+    return causal_unit(g_current_tick, team_id, 300u) < p;
+}
+
+/* The hazard/link/aftershock model uses libm and world-grid state, so it
+ * is laptop-only (the board never injects faults and its link check
+ * allows no libm references). fault_injector_causal_symptom_skip() above
+ * needs neither and stays available everywhere. */
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+
+/* ==================================================================
+ * Causal fault model (FAULT_PROFILE_CAUSAL). See docs/CAUSAL_FAULT_MODEL.md
+ * for every parameter and its source. Nothing below runs under another
+ * profile, and nothing below draws from a shared STREAM_* generator.
+ * ================================================================== */
+
+static uint8_t causal_active_count(const TeamState_t *team)
+{
+    uint8_t n = 0;
+    for(uint8_t c = 0; c < NUM_OPERATIONAL_FAULT_CLASSES; c++)
+        n += team->fault_state.active[c] ? 1u : 0u;
+    return n;
+}
+
+/* Receiver-side link margin (dB) for a team standing on cell (x, y):
+ *   margin = tx - body - PL(d) - shadow(cell) - building - rubble - rx_sens
+ * Receivers are the evacuation gateways and the safe zones. Shadowing is a
+ * zero-mean Gaussian drawn from a hash of (seed, cell), so a dead zone is
+ * the same dead zone every tick and every visit. */
+static float causal_link_margin_db(int x, int y)
+{
+    const CausalFaultParams_t *k = &g_causal_params;
+    float best_d2 = 1e30f;
+
+    for(uint8_t i = 0; i < NUM_EVACUATION_GATEWAYS; i++)
+    {
+        float dx = (float)(x - g_evacuation_gateways[i].loc_x);
+        float dy = (float)(y - g_evacuation_gateways[i].loc_y);
+        if(dx * dx + dy * dy < best_d2)
+            best_d2 = dx * dx + dy * dy;
+    }
+    for(uint8_t i = 0; i < MAX_SAFE_ZONES; i++)
+    {
+        float dx, dy;
+        if(g_safezones[i].capacity == 0)
+            continue;
+        dx = (float)(x - g_safezones[i].loc_x);
+        dy = (float)(y - g_safezones[i].loc_y);
+        if(dx * dx + dy * dy < best_d2)
+            best_d2 = dx * dx + dy * dy;
+    }
+
+    float d_m = sqrtf(best_d2) * k->cell_size_m;
+    if(d_m < 0.5f * k->cell_size_m)
+        d_m = 0.5f * k->cell_size_m;
+    float path_loss = k->pl0_db + 10.0f * k->path_loss_exponent * log10f(d_m / k->d0_m);
+
+    float u1 = ((float)(causal_hash((uint32_t)(x * 64 + y), 0xC0u, 400u) >> 8) + 1.0f) * (1.0f / 16777217.0f);
+    float u2 = (float)(causal_hash((uint32_t)(x * 64 + y), 0xC0u, 401u) >> 8) * (1.0f / 16777216.0f);
+    float shadow = k->shadow_sigma_db * sqrtf(-2.0f * logf(u1)) * cosf(6.2831853f * u2);
+
+    float building = 0.0f, rubble = 0.0f;
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+    if(x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT)
+    {
+        const EnvironmentCell_t *cell = &g_environment[x][y];
+        building = k->building_penalty_db * (float)cell->district_density / 100.0f;
+        rubble = k->rubble_penalty_db * (float)cell->infrastructure_damage / 100.0f;
+    }
+#endif
+
+    return k->tx_power_dbm - k->body_loss_db - path_loss - shadow - building - rubble -
+           k->rx_sensitivity_dbm;
+}
+
+/* Roughness of the ground a team just entered, 0..1: slope, road damage,
+ * structural damage and debris (a blocked road). */
+static float causal_roughness(int x, int y)
+{
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+    if(x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT)
+    {
+        const EnvironmentCell_t *cell = &g_environment[x][y];
+        return clampf(0.4f * (float)cell->terrain_slope / 100.0f +
+                      0.3f * (float)cell->road_damage / 100.0f +
+                      0.2f * (float)cell->infrastructure_damage / 100.0f +
+                      (cell->road_blocked ? 0.1f : 0.0f), 0.0f, 1.0f);
+    }
+#else
+    (void)x; (void)y;
+#endif
+    return 0.0f;
+}
+
+static void causal_register_onset(uint8_t team_id, OperationalFaultClass_t fault_class,
+                                  CausalOnsetCause_t cause)
+{
+    if(!g_teams[team_id].fault_state.active[fault_class])
+        return;
+
+    s_causal_stats.onsets[fault_class]++;
+    s_causal_truth[team_id].onset_cause[fault_class] = (uint8_t)cause;
+    if(fault_class == FAULT_CLASS_MOBILITY)
+        s_causal_repair_ticks[team_id] = 0;
+}
+
+static void causal_clear(uint8_t team_id, OperationalFaultClass_t fault_class,
+                         CausalClearCause_t how)
+{
+    TeamFaultState_t *fs = &g_teams[team_id].fault_state;
+
+    if(how == CAUSAL_CLEAR_CAUSE_REMOVED)
+        s_causal_stats.cleared_by_cause[fault_class]++;
+    else
+        s_causal_stats.cleared_by_backstop[fault_class]++;
+    s_causal_stats.active_ticks_total[fault_class] += g_current_tick - fs->start_tick[fault_class];
+    s_causal_truth[team_id].clear_cause[fault_class] = (uint8_t)how;
+
+    /* Wear is reset by repair only; a fault that merely ran out its
+     * backstop leaves the wear (and so the hazard) where it was. */
+    if(fault_class == FAULT_CLASS_MOBILITY && how == CAUSAL_CLEAR_CAUSE_REMOVED)
+        s_causal_wear[team_id] = 0.0f;
+
+    recover_fault(team_id, fault_class);
+}
+
+/* Has the cause of an active fault been removed? Communication returns 1
+ * only when the margin is back above zero; there is no time backstop. */
 static uint8_t causal_cause_removed(uint8_t team_id, OperationalFaultClass_t fault_class)
 {
     const TeamState_t *team = &g_teams[team_id];
@@ -564,13 +751,17 @@ static uint8_t causal_cause_removed(uint8_t team_id, OperationalFaultClass_t fau
             return s_causal_repair_ticks[team_id] >= CAUSAL_MOBILITY_REPAIR_REST_TICKS;
 
         case FAULT_CLASS_COMMUNICATION:
+            return s_causal_truth[team_id].link_margin_db > 0.0f;
+
+        case FAULT_CLASS_MISSION:
         {
-            /* Reposition: out of the cell where the link dropped. */
-            int dx = (int)team->loc_x - (int)s_causal_onset_x[team_id];
-            int dy = (int)team->loc_y - (int)s_causal_onset_y[team_id];
-            if(dx < 0) dx = -dx;
-            if(dy < 0) dy = -dy;
-            return (unsigned)(dx + dy) >= CAUSAL_COMM_REPOSITION_CELLS;
+            /* The incident is resolved, or this team is no longer on it. */
+            uint8_t slot = team->assigned_task_slot;
+            if(team->assigned_task_pool != TASK_POOL_INCIDENT || slot >= NUM_INCIDENTS)
+                return 1;
+            return !(g_incidents[slot].slot_occupied &&
+                     g_incidents[slot].status != INC_RESOLVED &&
+                     g_incidents[slot].incident_id == team->fault_state.target_incident_id[FAULT_CLASS_MISSION]);
         }
 
         default:
@@ -578,29 +769,366 @@ static uint8_t causal_cause_removed(uint8_t team_id, OperationalFaultClass_t fau
     }
 }
 
-static void causal_note_onset(uint8_t team_id, OperationalFaultClass_t fault_class)
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+/* Walks the team's route (its own cell, then up to `lookahead` path steps
+ * toward its destination) and returns 1 with the first cell inside the
+ * aftershock radius. */
+static int causal_route_hit(const TeamState_t *team, int cx, int cy, int *hit_x, int *hit_y)
 {
-    if(!g_teams[team_id].fault_state.active[fault_class])
+    const CausalFaultParams_t *k = &g_causal_params;
+    int x = team->loc_x, y = team->loc_y;
+    int dest_x = x, dest_y = y;
+    int have_dest = 0;
+
+    if(team->status == STATUS_EN_ROUTE)
+    {
+        if(team->heading_to_rest && team->resting_zone_id < MAX_SAFE_ZONES)
+        {
+            dest_x = g_safezones[team->resting_zone_id].loc_x;
+            dest_y = g_safezones[team->resting_zone_id].loc_y;
+            have_dest = 1;
+        }
+        else
+        {
+            const IncidentState_t *task = NULL;
+            if(team->assigned_task_pool == TASK_POOL_INCIDENT && team->assigned_task_slot < NUM_INCIDENTS)
+                task = &g_incidents[team->assigned_task_slot];
+            else if(team->assigned_task_pool == TASK_POOL_SYSTEM && team->assigned_task_slot < NUM_SYSTEM_TASKS)
+                task = &g_system_tasks[team->assigned_task_slot];
+            if(task != NULL && task->slot_occupied)
+            {
+                dest_x = task->loc_x;
+                dest_y = task->loc_y;
+                have_dest = 1;
+            }
+        }
+    }
+
+    for(uint8_t step = 0; step <= k->aftershock_route_lookahead; step++)
+    {
+        int dx = x - cx, dy = y - cy;
+        if(dx < 0) dx = -dx;
+        if(dy < 0) dy = -dy;
+        if(dx + dy <= (int)k->aftershock_radius_cells)
+        {
+            *hit_x = x;
+            *hit_y = y;
+            return 1;
+        }
+
+        if(!have_dest || (x == dest_x && y == dest_y))
+            break;
+        {
+            int nx = x, ny = y;
+            if(find_next_path_step(x, y, dest_x, dest_y, 0, &nx, &ny) <= 0)
+                break;
+            x = nx;
+            y = ny;
+        }
+    }
+    return 0;
+}
+
+/* Omori-Utsu aftershock sequence: a world event at rate
+ * R(t) = K * stress / (c + t)^p, t = ticks since the mainshock. Every team
+ * whose route crosses the affected cells takes an environment fault there
+ * (apply_environment_fault() raises the cell's cost; the existing
+ * road-degradation hazard then keeps raising it while the road is flagged
+ * blocked). */
+static void causal_aftershock_step(void)
+{
+    const CausalFaultParams_t *k = &g_causal_params;
+    float t = (float)g_current_tick + k->omori_t_offset_ticks;
+    float rate = k->omori_k * g_fault_stress / powf(k->omori_c_ticks + t, k->omori_p);
+    float p_event = 1.0f - expf(-clampf(rate, 0.0f, 4.0f));
+
+    if(causal_unit(g_current_tick, 0xA5A5u, 100u) >= clampf(p_event, 0.0f, 0.5f))
         return;
 
-    s_causal_stats.onsets[fault_class]++;
-    if(fault_class == FAULT_CLASS_COMMUNICATION)
+    int cx = (int)(causal_hash(g_current_tick, 0xA5A5u, 101u) % GRID_WIDTH);
+    int cy = (int)(causal_hash(g_current_tick, 0xA5A5u, 102u) % GRID_HEIGHT);
+
+    s_causal_world.aftershock_events++;
+
+    for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
-        s_causal_onset_x[team_id] = (uint8_t)g_teams[team_id].loc_x;
-        s_causal_onset_y[team_id] = (uint8_t)g_teams[team_id].loc_y;
+        TeamState_t *team = &g_teams[team_id];
+        int hit_x, hit_y;
+
+        if(team->fault_state.active[FAULT_CLASS_ENVIRONMENT] ||
+           causal_active_count(team) >= k->max_concurrent_faults)
+            continue;
+        if(!causal_route_hit(team, cx, cy, &hit_x, &hit_y))
+            continue;
+
+        apply_environment_fault(team_id, hit_x, hit_y);
+        causal_register_onset(team_id, FAULT_CLASS_ENVIRONMENT, CAUSAL_ONSET_AFTERSHOCK);
+        s_causal_truth[team_id].aftershock_hit = 1;
+        s_causal_world.aftershock_team_hits++;
     }
-    if(fault_class == FAULT_CLASS_MOBILITY)
-        s_causal_repair_ticks[team_id] = 0;
 }
+#endif
+
+/* Entrapment survival and escalation. Each open incident ages in real
+ * time (TICK_TIME_SEC per tick, times the stress multiplier). Victims die
+ * at the Weibull hazard fitted to MacIntyre 2006 (74% alive at 24 h, 22% at
+ * 72 h) and the priority steps one level toward CRITICAL every
+ * escalate_every_h. Both are irreversible. A team working a deteriorating
+ * incident takes a mission fault. */
+static void causal_mission_model_step(void)
+{
+    const CausalFaultParams_t *k = &g_causal_params;
+    const float tick_h = (float)TICK_TIME_SEC / 3600.0f;
+
+    for(uint8_t slot = 0; slot < NUM_INCIDENTS; slot++)
+    {
+        IncidentState_t *inc = &g_incidents[slot];
+        uint8_t deteriorated = 0;
+
+        if(!inc->slot_occupied || inc->status == INC_RESOLVED)
+            continue;
+
+        if(s_causal_inc_id[slot] != inc->incident_id)
+        {
+            s_causal_inc_id[slot] = inc->incident_id;
+            s_causal_inc_escalations[slot] = 0;
+            s_causal_world.victims_seen += inc->victim_count;
+        }
+
+        if(g_current_tick <= inc->reported_at_tick)
+            continue;
+        float age_h = (float)(g_current_tick - inc->reported_at_tick) * tick_h * g_fault_stress;
+
+        if(inc->victim_count > 0)
+        {
+            float hazard_per_h = (k->survival_k / k->survival_lambda_h) *
+                                 powf(age_h / k->survival_lambda_h, k->survival_k - 1.0f);
+            float p_die = 1.0f - expf(-hazard_per_h * tick_h * g_fault_stress);
+            float expected = (float)inc->victim_count * p_die;
+            uint8_t deaths = (uint8_t)expected;
+
+            if(causal_unit(g_current_tick, inc->incident_id, 200u) < expected - (float)deaths)
+                deaths++;
+            if(deaths > inc->victim_count)
+                deaths = inc->victim_count;
+            if(deaths > 0)
+            {
+                inc->victim_count = (uint8_t)(inc->victim_count - deaths);
+                s_causal_world.victims_lost += deaths;
+                deteriorated = 1;
+            }
+        }
+
+        {
+            uint8_t levels = (uint8_t)clampf(age_h / k->escalate_every_h, 0.0f, 255.0f);
+            while(s_causal_inc_escalations[slot] < levels)
+            {
+                s_causal_inc_escalations[slot]++;
+                if(inc->priority > PRIORITY_CRITICAL)
+                {
+                    inc->priority = (Priority_t)((uint8_t)inc->priority - 1u);
+                    s_causal_world.escalations++;
+                    deteriorated = 1;
+                }
+            }
+        }
+
+        if(!deteriorated)
+            continue;
+
+        for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+        {
+            TeamState_t *team = &g_teams[team_id];
+
+            if(team->assigned_task_pool != TASK_POOL_INCIDENT || team->assigned_task_slot != slot ||
+               team->fault_state.active[FAULT_CLASS_MISSION] ||
+               causal_active_count(team) >= k->max_concurrent_faults)
+                continue;
+
+            inject_mission_fault(team_id);
+            causal_register_onset(team_id, FAULT_CLASS_MISSION, CAUSAL_ONSET_DETERIORATION);
+        }
+    }
+}
+
+/* Per-tick bookkeeping of a team's hidden state: wear from distance and
+ * ground roughness, time since rest, link margin. Returns the roughness of
+ * the cell crossed this tick (0 when stationary). */
+static float causal_track_team(uint8_t team_id)
+{
+    const CausalFaultParams_t *k = &g_causal_params;
+    const TeamState_t *team = &g_teams[team_id];
+    CausalTeamTruth_t *truth = &s_causal_truth[team_id];
+    float rough_now = 0.0f;
+
+    if(s_causal_prev_valid[team_id])
+    {
+        int moved = abs((int)team->loc_x - (int)s_causal_prev_x[team_id]) +
+                    abs((int)team->loc_y - (int)s_causal_prev_y[team_id]);
+        if(moved > 0)
+        {
+            if(moved > 2)
+                moved = 2;
+            rough_now = causal_roughness(team->loc_x, team->loc_y);
+            s_causal_wear[team_id] += (float)moved * (k->wear_per_cell + k->wear_per_cell_rough * rough_now);
+        }
+    }
+    s_causal_prev_x[team_id] = team->loc_x;
+    s_causal_prev_y[team_id] = team->loc_y;
+    s_causal_prev_valid[team_id] = 1;
+
+    if(team->status == STATUS_RESTING)
+        s_causal_last_rest_tick[team_id] = g_current_tick;
+
+    truth->hidden_wear = s_causal_wear[team_id];
+    truth->ticks_since_rest = g_current_tick - s_causal_last_rest_tick[team_id];
+    truth->link_margin_db = causal_link_margin_db(team->loc_x, team->loc_y);
+    return rough_now;
+}
+
+static void causal_step(void)
+{
+    const CausalFaultParams_t *k = &g_causal_params;
+
+    for(uint8_t t = 0; t < NUM_TEAMS; t++)
+    {
+        for(uint8_t c = 0; c < NUM_OPERATIONAL_FAULT_CLASSES; c++)
+        {
+            s_causal_truth[t].onset_cause[c] = CAUSAL_ONSET_NONE;
+            s_causal_truth[t].clear_cause[c] = CAUSAL_CLEAR_NONE;
+        }
+        s_causal_truth[t].aftershock_hit = 0;
+    }
+
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+    causal_aftershock_step();
+#endif
+    causal_mission_model_step();
+
+    for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+    {
+        TeamState_t *team = &g_teams[team_id];
+        CausalTeamTruth_t *truth = &s_causal_truth[team_id];
+        float rough_now = causal_track_team(team_id);
+
+        /* Hazards, per tick, from state plus a small baseline. */
+        float t_base = k->mob_hazard_base;
+        float t_wear = k->mob_hazard_per_wear * s_causal_wear[team_id];
+        float t_rough = k->mob_hazard_rough * rough_now;
+        float h_mob = clampf((t_base + t_wear + t_rough) * g_fault_stress, 0.0f, k->hazard_cap);
+
+        float depletion = 1.0f - (float)team->equipment_level / (float)EQ_MAX_LEVEL;
+        float r_base = k->res_hazard_base;
+        float r_batt = k->res_hazard_battery * depletion * depletion;
+        float r_rest = k->res_hazard_since_rest *
+                       clampf((float)truth->ticks_since_rest / k->res_since_rest_horizon, 0.0f, 2.0f);
+        float cascade = team->fault_state.active[FAULT_CLASS_MOBILITY] ? k->res_mobility_cascade : 1.0f;
+        float h_res = clampf((r_base + r_batt + r_rest) * cascade * g_fault_stress, 0.0f, k->hazard_cap);
+
+        truth->hazard_mobility = h_mob;
+        truth->hazard_resource = h_res;
+
+        for(uint8_t fault_class = 0; fault_class < NUM_OPERATIONAL_FAULT_CLASSES; fault_class++)
+        {
+            OperationalFaultClass_t class_id = (OperationalFaultClass_t)fault_class;
+
+            if(team->fault_state.active[fault_class])
+            {
+                s_causal_stats.exposure_ticks[fault_class]++;
+
+                if(class_id == FAULT_CLASS_MOBILITY && team->status == STATUS_RESTING &&
+                   s_causal_repair_ticks[team_id] < 255u)
+                    s_causal_repair_ticks[team_id]++;
+
+                if(class_id == FAULT_CLASS_COMMUNICATION)
+                {
+                    float deficit = -truth->link_margin_db;
+                    if(causal_cause_removed(team_id, class_id))
+                        causal_clear(team_id, class_id, CAUSAL_CLEAR_CAUSE_REMOVED);
+                    else
+                        team->fault_state.severity[fault_class] =
+                            (uint8_t)clampf(1.0f + deficit / k->severity_db_per_level, 1.0f, 4.0f);
+                    continue;
+                }
+
+                /* Cause removed, or the old duration as a maximum backstop.
+                 * No PAR confirmation delay and no post-repair immunity. */
+                if(causal_cause_removed(team_id, class_id))
+                    causal_clear(team_id, class_id, CAUSAL_CLEAR_CAUSE_REMOVED);
+                else if(g_current_tick >= team->fault_state.recovery_tick[fault_class])
+                    causal_clear(team_id, class_id, CAUSAL_CLEAR_BACKSTOP);
+                continue;
+            }
+
+            switch(class_id)
+            {
+                case FAULT_CLASS_COMMUNICATION:
+                    /* Deterministic: no dice, no concurrency cap. */
+                    if(truth->link_margin_db < 0.0f)
+                    {
+                        inject_communication_fault(team_id);
+                        team->fault_state.severity[fault_class] =
+                            (uint8_t)clampf(1.0f - truth->link_margin_db / k->severity_db_per_level, 1.0f, 4.0f);
+                        causal_register_onset(team_id, class_id, CAUSAL_ONSET_LINK_MARGIN);
+                    }
+                    break;
+
+                case FAULT_CLASS_MOBILITY:
+                    if(causal_active_count(team) < k->max_concurrent_faults &&
+                       causal_unit(g_current_tick, team_id, CAUSAL_SALT_ONSET(class_id)) <
+                           1.0f - expf(-h_mob))
+                    {
+                        CausalOnsetCause_t why = CAUSAL_ONSET_BASELINE;
+                        float best = t_base;
+                        if(t_wear > best) { best = t_wear; why = CAUSAL_ONSET_WEAR; }
+                        if(t_rough > best) { why = CAUSAL_ONSET_ROUGHNESS; }
+                        inject_mobility_fault(team_id);
+                        causal_register_onset(team_id, class_id, why);
+                    }
+                    break;
+
+                case FAULT_CLASS_RESOURCE:
+                    if(causal_active_count(team) < k->max_concurrent_faults &&
+                       causal_unit(g_current_tick, team_id, CAUSAL_SALT_ONSET(class_id)) <
+                           1.0f - expf(-h_res))
+                    {
+                        CausalOnsetCause_t why = CAUSAL_ONSET_BASELINE;
+                        float best = r_base;
+                        if(r_batt > best) { best = r_batt; why = CAUSAL_ONSET_BATTERY; }
+                        if(r_rest > best) { why = CAUSAL_ONSET_SINCE_REST; }
+                        inject_resource_fault(team_id);
+                        causal_register_onset(team_id, class_id, why);
+                    }
+                    break;
+
+                default:
+                    /* Environment and mission onsets are world/model events
+                     * (aftershocks, incident deterioration), raised above. */
+                    break;
+            }
+        }
+    }
+}
+
+#endif /* ENVIRONMENT_HAS_WORLD_STORAGE (causal model) */
 
 void fault_injector_init(uint32_t seed)
 {
     g_fault_seed = seed;
     for(uint8_t t = 0; t < NUM_TEAMS; t++)
     {
-        s_causal_onset_x[t] = 0;
-        s_causal_onset_y[t] = 0;
         s_causal_repair_ticks[t] = 0;
+        s_causal_wear[t] = 0.0f;
+        s_causal_prev_x[t] = 0;
+        s_causal_prev_y[t] = 0;
+        s_causal_prev_valid[t] = 0;
+        s_causal_last_rest_tick[t] = 0;
+        memset(&s_causal_truth[t], 0, sizeof(s_causal_truth[t]));
+    }
+    for(uint8_t i = 0; i < NUM_INCIDENTS; i++)
+    {
+        s_causal_inc_id[i] = 0;
+        s_causal_inc_escalations[i] = 0;
     }
     random_seed_stream(STREAM_FAULTS, derive_seed(seed, STREAM_FAULTS));
 }
@@ -622,7 +1150,13 @@ void fault_injector_step(void)
 
     (void)g_fault_seed;
 
-    const uint8_t causal = (uint8_t)fault_profile_is_causal();
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+    if(fault_profile_is_causal())
+    {
+        causal_step();
+        return;
+    }
+#endif
 
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
@@ -634,40 +1168,6 @@ void fault_injector_step(void)
 
             if(team->fault_state.active[fault_class])
             {
-                if(causal)
-                {
-                    s_causal_stats.exposure_ticks[fault_class]++;
-
-                    if(class_id == FAULT_CLASS_MOBILITY && team->status == STATUS_RESTING &&
-                       s_causal_repair_ticks[team_id] < 255u)
-                        s_causal_repair_ticks[team_id]++;
-
-                    if(class_id == FAULT_CLASS_MOBILITY ||
-                       class_id == FAULT_CLASS_COMMUNICATION ||
-                       class_id == FAULT_CLASS_RESOURCE)
-                    {
-                        /* Cleared by its cause, or at the old duration as a
-                         * maximum backstop. No PAR confirmation delay and no
-                         * post-repair immunity: nothing holds the fault open
-                         * once the cause is gone, and nothing protects the
-                         * team from the next one. */
-                        uint8_t by_cause = causal_cause_removed(team_id, class_id);
-                        uint8_t by_backstop = g_current_tick >= team->fault_state.recovery_tick[fault_class];
-
-                        if(by_cause || by_backstop)
-                        {
-                            if(by_cause)
-                                s_causal_stats.cleared_by_cause[fault_class]++;
-                            else
-                                s_causal_stats.cleared_by_backstop[fault_class]++;
-                            s_causal_stats.active_ticks_total[fault_class] +=
-                                g_current_tick - team->fault_state.start_tick[fault_class];
-                            recover_fault(team_id, class_id);
-                        }
-                        continue;
-                    }
-                }
-
                 /* Fix 3: environment faults bypass the two-stage confirm delay
                  * entirely. The 33-tick PAR-interval delay models human
                  * operator sign-off — appropriate for logical faults (mobility,
@@ -681,16 +1181,9 @@ void fault_injector_step(void)
                 if(class_id == FAULT_CLASS_ENVIRONMENT &&
                    g_current_tick >= team->fault_state.recovery_tick[fault_class])
                 {
-                    if(causal)
-                    {
-                        s_causal_stats.cleared_by_backstop[fault_class]++;
-                        s_causal_stats.active_ticks_total[fault_class] +=
-                            g_current_tick - team->fault_state.start_tick[fault_class];
-                    }
                     recover_fault(team_id, class_id);
-                    if(!causal)
-                        team->fault_state.immune_until_tick[fault_class] =
-                            g_current_tick + FAULT_POST_REPAIR_IMMUNITY_TICKS;
+                    team->fault_state.immune_until_tick[fault_class] =
+                        g_current_tick + FAULT_POST_REPAIR_IMMUNITY_TICKS;
                     continue;
                 }
 
@@ -709,20 +1202,13 @@ void fault_injector_step(void)
 
                 /* Stage 2: confirmation delay elapsed - actually clear the
                  * fault now, and start this team's immunity window for this
-                 * fault class (not in the causal profile). */
+                 * fault class. */
                 if(team->fault_state.pending_repair[fault_class] &&
                    g_current_tick >= team->fault_state.repair_confirm_tick[fault_class])
                 {
-                    if(causal)
-                    {
-                        s_causal_stats.cleared_by_backstop[fault_class]++;
-                        s_causal_stats.active_ticks_total[fault_class] +=
-                            g_current_tick - team->fault_state.start_tick[fault_class];
-                    }
                     recover_fault(team_id, class_id);
-                    if(!causal)
-                        team->fault_state.immune_until_tick[fault_class] =
-                            g_current_tick + FAULT_POST_REPAIR_IMMUNITY_TICKS;
+                    team->fault_state.immune_until_tick[fault_class] =
+                        g_current_tick + FAULT_POST_REPAIR_IMMUNITY_TICKS;
                 }
 
                 continue;
@@ -731,12 +1217,10 @@ void fault_injector_step(void)
             if(g_current_tick < team->fault_state.immune_until_tick[fault_class])
                 continue;
 
-            if(!roll_injection(team_id, fault_class, g_fault_config.class_probability[fault_class]))
+            if(!roll_injection(g_fault_config.class_probability[fault_class]))
                 continue;
 
             inject_fault(team_id, class_id);
-            if(causal)
-                causal_note_onset(team_id, class_id);
         }
     }
 }

@@ -1257,11 +1257,32 @@ check-eval-metrics-unittest:
 check-evaluate-determinism:
 	@PYTHON=$(PYTHON) $(TOOLS_DIR)/check-evaluate-determinism.sh
 
+# Evaluation stress multiplier for the causal profile (--fault-stress). 1 is
+# realistic field rate; 8 is the value recommended for evaluation runs (see
+# docs/CAUSAL_FAULT_MODEL.md). Always recorded in the tool's output.
+CAUSAL_STRESS ?= 8
+
 # Run-level sanity bound on --fault-profile=causal: per-class and per-team
-# fault exposure, episode chattering and the maximum-duration backstop must
+# fault exposure, episode chattering and the maximum-duration backstops must
 # stay within laptop/tools/fault_exposure.py's bounds over 8 seeds x 3000
-# ticks (AI off). Catches a fault -> drain -> fault loop pinning teams in a
-# faulted state. Bounds are assumed guard rails, not calibrated values.
+# ticks (AI off) at CAUSAL_STRESS. Catches a fault -> drain -> fault loop
+# pinning teams in a faulted state. Bounds are assumed guard rails, not
+# calibrated values.
 check-causal-fault-exposure: $(TARGET)
-	@$(PYTHON) $(TOOLS_DIR)/fault_exposure.py --tron ./$(TARGET) --profile causal --seeds 1001-1008 --ticks 3000 --check
-.PHONY: check-causal-fault-exposure
+	@$(PYTHON) $(TOOLS_DIR)/fault_exposure.py --tron ./$(TARGET) --profile causal --stress $(CAUSAL_STRESS) --seeds 1001-1008 --ticks 3000 --check
+
+# Causal profile plumbing: an unknown --fault-profile is an error, --fault-stress
+# is rejected for other profiles, and a causal run is reproducible - the main
+# dataset and the causal-only ground-truth sidecar are byte-identical across two runs.
+CAUSAL_DET_DIR = build/causal-determinism
+check-causal-profile: $(TARGET)
+	@rm -rf $(CAUSAL_DET_DIR) && mkdir -p $(CAUSAL_DET_DIR)/a $(CAUSAL_DET_DIR)/b
+	@if ./$(TARGET) 1 1 10 --fault-profile=bogus >/dev/null 2>&1; then echo "FAIL: unknown --fault-profile accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --fault-stress=2 >/dev/null 2>&1; then echo "FAIL: --fault-stress accepted without causal"; exit 1; fi
+	@cd $(CAUSAL_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) >/dev/null 2>&1
+	@cd $(CAUSAL_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) >/dev/null 2>&1
+	@cmp $(CAUSAL_DET_DIR)/a/tron_snapshot_dataset.csv $(CAUSAL_DET_DIR)/b/tron_snapshot_dataset.csv
+	@cmp $(CAUSAL_DET_DIR)/a/tron_causal_truth.csv $(CAUSAL_DET_DIR)/b/tron_causal_truth.csv
+	@echo "check-causal-profile: unknown profile rejected, stress gated to causal, causal dataset + truth sidecar reproducible"
+
+.PHONY: check-causal-fault-exposure check-causal-profile

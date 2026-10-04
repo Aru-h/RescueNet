@@ -14,6 +14,7 @@
  */
 #include <stdbool.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "team.h"
 #include "incident.h"
@@ -24,7 +25,8 @@
 #include "mission_link.h"
 #include "environment.h" /* environment_cell_travel_cost() - env_raw_travel_cost column below */
 #include "consensus.h"
-#include "fault_config.h" /* g_fault_config.profile - composite run_id, below */
+#include "fault_config.h"
+#include "fault_injector.h" /* g_fault_config.profile - composite run_id, below */
 
 /*
  * core/cbba.c's cbba_team_is_local() - public, but deliberately not
@@ -184,6 +186,14 @@ static uint8_t g_peer_log_enabled = 0;
 static uint32_t g_dataset_seed = 0;
 static uint32_t g_run_id = 0;
 
+/* Causal-profile ground truth, one row per (world_seed, cycle, team_id).
+ * Separate from tron_snapshot_dataset.csv on purpose: the main dataset's
+ * schema (and everything in ml/ that reads it) is untouched, and these
+ * columns can never be picked up as features. See
+ * docs/CAUSAL_FAULT_MODEL.md for the column definitions. */
+static FILE *g_causal_truth_file = NULL;
+
+
 /*
  * Composite run_id (feature-contract Decision 5): world_seed, fault
  * profile, CONSENSUS_ENFORCE and the vbus link-loss setting, hashed into
@@ -219,6 +229,15 @@ static uint32_t compute_composite_run_id(uint32_t world_seed)
 
     snprintf(buf, sizeof(buf), "%u:%u:%u:%u",
         world_seed, (unsigned)g_fault_config.profile, enforce, link_loss_ppm);
+
+    /* Causal runs at different stress multipliers are different
+     * experiments and must not share a run_id. Other profiles keep the
+     * exact string above. */
+    if(g_fault_config.profile == FAULT_PROFILE_CAUSAL)
+    {
+        size_t len = strlen(buf);
+        snprintf(buf + len, sizeof(buf) - len, ":%u", (unsigned)(g_fault_stress * 1000.0f + 0.5f));
+    }
 
     /* FNV-1a, 32-bit. */
     hash = 2166136261u;
@@ -263,6 +282,19 @@ void snapshot_begin_run(uint32_t seed)
                 "gt_link_dropped,gt_loss_model\n");
     }
 #endif
+
+    if(g_fault_config.profile == FAULT_PROFILE_CAUSAL && g_causal_truth_file == NULL)
+    {
+        g_causal_truth_file = fopen("tron_causal_truth.csv", "w");
+        if(g_causal_truth_file != NULL)
+            fprintf(g_causal_truth_file,
+                "run_id,world_seed,cycle,team_id,fault_stress,hidden_wear,link_margin_db,"
+                "hazard_mobility,hazard_resource,ticks_since_rest,aftershock_hit,"
+                "onset_cause_mobility,onset_cause_communication,onset_cause_resource,"
+                "onset_cause_environment,onset_cause_mission,"
+                "clear_cause_mobility,clear_cause_communication,clear_cause_resource,"
+                "clear_cause_environment,clear_cause_mission\n");
+    }
 
     if(g_snapshot_file != NULL)
         return;
@@ -579,6 +611,19 @@ static void write_snapshot_row(uint32_t cycle, EventType_t event_type,
 
 void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)
 {
+    if(event_type == EVENT_TICK && g_causal_truth_file != NULL && team_id < NUM_TEAMS)
+    {
+        const CausalTeamTruth_t *t = fault_injector_causal_truth(team_id);
+        fprintf(g_causal_truth_file,
+            "%u,%u,%u,%u,%g,%.4f,%.3f,%.6f,%.6f,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+            g_run_id, g_dataset_seed, cycle, team_id, (double)g_fault_stress,
+            (double)t->hidden_wear, (double)t->link_margin_db,
+            (double)t->hazard_mobility, (double)t->hazard_resource,
+            t->ticks_since_rest, t->aftershock_hit,
+            t->onset_cause[0], t->onset_cause[1], t->onset_cause[2], t->onset_cause[3], t->onset_cause[4],
+            t->clear_cause[0], t->clear_cause[1], t->clear_cause[2], t->clear_cause[3], t->clear_cause[4]);
+    }
+
     TeamState_t *team;
     int incident_id = -1;
     /* Feature-contract Decision 4: numeric incident fields read 0, not
@@ -758,5 +803,10 @@ void snapshot_close_dataset(void)
     {
         fclose(g_peer_file);
         g_peer_file = NULL;
+    }
+    if(g_causal_truth_file != NULL)
+    {
+        fclose(g_causal_truth_file);
+        g_causal_truth_file = NULL;
     }
 }

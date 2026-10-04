@@ -257,6 +257,11 @@ void move_team(TeamState_t *team) //simulation
             return;
     }
 
+    /* Causal profile: hidden wear shows up as an occasional lost step
+     * (the only symptom of wear a model can observe). */
+    if(fault_profile_is_causal() && fault_injector_causal_symptom_skip(team->team_id))
+        return;
+
     if(team->heading_to_rest)
     {
         SafeZone_t *safezone = &g_safezones[team->resting_zone_id];

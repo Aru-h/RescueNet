@@ -24,4 +24,58 @@ typedef struct
 
 const CausalFaultStats_t *fault_injector_causal_stats(void);
 
+/* Why a causal fault started / ended (ground truth, never a model input). */
+typedef enum
+{
+    CAUSAL_ONSET_NONE = 0,
+    CAUSAL_ONSET_BASELINE,        /* random baseline hazard */
+    CAUSAL_ONSET_WEAR,            /* accumulated wear term dominated */
+    CAUSAL_ONSET_ROUGHNESS,       /* roughness of the cell being crossed */
+    CAUSAL_ONSET_BATTERY,         /* equipment depletion */
+    CAUSAL_ONSET_SINCE_REST,      /* time since last rest */
+    CAUSAL_ONSET_LINK_MARGIN,     /* margin < 0 */
+    CAUSAL_ONSET_AFTERSHOCK,      /* Omori aftershock on the route */
+    CAUSAL_ONSET_DETERIORATION    /* victim loss / escalation on the assigned incident */
+} CausalOnsetCause_t;
+
+typedef enum
+{
+    CAUSAL_CLEAR_NONE = 0,
+    CAUSAL_CLEAR_CAUSE_REMOVED,
+    CAUSAL_CLEAR_BACKSTOP
+} CausalClearCause_t;
+
+/* Per-team ground truth for the tick the injector just stepped. Written to
+ * the causal-only sidecar CSV by laptop/snapshot.c, never to the main
+ * dataset. */
+typedef struct
+{
+    float hidden_wear;
+    float link_margin_db;
+    float hazard_mobility;
+    float hazard_resource;
+    uint32_t ticks_since_rest;
+    uint8_t onset_cause[NUM_OPERATIONAL_FAULT_CLASSES];  /* CausalOnsetCause_t, this tick */
+    uint8_t clear_cause[NUM_OPERATIONAL_FAULT_CLASSES];  /* CausalClearCause_t, this tick */
+    uint8_t aftershock_hit;
+} CausalTeamTruth_t;
+
+const CausalTeamTruth_t *fault_injector_causal_truth(uint8_t team_id);
+
+/* Causal profile only: 1 when accumulated wear makes the team skip this
+ * tick's step (a noisy, visible symptom of hidden wear). */
+int fault_injector_causal_symptom_skip(uint8_t team_id);
+
+/* Causal profile mission model, for result reporting. */
+typedef struct
+{
+    uint32_t victims_lost;
+    uint32_t victims_seen;      /* initial victim count of every incident that entered the model */
+    uint32_t escalations;
+    uint32_t aftershock_events;
+    uint32_t aftershock_team_hits;
+} CausalWorldStats_t;
+
+const CausalWorldStats_t *fault_injector_causal_world_stats(void);
+
 #endif

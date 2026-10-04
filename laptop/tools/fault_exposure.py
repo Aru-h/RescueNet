@@ -12,7 +12,7 @@ Standard library only (no pandas), so it runs wherever `make` does.
 
 usage:
   fault_exposure.py [--tron ./tron] [--profile causal] [--seeds 1001-1020]
-                    [--ticks 3000] [--jobs 4] [--extra-arg ARG ...]
+                    [--ticks 3000] [--stress X] [--jobs 4] [--extra-arg ARG ...]
                     [--check] [--json OUT.json]
 """
 import argparse
@@ -28,6 +28,9 @@ from concurrent.futures import ThreadPoolExecutor
 CLASSES = ["mobility", "communication", "resource", "environment", "mission"]
 EVENT_TICK = 12
 THROUGHPUT_RE = re.compile(r"\[DIAG THROUGHPUT\] team=(\d+) incidents_resolved=(\d+)")
+CAUSAL_RE = re.compile(
+    r"\[DIAG CAUSAL\] fault_stress=(\S+) victims_seen=(\d+) victims_lost=(\d+) escalations=(\d+) "
+    r"aftershock_events=(\d+) aftershock_team_hits=(\d+)")
 FAULT_RE = re.compile(
     r"\[DIAG FAULT\] class=(\d+) onsets=(\d+) cleared_by_cause=(\d+) "
     r"cleared_by_backstop=(\d+) exposure_ticks=(\d+) episode_ticks=(\d+)")
@@ -39,10 +42,11 @@ MAX_CLASS_EXPOSURE = 0.30        # fraction of team-ticks one class may be activ
 MAX_ANY_EXPOSURE = 0.60          # fraction of team-ticks with >= 1 active fault
 MAX_TEAM_ANY_EXPOSURE = 0.80     # worst single team, any fault
 MAX_ONSETS_PER_TEAM_KTICK = 60.0 # chattering guard (episodes / team / 1000 ticks)
-# Longest episode a class may show = configured backstop + slack. Mission
-# faults still pass the PAR confirmation delay (FAULT_REPAIR_CONFIRM_DELAY_TICKS).
-MAX_EPISODE_TICKS = {"mobility": 14 + 2, "communication": 14 + 2, "resource": 14 + 2,
-                     "environment": 12 + 2, "mission": 12 + 33 + 2}
+# Longest episode a class may show = configured backstop + slack. Under the
+# causal profile communication has no backstop (it clears only when the link
+# margin is positive), so it is bounded by exposure and chattering instead.
+MAX_EPISODE_TICKS = {"mobility": 14 + 2, "resource": 14 + 2,
+                     "environment": 12 + 2, "mission": 12 + 2}
 
 
 def parse_seeds(text):
@@ -61,6 +65,8 @@ def run_seed(tron, profile, seed, ticks, extra):
             raise RuntimeError(f"seed {seed}: {' '.join(cmd)} exited {proc.returncode}\n{proc.stderr[-400:]}")
         resolved = sum(int(m.group(2)) for m in THROUGHPUT_RE.finditer(proc.stderr))
         causal = {int(m.group(1)): tuple(int(g) for g in m.groups()[1:]) for m in FAULT_RE.finditer(proc.stderr)}
+        world = CAUSAL_RE.search(proc.stderr)
+        world = [float(world.group(1))] + [int(g) for g in world.groups()[1:]] if world else None
 
         team_ticks = 0
         active = {c: 0 for c in CLASSES}
@@ -97,7 +103,7 @@ def run_seed(tron, profile, seed, ticks, extra):
             "seed": seed, "incidents_resolved": resolved, "team_ticks": team_ticks,
             "active": active, "any_active": any_active,
             "worst_team_any": max((per_team_any.get(t, 0) / n for t, n in per_team_ticks.items()), default=0.0),
-            "episodes": episodes, "causal_diag": causal,
+            "episodes": episodes, "causal_diag": causal, "world": world,
         }
 
 
@@ -127,6 +133,17 @@ def summarise(results):
             cause[k][0] += v[1]
             cause[k][1] += v[2]
     out["cleared_by_cause_backstop"] = {CLASSES[k]: v for k, v in cause.items()}
+    worlds = [r["world"] for r in results if r["world"]]
+    if worlds:
+        seen = sum(w[1] for w in worlds)
+        out["world"] = {
+            "fault_stress": worlds[0][0],
+            "victims_seen": seen / n, "victims_lost": sum(w[2] for w in worlds) / n,
+            "victim_loss_fraction": (sum(w[2] for w in worlds) / seen) if seen else 0.0,
+            "escalations": sum(w[3] for w in worlds) / n,
+            "aftershock_events": sum(w[4] for w in worlds) / n,
+            "aftershock_team_hits": sum(w[5] for w in worlds) / n,
+        }
     return out
 
 
@@ -137,7 +154,7 @@ def check(summary):
             problems.append(f"{c}: exposure {s['exposure']:.3f} > {MAX_CLASS_EXPOSURE}")
         if s["onsets_per_team_ktick"] > MAX_ONSETS_PER_TEAM_KTICK:
             problems.append(f"{c}: {s['onsets_per_team_ktick']:.1f} episodes/team/1000 ticks > {MAX_ONSETS_PER_TEAM_KTICK}")
-        if s["max_duration"] > MAX_EPISODE_TICKS[c]:
+        if c in MAX_EPISODE_TICKS and s["max_duration"] > MAX_EPISODE_TICKS[c]:
             problems.append(f"{c}: longest episode {s['max_duration']} ticks > backstop {MAX_EPISODE_TICKS[c]}")
     if summary["any_exposure"] > MAX_ANY_EXPOSURE:
         problems.append(f"any-fault exposure {summary['any_exposure']:.3f} > {MAX_ANY_EXPOSURE}")
@@ -156,18 +173,24 @@ def main():
     ap.add_argument("--seeds", default="1001-1020")
     ap.add_argument("--ticks", type=int, default=3000)
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
+    ap.add_argument("--stress", type=float, help="causal --fault-stress multiplier (recorded in the output)")
     ap.add_argument("--extra-arg", action="append", default=[])
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--json")
     args = ap.parse_args()
 
     seeds = parse_seeds(args.seeds)
+    if args.stress is not None:
+        args.extra_arg = args.extra_arg + [f"--fault-stress={args.stress:g}"]
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
         results = list(pool.map(lambda s: run_seed(args.tron, args.profile, s, args.ticks, args.extra_arg), seeds))
     summary = summarise(results)
-    summary.update(profile=args.profile, ticks=args.ticks, extra_args=args.extra_arg)
+    summary.update(profile=args.profile, ticks=args.ticks, extra_args=args.extra_arg,
+                   fault_stress=args.stress if args.stress is not None else (1.0 if args.profile == "causal" else None))
 
     print(f"profile={args.profile} seeds={args.seeds} ticks={args.ticks} extra={args.extra_arg}")
+    if args.profile == "causal":
+        print(f"fault_stress used: {summary['fault_stress']:g}")
     print(f"incidents resolved / seed (mean): {summary['incidents_resolved_mean']:.2f}")
     print(f"any-fault exposure: {summary['any_exposure']:.3f}   worst single team: {summary['worst_team_any_exposure']:.3f}")
     print(f"{'class':<14}{'exposure':>9}{'episodes':>9}{'ep/team/kt':>11}{'mean dur':>9}{'max dur':>8}")
@@ -175,6 +198,10 @@ def main():
         s = summary["classes"][c]
         print(f"{c:<14}{s['exposure']:>9.3f}{s['episodes']:>9d}{s['onsets_per_team_ktick']:>11.1f}"
               f"{s['mean_duration']:>9.1f}{s['max_duration']:>8d}")
+    if "world" in summary:
+        w = summary["world"]
+        print(f"victims lost / seed: {w['victims_lost']:.1f} of {w['victims_seen']:.1f} ({100*w['victim_loss_fraction']:.1f}%)  "
+              f"escalations: {w['escalations']:.1f}  aftershocks: {w['aftershock_events']:.1f} (team hits {w['aftershock_team_hits']:.1f})")
     if any(v != [0, 0] for v in summary["cleared_by_cause_backstop"].values()):
         print("cleared by [cause, backstop]: " +
               ", ".join(f"{c}={v}" for c, v in summary["cleared_by_cause_backstop"].items()))

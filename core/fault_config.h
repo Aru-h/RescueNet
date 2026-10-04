@@ -40,10 +40,72 @@ typedef struct
 } FaultConfig_t;
 
 /* Cause thresholds for FAULT_PROFILE_CAUSAL (read by fault_injector.c).
- * Every value is "assumed" - see docs/CAUSAL_FAULT_MODEL.md. */
+ * Every value is documented, with its source or "assumed", in
+ * docs/CAUSAL_FAULT_MODEL.md. */
 #define CAUSAL_MOBILITY_REPAIR_REST_TICKS  4u  /* ticks RESTING at a safe zone = field repair done */
-#define CAUSAL_COMM_REPOSITION_CELLS       3u  /* Manhattan cells moved from the onset cell */
 #define CAUSAL_RESOURCE_RESUPPLY_LEVEL     90u /* equipment level that counts as resupplied (the fault's own drain keeps it just under 100) */
+
+typedef struct
+{
+    /* --- Communication: deterministic link margin ------------------------
+     * margin = tx - body - PL(d) - shadow(cell) - building - rubble - rx_sens
+     * PL(d) = pl0 + 10 n log10(d / d0)                                    */
+    float tx_power_dbm;            /* LORA_TX_POWER_DBM (core/lora_radio_params.h) */
+    float body_loss_db;            /* handheld/body + antenna loss */
+    float pl0_db;                  /* free-space path loss at d0 */
+    float d0_m;
+    float path_loss_exponent;      /* n */
+    float shadow_sigma_db;         /* log-normal shadowing sigma, fixed per cell */
+    float building_penalty_db;     /* at district_density == 100 */
+    float rubble_penalty_db;       /* at infrastructure_damage == 100 */
+    float rx_sensitivity_dbm;      /* SF7 / BW125 */
+    float cell_size_m;
+    float severity_db_per_level;   /* comm fault severity = 1 + deficit / this, capped at 4 */
+
+    /* --- Mobility: hidden cumulative wear -------------------------------- */
+    float wear_per_cell;           /* wear added per cell crossed */
+    float wear_per_cell_rough;     /* extra wear per cell crossed at roughness 1 */
+    float mob_hazard_base;         /* per tick */
+    float mob_hazard_per_wear;     /* per tick per wear unit */
+    float mob_hazard_rough;        /* per tick while crossing a roughness-1 cell */
+    float wear_symptom_start;      /* wear above which movement visibly slows */
+    float wear_symptom_slope;      /* skip probability per wear unit above start */
+    float wear_symptom_max;
+
+    /* --- Resource -------------------------------------------------------- */
+    float res_hazard_base;         /* per tick */
+    float res_hazard_battery;      /* per tick at equipment 0, quadratic in depletion */
+    float res_hazard_since_rest;   /* per tick once since_rest reaches the horizon */
+    float res_since_rest_horizon;  /* ticks */
+    float res_mobility_cascade;    /* hazard multiplier while a mobility fault is active */
+    float res_drain_stamina_floor; /* resource-fault drain stops below this stamina */
+    float res_drain_equipment_floor;
+
+    /* --- Environment: Omori-Utsu aftershocks R(t) = K / (c + t)^p -------- */
+    float omori_k;                 /* events per tick at (c + t) == 1 */
+    float omori_c_ticks;
+    float omori_p;
+    float omori_t_offset_ticks;    /* mainshock-to-tick-0 delay */
+    uint8_t aftershock_radius_cells;
+    uint8_t aftershock_route_lookahead;
+
+    /* --- Mission: entrapment survival (Weibull fit to MacIntyre 2006) ---- */
+    float survival_lambda_h;
+    float survival_k;
+    float escalate_every_h;        /* priority steps one level toward CRITICAL */
+
+    /* --- Bounds ----------------------------------------------------------- */
+    float hazard_cap;              /* max per-tick hazard for any class */
+    uint8_t max_concurrent_faults; /* per team, stochastic classes */
+} CausalFaultParams_t;
+
+extern CausalFaultParams_t g_causal_params;
+/* Evaluation stress multiplier (--fault-stress=<x>, default 1 = realistic
+ * field rates). Scales mobility/resource hazards, the Omori rate K and the
+ * mission clock; it does not scale the deterministic link-margin model.
+ * Survives fault_config_apply_profile(), which runs once per seed. */
+extern float g_fault_stress;
+void fault_config_set_stress(float stress);
 
 extern FaultConfig_t g_fault_config;
 
