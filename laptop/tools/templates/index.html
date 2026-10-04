@@ -495,6 +495,7 @@
               <h2>Region Map (36×36) <span id="liveTickLabel" style="color:var(--muted);font-weight:400;text-transform:none;font-size:11px;">no run yet</span></h2>
               <div style="display:flex;gap:6px;flex-wrap:nowrap;">
                 <button type="button" id="resetViewBtn" class="map-toolbar-btn" title="Recenter and re-fit the pan/zoom">↺</button>
+                <button type="button" id="camTargetBtn" class="map-toolbar-btn" style="display:none;" title="Follow the selected team, or fly the camera to the selected incident (Esc or dragging the map stops it)"></button>
                 <button type="button" id="map3dSettingsBtn" class="map-toolbar-btn" style="display:none;" title="3D view settings: hazard effects, reduce motion, lighting" aria-haspopup="true" aria-expanded="false">⚙</button>
                 <button type="button" id="topDownBtn" class="map-toolbar-btn" style="display:none;" title="3D view: look straight down at the whole map (the ↺ button restores the default angle)">⤓ Top</button>
                 <button type="button" id="viewModeBtn" onclick="toggleMapViewMode()" class="map-toolbar-btn" title="Switch between the flat 2D map and the isometric 2.5D map">◫ 2D</button>
@@ -1581,6 +1582,7 @@ function ensureMap3d() {
     // drawing on its own and reports fresh hit targets here.
     map3d.onHits = (hits) => { mapHitTargets = hits; };
     map3d.onSettings = refreshMap3dSettingsUI;
+    map3d.onCamera = updateCamButton;
     refreshMap3dSettingsUI();
     sizeMap3d();
     return true;
@@ -1600,6 +1602,46 @@ function refreshMap3dSettingsUI() {
   note.textContent = !st.fxAvailable ? "Hazard effects unavailable (module failed to load)."
     : st.autoReduced ? `Effects auto-reduced to "${st.autoReduced}" to keep the map smooth - pick a level to retry.` : "";
 }
+// ---- 3D camera: follow the selected team / fly to the selected incident ----
+function updateCamButton() {
+  const btn = document.getElementById("camTargetBtn");
+  if (!btn) return;
+  const on3d = map3d && mapCamera.state.viewMode === "3d";
+  const cam = on3d ? map3d.cameraMode : null;
+  let text = "", action = "";
+  if (cam && cam.mode === "follow") { text = "✕ Stop following"; action = "stop"; }
+  else if (cam && cam.mode === "fly") { text = "✕ Stop"; action = "stop"; }
+  else if (on3d && selectedMarker && selectedMarker.type === "team") {
+    const h = mapHitTargets.find((x) => x.type === "team" && x.id === selectedMarker.id);
+    if (h) { text = `◎ Follow team ${h.data.i}`; action = "follow"; }
+  } else if (on3d && selectedMarker && selectedMarker.type === "incident") {
+    text = `✈ Fly to incident ${selectedMarker.id}`; action = "fly";
+  }
+  btn.style.display = text ? "" : "none";
+  btn.textContent = text; btn.dataset.action = action;
+}
+function incidentHitFor(id) {
+  return mapHitTargets.find((h) => h.type === "incident" && (h.id === id || (h.data.groupIncidents && h.data.groupIncidents.some((m) => m.id === id))));
+}
+function runCamAction(action) {
+  if (!map3d) return;
+  if (action === "stop") map3d.cancelCamera();
+  else if (action === "follow" && selectedMarker) map3d.follow(selectedMarker.id);
+  else if (action === "fly" && selectedMarker) { const h = incidentHitFor(selectedMarker.id); if (h) map3d.flyTo(h.wx, h.wy); }
+  updateCamButton();
+  if (window._lastFrame) drawFrame(window._lastFrame, true);
+}
+(function wireCamButton() {
+  const btn = document.getElementById("camTargetBtn");
+  if (btn) btn.addEventListener("click", () => runCamAction(btn.dataset.action));
+  // Esc ends a follow / fly (and closes the settings popover).
+  window.addEventListener("keydown", (evt) => {
+    if (evt.key !== "Escape") return;
+    closeMap3dSettings();
+    if (map3d && mapCamera.state.viewMode === "3d" && map3d.cancelCamera()) { updateCamButton(); }
+  });
+})();
+
 function closeMap3dSettings() {
   const panel = document.getElementById("map3dSettings"), btn = document.getElementById("map3dSettingsBtn");
   if (panel) panel.style.display = "none";
@@ -1651,7 +1693,8 @@ function applyMapViewMode(mode) {
   if (topBtn) topBtn.style.display = mode === "3d" ? "" : "none";
   const setBtn = document.getElementById("map3dSettingsBtn");
   if (setBtn) setBtn.style.display = mode === "3d" ? "" : "none";
-  if (mode !== "3d") closeMap3dSettings();
+  if (mode !== "3d") { closeMap3dSettings(); if (map3d) map3d.cancelCamera(); }
+  updateCamButton();
   mapCanvas.style.background = mode === "3d" ? "transparent" : "#05080c";
   const btn = document.getElementById("viewModeBtn");
   if (btn) {
@@ -1961,6 +2004,7 @@ function handleMapClick(evt) {
   selectedMarker = best ? { type: best.type, id: best.data.id } : null;
   if (window.DashboardSelection) DashboardSelection.set(selectedMarker);
   renderInspector();
+  updateCamButton();
   // A click on a marker pins its card open the same as a hover would;
   // a click on empty space is the one thing that actually closes it.
   if (best) showMapCard(best); else hideMapCard();
@@ -2222,6 +2266,16 @@ function hideMapCard() {
 }
 
 mapCanvas.addEventListener("click", handleMapClick);
+// 3D: double-click a team to follow it, an incident to fly to it.
+mapCanvas.addEventListener("dblclick", (evt) => {
+  if (!map3d || mapCamera.state.viewMode !== "3d") return;
+  const { sx, sy } = screenPointFromEvent(evt);
+  const hit = hitTestAt(sx, sy);
+  if (!hit) return;
+  if (hit.type === "team") map3d.follow(hit.id);
+  else if (hit.type === "incident") map3d.flyTo(hit.wx, hit.wy);
+  updateCamButton();
+});
 mapCanvas.addEventListener("contextmenu", (evt) => { if (mapCamera.state.viewMode === "3d") evt.preventDefault(); });
 mapCanvas.addEventListener("mousedown", handleMapMouseDown);
 mapCanvas.addEventListener("mousemove", handleMapMouseMove);
@@ -2256,6 +2310,7 @@ if (window.DashboardSelection) {
     if (same || bothNull) return;
     selectedMarker = sel;
     renderInspector();
+    updateCamButton();
     if (window._lastFrame) drawFrame(window._lastFrame, true);
   });
 }

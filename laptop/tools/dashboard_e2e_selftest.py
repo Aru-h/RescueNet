@@ -426,6 +426,7 @@ def _view3d_check(page, console_errors, screenshot_dir):
     _view3d_motion_check(page, console_errors)
     _view3d_effects_check(page, console_errors)
     _view3d_buildings_check(page, console_errors)
+    _view3d_camera_check(page, console_errors, screenshot_dir)
 
     # Tilt limits, full rotation, top-down shortcut.
     lim = page.evaluate("""() => {
@@ -655,6 +656,111 @@ def _view3d_buildings_check(page, console_errors):
     check(ev["repeat"] == 1 and ev["scrub"] == 1, f"[3d] the same list again, or a jump across many ticks, is not a new collapse event (after repeat {ev['repeat']}, after scrub {ev['scrub']})")
     real_errors = real_console_errors(console_errors)
     check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the building checks (got {real_errors[:5]})")
+
+
+def _view3d_camera_check(page, console_errors, screenshot_dir):
+    """C4: follow a team, fly to an incident (Esc / dragging cancels), and
+    clicking / dragging a team still works after the camera is rotated."""
+    # ---- follow a team that keeps moving ----
+    page.evaluate("() => { map3d.setSettings({ reduceMotion: false }); mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
+    team_id = page.evaluate("() => window._lastFrame.teams[0].id")
+    page.evaluate("(id) => DashboardSelection.set({ type: 'team', id })", team_id)
+    page.wait_for_timeout(100)
+    check(page.is_visible("#camTargetBtn") and "Follow team" in page.inner_text("#camTargetBtn"),
+          f"[3d] selecting a team offers 'Follow' (button: {page.inner_text('#camTargetBtn')!r})")
+    page.click("#camTargetBtn")
+    mode = page.evaluate("() => map3d.cameraMode")
+    check(bool(mode and mode["mode"] == "follow" and mode["teamId"] == team_id) and "Stop following" in page.inner_text("#camTargetBtn"),
+          f"[3d] the button starts following that team and turns into 'Stop following' ({mode})")
+    res = page.evaluate("""async (id) => {
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const base = JSON.parse(JSON.stringify(window._lastFrame));
+      const T = 12000, y = 8;
+      const mk = (tick, x) => { const f = JSON.parse(JSON.stringify(base)); f.tick = tick;
+        Object.assign(f.teams[0], { x, y, has_dest: 0, status: 1 }); return f; };
+      const dist = () => { const p = map3d.teamInfo(id), s = map3d.state; return Math.hypot(s.tx - p.x, s.tz - p.y); };
+      drawFrame(mk(T, 5), true);
+      const d0 = dist(); await sleep(900); const d1 = dist();
+      const out = { d0, d1, dists: [] };
+      for (let k = 1; k <= 8; k++) { drawFrame(mk(T + k, 5 + k * 2), true); await sleep(160); }
+      await sleep(700);
+      out.afterMove = dist();
+      out.teamX = map3d.teamInfo(id).x;
+      out.camX = map3d.state.tx;
+      return out;
+    }""", team_id)
+    check(res["d1"] < max(0.3, res["d0"] * 0.2) and res["afterMove"] < 1.2,
+          f"[3d] while following, the camera glides onto the team and keeps up as it moves (distance {res['d0']:.1f} -> {res['d1']:.2f}; after the team moved 16 cells: {res['afterMove']:.2f}; team x {res['teamX']:.1f}, camera x {res['camX']:.1f})")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(100)
+    check(page.evaluate("() => map3d.cameraMode") is None, "[3d] Esc stops following")
+    tx = page.evaluate("() => map3d.state.tx")
+    page.evaluate("""async () => { const f = JSON.parse(JSON.stringify(window._lastFrame)); f.tick = 12020; Object.assign(f.teams[0], { x: 30, y: 8, has_dest: 0 }); drawFrame(f, true); await new Promise((r) => setTimeout(r, 500)); }""")
+    check(abs(page.evaluate("() => map3d.state.tx") - tx) < 1e-9, "[3d] after Esc the camera no longer tracks the team")
+    # Dragging the map stops a follow too.
+    page.evaluate("(id) => { DashboardSelection.set({ type: 'team', id }); }", team_id)
+    page.click("#camTargetBtn")
+    check(page.evaluate("() => !!map3d.cameraMode"), "[3d] following again")
+    box = page.evaluate("() => { const r = document.getElementById('mapCanvas').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }")
+    page.mouse.move(box["x"] + 14, box["y"] + 14)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 70, box["y"] + 40, steps=4)
+    page.mouse.up()
+    check(page.evaluate("() => map3d.cameraMode") is None, "[3d] dragging the map stops following")
+    page.evaluate("(id) => { DashboardSelection.set({ type: 'team', id }); }", team_id)
+    page.click("#camTargetBtn")
+    page.click("#camTargetBtn")   # now says "Stop following"
+    check(page.evaluate("() => map3d.cameraMode") is None, "[3d] the 'Stop following' button stops it")
+    page.evaluate("() => { DashboardSelection.set(null); mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
+
+    # ---- fly to an incident ----
+    inc = page.evaluate("""() => { const h = mapHitTargets.find((x) => x.type === 'incident'); return h ? { id: h.id, x: h.wx, y: h.wy } : null; }""")
+    if inc:
+        before = page.evaluate("() => ({ dist: map3d.state.dist, az: map3d.state.az })")
+        page.evaluate("(id) => DashboardSelection.set({ type: 'incident', id })", inc["id"])
+        page.wait_for_timeout(100)
+        check("Fly to incident" in page.inner_text("#camTargetBtn"), f"[3d] selecting an incident offers 'Fly to' (button: {page.inner_text('#camTargetBtn')!r})")
+        page.click("#camTargetBtn")
+        check(page.evaluate("() => map3d.cameraMode && map3d.cameraMode.mode") == "fly", "[3d] the button starts a fly-to")
+        page.wait_for_timeout(2200)
+        after = page.evaluate("() => ({ tx: map3d.state.tx, tz: map3d.state.tz, dist: map3d.state.dist, az: map3d.state.az, el: map3d.state.el, mode: map3d.cameraMode })")
+        check(after["mode"] is None and abs(after["tx"] - inc["x"]) < 0.05 and abs(after["tz"] - inc["y"]) < 0.05,
+              f"[3d] the camera flies to the incident and stops there (target {after['tx']:.2f},{after['tz']:.2f} vs incident {inc['x']},{inc['y']})")
+        check(after["dist"] <= 20.01 and abs((after["az"] - before["az"]) - 0.9) < 0.01,
+              f"[3d] the fly-to moves in close and swings the camera around the spot (distance {before['dist']:.0f} -> {after['dist']:.0f}, swing {after['az'] - before['az']:.2f} rad)")
+        # Esc part-way stops it where it is.
+        page.evaluate("() => { mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); }")
+        page.evaluate("(id) => DashboardSelection.set({ type: 'incident', id })", inc["id"])
+        page.click("#camTargetBtn")
+        page.wait_for_timeout(250)
+        page.keyboard.press("Escape")
+        mid = page.evaluate("() => ({ tx: map3d.state.tx, mode: map3d.cameraMode })")
+        page.wait_for_timeout(500)
+        check(mid["mode"] is None and abs(page.evaluate("() => map3d.state.tx") - mid["tx"]) < 1e-9 and abs(mid["tx"] - inc["x"]) > 0.3,
+              "[3d] Esc cancels a fly-to part-way and leaves the camera where it was")
+        page.evaluate("() => { map3d.setSettings({ reduceMotion: true }); }")
+        page.evaluate("(id) => DashboardSelection.set({ type: 'incident', id })", inc["id"])
+        page.evaluate("() => { mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); }")
+        page.click("#camTargetBtn")
+        check(abs(page.evaluate("() => map3d.state.tx") - inc["x"]) < 0.05, "[3d] with reduce motion the fly-to jumps there instead of animating")
+        page.evaluate("() => { map3d.setSettings({ reduceMotion: false }); DashboardSelection.set(null); }")
+    else:
+        print("INFO: no incident in the current frame to fly to - skipped the fly-to checks")
+
+    # ---- a click on a team after rotating the camera ----
+    page.evaluate("() => { mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
+    az0 = page.evaluate("() => map3d.state.az")
+    page.mouse.move(box["x"] + 14, box["y"] + 14)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 200, box["y"] + 60, steps=6)
+    page.mouse.up()
+    az1 = page.evaluate("() => map3d.state.az")
+    check(abs(az1 - az0) > 0.5, f"[3d] rotated the camera by dragging (azimuth {az0:.2f} -> {az1:.2f})")
+    _click_and_drag_markers(page, "3d rotated", screenshot_dir)
+    page.screenshot(path=os.path.join(screenshot_dir, "dashboard_e2e_3d_rotated_selected.png"))
+    page.evaluate("() => { DashboardSelection.set(null); mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the camera checks (got {real_errors[:5]})")
 
 
 def _route_accuracy_check(page):

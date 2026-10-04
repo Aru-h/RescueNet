@@ -219,6 +219,7 @@
       // (sx - dx, sy - dy) ends up under it at (sx, sy). Translating
       // the camera over the ground plane does this exactly.
       pan(dx, dy, sx, sy) {
+        cancelCamera();
         const cx = sx === undefined ? view.w / 2 + dx : sx, cy = sy === undefined ? view.h / 2 + dy : sy;
         const a = screenToWorld(cx - dx, cy - dy, 0), b = screenToWorld(cx, cy, 0);
         view.tx += a.x - b.x; view.tz += a.y - b.y;
@@ -233,18 +234,21 @@
         updateCamera();
       },
       orbit(dx, dy) {
+        cancelCamera();
         view.az -= dx * 0.008;
         view.el = Math.max(EL_MIN, Math.min(EL_MAX, view.el + dy * 0.006));
         updateCamera();
       },
       // Straight down at the whole map, keeping the current rotation.
       topDown() {
+        cancelCamera();
         view.el = EL_MAX;
         view.tx = view.mapW / 2 - 0.5; view.tz = view.mapH / 2 - 0.5;
         view.dist = fitDistance();
         updateCamera();
       },
       reset() {
+        cancelCamera();
         view.az = Math.PI / 4; view.el = 50 * Math.PI / 180;
         view.tx = view.mapW / 2 - 0.5; view.tz = view.mapH / 2 - 0.5;
         view.dist = fitDistance();
@@ -719,6 +723,55 @@
     let rafId = 0, lastDraw = 0, curModel = null, curOpts = null;
     const api = { onHits: null };
 
+    // ---------- camera director: follow a team / fly to a spot ----------
+    // Both are smooth and both end the moment the user drags the camera
+    // (pan / orbit / top-down / reset all call cancelCamera) or presses
+    // Esc (the page calls cancelCamera). Wheel zoom does not cancel.
+    let director = null; // { mode: "follow", teamId, goalDist } | { mode: "fly", t0, dur, from, to }
+    const easeInOut = (k) => (k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2);
+    function cameraModeInfo() { return director ? { mode: director.mode, teamId: director.teamId } : null; }
+    function notifyCamera() { if (api.onCamera) api.onCamera(cameraModeInfo()); }
+    function cancelCamera() {
+      if (!director) return false;
+      director = null; notifyCamera();
+      return true;
+    }
+    function followTeam(id) {
+      const v = teamViews.get(id);
+      if (!v) return false;
+      director = { mode: "follow", teamId: id, goalDist: Math.min(view.dist, 30) };
+      if (settings.reduceMotion) { view.tx = v.pos.x; view.tz = v.pos.y; view.dist = director.goalDist; updateCamera(); }
+      notifyCamera(); kick();
+      return true;
+    }
+    // Fly to (x, y): swings the camera ~50 degrees around the spot while
+    // moving in, ending closer and tilted down onto it.
+    function flyTo(x, y, opts) {
+      opts = opts || {};
+      const to = { tx: x, tz: y, dist: opts.dist || Math.max(10, Math.min(view.dist, 20)), el: Math.max(EL_MIN, Math.min(EL_MAX, opts.el || 0.75)), az: view.az + (opts.swing === undefined ? 0.9 : opts.swing) };
+      if (settings.reduceMotion) { Object.assign(view, to); updateCamera(); director = null; notifyCamera(); return true; }
+      director = { mode: "fly", t0: performance.now(), dur: opts.dur || 1400, from: { tx: view.tx, tz: view.tz, dist: view.dist, el: view.el, az: view.az }, to };
+      notifyCamera(); kick();
+      return true;
+    }
+    function stepDirector(now, dt) {
+      if (!director) return;
+      if (director.mode === "follow") {
+        const v = teamViews.get(director.teamId);
+        if (!v) { cancelCamera(); return; }
+        const k = 1 - Math.exp(-dt * 5.5);
+        view.tx += (v.pos.x - view.tx) * k; view.tz += (v.pos.y - view.tz) * k;
+        if (view.dist > director.goalDist) view.dist += (director.goalDist - view.dist) * (1 - Math.exp(-dt * 3));
+        updateCamera();
+      } else {
+        const k = Math.max(0, Math.min(1, (now - director.t0) / director.dur)), e = easeInOut(k), f = director.from, t = director.to;
+        view.tx = f.tx + (t.tx - f.tx) * e; view.tz = f.tz + (t.tz - f.tz) * e;
+        view.dist = f.dist + (t.dist - f.dist) * e; view.el = f.el + (t.el - f.el) * e; view.az = f.az + (t.az - f.az) * e;
+        updateCamera();
+        if (k >= 1) { director = null; notifyCamera(); }
+      }
+    }
+
     // Camera shake (building collapse): a decaying jitter on top of the user's camera.
     let shake = null; // { t0, dur, amp }
     function applyShake(now) {
@@ -733,8 +786,10 @@
     }
 
     function drawNow(now, notify) {
+      const dt = Math.max(0, Math.min(0.1, (now - lastDraw) / 1000));
       lastDraw = now;
       poseTeams(now);
+      stepDirector(now, dt);
       applyShake(now);
       if (fx) {
         renderer.getDrawingBufferSize(_v2);
@@ -746,9 +801,9 @@
       return hits;
     }
 
-    function ambientOnly(now) { return !teamAnimating(now) && !shake; }
+    function ambientOnly(now) { return !teamAnimating(now) && !shake && !director; }
     function needsMotion(now) {
-      return teamAnimating(now) || !!shake || (!!fx && fx.animated(now / 1000));
+      return teamAnimating(now) || !!shake || !!director || (!!fx && fx.animated(now / 1000));
     }
 
     // Auto quality: if frames keep taking long at "high"/"low" effects,
@@ -908,6 +963,7 @@
     projector.reset();
     Object.assign(api, {
       setSettings: applySettings, settingsState, triggerCollapse,
+      follow: followTeam, flyTo, cancelCamera,
       get fx() { return fx; },
       buildingStats() { return bld ? bld.stats : null; },
       // Height the 3D view gives a building (where markers stand on it), for tests/tooling.
@@ -922,12 +978,17 @@
         return { x: p.x, y: p.y, k: p.k, from: [st.px, st.py], to: [st.cx, st.cy], heading: st.heading,
                  route: v.route ? v.route.cells.map((c) => c.slice()) : null, dashed: v.route ? v.route.dashed : null, faulted: !!v.faulted };
       },
-      get settings() { return Object.assign({}, settings); },
       get state() { return view; },
-      get isLost() { return lost; },
       // Internals for profiling only: exposed just when the page URL has ?debug=1.
       ...(new URLSearchParams(window.location.search).get("debug") === "1"
         ? { _renderer: renderer, _scene: scene, _camera: camera, _teamViews: teamViews, _teamStates: teamStates } : {}),
+    });
+    // Live getters. (They can't sit inside Object.assign above: assign would
+    // read each getter once and copy the value, freezing it at creation.)
+    Object.defineProperties(api, {
+      cameraMode: { get: cameraModeInfo },
+      settings: { get: () => Object.assign({}, settings) },
+      isLost: { get: () => lost },
     });
     return api;
   }
