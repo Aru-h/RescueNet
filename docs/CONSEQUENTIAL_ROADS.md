@@ -218,9 +218,8 @@ severity, REROUTE carries the stall cost), reroute minus blind off:
 
 Blind A* without actions is not distinguishable from true-cost A* (dev -1.35
 [-3.90, +1.15], held-out +0.10 [-1.20, +1.50]). With the actions on, REROUTE
-made things worse on both sets. I did not isolate the cause. A plausible one is
-that detours cost more travel time than the one-off stall they avoid, but that
-is untested.
+made things worse on both sets. The cause is traced below ("Why blind-A* REROUTE
+loses"): it does not change travel, it makes the legacy recovery fire more.
 
 ### Table C13: oracle detectors, actions on and off (AI predictor on, roads on)
 
@@ -244,9 +243,9 @@ oracle env on 16.60 / 13.50, oracle env off 27.80 / 27.65.
   dev +0.15, held-out -2.05 (excludes 0). There is no evidence the actions help
   and some that they cost incidents on held-out seeds.
 * A perfect environment detector with **actions off** loses about 24-26
-  incidents on both sets. The existing recovery then reacts to every flagged
-  environment fault, which now last about 900 ticks. With actions on the loss
-  falls to -2.85 (dev) and +0.55 (held-out). I did not isolate the mechanism.
+  incidents on both sets. Cause traced below ("Why the oracle environment
+  detector collapses"): the legacy team-level reaction holds flagged teams at the
+  safe zone for the whole, hours-long, damage lifetime.
 * The mission oracle with actions on equals the AI baseline exactly: it never
   triggers an action here, because REINFORCE_INCIDENT starves (below).
 
@@ -290,3 +289,110 @@ Step 3.5.
 | `check-selftests` | pass (fourteen selftests) |
 | Board (`check-board*`) | **not run**: no `arm-none-eabi-gcc` here |
 
+## Why the oracle environment detector collapses (investigation, measurement only)
+
+Hypothesis (from the Step 3.1 review): damage now lasts 6-24 h, the per-team
+environment flag stays on for hours, and the legacy team-level reaction keeps those
+teams idle. **Confirmed**, with the refinements below. Nothing in `core/` was
+changed: counters were added to scratch copies of the sources
+(`laptop/tools/investigations/trace_team_status.patch`, reports
+`trace_status_report.py` and `trace_outofservice_report.py`), which log, per team
+per tick, the flag, the status before and after dispatch, the recommended action
+and its reason.
+
+**Traced seeds** (causal, stress 7, roads on, actions off, AI-on build; "baseline"
+is the shipped thresholds with the environment class off, "oracle" is the perfect
+environment detector):
+
+| | 1001 baseline | 1001 oracle | 1002 baseline | 1002 oracle |
+|---|---|---|---|---|
+| incidents resolved | 36 | 1 | 44 | 15 |
+| environment flag on, % of team-ticks | 74.4 | 83.4 | 65.0 | 73.0 |
+| flag episodes: count, mean length (ticks) | 18, 1240 | 19, 1317 | 19, 1026 | 17, 1289 |
+| recommendation while flag on: RETURN_TO_SAFE_ZONE | 8.4% | **99.4%** | 7.5% | **99.4%** |
+| team status while flag on: RESTING | 51.6% | **99.1%** | 48.7% | **98.8%** |
+| all team-ticks: working (en route or on scene) | 34.3% | 8.0% | 35.4% | 10.6% |
+| all team-ticks: resting | 50.5% | 86.5% | 49.0% | 82.6% |
+| resting team-ticks with stamina and equipment >= 90 | 6.7% | **92.6%** | 7.3% | **86.7%** |
+| healthy team-ticks held at a safe zone by a RETURN_TO_SAFE_ZONE recommendation, % of all team-ticks | 0.0 | **78.9** | 0.1 | **67.8** |
+| RETURN_TO_SAFE_ZONE stretches: count, mean length (ticks) | 334, 8 | 110, 234 | 356, 6 | 185, 124 |
+| status changes caused by a dispatch | 105 | 21 | 81 | 65 |
+
+What this shows:
+
+* **Which response fires:** almost only RETURN_TO_SAFE_ZONE (reason
+  PREDICTED_FAULT), 99.4% of the flagged team-ticks. LOCAL_RECOVERY is 0.5% and
+  reallocation 0.1% or less; abort never fires. The oracle's reaction is "go and
+  rest", not "reallocate".
+* **How long:** the flag lasts as long as the damage (mean 1000-1300 ticks, max
+  about 2250), so each team is flagged for 65-83% of the run, in a few long
+  episodes.
+* **What it costs:** the teams are not interrupted (dispatch-caused status
+  changes fall from 81-105 to 21-65); they are *held*. `recovery_dispatch()` leaves
+  a RESTING team alone, so a team sits at the safe zone until the flag ends, even
+  though 87-93% of those resting ticks are already fully rested (stamina and
+  equipment >= 90). 68-79% of all team-ticks are healthy teams held idle.
+* **The flag is a poor proxy for consequence:** in the baseline seed-1001 run the
+  flag is on for 22,313 team-ticks, but the team's route touches a damaged cell on
+  only 4.1% of them (sidecar `route_touch`). The flag keeps its Step 3 meaning (a
+  team holds an environment fault for the fault's duration), as instructed.
+
+**Dose-response** (20 seeds 1001-1020, AI on, actions off; only
+`--roads-persist` varied, an existing flag; oracle environment minus shipped AI,
+paired 95% CI):
+
+| Unattended damage lasts | Incidents resolved | Victims lost |
+|---|---|---|
+| 20-60 ticks | -0.65 [-1.95, +0.65] | +0.25 [-1.60, +2.10] |
+| 200-600 ticks | -11.90 [-14.35, -9.70] | +3.25 [+0.60, +6.00] |
+| 600-2400 ticks (default) | -25.60 [-28.55, -22.50] | +12.85 [+9.65, +15.85] |
+
+The collapse vanishes when damage is short and grows with duration, so the
+duration of the flag, not the detector, is the driver.
+
+Implication (not implemented): an environment detector must not drive a team-level
+reaction. The causal `--causal-actions` path already routes it to map-level actions
+instead (oracle environment with actions on: -2.85 on the development seeds and
++0.55 on the held-out seeds, against about -25 with them off). A team-level reaction
+to the environment class would need a flag that reflects route exposure, not the
+fault's lifetime.
+
+## Why blind-A* REROUTE loses (investigation, measurement only)
+
+Setup: `--roads-astar=blind`, AI off, seeds 1001-1020, REROUTE on vs off, counters
+in a scratch copy (`reroute_probe.patch`, reports `reroute_probe_report.py` and
+`reroute_recovery_report.py`). The instrumented build reproduces the recorded
+per-seed incidents and victims exactly on all 20 seeds (reroute off 38.75, on 36.80
+incidents; victims lost 13.95 and 17.75).
+
+* **Detour length vs stalls avoided: both are tiny.** About 310 reroute episodes a
+  seed. Measured at each episode's start (route without vs with the overlay), the
+  overlay leaves the route unchanged in 85% of them. The average route is 10.1
+  cells with 0.79 partial-debris cells, and 10.4 cells with 0.72 after rerouting:
+  a detour of +0.26 cells against 0.08 cells of debris avoided (0.30 stall ticks at
+  4 ticks per cell). Net about +0.04 ticks per episode, i.e. zero.
+* **Realised movement agrees.** Step attempts 11,553 to 11,588 per seed (+35,
+  CI [-290, +401]); stall ticks 842 to 912 (+70, CI [-352, +680]). Neither changes
+  significantly.
+* **Where the loss comes from: more legacy recovery.** Team-ticks per seed with a
+  recovery recommendation, reroute off to on (paired diff, 95% CI):
+
+| Legacy recommendation | Off | On | Diff |
+|---|---|---|---|
+| LOCAL_RECOVERY | 973.8 | 1450.5 | +476.8 [+184.0, +881.6] |
+| RETURN_TO_SAFE_ZONE | 191.5 | 255.9 | +64.4 [+22.1, +120.3] |
+| of which reason PROGRESS_DEVIATION (all actions) | 249.3 | 753.9 | +504.5 [+279.8, +785.1] |
+| REQUEST_TASK_REALLOCATION, ABORT_MISSION | 0 | 0 | 0 |
+
+The progress-deviation signal triples. The likely route: the overlay is added to
+the cell cost in the pathfinder (`core/path.c:148`) and the team's
+`cached_remaining_path_cost` comes from that same search (`core/simulation.c`,
+the `causal_actions_path_begin()` calls), and `core/mission_execution_twin.c` reads
+that cached value for its progress expectation. A reroute therefore inflates the
+remaining-cost estimate by 12 per damaged cell and the team looks behind schedule.
+The code path is verified; the link is not isolated by a counterfactual (that would
+need a behaviour change, which this round excludes).
+
+So blind REROUTE neither shortens nor lengthens trips; it costs incidents by making
+the legacy recovery fire more. Under true-cost A* the overlay is 0, which is why
+REROUTE-only is exactly zero there.
