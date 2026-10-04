@@ -1282,6 +1282,8 @@
       // Height the 3D view gives a building (where markers stand on it), for tests/tooling.
       buildingHeight(id) { const e = curModel && curModel.prep.byId.get(id); return e && bld ? bld.heightOf(e) : null; },
       projector, render, setSize,
+      // Is a ground point (at height z) on screen and in front of the camera?
+      isVisible(wx, wy, z) { tmpV.set(wx, z || 0, wy).project(camera); return tmpV.z > -1 && tmpV.z < 1 && Math.abs(tmpV.x) <= 1 && Math.abs(tmpV.y) <= 1; },
       setActive(on) { active = !!on; if (!active && rafId) { cancelAnimationFrame(rafId); rafId = 0; } else kick(); },
       // Read-only snapshot of one team's drawn state (for tests and tooling).
       teamInfo(id) {

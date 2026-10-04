@@ -431,6 +431,7 @@ def _view3d_check(page, console_errors, screenshot_dir):
     _view3d_labels_check(page)
     _view3d_pins_check(page, console_errors)
     _view3d_pin_details_check(page, console_errors)
+    _view3d_card_follow_check(page, console_errors)
 
     # Tilt limits, full rotation, top-down shortcut.
     lim = page.evaluate("""() => {
@@ -977,6 +978,122 @@ def _view3d_pin_details_check(page, console_errors):
     page.evaluate("() => { drawFrame(window.__orig, true); }")
     real_errors = real_console_errors(console_errors)
     check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the pin-detail checks (got {real_errors[:5]})")
+
+
+def _view3d_card_follow_check(page, console_errors):
+    """The floating card and the follow camera are independent: following
+    hides the team's card; an open card stays anchored to its marker while
+    the camera moves; the card's x and Esc close it without ending a follow;
+    a click with a little jitter never orbits; a real drag does."""
+    page.evaluate("""() => { map3d.setSettings({ reduceMotion: false }); map3d.cancelCamera(); hideMapCard(); DashboardSelection.set(null); selectedMarker = null;
+      mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); window.__cardDisplay = () => document.getElementById('mapTooltip').style.display;
+      window.__follow = () => { const c = map3d.cameraMode; return c ? c.mode : null; }; }""")
+    page.wait_for_timeout(300)
+    pos = lambda kind, idx=0: page.evaluate("""([kind, idx]) => { const hs = mapHitTargets.filter((h) => h.type === kind && (kind !== 'incident' || h.data.pool !== 1)); const h = hs[idx]; if (!h) return null;
+      const r = document.getElementById('mapCanvas').getBoundingClientRect(); const p = mapCamera.worldToScreen(h.wx, h.wy, h.wz || 0); return { id: h.data.id, x: r.left + p.x, y: r.top + p.y }; }""", [kind, idx])
+    def settle():                       # wait until the team marker stops gliding, so the second click of a double-click lands on it
+        last = None
+        for _ in range(40):
+            cur = pos("team")
+            if last and abs(cur["x"] - last["x"]) < 0.3 and abs(cur["y"] - last["y"]) < 0.3:
+                return cur
+            last = cur; page.wait_for_timeout(120)
+        return last
+    team = settle()
+    check(team is not None, "[3d] card/follow checks: a team marker is on screen")
+    # 1a. double-click a team: follow starts and the card is hidden
+    page.mouse.move(team["x"] - 50, team["y"] - 50); page.mouse.move(team["x"], team["y"], steps=3)
+    page.mouse.click(team["x"], team["y"]); page.wait_for_timeout(250)      # first click selects it (the marker shifts a few px when selected)
+    team = settle()
+    page.mouse.dblclick(team["x"], team["y"]); page.wait_for_timeout(200)
+    check(page.evaluate("() => window.__follow()") == "follow" and page.evaluate("() => window.__cardDisplay()") == "none",
+          "[3d] double-clicking a team starts following and shows no card")
+    # tick refreshes and hovering the followed team do not bring the card back
+    page.evaluate("() => { const f = JSON.parse(JSON.stringify(window._lastFrame)); f.tick += 1; drawFrame(f, true); }")
+    page.wait_for_timeout(100)
+    st = page.evaluate("() => ({ card: window.__cardDisplay(), sel: selectedMarker && selectedMarker.type })")
+    check(st["card"] == "none" and st["sel"] == "team", f"[3d] while following, a tick refresh does not pop the card up; the team stays selected ({st})")
+    check("Stop following" in page.inner_text("#camTargetBtn"), "[3d] the follow button remains while following")
+    page.evaluate("() => map3d.cancelCamera()"); page.wait_for_timeout(100)
+    # 1b. the follow button: open the card first, then follow -> card hidden
+    page.evaluate("() => { const h = mapHitTargets.find((x) => x.type === 'team'); selectedMarker = { type: 'team', id: h.data.id }; updateCamButton(); showMapCard(h); }")
+    check(page.evaluate("() => window.__cardDisplay()") == "block", "[3d] a team's card opens before following")
+    page.click("#camTargetBtn"); page.wait_for_timeout(200)
+    check(page.evaluate("() => window.__follow()") == "follow" and page.evaluate("() => window.__cardDisplay()") == "none", "[3d] the Follow button hides the team's card and follows")
+    page.evaluate("() => map3d.cancelCamera()")
+    # 2. an open card stays anchored to its marker while the camera moves
+    anch = page.evaluate("""async () => {
+      const inc = mapHitTargets.find((h) => h.type === 'incident' && h.data.pool !== 1); showMapCard(inc);
+      const rect = () => document.getElementById('mapTooltip').getBoundingClientRect(), cv = document.getElementById('mapCanvas').getBoundingClientRect();
+      const samples = [];
+      map3d.flyTo(inc.wx + 3, inc.wy + 3);                          // the camera now swings and moves every frame; the card is for an incident that stays in view
+      for (let i = 0; i < 8; i++) {
+        await new Promise((r) => setTimeout(r, 170));
+        const h = mapHitTargets.find((x) => x.type === 'incident' && x.id === inc.id), p = mapCamera.worldToScreen(h.wx, h.wy, h.wz || 0);
+        const c = document.getElementById('mapTooltip'), r = rect();
+        const mx = cv.left + p.x, my = cv.top + p.y;
+        const dx = Math.max(r.left - mx, 0, mx - r.right), dy = Math.max(r.top - my, 0, my - r.bottom);
+        samples.push({ px: p.x, py: p.y, hidden: c.style.visibility === 'hidden', gap: Math.hypot(dx, dy) });
+      }
+      return samples; }""")
+    vis = [a for a in anch if not a["hidden"]]
+    travel = max(abs(a["px"] - vis[0]["px"]) + abs(a["py"] - vis[0]["py"]) for a in vis) if vis else 0
+    check(len(vis) >= 3 and travel > 20 and all(a["gap"] < 40 for a in vis),
+          f"[3d] an open card stays anchored to its marker while the camera swings and moves it {travel:.0f}px across the screen (gaps {[round(a['gap']) for a in vis]})")
+    # 2b. marker off-screen: the card hides but stays open
+    page.evaluate("() => { map3d.cancelCamera(); mapCamera.pan(-4000, 0); drawFrame(window._lastFrame, true); }")
+    off = page.evaluate("() => ({ vis: document.getElementById('mapTooltip').style.visibility, disp: window.__cardDisplay() })")
+    check(off["vis"] == "hidden" and off["disp"] == "block", f"[3d] a card whose marker is off-screen is hidden ({off})")
+    page.evaluate("() => { mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
+    check(page.evaluate("() => document.getElementById('mapTooltip').style.visibility") == "", "[3d] ... and reappears when the marker is back on screen")
+    # 3. the x button and Esc close the card without ending a follow
+    page.evaluate("() => { const t = mapHitTargets.find((h) => h.type === 'team'); map3d.follow(t.data.id); showMapCard(mapHitTargets.find((h) => h.type === 'incident' && h.data.pool !== 1)); }")
+    page.wait_for_timeout(150)
+    check(page.evaluate("() => window.__cardDisplay()") == "block" and page.evaluate("() => window.__follow()") == "follow", "[3d] a card can be open while following another marker")
+    page.click("#mapCardClose", force=True); page.wait_for_timeout(100)
+    check(page.evaluate("() => window.__cardDisplay()") == "none" and page.evaluate("() => window.__follow()") == "follow", "[3d] the card's x button closes it without ending the follow")
+    page.evaluate("() => showMapCard(mapHitTargets.find((h) => h.type === 'incident' && h.data.pool !== 1))")
+    page.keyboard.press("Escape"); page.wait_for_timeout(100)
+    check(page.evaluate("() => window.__cardDisplay()") == "none" and page.evaluate("() => window.__follow()") == "follow", "[3d] Esc closes the open card without ending the follow")
+    # 4. clicking empty space closes the card but keeps following; a 2px-jitter click never orbits
+    page.evaluate("() => showMapCard(mapHitTargets.find((h) => h.type === 'incident' && h.data.pool !== 1))")
+    empty = page.evaluate("""() => { const r = document.getElementById('mapCanvas').getBoundingClientRect();
+      for (const [fx, fy] of [[0.04, 0.5], [0.96, 0.5], [0.5, 0.06], [0.5, 0.94], [0.1, 0.1], [0.9, 0.9]]) { const sx = r.width * fx, sy = r.height * fy;
+        if (!MapRender.hitTestWorld(mapCamera, mapHitTargets, sx, sy)) return { x: r.left + sx, y: r.top + sy }; } return null; }""")
+    check(empty is not None, "[3d] there is an empty map spot to click")
+    az0 = page.evaluate("() => map3d.state.az")
+    page.mouse.move(empty["x"], empty["y"])
+    page.mouse.down(); page.mouse.move(empty["x"] + 2, empty["y"] + 1); page.mouse.move(empty["x"] + 1, empty["y"] + 2); page.mouse.up()
+    page.wait_for_timeout(150)
+    jit = page.evaluate("() => ({ card: window.__cardDisplay(), follow: window.__follow(), az: map3d.state.az })")
+    check(jit["follow"] == "follow" and abs(jit["az"] - az0) < 1e-9, f"[3d] a click with 2px jitter does not orbit or end the follow (az {az0:.4f} -> {jit['az']:.4f})")
+    check(jit["card"] == "none", "[3d] clicking empty space closes the card (and the follow continues)")
+    # 5. a real drag still orbits and ends the follow
+    page.mouse.move(empty["x"], empty["y"]); page.mouse.down()
+    for i in range(1, 9):
+        page.mouse.move(empty["x"] + 6 * i, empty["y"] + 2 * i)
+    page.mouse.up(); page.wait_for_timeout(150)
+    drag = page.evaluate("() => ({ follow: window.__follow(), az: map3d.state.az })")
+    check(drag["follow"] is None and abs(drag["az"] - az0) > 0.05, f"[3d] a real drag orbits and ends the follow (az {az0:.3f} -> {drag['az']:.3f})")
+    # Esc with no card open ends a follow
+    page.evaluate("() => { map3d.follow(mapHitTargets.find((h) => h.type === 'team').data.id); }")
+    page.keyboard.press("Escape"); page.wait_for_timeout(100)
+    check(page.evaluate("() => window.__follow()") is None, "[3d] Esc with no card open stops following")
+    # 2D / 2.5D: the open card stays with its marker when panning
+    for mode in ("iso", "2d"):
+        page.evaluate("(m) => { setMapViewMode(m); }", mode); page.wait_for_timeout(300)
+        r2 = page.evaluate("""() => { const h = mapHitTargets.find((x) => x.type === 'incident'); showMapCard(h);
+          const card = document.getElementById('mapTooltip'), cv = document.getElementById('mapCanvas').getBoundingClientRect();
+          const gap = () => { const hh = mapHitTargets.find((x) => x.type === 'incident' && x.data.id === h.data.id), p = mapCamera.worldToScreen(hh.wx, hh.wy, hh.wz || 0), r = card.getBoundingClientRect();
+            const mx = cv.left + p.x, my = cv.top + p.y; return Math.hypot(Math.max(r.left - mx, 0, mx - r.right), Math.max(r.top - my, 0, my - r.bottom)); };
+          const g0 = gap(); mapCamera.pan(25, 15, 100, 100); drawFrame(window._lastFrame, true); anchorMapCard(); const g1 = gap();
+          { const hh = mapHitTargets.find((x) => x.type === 'incident' && x.data.id === h.data.id), pp = mapCamera.worldToScreen(hh.wx, hh.wy, hh.wz || 0); mapCamera.zoomAt(pp.x, pp.y, 1.3); } drawFrame(window._lastFrame, true); anchorMapCard(); const g2 = gap();
+          hideMapCard(); return [g0, g1, g2]; }""")
+        check(all(g < 40 for g in r2), f"[{mode}] an open card follows its marker through pan and zoom (gaps {[round(g) for g in r2]})")
+        page.evaluate("() => { mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); }")
+    page.evaluate("() => setMapViewMode('3d')"); page.wait_for_timeout(300)
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the card / follow checks (got {real_errors[:5]})")
 
 
 def _route_accuracy_check(page):
