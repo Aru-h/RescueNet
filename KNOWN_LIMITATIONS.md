@@ -94,3 +94,15 @@ accepted code-audit findings, implementation notes) is in
     `make check-dashboard-e2e` is expected to fail on Linux. Everything else
     in that check passes. This is believed to be cross-platform
     floating-point divergence; the cause has not been confirmed.
+17. **The 3D incident pin has no time-pressure ring yet.** The simulator does
+    not send an incident's age, deadline or victims' survival time, so the
+    dashboard cannot show how urgent an incident is in time. It is left out
+    on purpose (not even a "seen for N ticks" stand-in, which would not be
+    the incident's real age). To do: add the ring once the simulator sends
+    incident age / survival from the causal mission model.
+18. **The 3D pin's progress arc is an estimate.** The simulator sends the work
+    remaining on an incident but not the starting amount, so the arc is
+    measured against the largest value the dashboard has seen for that
+    incident. It starts empty when the dashboard connects to an incident
+    that is already partly worked, and shows nothing when the remaining work
+    is sent as 0.
