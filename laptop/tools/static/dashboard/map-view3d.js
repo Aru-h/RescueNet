@@ -83,6 +83,12 @@
   try { FXMOD = await import("/static/dashboard/map-view3d-fx.js"); }
   catch (e) { console.warn("map-view3d: effects module failed to load; no hazard effects", e); }
 
+  // Procedural buildings with damage states (intact / cracked / partial
+  // collapse / rubble); falls back to plain boxes if it can't load.
+  let BLDMOD = null;
+  try { BLDMOD = await import("/static/dashboard/map-view3d-buildings.js"); }
+  catch (e) { console.warn("map-view3d: buildings module failed to load; plain boxes used", e); }
+
   const MR = window.MapRender;
   const GLYPH_PX = 128;          // marker glyph canvas size
   const GLYPH_TEAM_R = 26;       // team glyph radius on that canvas (px)
@@ -127,6 +133,7 @@
     const settings = loadSettings();
     const fx = FXMOD ? FXMOD.createFx(THREE, { scene, MR }) : null;
     if (fx) { fx.setLevel(settings.effects); fx.setMotion(!settings.reduceMotion); }
+    const bld = BLDMOD ? BLDMOD.createBuildings(THREE, { scene, MR, maxAniso }) : null;
     let autoReduced = null;     // effects level the auto-quality fallback dropped to, if it did
     const _v2 = new THREE.Vector2();
 
@@ -712,7 +719,7 @@
     let rafId = 0, lastDraw = 0, curModel = null, curOpts = null;
     const api = { onHits: null };
 
-    // Camera shake (aftershock): a decaying jitter on top of the user's camera.
+    // Camera shake (building collapse): a decaying jitter on top of the user's camera.
     let shake = null; // { t0, dur, amp }
     function applyShake(now) {
       if (!shake) return false;
@@ -792,7 +799,16 @@
         buildGround(MR.renderTerrainTexture(o.terrainMap, GROUND_TEX_PX_PER_CELL));
         if (first) projector.reset();
       }
-      if (model.prep.source !== envSource) { envSource = model.prep.source; buildBuildings(model.prep); }
+      if (model.prep.source !== envSource) {
+        envSource = model.prep.source;
+        if (bld) bld.build(model.prep.list); else buildBuildings(model.prep);
+        detectCollapses(model.prep, o.frame ? o.frame.tick : null);
+      }
+      // Markers stand on the building as 3D draws it (collapsed ones are lower than in 2.5D).
+      if (bld) {
+        model.teams.forEach((mt) => { mt.foot = bld.footing(model.prep, mt.t.x, mt.t.y); mt.headZ = mt.foot + MR.ISO_TEAM_Z; });
+        model.incidents.forEach((mi) => { mi.foot = bld.footing(model.prep, mi.wx, mi.wy); mi.headZ = mi.foot + MR.ISO_INCIDENT_Z; });
+      }
 
       const tick = o.frame ? o.frame.tick : null;
       const newTick = tick !== lastTick;
@@ -800,7 +816,8 @@
       syncTeamViews(model);
 
       if (fx && (newTick || terrainChanged || !fxSynced)) {
-        fx.sync({ terrain: terrainParsed, hazardCells: model.hazardCells, incidents: model.incidents, prep: model.prep, tick: tick || 0 });
+        fx.sync({ terrain: terrainParsed, hazardCells: model.hazardCells, incidents: model.incidents, prep: model.prep, tick: tick || 0,
+          footing: bld ? (x, y) => bld.footing(model.prep, x, y) : null });
         fxSynced = true;
       }
 
@@ -812,9 +829,10 @@
       if (o.outlineBuildingId !== undefined && o.outlineBuildingId !== null) {
         const e = model.prep.byId.get(o.outlineBuildingId);
         if (e) {
+          const h = bld ? Math.max(0.12, bld.heightOf(e)) : e.h;
           outline.visible = true;
-          outline.position.set((e.x0 + e.x1) / 2, e.h / 2, (e.y0 + e.y1) / 2);
-          outline.scale.set(e.x1 - e.x0, e.h, e.y1 - e.y0);
+          outline.position.set((e.x0 + e.x1) / 2, h / 2, (e.y0 + e.y1) / 2);
+          outline.scale.set(e.x1 - e.x0, h, e.y1 - e.y0);
         }
       }
 
@@ -848,11 +866,37 @@
       drawNow(performance.now(), false);
       if (api.onSettings) api.onSettings(settingsState());
     }
-    // An aftershock: brief camera shake plus a dust burst over the affected
-    // cells ([{x, y}]). Both are skipped with "reduce motion". The
-    // simulator does not send aftershock events today, so nothing in the
-    // dashboard calls this yet - it is the hook for when one is sent.
-    function triggerAftershock(cells) {
+    // Building-collapse detection. The simulator re-sends the building list when
+    // an aftershock destroys buildings ("An aftershock destroyed at least one
+    // building this tick" in laptop/main.c), so a new building list in which
+    // buildings have newly reached ENV_DAMAGE_DESTROYED is the dashboard's
+    // building-collapse event (a gas explosion that destroys a building looks the
+    // same in the data, so it is called a collapse, not an aftershock;
+    // the simulator doesn't say which). Only while playing along - a seek
+    // or scrub across many ticks isn't an "event".
+    let prevDamage = null;
+    function detectCollapses(prep, tick) {
+      const cur = new Map(prep.list.map((e) => [e.id, e.b.damage || 0]));
+      if (prevDamage && tick !== null && lastTick !== null && Math.abs(tick - lastTick) <= 2) {
+        const cells = [];
+        for (const e of prep.list) {
+          const was = prevDamage.get(e.id);
+          if (was !== undefined && was < 100 && (e.b.damage || 0) >= 100) cells.push({ x: e.b.x, y: e.b.y });
+        }
+        if (cells.length) {
+          const step = Math.max(1, Math.ceil(cells.length / 30));
+          api.collapseEvents = (api.collapseEvents || 0) + 1;
+          api.lastCollapse = { tick, buildings: cells.length };
+          triggerCollapse(cells.filter((_, i) => i % step === 0));
+        }
+      }
+      prevDamage = cur;
+    }
+
+    // A building collapse: brief camera shake plus a dust burst over the collapsed
+    // cells ([{x, y}]). Both are skipped with "reduce motion". Called by
+    // detectCollapses() when a new building list shows buildings destroyed.
+    function triggerCollapse(cells) {
       if (settings.reduceMotion) return false;
       const now = performance.now();
       if (fx) fx.burst(cells, now / 1000);
@@ -863,8 +907,11 @@
 
     projector.reset();
     Object.assign(api, {
-      setSettings: applySettings, settingsState, triggerAftershock,
+      setSettings: applySettings, settingsState, triggerCollapse,
       get fx() { return fx; },
+      buildingStats() { return bld ? bld.stats : null; },
+      // Height the 3D view gives a building (where markers stand on it), for tests/tooling.
+      buildingHeight(id) { const e = curModel && curModel.prep.byId.get(id); return e && bld ? bld.heightOf(e) : null; },
       projector, render, setSize,
       setActive(on) { active = !!on; if (!active && rafId) { cancelAnimationFrame(rafId); rafId = 0; } else kick(); },
       // Read-only snapshot of one team's drawn state (for tests and tooling).

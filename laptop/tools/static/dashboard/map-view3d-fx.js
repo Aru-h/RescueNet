@@ -3,7 +3,7 @@
  *
  * Hazard effects for the 3D map (loaded by map-view3d.js): flames and
  * smoke on fires, animated water on flooded cells, debris on blocked /
- * damaged roads, ground haze for gas, and a dust burst for aftershocks.
+ * damaged roads, ground haze for gas, and a dust burst for building collapses.
  * Everything is driven by data the dashboard already receives:
  *
  *   fire   - hazard_cells[].hazard_flags bit 0 (per-cell flag, no
@@ -309,7 +309,7 @@ export function createFx(THREE, ctx) {
       const age = (data.tick || 0) - fireAge.get(k);
       const inten = Math.max(0.4, Math.min(1.25, 0.55 + 0.1 * nb + Math.min(0.3, age / 200)));
       const prep = data.prep;
-      list.set(k, { x: c.x, y: c.y, z: MR.footingZ(prep, c.x, c.y), inten });
+      list.set(k, { x: c.x, y: c.y, z: (data.footing || ((x, y) => MR.footingZ(prep, x, y)))(c.x, c.y), inten });
     }
     // "Active fire" incidents: flames on their building, sized by work left.
     for (const mi of data.incidents) {
@@ -356,7 +356,7 @@ export function createFx(THREE, ctx) {
 
   const counts = { fires: 0 };
 
-  // One-shot dust burst over affected cells (aftershock). `cells`: [{x, y}].
+  // One-shot dust burst over collapsed buildings. `cells`: [{x, y}].
   let burstUntil = -1;
   function burst(cells, timeSec) {
     const cap = CAPS[level].dust;

@@ -95,10 +95,10 @@
       } else if (raw.startsWith("STATICENV ")) {
         try {
           outEnv = JSON.parse(raw.slice("STATICENV ".length));
-          // The simulator re-sends the building list when an aftershock
-          // destroys buildings, so a recording holds several; remember
-          // where each one starts (the 3D view shows the city as of the
-          // frame being replayed - see envAt()).
+          // The simulator re-sends the building list when buildings are
+          // destroyed, so a recording holds several; remember where each one
+          // starts (the maps show the city as of the frame being replayed -
+          // see envAt()).
           outEnvHistory.push({ index: outFrames.length, env: outEnv });
         } catch (e) { /* skip malformed line */ }
       } else if (raw.startsWith("STATICMAP ")) {

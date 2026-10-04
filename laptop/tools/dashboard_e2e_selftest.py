@@ -425,6 +425,7 @@ def _view3d_check(page, console_errors, screenshot_dir):
 
     _view3d_motion_check(page, console_errors)
     _view3d_effects_check(page, console_errors)
+    _view3d_buildings_check(page, console_errors)
 
     # Tilt limits, full rotation, top-down shortcut.
     lim = page.evaluate("""() => {
@@ -544,7 +545,7 @@ def _view3d_motion_check(page, console_errors):
 
 def _view3d_effects_check(page, console_errors):
     """C2: hazard effects - levels (off / low / high), caps, reduce-motion,
-    the settings popover and the aftershock hook."""
+    the settings popover and the building-collapse effect."""
     st = page.evaluate("() => map3d.settingsState()")
     check(st["fxAvailable"], "[3d] the hazard-effects module loaded")
     page.evaluate("() => map3d.setSettings({ autoQuality: false, reduceMotion: false, effects: 'off' })")
@@ -575,10 +576,10 @@ def _view3d_effects_check(page, console_errors):
     page.evaluate("() => map3d.setSettings({ reduceMotion: true })")
     check(page.evaluate("() => map3d.fx.motion === false && map3d.fx.animated(performance.now() / 1000) === false"),
           "[3d] reduce motion stops the ambient animation (the loop goes idle)")
-    check(page.evaluate("() => map3d.triggerAftershock([{ x: 10, y: 10 }])") is False, "[3d] reduce motion suppresses the aftershock shake and dust")
+    check(page.evaluate("() => map3d.triggerCollapse([{ x: 10, y: 10 }])") is False, "[3d] reduce motion suppresses the collapse shake and dust")
     page.evaluate("() => map3d.setSettings({ reduceMotion: false })")
-    fired = page.evaluate("() => { const ok = map3d.triggerAftershock([{ x: 10, y: 10 }, { x: 11, y: 10 }, { x: 10, y: 11 }]); return { ok, dust: map3d.fx.counts().dust, anim: map3d.fx.animated(performance.now() / 1000) }; }")
-    check(fired["ok"] and fired["dust"] > 0 and fired["anim"], f"[3d] the aftershock hook raises a dust burst ({fired['dust']} particles)")
+    fired = page.evaluate("() => { const ok = map3d.triggerCollapse([{ x: 10, y: 10 }, { x: 11, y: 10 }, { x: 10, y: 11 }]); return { ok, dust: map3d.fx.counts().dust, anim: map3d.fx.animated(performance.now() / 1000) }; }")
+    check(fired["ok"] and fired["dust"] > 0 and fired["anim"], f"[3d] a building collapse raises a dust burst ({fired['dust']} particles)")
     page.wait_for_timeout(2200)
     check(page.evaluate("() => map3d.fx.counts().dust") == 0, "[3d] the dust burst clears itself")
 
@@ -600,6 +601,60 @@ def _view3d_effects_check(page, console_errors):
     check(not page.is_visible("#map3dSettings"), "[3d] clicking elsewhere closes the popover")
     real_errors = real_console_errors(console_errors)
     check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the effects checks (got {real_errors[:5]})")
+
+
+def _view3d_buildings_check(page, console_errors):
+    """C3: buildings are built from the damage data (named simulator
+    levels), shorter the more damaged; and a new building list with newly
+    destroyed buildings is a building-collapse event."""
+    res = page.evaluate("""() => {
+      const env = currentEnvironment(), st = map3d.buildingStats();
+      const state = (d) => d >= 100 ? 3 : d >= 75 ? 2 : d >= 25 ? 1 : 0;
+      const want = [0, 0, 0, 0];
+      let heightsOk = true, worst = null;
+      env.buildings.forEach((b) => {
+        const s = state(b.damage || 0); want[s]++;
+        const H0 = Math.max(1, b.floors || 1) * 0.25, h = map3d.buildingHeight(b.id);
+        const ok = s === 0 ? Math.abs(h - H0) < 1e-6 : s === 1 ? h <= H0 && h >= H0 * 0.9 : s === 2 ? h < H0 * 0.95 && h > H0 * 0.4 : h <= H0 * 0.3 + 1e-6;
+        if (!ok && heightsOk) { heightsOk = false; worst = [b.id, b.damage, b.floors, h]; }
+      });
+      return { st, want, heightsOk, worst, n: env.buildings.length };
+    }""")
+    check([res["st"]["intact"], res["st"]["cracked"], res["st"]["partial"], res["st"]["rubble"]] == res["want"],
+          f"[3d] buildings come out in the damage state the data says (intact/cracked/partial/rubble: built {res['st']}, expected {res['want']})")
+    check(res["heightsOk"], f"[3d] building height follows floors and damage - lower the more damaged (first violation: {res['worst']})")
+
+    ev = page.evaluate("""async () => {
+      const out = {};
+      const frame = JSON.parse(JSON.stringify(window._lastFrame));
+      const orig = staticEnvironment;
+      const e1 = JSON.parse(JSON.stringify(orig));
+      e1.buildings.forEach((b) => { b.damage = Math.min(b.damage || 0, 60); });      // nothing destroyed yet
+      const T = 7000;
+      staticEnvironment = e1; frame.tick = T; drawFrame(frame, true);
+      const base = map3d.collapseEvents || 0;
+      const e2 = JSON.parse(JSON.stringify(e1));
+      [0, 1, 2].forEach((i) => { e2.buildings[i].damage = 100; });                    // three buildings destroyed
+      staticEnvironment = e2; frame.tick = T + 1; drawFrame(frame, true);
+      out.events = (map3d.collapseEvents || 0) - base;
+      out.last = map3d.lastCollapse;
+      out.dust = map3d.fx ? map3d.fx.counts().dust : -1;
+      out.shaking = map3d.fx ? map3d.fx.animated(performance.now() / 1000) : false;
+      // Same list again (nothing new): no event.
+      frame.tick = T + 2; drawFrame(frame, true);
+      out.repeat = (map3d.collapseEvents || 0) - base;
+      // A scrub far ahead that happens to destroy more is not an "event".
+      const e3 = JSON.parse(JSON.stringify(e2)); e3.buildings[3].damage = 100;
+      staticEnvironment = e3; frame.tick = T + 80; drawFrame(frame, true);
+      out.scrub = (map3d.collapseEvents || 0) - base;
+      staticEnvironment = orig; drawFrame(window._lastFrame, true);
+      return out;
+    }""")
+    check(ev["events"] == 1 and ev["last"]["buildings"] == 3, f"[3d] newly destroyed buildings in a new building list raise one building-collapse event (events {ev['events']}, {ev['last']})")
+    check(ev["dust"] > 0 and ev["shaking"], f"[3d] a building collapse throws up dust ({ev['dust']} particles) and shakes the camera")
+    check(ev["repeat"] == 1 and ev["scrub"] == 1, f"[3d] the same list again, or a jump across many ticks, is not a new collapse event (after repeat {ev['repeat']}, after scrub {ev['scrub']})")
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the building checks (got {real_errors[:5]})")
 
 
 def _route_accuracy_check(page):
