@@ -11,8 +11,9 @@ duration ranges remain only as maximum backstops (communication has none).
 
 Recovery actions that act on environment faults, incidents and the radio link
 (reroute, clear road, reinforce, relay) are described in
-`docs/RECOVERY_ACTIONS.md`. They run by default under this profile; use
-`--causal-actions=off` to reproduce the profile without them.
+`docs/RECOVERY_ACTIONS.md`. They are **off by default** under this profile
+(`--causal-actions` defaults to `off`); enable them with
+`--causal-actions=on`.
 
 ## Determinism
 

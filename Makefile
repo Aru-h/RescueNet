@@ -1265,11 +1265,11 @@ CAUSAL_STRESS ?= 7
 # Run-level sanity bound on --fault-profile=causal: per-class and per-team
 # fault exposure, episode chattering and the maximum-duration backstops must
 # stay within laptop/tools/fault_exposure.py's bounds over 8 seeds x 3000
-# ticks (AI off) at CAUSAL_STRESS. Catches a fault -> drain -> fault loop
+# ticks (AI off) at CAUSAL_STRESS with the recovery actions ON (the worst case for chattering). Catches a fault -> drain -> fault loop
 # pinning teams in a faulted state. Bounds are assumed guard rails, not
 # calibrated values.
 check-causal-fault-exposure: $(TARGET)
-	@$(PYTHON) $(TOOLS_DIR)/fault_exposure.py --tron ./$(TARGET) --profile causal --stress $(CAUSAL_STRESS) --seeds 1001-1008 --ticks 3000 --check
+	@$(PYTHON) $(TOOLS_DIR)/fault_exposure.py --tron ./$(TARGET) --profile causal --stress $(CAUSAL_STRESS) --extra-arg=--causal-actions=on --seeds 1001-1008 --ticks 3000 --check
 
 # Causal profile plumbing: an unknown --fault-profile is an error, --fault-stress
 # is rejected for other profiles, and a causal run is reproducible - the main
@@ -1281,8 +1281,8 @@ check-causal-profile: $(TARGET)
 	@if ./$(TARGET) 1 1 10 --fault-profile=combined --fault-stress=2 >/dev/null 2>&1; then echo "FAIL: --fault-stress accepted without causal"; exit 1; fi
 	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-actions=off >/dev/null 2>&1; then echo "FAIL: --causal-actions accepted without causal"; exit 1; fi
 	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-actions=bogus >/dev/null 2>&1; then echo "FAIL: unknown --causal-actions value accepted"; exit 1; fi
-	@cd $(CAUSAL_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) >/dev/null 2>&1
-	@cd $(CAUSAL_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) >/dev/null 2>&1
+	@cd $(CAUSAL_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-actions=on >/dev/null 2>&1
+	@cd $(CAUSAL_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-actions=on >/dev/null 2>&1
 	@cmp $(CAUSAL_DET_DIR)/a/tron_snapshot_dataset.csv $(CAUSAL_DET_DIR)/b/tron_snapshot_dataset.csv
 	@cmp $(CAUSAL_DET_DIR)/a/tron_causal_truth.csv $(CAUSAL_DET_DIR)/b/tron_causal_truth.csv
 	@echo "check-causal-profile: unknown profile rejected, causal-only flags gated, causal dataset + truth sidecar reproducible (recovery actions on)"

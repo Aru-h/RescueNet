@@ -12,6 +12,16 @@ Step 3 adds four actions that act on the map, the incident or the radio link.
 They exist **only under `--fault-profile=causal`**; every other profile, and
 the default recovery behaviour, is byte-identical to before.
 
+**Default: OFF.** Under the causal profile `--causal-actions` defaults to
+`off` (the profile behaves exactly as it did before Step 3). On the approved
+Phase 2 model the actions bring no measurable gain: -1.25 incidents resolved
+on the development seeds (significant) but -0.25 [-1.60, +1.20] on held-out
+seeds (not significant), -0.75 [-1.68, +0.15] pooled over 40 seeds. They stay
+off until the Step 3.5 planner gates them.
+Turn them on with `--causal-actions=on` or a list such as
+`--causal-actions=reroute,relay`. Other profiles reject the flag, so they are
+unaffected either way.
+
 ## They are not `RecoveryAction_t` values
 
 `RecoveryAction_t` is serialized: it is written to the dataset CSV
@@ -134,7 +144,7 @@ keep the old arithmetic.
 | `relay_max_ticks` | 20 | a reposition never lasts longer | assumed |
 
 Command-line controls (all causal-only; other profiles reject them):
-`--causal-actions=on|off|reroute,clear_road,reinforce,relay` (default on),
+`--causal-actions=on|off|reroute,clear_road,reinforce,relay` (default **off**),
 and the sensitivity overrides `--causal-env-duration=<min>-<max>`,
 `--causal-env-crossing-delay=<ticks>`, `--causal-reroute-penalty=<n>`.
 
@@ -160,9 +170,9 @@ and the sensitivity overrides `--causal-env-duration=<min>-<max>`,
    a penalty of 30-40 made teams walk far to avoid a +3 cost. With persistent,
    costly road faults (below) reroute-only scored 42.35 incidents at penalty 3,
    41.60 at 10 and 37.10 at 30, against 41.20 with the actions off. The default
-   is 3 (the fault's own cost increment). It was chosen on the same seeds used
-   for evaluation, from three values, so treat the reroute number as
-   mildly optimistic.
+   is 3 (the fault's own cost increment). It was chosen on the development
+   seeds 1001-1020, from three values, so numbers on those seeds are mildly
+   optimistic; the held-out seeds 2001-2020 below were run with it fixed.
 4. **The first version was harmful and was changed.** With penalty 40 and a
    `RELAY_REPOSITION` that triggered on any comms fault, all four actions on
    gave 34.10 incidents against 44.45 with them off (seeds 1001-1020, stress
@@ -172,11 +182,18 @@ and the sensitivity overrides `--causal-env-duration=<min>-<max>`,
    lasted 3 ticks, with a 30-tick cooldown. The numbers below are from the
    fixed version.
 
-## Results (causal profile, stress 7, seeds 1001-1020, 3000 ticks, AI off)
+## Results (causal profile, stress 7, 3000 ticks, AI off unless stated)
 
-Differences are paired by seed; bootstrap 95% CI, 10000 resamples.
+Two seed sets. **Seeds 1001-1020 are the development seeds**: the detour
+penalty (3) was chosen on them, so numbers on them are mildly optimistic for
+the actions. **Seeds 2001-2020 are held out**: the penalty was fixed at 3
+before they were run. Differences are paired by seed; bootstrap 95% CI, 10000
+resamples. The C13 re-run below uses the development seeds only.
 
-### Causal before Step 3 (`--causal-actions=off`) vs with the actions (`on`)
+Tables headed "development seeds" are seeds 1001-1020; the held-out tables
+follow them.
+
+### Development seeds 1001-1020: causal before Step 3 (`--causal-actions=off`) vs with the actions (`on`)
 
 Phase 2 environment model (faults last 5-12 ticks, no crossing cost):
 
@@ -196,9 +213,10 @@ Action counts per seed (on): reroute started 114.5, resolved 88.3, abandoned
 first); reinforce_incident started 0.0 (3.9 requests expired unserved);
 relay_reposition started 9.2, resolved 8.9, abandoned 0.2.
 
-In this model the actions cost a small, significant number of incidents: the
-only action with real activity is reroute, and it detours to avoid a cost that
-never slowed anyone.
+On the development seeds the actions cost a small, significant number of
+incidents; on held-out seeds (below) the loss is not significant. The only
+action with real activity is reroute, and in this model it detours to avoid a
+cost that never slowed anyone, so no gain is expected.
 
 Sensitivity model (what-if, not the default): environment faults last 60-150
 ticks (`--causal-env-duration=60-150`) and a team stalls 3 ticks before
@@ -219,6 +237,68 @@ started; relay_reposition started 9.6, resolved 9.3. Going from the Phase 2
 environment model to this one costs 3.25 incidents per seed with the actions
 off (44.45 to 41.20; the duration change and the crossing delay are not
 separated), and the actions recover none of it significantly.
+
+### Held-out seeds 2001-2020 (penalty fixed at 3 beforehand), AI off
+
+Same tables, same settings, seeds not used to choose any parameter.
+
+Phase 2 environment model:
+
+| | actions off | actions on | on - off (95% CI) |
+|---|---|---|---|
+| incidents resolved / seed | 43.75 | 43.50 | -0.25 [-1.60, +1.20] |
+| victims lost / seed | 11.3 | 12.8 | +1.40 [-1.40, +4.15] |
+| any-fault exposure | 0.110 | 0.112 | |
+| mobility exposure / mean duration | 0.044 / 7.6 | 0.045 / 7.6 | |
+| communication exposure / mean duration | 0.016 / 3.2 | 0.017 / 3.2 | |
+| resource exposure / mean duration | 0.038 / 7.9 | 0.038 / 7.9 | |
+| environment exposure / mean duration | 0.019 / 8.5 | 0.019 / 8.5 | |
+| mission exposure / mean duration | 0.000 / 7.6 | 0.001 / 7.4 | |
+
+Actions per seed (on): reroute started 125.7 (96.1 resolved, 29.4 abandoned);
+clear_road started 40.6, resolved 0.0, abandoned 40.6; reinforce_incident
+started 0.0 (5.4 requests expired unserved); relay_reposition started 19.5
+(19.1 resolved).
+
+Sensitivity model (60-150 tick faults, 3-tick crossing cost):
+
+| | off | on (all four) | reroute only | clear_road only |
+|---|---|---|---|---|
+| incidents resolved / seed | 40.75 | 41.90 | 42.15 | 40.95 |
+| paired vs off (95% CI) | | +1.15 [-0.45, +2.80] | **+1.40 [+0.15, +2.70]** | +0.20 [-1.45, +2.05] |
+| victims lost / seed | 12.5 | 14.3 | 12.9 | 12.7 |
+| victims lost vs off (95% CI) | | **+1.80 [+0.25, +3.45]** | +0.40 [-1.40, +2.30] | +0.20 [-0.95, +1.30] |
+| environment exposure / mean duration | 0.175 / 104.2 | 0.165 / 98.8 | 0.180 / 104.8 | 0.168 / 99.1 |
+| any-fault exposure | 0.252 | 0.242 | 0.256 | 0.244 |
+
+Actions per seed (on): reroute started 201.6 (142.4 resolved, 58.9
+abandoned); clear_road started 33.6, resolved 1.9, abandoned 31.4;
+reinforce_incident 0 started; relay_reposition started 18.8 (18.2 resolved).
+
+### Both seed sets together (paired, 40 seeds)
+
+| comparison | incidents resolved (95% CI) | victims lost (95% CI) |
+|---|---|---|
+| Phase 2 model: on - off | -0.75 [-1.68, +0.15] | +0.25 [-1.45, +1.90] |
+| sensitivity: on - off | +0.57 [-0.68, +1.77] | +0.72 [-0.53, +2.00] |
+| sensitivity: reroute only - off | **+1.27 [+0.30, +2.25]** | +0.68 [-0.65, +2.05] |
+| sensitivity: clear_road only - off | +0.12 [-0.93, +1.20] | -0.28 [-1.52, +0.97] |
+
+What the held-out seeds change:
+
+* The development-seed loss on the Phase 2 model (-1.25, CI just excluding
+  zero) shrinks to -0.25 [-1.60, +1.20] held out and -0.75 [-1.68, +0.15]
+  pooled: not significant. The right reading is "no measurable gain, possibly
+  a small loss", not "a significant loss".
+* In the sensitivity model, reroute-only is the one condition with a positive
+  CI for incidents resolved on held-out seeds (+1.40 [+0.15, +2.70]) and
+  pooled (+1.27 [+0.30, +2.25]). The penalty was fixed before those seeds
+  were run, so this is not selection on the evaluation set. It is a
+  1-1.3 incident gain (about 3%), in a what-if model that is not the default.
+* Victims lost was not higher with the actions on in the development seeds'
+  AI-off runs (-0.35) but is higher on held-out seeds with all four on
+  (+1.80 [+0.25, +3.45]); pooled it is +0.72 [-0.53, +2.00]. The effect on
+  victims lost is not consistent across seed sets and is not explained.
 
 ### C13 re-run under the causal profile (AI_EVALUATION_BRIEF.md claim C13)
 
@@ -271,10 +351,15 @@ Reading it:
   in the sensitivity model (-1.95 [-3.70, -0.35]) without a clear change in
   incidents; that is the old team-level reaction, not a Step 3 effect, and one
   interval of 20 seeds does not say why.
-* Victims lost is higher with the actions on in the sensitivity model
-  (14.90 vs 12.50 with them off: `ai_ship, actions off` -2.40 [-4.15, -0.80]).
-  The actions delay some teams' arrival at incidents; this was not
-  investigated further.
+* Victims lost is higher with the actions on in the sensitivity model **in
+  this AI-on experiment**: `ai_ship, actions on` 14.90 vs `ai_ship, actions
+  off` 12.50 (difference -2.40 [-4.15, -0.80] for off minus on). That is the
+  real-AI build (`-DFAULT_MODEL_LOADED=1`). It did not replicate in the AI-off
+  runs of the Results tables above, where the sensitivity model gives 12.0
+  (on) vs 12.3 (off), paired -0.35 [-2.10, +1.50]. So the effect is
+  specific to the AI-on build, or chance; it was not investigated further.
+  The 14.90 and 12.50 figures are not comparable with the AI-off 12.0 and
+  12.3, which come from a different build.
 
 ### Recommendation on thresholds
 
@@ -298,10 +383,12 @@ expected effect:
   `combined`'s, not a causal value. A 60-150 tick backstop (36-90 minutes) is
   a more defensible assumption (assumed, no source).
 * Measured with the two overrides above, together they cost the mission about
-  3 incidents per seed (44.45 to 41.20, about 7%), which is the size of the
-  problem the actions would be paid to solve. The rule-based actions recover
-  at most about 1 incident of it (reroute only, +1.15 [-0.30, +2.55], not
-  significant), so this needs the Step 3.5 planner to show a benefit.
+  3 incidents per seed (44.45 to 41.20 on the development seeds, 43.75 to
+  40.75 on held-out seeds, about 7%), which is the size of the problem the
+  actions would be paid to solve. The rule-based actions recover about 1 of it
+  at best (reroute only: +1.15 [-0.30, +2.55] development, +1.40 [+0.15,
+  +2.70] held out, +1.27 [+0.30, +2.25] pooled), so a planner is needed to
+  recover the rest.
 * It restores the C13 signal (the legacy reaction becomes harmful again,
   -2.55 [-4.05, -1.05]), which is the property a trained environment class
   needs to be evaluated against.

@@ -78,7 +78,10 @@ CausalActionParams_t g_causal_actions = {
     .relay_search_radius = 8,
     .relay_max_ticks = 20,
 };
-uint8_t g_causal_actions_enabled = CAUSAL_ACTIONS_ALL;
+/* Off by default: on the approved Phase 2 model the actions cost incidents
+ * (docs/RECOVERY_ACTIONS.md). Enable with --causal-actions=on|<list> until a
+ * planner gates them. */
+uint8_t g_causal_actions_enabled = 0;
 static uint8_t g_causal_env_min = 0, g_causal_env_max = 0;
 
 void fault_config_set_causal_env_duration(uint8_t min_ticks, uint8_t max_ticks)

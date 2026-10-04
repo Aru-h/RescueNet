@@ -199,7 +199,7 @@ int main(int argc, char **argv)
     float fault_stress = 1.0f;
     int fault_stress_given = 0;
     int link_margin_map = 0;
-    int causal_actions_flag = (int)CAUSAL_ACTIONS_ALL;
+    int causal_actions_flag = 0;   /* default off: see docs/RECOVERY_ACTIONS.md */
     int causal_actions_given = 0;
     uint8_t causal_env_min = 0, causal_env_max = 0;
     uint8_t causal_env_delay = 0;
@@ -314,8 +314,8 @@ int main(int argc, char **argv)
         }
 
         /* Causal-profile recovery actions (reroute, clear road, reinforce,
-         * relay). On by default under causal; off reproduces the causal
-         * profile as it was before they existed. */
+         * relay). OFF by default under causal (the profile as it was before
+         * they existed); on, or a comma list, enables them. */
         if(strncmp(argv[i], "--causal-actions=", 17) == 0)
         {
             /* on | off | comma list of reroute,clear_road,reinforce,relay */

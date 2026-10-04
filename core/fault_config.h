@@ -138,7 +138,7 @@ typedef struct
 } CausalActionParams_t;
 
 extern CausalActionParams_t g_causal_actions;
-extern uint8_t g_causal_actions_enabled;     /* bit mask, one bit per CausalAction_t; --causal-actions=on|off|<list>, default all */
+extern uint8_t g_causal_actions_enabled;     /* bit mask, one bit per CausalAction_t; --causal-actions=on|off|<list>, default off */
 void fault_config_set_causal_actions(uint8_t mask);
 #define CAUSAL_ACTIONS_ALL 0x0Fu
 /* --causal-env-duration=<min>-<max>: sensitivity override of the causal
