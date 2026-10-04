@@ -1,4 +1,5 @@
 #include "allocator.h"
+#include "causal_actions.h"
 #include <stdio.h>
 #include <stdint.h>
 #include "simulation.h"
@@ -452,7 +453,8 @@ static void allocate_support_team(void)
             continue;
         if(incident->support_team != NO_ASSIGNMENT)
             continue;
-        if(!incident_needs_support(incident))
+        if(!incident_needs_support(incident) &&
+           !(fault_profile_causal_action_enabled(CAUSAL_ACTION_REINFORCE_INCIDENT) && causal_actions_reinforce_wanted(i)))
             continue;
         /* L8: same pair check as select_best_team(). Without it the
          * support team was re-sent every tick to an incident on the far

@@ -75,6 +75,9 @@ typedef enum {
     INCIDENT_EQUIPMENT_CACHE,
     INCIDENT_RETURN_TO_SAFE_ZONE,
     INCIDENT_EVACUEE_OFFBOARD,
+    /* Causal-profile only (core/causal_actions.c): a system task that clears
+     * a faulted road cell. Appended so every existing value is unchanged. */
+    INCIDENT_CLEAR_ROAD,
 
     NUM_INCIDENT_TYPES
 } IncidentType_t;

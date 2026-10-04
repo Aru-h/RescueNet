@@ -9,6 +9,7 @@
 #include "environment.h"
 #include "fault_buffer.h"
 #include "fault_predictor.h"
+#include "causal_actions.h"
 #include "feature_pack.h"
 #include "incident.h"
 #include "mission_execution_twin.h"
@@ -1328,6 +1329,18 @@ static RecoverySignal_t evaluate_fault_predictor(
 
         for(uint8_t fault_class = 0u; fault_class < NUM_OPERATIONAL_FAULT_CLASSES; fault_class++)
         {
+            /* Causal profile: a flagged environment/mission class drives its
+             * own map/incident action (reroute, clear road, reinforce)
+             * instead of a team-level action, which is what made these
+             * classes harmful to enable (AI_EVALUATION_BRIEF C13). */
+            if(fault_profile_causal_actions_on() &&
+               (fault_class == FAULT_CLASS_ENVIRONMENT || fault_class == FAULT_CLASS_MISSION))
+            {
+                if(scores.score[fault_class] >= class_threshold[fault_class])
+                    causal_actions_detector_flag(team->team_id, (OperationalFaultClass_t)fault_class);
+                continue;
+            }
+
             if(scores.score[fault_class] >= class_threshold[fault_class] &&
                scores.score[fault_class] > best_score)
             {

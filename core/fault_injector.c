@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "allocator.h"
+#include "causal_actions.h"
 #include "environment.h"
 #include "incident.h"
 #include "mission_state.h"
@@ -464,6 +465,25 @@ static void recover_environment_fault(uint8_t team_id)
         uint8_t new_cost = (cell->travel_cost > severity)
                            ? (cell->travel_cost - severity)
                            : cell->env_fault_base_cost;
+
+        /* Causal profile: subtracting this team's severity from a cost the
+         * road-degradation hazard may have raised leaves a residual, so
+         * rebuild the cost from the baseline plus the severities of the
+         * faults that are still active on this cell. */
+        if(fault_profile_is_causal())
+        {
+            uint16_t rebuilt = cell->env_fault_base_cost;
+
+            for(uint8_t other = 0; other < NUM_TEAMS; other++)
+            {
+                const TeamFaultState_t *ofs = &g_teams[other].fault_state;
+
+                if(other != team_id && ofs->active[fault_class] &&
+                   ofs->target_x[fault_class] == x && ofs->target_y[fault_class] == y)
+                    rebuilt = (uint16_t)(rebuilt + ofs->severity[fault_class]);
+            }
+            new_cost = rebuilt > 255u ? 255u : (uint8_t)rebuilt;
+        }
         environment_set_cell_operational_state(
             x, y,
             new_cost,
@@ -958,7 +978,7 @@ static void causal_mission_model_step(void)
         {
             float hazard_per_h = (k->survival_k / k->survival_lambda_h) *
                                  powf(age_h / k->survival_lambda_h, k->survival_k - 1.0f);
-            float p_die = 1.0f - expf(-hazard_per_h * tick_h);
+            float p_die = 1.0f - expf(-hazard_per_h * tick_h * causal_actions_survival_factor(slot));
             float expected = (float)inc->victim_count * p_die;
             uint8_t deaths = (uint8_t)expected;
 
@@ -1178,6 +1198,51 @@ static void causal_step(void)
     }
 }
 
+/* CLEAR_ROAD completion: the cell goes back to its pre-fault state and every
+ * team's environment fault on it ends. Restoring from the baseline in one
+ * step (rather than owner by owner) leaves no residual cost. Returns how
+ * many team faults ended. */
+int fault_injector_clear_cell_faults(int x, int y)
+{
+    EnvironmentCell_t *cell;
+    int ended = 0;
+
+    if(x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT)
+        return 0;
+    cell = &g_environment[x][y];
+    if(cell->env_fault_ref_count == 0)
+        return 0;
+
+    environment_set_cell_operational_state(
+        x, y,
+        cell->env_fault_base_cost,
+        s_env_fault_base_navigable[x][y],
+        s_env_fault_base_road_blocked[x][y]);
+    cell->env_fault_ref_count = 0;
+
+    for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+    {
+        TeamFaultState_t *fs = &g_teams[team_id].fault_state;
+
+        if(!fs->active[FAULT_CLASS_ENVIRONMENT] ||
+           fs->target_x[FAULT_CLASS_ENVIRONMENT] != x || fs->target_y[FAULT_CLASS_ENVIRONMENT] != y)
+            continue;
+
+        s_causal_stats.cleared_by_cause[FAULT_CLASS_ENVIRONMENT]++;
+        s_causal_stats.active_ticks_total[FAULT_CLASS_ENVIRONMENT] +=
+            g_current_tick - fs->start_tick[FAULT_CLASS_ENVIRONMENT];
+        s_causal_truth[team_id].clear_cause[FAULT_CLASS_ENVIRONMENT] = (uint8_t)CAUSAL_CLEAR_CAUSE_REMOVED;
+
+        fs->recovery_tick[FAULT_CLASS_ENVIRONMENT] = g_current_tick;
+        mark_last_fault(fs, FAULT_CLASS_ENVIRONMENT);
+        snapshot_record(g_sim_step_tick, EVENT_FAULT_RECOVERED, team_id);
+        clear_fault_summary(fs, FAULT_CLASS_ENVIRONMENT);
+        ended++;
+    }
+
+    return ended;
+}
+
 float fault_injector_causal_link_margin_at(int x, int y)
 {
     return causal_link_margin_db(x, y);
@@ -1204,6 +1269,7 @@ void fault_injector_init(uint32_t seed)
         s_causal_last_rest_tick[t] = 0;
         memset(&s_causal_truth[t], 0, sizeof(s_causal_truth[t]));
     }
+    causal_actions_reset();
     for(uint8_t i = 0; i < NUM_INCIDENTS; i++)
     {
         s_causal_inc_id[i] = 0;

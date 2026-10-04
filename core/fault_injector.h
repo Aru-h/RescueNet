@@ -71,6 +71,9 @@ int fault_injector_causal_symptom_skip(uint8_t team_id);
  * the current tick. */
 float fault_injector_causal_link_margin_at(int x, int y);
 float fault_injector_causal_shadow_at(int x, int y);
+/* Causal REROUTE/CLEAR_ROAD: ends every environment fault on cell (x, y) and
+ * restores the cell. Returns the number of faults ended. Laptop only. */
+int fault_injector_clear_cell_faults(int x, int y);
 
 /* Causal profile mission model, for result reporting. */
 typedef struct

@@ -19,6 +19,7 @@
 #include "watchdog.h"
 #include "recovery_manager.h"
 #include "fault_injector.h"
+#include "causal_actions.h"
 #include "fault_comms.h"
 #include "mission_execution_twin.h"
 #include "consensus.h"
@@ -262,13 +263,20 @@ void move_team(TeamState_t *team) //simulation
     if(fault_profile_is_causal() && fault_injector_causal_symptom_skip(team->team_id))
         return;
 
+    /* Causal RELAY_REPOSITION: a team with a weak link steps toward the
+     * nearest cell with a positive margin instead of its usual route. */
+    if(fault_profile_causal_action_enabled(CAUSAL_ACTION_RELAY_REPOSITION) && causal_actions_move_override(team))
+        return;
+
     if(team->heading_to_rest)
     {
         SafeZone_t *safezone = &g_safezones[team->resting_zone_id];
 
         int next_x, next_y;
         uint16_t remaining_after_step = 0;
+        causal_actions_path_begin(team);
         int pre_step_cost = find_next_path_step_remaining(team->loc_x, team->loc_y, safezone->loc_x, safezone->loc_y, &next_x, &next_y, &remaining_after_step);
+        causal_actions_path_end();
 
         if(pre_step_cost <= 0)
         {
@@ -303,6 +311,9 @@ void move_team(TeamState_t *team) //simulation
 
             return;
         }
+
+        if(fault_profile_is_causal() && causal_actions_crossing_stall(team, next_x, next_y))
+            return;
 
         team->loc_x = next_x;
         team->loc_y = next_y;
@@ -345,9 +356,14 @@ void move_team(TeamState_t *team) //simulation
 
     int next_x, next_y;
     uint16_t remaining_after_step = 0;
+    causal_actions_path_begin(team);
     int pre_step_cost = find_next_path_step_remaining(team->loc_x, team->loc_y, task->loc_x, task->loc_y, &next_x, &next_y, &remaining_after_step);
+    causal_actions_path_end();
     if(pre_step_cost > 0)
     {
+        if(fault_profile_is_causal() && causal_actions_crossing_stall(team, next_x, next_y))
+            return;
+
         team->loc_x = next_x;
         team->loc_y = next_y;
         if(g_simulation_trace_enabled) debug_trace(" -> (%d,%d)", team->loc_x, team->loc_y);

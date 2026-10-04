@@ -3,6 +3,7 @@
 #include "scoring.h"
 #include "fault_config.h"
 #include "fault_injector.h"
+#include "causal_actions.h"
 #include "simulation.h"
 #include "allocator.h"
 #include "snapshot.h"
@@ -134,6 +135,8 @@ void sim_tick(void)
     g_sim_step_tick = g_current_tick + 1u;
     if(g_sim_role != SIM_ROLE_BOARD)
         fault_injector_step();  /* faults reach a board as MissionLinkFault_t */
+    if(g_sim_role != SIM_ROLE_BOARD)
+        causal_actions_step();  /* causal profile only; no-op otherwise */
     allocate_all_incidents();
     simulation_step();
 }

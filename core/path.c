@@ -41,6 +41,12 @@ typedef struct
 
 static PathCacheEntry_t g_path_cache[PATH_CACHE_SIZE];
 static uint8_t g_path_cache_active = 0;
+static const uint8_t *g_path_extra_cost = NULL;
+
+void path_set_extra_cost(const uint8_t *grid)
+{
+    g_path_extra_cost = grid;
+}
 
 /* Number of moves (one per tick, diagonal or not) on the route the most
  * recent path_search() call found - set on a fresh search and restored on
@@ -73,7 +79,7 @@ static uint8_t path_cache_lookup(
     int sx, int sy, int dx, int dy, uint8_t eq,
     int *out_cost, int *out_next_x, int *out_next_y)
 {
-    if(!g_path_cache_active)
+    if(!g_path_cache_active || g_path_extra_cost != NULL)
         return 0;
 
     uint32_t slot = path_cache_hash(sx, sy, dx, dy, eq);
@@ -96,7 +102,7 @@ static void path_cache_store(
     int sx, int sy, int dx, int dy, uint8_t eq,
     int cost, int next_x, int next_y)
 {
-    if(!g_path_cache_active)
+    if(!g_path_cache_active || g_path_extra_cost != NULL)
         return;
 
     uint32_t slot = path_cache_hash(sx, sy, dx, dy, eq);
@@ -138,6 +144,9 @@ static int get_movement_cost(int x, int y, uint8_t equipment_flags)
 
     if(!environment_cell_is_navigable(x, y))
         return -1;
+
+    if(g_path_extra_cost != NULL)
+        return (int)environment_cell_travel_cost(x, y) + (int)g_path_extra_cost[x * GRID_HEIGHT + y];
 
     return environment_cell_travel_cost(x, y);
 }

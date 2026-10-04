@@ -1279,10 +1279,12 @@ check-causal-profile: $(TARGET)
 	@rm -rf $(CAUSAL_DET_DIR) && mkdir -p $(CAUSAL_DET_DIR)/a $(CAUSAL_DET_DIR)/b
 	@if ./$(TARGET) 1 1 10 --fault-profile=bogus >/dev/null 2>&1; then echo "FAIL: unknown --fault-profile accepted"; exit 1; fi
 	@if ./$(TARGET) 1 1 10 --fault-profile=combined --fault-stress=2 >/dev/null 2>&1; then echo "FAIL: --fault-stress accepted without causal"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-actions=off >/dev/null 2>&1; then echo "FAIL: --causal-actions accepted without causal"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-actions=bogus >/dev/null 2>&1; then echo "FAIL: unknown --causal-actions value accepted"; exit 1; fi
 	@cd $(CAUSAL_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) >/dev/null 2>&1
 	@cd $(CAUSAL_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) >/dev/null 2>&1
 	@cmp $(CAUSAL_DET_DIR)/a/tron_snapshot_dataset.csv $(CAUSAL_DET_DIR)/b/tron_snapshot_dataset.csv
 	@cmp $(CAUSAL_DET_DIR)/a/tron_causal_truth.csv $(CAUSAL_DET_DIR)/b/tron_causal_truth.csv
-	@echo "check-causal-profile: unknown profile rejected, stress gated to causal, causal dataset + truth sidecar reproducible"
+	@echo "check-causal-profile: unknown profile rejected, causal-only flags gated, causal dataset + truth sidecar reproducible (recovery actions on)"
 
 .PHONY: check-causal-fault-exposure check-causal-profile

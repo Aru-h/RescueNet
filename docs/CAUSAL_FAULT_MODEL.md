@@ -9,6 +9,11 @@ Faults under `causal` are consequences of simulated state rather than
 per-tick dice rolls, and they end when their cause is removed. The old
 duration ranges remain only as maximum backstops (communication has none).
 
+Recovery actions that act on environment faults, incidents and the radio link
+(reroute, clear road, reinforce, relay) are described in
+`docs/RECOVERY_ACTIONS.md`. They run by default under this profile; use
+`--causal-actions=off` to reproduce the profile without them.
+
 ## Determinism
 
 Every causal draw is a hash of `(seed, tick, team-or-incident, salt)`

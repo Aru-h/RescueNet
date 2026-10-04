@@ -50,6 +50,12 @@ uint16_t find_path_cost_with_equipment(
  * or team positions runs, and MUST call path_cache_begin() again for any
  * subsequent span (e.g. a second allocate_all_incidents() call later in
  * the same tick) rather than reusing an old span's cache. */
+/* Per-team extra cost overlay (causal REROUTE). grid is GRID_WIDTH *
+ * GRID_HEIGHT bytes indexed [x * GRID_HEIGHT + y], added to a cell's
+ * movement cost; NULL (the default, and the state outside move_team())
+ * means no overlay. While set, the intra-call cache is bypassed. */
+void path_set_extra_cost(const uint8_t *grid);
+
 void path_cache_begin(void);
 void path_cache_end(void);
 #endif

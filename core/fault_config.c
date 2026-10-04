@@ -57,6 +57,61 @@ CausalFaultParams_t g_causal_params = {
     .max_concurrent_faults = 3,
 };
 
+CausalActionParams_t g_causal_actions = {
+    .reroute_cost_penalty = 3,
+    .env_crossing_delay_ticks = 0,
+    .reroute_lookahead = 8,
+    .reroute_max_ticks = 40,
+
+    .clear_road_persist_ticks = 5,
+    .clear_road_teams_threshold = 2,
+    .clear_road_max_tasks = 2,
+    .clear_road_work = 60,
+
+    .reinforce_event_window = 60,
+    .reinforce_hold_ticks = 150,
+    .reinforce_work_boost = 1.25f,
+    .reinforce_survival_factor = 0.5f,
+
+    .relay_min_fault_ticks = 3,
+    .relay_cooldown_ticks = 30,
+    .relay_search_radius = 8,
+    .relay_max_ticks = 20,
+};
+uint8_t g_causal_actions_enabled = CAUSAL_ACTIONS_ALL;
+static uint8_t g_causal_env_min = 0, g_causal_env_max = 0;
+
+void fault_config_set_causal_env_duration(uint8_t min_ticks, uint8_t max_ticks)
+{
+    g_causal_env_min = min_ticks;
+    g_causal_env_max = max_ticks;
+}
+
+void fault_config_set_causal_env_crossing_delay(uint8_t ticks)
+{
+    g_causal_actions.env_crossing_delay_ticks = ticks;
+}
+
+void fault_config_set_causal_reroute_penalty(uint16_t penalty)
+{
+    g_causal_actions.reroute_cost_penalty = penalty;
+}
+
+void fault_config_set_causal_actions(uint8_t mask)
+{
+    g_causal_actions_enabled = (uint8_t)(mask & CAUSAL_ACTIONS_ALL);
+}
+
+int fault_profile_causal_actions_on(void)
+{
+    return g_fault_config.profile == FAULT_PROFILE_CAUSAL && g_causal_actions_enabled != 0u;
+}
+
+int fault_profile_causal_action_enabled(unsigned action)
+{
+    return g_fault_config.profile == FAULT_PROFILE_CAUSAL && ((g_causal_actions_enabled >> action) & 1u);
+}
+
 void fault_config_set_stress(float stress)
 {
     g_fault_stress = stress;
@@ -156,6 +211,8 @@ void fault_config_apply_profile(FaultProfile_t profile)
             set_duration_range(FAULT_CLASS_RESOURCE, 6, 14);
             set_duration_range(FAULT_CLASS_ENVIRONMENT, 5, 12);
             set_duration_range(FAULT_CLASS_MISSION, 5, 12);
+            if(g_causal_env_max != 0)
+                set_duration_range(FAULT_CLASS_ENVIRONMENT, g_causal_env_min, g_causal_env_max);
             break;
 
         case FAULT_PROFILE_NONE:

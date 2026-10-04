@@ -92,6 +92,9 @@ int create_equipment_cache_incident(TeamState_t *team);
 int create_evacuee_offboard_incident(uint8_t safezone_id);
 void generate_evacuee_offboard_incidents(void);
 int begin_return_to_safe_zone(TeamState_t *team);
+/* Causal profile only (core/causal_actions.c). */
+int create_clear_road_task(int16_t x, int16_t y, uint16_t work);
+void incident_cancel_system_task(IncidentState_t *task);
 uint8_t find_nearest_safe_zone(const TeamState_t *team);
 void abandon_task_for_recovery(TeamState_t *team);
 

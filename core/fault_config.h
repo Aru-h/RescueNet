@@ -106,6 +106,53 @@ typedef struct
 } CausalFaultParams_t;
 
 extern CausalFaultParams_t g_causal_params;
+
+/* Recovery actions that only exist under the causal profile (Step 3):
+ * REROUTE, CLEAR_ROAD, REINFORCE_INCIDENT, RELAY_REPOSITION. They are NOT
+ * RecoveryAction_t values: that enum is written to the dataset CSV
+ * (recovery_recommendation) and compared numerically by tools, so it is
+ * left alone. Every effect size is here; docs/RECOVERY_ACTIONS.md documents
+ * each one with its source or "assumed". */
+typedef struct
+{
+    /* REROUTE */
+    uint16_t reroute_cost_penalty;      /* extra path cost on a faulted/blocked cell, for the rerouting team only; a detour is taken only when it is nearly free */
+    uint8_t  env_crossing_delay_ticks;  /* sensitivity override (default 0 = Phase 2 model): ticks a team stalls before stepping onto a faulted cell */
+    uint8_t  reroute_lookahead;         /* route steps scanned for faulted cells */
+    uint16_t reroute_max_ticks;         /* a reroute never lasts longer than this */
+    /* CLEAR_ROAD */
+    uint16_t clear_road_persist_ticks;  /* N: a cell faulted this long gets a clearing task */
+    uint8_t  clear_road_teams_threshold;/* ... or as soon as this many teams have it on their route */
+    uint8_t  clear_road_max_tasks;      /* concurrent clearing tasks */
+    uint16_t clear_road_work;           /* work units to clear a cell (a team does ~8-12 per tick) */
+    /* REINFORCE_INCIDENT */
+    uint16_t reinforce_event_window;    /* ticks after a death/escalation that count as "deteriorating" */
+    uint16_t reinforce_hold_ticks;      /* how long a reinforcement request stands */
+    float    reinforce_work_boost;      /* work-rate multiplier while a support team is on scene */
+    float    reinforce_survival_factor; /* victim death-hazard multiplier while a support team is on scene */
+    /* RELAY_REPOSITION */
+    uint8_t  relay_min_fault_ticks;     /* only a comms fault this old triggers a reposition (1-2 tick blips are ignored) */
+    uint16_t relay_cooldown_ticks;      /* after a reposition ends, no new one for this team for this long */
+    uint8_t  relay_search_radius;       /* cells searched for a positive-margin cell */
+    uint16_t relay_max_ticks;           /* a reposition never lasts longer than this */
+} CausalActionParams_t;
+
+extern CausalActionParams_t g_causal_actions;
+extern uint8_t g_causal_actions_enabled;     /* bit mask, one bit per CausalAction_t; --causal-actions=on|off|<list>, default all */
+void fault_config_set_causal_actions(uint8_t mask);
+#define CAUSAL_ACTIONS_ALL 0x0Fu
+/* --causal-env-duration=<min>-<max>: sensitivity override of the causal
+ * environment-fault backstop (ticks, 1-255). 0/0 = the profile default. */
+void fault_config_set_causal_env_duration(uint8_t min_ticks, uint8_t max_ticks);
+/* --causal-env-crossing-delay=<ticks> (sensitivity override, causal only). */
+void fault_config_set_causal_env_crossing_delay(uint8_t ticks);
+/* --causal-reroute-penalty=<cost units> (sensitivity, causal only). */
+void fault_config_set_causal_reroute_penalty(uint16_t penalty);
+/* 1 only under the causal profile with at least one action enabled. */
+int fault_profile_causal_actions_on(void);
+/* 1 under the causal profile when this particular action (CausalAction_t) is enabled. */
+int fault_profile_causal_action_enabled(unsigned action);
+
 /* Evaluation stress multiplier (--fault-stress=<x>, default 1 = realistic
  * field rates). Scales mobility/resource hazards and the Omori rate K ONLY.
  * It does not scale the deterministic link-margin model or the mission

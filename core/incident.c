@@ -1,4 +1,5 @@
 #include "incident.h"
+#include "causal_actions.h"
 #include "mission_state.h"
 #include "cbba.h"
 #include "simulation.h"
@@ -298,9 +299,23 @@ const IncidentArchetype_t g_incident_archetypes[NUM_INCIDENT_TYPES] =
             .priority=PRIORITY_LOW,
             .passive_effect=PASSIVE_NONE,
             .hazard_flags=0,
+        },
+        /* Causal profile only (causal_actions.c). Perimeter teams do the
+         * structural/debris work, so they are preferred; any AVAILABLE
+         * team can still win it if no Perimeter team competes. */
+        [INCIDENT_CLEAR_ROAD] =
+        {
+            .incident_type = INCIDENT_CLEAR_ROAD,
+            .priority = PRIORITY_HIGH,
+            .required_specialization = SPEC_PERIMETER,
+            .hazard_flags = 0,
+            .passive_effect = PASSIVE_NONE,
         }
 
 };
+
+static IncidentState_t *find_free_system_task_slot(void);
+static IncidentState_t *find_reclaimable_system_task_slot(void);
 
 static void apply_incident_archetype(IncidentState_t *incident, IncidentType_t type)
 {
@@ -738,6 +753,38 @@ int create_equipment_cache_incident(TeamState_t *team) //incident
     return task->incident_id;
 }
 
+/* Causal profile only: an OPEN system task asking a team to clear the
+ * faulted road cell (x, y). Same slot handling as the equipment-cache
+ * request above. Returns the new incident id or NO_ASSIGNMENT. */
+int create_clear_road_task(int16_t x, int16_t y, uint16_t work)
+{
+    IncidentState_t *task = find_free_system_task_slot();
+    if(task == NULL)
+        task = find_reclaimable_system_task_slot();
+    if(task == NULL)
+        return NO_ASSIGNMENT;
+
+    task->incident_id = allocate_incident_id();
+
+    apply_incident_archetype(task, INCIDENT_CLEAR_ROAD);
+
+    task->status = INC_OPEN;
+    task->assigned_team = NO_ASSIGNMENT;
+    task->support_team = NO_ASSIGNMENT;
+    task->loc_x = x;
+    task->loc_y = y;
+    task->victim_count = 0;
+    task->reported_at_tick = g_current_tick;
+    task->structure_type = 0;
+    task->passive_timer = 0;
+    task->spawned_by = NO_ASSIGNMENT;
+    task->work_remaining = work;
+    task->stage_work = work;
+    task->discovered = 1;
+
+    return (int)task->incident_id;
+}
+
 int incident_degradation_radius(IncidentType_t type)
 {
     switch(type)
@@ -952,7 +999,14 @@ static void update_incident_work(IncidentState_t *incident, TaskPool_t pool) //i
     uint8_t work_rate = incident_work_rate_for_team(incident->assigned_team);
 
     if(is_valid_team_id(incident->support_team) && g_teams[incident->support_team].status==STATUS_ON_SCENE)
+    {
         work_rate += incident_work_rate_for_team(incident->support_team);
+
+        /* Causal REINFORCE_INCIDENT: a reinforced incident is worked faster
+         * while its support team is on scene. */
+        if(pool == TASK_POOL_INCIDENT && fault_profile_causal_action_enabled(CAUSAL_ACTION_REINFORCE_INCIDENT))
+            work_rate = causal_actions_boost_work(incident, work_rate);
+    }
 
     if(incident->work_remaining<=work_rate)
     {
@@ -1188,8 +1242,29 @@ static void complete_task(TaskPool_t pool, IncidentState_t *task)
     clear_task_slot(TASK_POOL_INCIDENT, task);
 }
 
+/* Causal profile only: closes a system task that stopped being needed
+ * (its road cell cleared on its own) and releases whoever was on it. */
+void incident_cancel_system_task(IncidentState_t *task)
+{
+    if(task == NULL || !task->slot_occupied)
+        return;
+
+    complete_task(TASK_POOL_SYSTEM, task);
+    cbba_sync_mission_execution_twin();
+}
+
 void complete_incident_stage(IncidentState_t *incident) //incident
 {
+    /* Causal profile only: the road is cleared, the faults on that cell end,
+     * the task resolves and its team is released. */
+    if(incident->incident_type == INCIDENT_CLEAR_ROAD)
+    {
+        causal_actions_road_cleared(incident->loc_x, incident->loc_y);
+        complete_task(TASK_POOL_SYSTEM, incident);
+        cbba_sync_mission_execution_twin();
+        return;
+    }
+
     /* An evacuee run's legs load and unload safe-zone headcounts, which
      * only the laptop holds. On a board, finishing a leg just frees the
      * team; the laptop stages the next leg from the team's report

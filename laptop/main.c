@@ -16,6 +16,7 @@
 #include "snapshot.h"
 #include "fault_config.h"
 #include "fault_injector.h"
+#include "causal_actions.h"
 #include "sim_runner.h"
 #include "mission_feed.h"
 #include "mission_mirror.h"
@@ -198,6 +199,11 @@ int main(int argc, char **argv)
     float fault_stress = 1.0f;
     int fault_stress_given = 0;
     int link_margin_map = 0;
+    int causal_actions_flag = (int)CAUSAL_ACTIONS_ALL;
+    int causal_actions_given = 0;
+    uint8_t causal_env_min = 0, causal_env_max = 0;
+    uint8_t causal_env_delay = 0;
+    int causal_reroute_penalty = -1;
     int live_mode = 0;
     int mission_feed_mode = 0; /* --mission-feed, see laptop/mission_feed.h */
     int diag_mode = 0;  /* off by default - see --diag below */
@@ -307,6 +313,91 @@ int main(int argc, char **argv)
             continue;
         }
 
+        /* Causal-profile recovery actions (reroute, clear road, reinforce,
+         * relay). On by default under causal; off reproduces the causal
+         * profile as it was before they existed. */
+        if(strncmp(argv[i], "--causal-actions=", 17) == 0)
+        {
+            /* on | off | comma list of reroute,clear_road,reinforce,relay */
+            const char *v = argv[i] + 17;
+            static const char *const names[NUM_CAUSAL_ACTIONS] =
+                { "reroute", "clear_road", "reinforce", "relay" };
+            int mask = 0;
+
+            if(strcmp(v, "on") == 0)
+                mask = (int)CAUSAL_ACTIONS_ALL;
+            else if(strcmp(v, "off") != 0)
+            {
+                char buf[96];
+                char *tok;
+
+                snprintf(buf, sizeof(buf), "%s", v);
+                for(tok = strtok(buf, ","); tok != NULL; tok = strtok(NULL, ","))
+                {
+                    int found = 0;
+
+                    for(int a = 0; a < NUM_CAUSAL_ACTIONS; a++)
+                    {
+                        if(strcmp(tok, names[a]) == 0)
+                        {
+                            mask |= 1 << a;
+                            found = 1;
+                        }
+                    }
+                    if(!found)
+                    {
+                        fprintf(stderr, "invalid --causal-actions '%s' (on, off, or a list of reroute,clear_road,reinforce,relay)\n", v);
+                        exit(2);
+                    }
+                }
+            }
+            causal_actions_flag = mask;
+            causal_actions_given = 1;
+            continue;
+        }
+
+        if(strncmp(argv[i], "--causal-env-duration=", 22) == 0)
+        {
+            unsigned lo = 0, hi = 0;
+
+            if(sscanf(argv[i] + 22, "%u-%u", &lo, &hi) != 2 || lo < 1 || hi < lo || hi > 255)
+            {
+                fprintf(stderr, "invalid --causal-env-duration '%s' (need <min>-<max>, 1 <= min <= max <= 255)\n", argv[i] + 22);
+                exit(2);
+            }
+            causal_env_min = (uint8_t)lo;
+            causal_env_max = (uint8_t)hi;
+            continue;
+        }
+
+        if(strncmp(argv[i], "--causal-env-crossing-delay=", 28) == 0)
+        {
+            char *end = NULL;
+            long v = strtol(argv[i] + 28, &end, 10);
+
+            if(end == argv[i] + 28 || *end != '\0' || v < 1 || v > 20)
+            {
+                fprintf(stderr, "invalid --causal-env-crossing-delay '%s' (need 1-20 ticks)\n", argv[i] + 28);
+                exit(2);
+            }
+            causal_env_delay = (uint8_t)v;
+            continue;
+        }
+
+        if(strncmp(argv[i], "--causal-reroute-penalty=", 25) == 0)
+        {
+            char *end = NULL;
+            long v = strtol(argv[i] + 25, &end, 10);
+
+            if(end == argv[i] + 25 || *end != '\0' || v < 0 || v > 255)
+            {
+                fprintf(stderr, "invalid --causal-reroute-penalty '%s' (need 0-255)\n", argv[i] + 25);
+                exit(2);
+            }
+            causal_reroute_penalty = (int)v;
+            continue;
+        }
+
         if(strcmp(argv[i], "--link-margin-map") == 0)
         {
             link_margin_map = 1;
@@ -345,6 +436,33 @@ int main(int argc, char **argv)
             positional_args[positional_count++] = (uint32_t)strtoul(argv[i], NULL, 10);
     }
 
+    if(causal_actions_given && fault_profile != FAULT_PROFILE_CAUSAL)
+    {
+        fprintf(stderr, "--causal-actions only applies to --fault-profile=causal\n");
+        return 2;
+    }
+    if(causal_env_max != 0 && fault_profile != FAULT_PROFILE_CAUSAL)
+    {
+        fprintf(stderr, "--causal-env-duration only applies to --fault-profile=causal\n");
+        return 2;
+    }
+    if(causal_env_delay != 0 && fault_profile != FAULT_PROFILE_CAUSAL)
+    {
+        fprintf(stderr, "--causal-env-crossing-delay only applies to --fault-profile=causal\n");
+        return 2;
+    }
+    fault_config_set_causal_env_duration(causal_env_min, causal_env_max);
+    fault_config_set_causal_env_crossing_delay(causal_env_delay);
+    if(causal_reroute_penalty >= 0)
+    {
+        if(fault_profile != FAULT_PROFILE_CAUSAL)
+        {
+            fprintf(stderr, "--causal-reroute-penalty only applies to --fault-profile=causal\n");
+            return 2;
+        }
+        fault_config_set_causal_reroute_penalty((uint16_t)causal_reroute_penalty);
+    }
+    fault_config_set_causal_actions((uint8_t)causal_actions_flag);
     if(fault_stress_given && fault_profile != FAULT_PROFILE_CAUSAL)
     {
         fprintf(stderr, "--fault-stress only applies to --fault-profile=causal\n");
@@ -359,7 +477,8 @@ int main(int argc, char **argv)
     fault_config_apply_profile(fault_profile);
     fault_injector_set_profile(fault_profile);
     if(fault_profile == FAULT_PROFILE_CAUSAL)
-        fprintf(stderr, "[FAULT] profile=causal fault_stress=%g\n", (double)fault_stress);
+        fprintf(stderr, "[FAULT] profile=causal fault_stress=%g causal_actions=%s env_backstop=%u-%u env_crossing_delay=%u\n", (double)fault_stress,
+                causal_actions_flag == (int)CAUSAL_ACTIONS_ALL ? "on" : (causal_actions_flag ? "partial" : "off"), causal_env_max ? causal_env_min : 5u, causal_env_max ? causal_env_max : 12u, (unsigned)causal_env_delay);
 
     if(fast_forward_ticks > 0 && (!live_mode || mission_feed_mode))
     {
@@ -555,6 +674,18 @@ int main(int argc, char **argv)
 
         if(g_fault_config.profile == FAULT_PROFILE_CAUSAL)
         {
+            static const char *const action_names[NUM_CAUSAL_ACTIONS] =
+                { "reroute", "clear_road", "reinforce_incident", "relay_reposition" };
+            const CausalActionStats_t *as = causal_actions_stats();
+
+            fprintf(stderr, "[DIAG ACTIONS] enabled_mask=%d crossing_stall_ticks=%u\n", g_causal_actions_enabled, causal_actions_stall_ticks());
+            for(uint8_t a = 0; a < NUM_CAUSAL_ACTIONS; a++)
+                fprintf(stderr, "[DIAG ACTION] name=%s dispatched=%u resolved=%u abandoned=%u active_ticks=%u from_detector=%u\n",
+                    action_names[a], as->dispatched[a], as->resolved[a], as->abandoned[a],
+                    as->active_ticks[a], as->from_detector[a]);
+        }
+        if(g_fault_config.profile == FAULT_PROFILE_CAUSAL)
+        {
             const CausalWorldStats_t *ws = fault_injector_causal_world_stats();
             fprintf(stderr, "[DIAG CAUSAL] fault_stress=%g victims_seen=%u victims_lost=%u escalations=%u aftershock_events=%u aftershock_team_hits=%u\n",
                 (double)g_fault_stress, ws->victims_seen, ws->victims_lost, ws->escalations,
@@ -572,7 +703,7 @@ int main(int argc, char **argv)
         extern uint32_t g_diag_discovered_by_type[NUM_INCIDENT_TYPES];
         extern uint32_t g_diag_resolved_by_type[NUM_INCIDENT_TYPES];
         extern uint32_t g_diag_spawned_by_type[NUM_INCIDENT_TYPES];
-        for(uint8_t ty = 0; ty < NUM_INCIDENT_TYPES; ty++)
+        for(uint8_t ty = 0; ty < (g_fault_config.profile == FAULT_PROFILE_CAUSAL ? NUM_INCIDENT_TYPES : INCIDENT_CLEAR_ROAD); ty++)
             fprintf(stderr, "[DIAG FOG] type=%u spawned=%u discovered=%u resolved=%u\n",
                 ty, g_diag_spawned_by_type[ty], g_diag_discovered_by_type[ty], g_diag_resolved_by_type[ty]);
 

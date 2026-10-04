@@ -31,6 +31,8 @@ THROUGHPUT_RE = re.compile(r"\[DIAG THROUGHPUT\] team=(\d+) incidents_resolved=(
 CAUSAL_RE = re.compile(
     r"\[DIAG CAUSAL\] fault_stress=(\S+) victims_seen=(\d+) victims_lost=(\d+) escalations=(\d+) "
     r"aftershock_events=(\d+) aftershock_team_hits=(\d+)")
+ACTION_RE = re.compile(
+    r"\[DIAG ACTION\] name=(\S+) dispatched=(\d+) resolved=(\d+) abandoned=(\d+) active_ticks=(\d+) from_detector=(\d+)")
 FAULT_RE = re.compile(
     r"\[DIAG FAULT\] class=(\d+) onsets=(\d+) cleared_by_cause=(\d+) "
     r"cleared_by_backstop=(\d+) exposure_ticks=(\d+) episode_ticks=(\d+)")
@@ -69,6 +71,7 @@ def run_seed(tron, profile, seed, ticks, extra):
             raise RuntimeError(f"seed {seed}: {' '.join(cmd)} exited {proc.returncode}\n{proc.stderr[-400:]}")
         resolved = sum(int(m.group(2)) for m in THROUGHPUT_RE.finditer(proc.stderr))
         causal = {int(m.group(1)): tuple(int(g) for g in m.groups()[1:]) for m in FAULT_RE.finditer(proc.stderr)}
+        actions = {m.group(1): [int(g) for g in m.groups()[1:]] for m in ACTION_RE.finditer(proc.stderr)}
         world = CAUSAL_RE.search(proc.stderr)
         world = [float(world.group(1))] + [int(g) for g in world.groups()[1:]] if world else None
 
@@ -118,7 +121,7 @@ def run_seed(tron, profile, seed, ticks, extra):
             "seed": seed, "attribution": attribution, "incidents_resolved": resolved, "team_ticks": team_ticks,
             "active": active, "any_active": any_active,
             "worst_team_any": max((per_team_any.get(t, 0) / n for t, n in per_team_ticks.items()), default=0.0),
-            "episodes": episodes, "causal_diag": causal, "world": world,
+            "episodes": episodes, "causal_diag": causal, "world": world, "actions": actions,
         }
 
 
@@ -155,6 +158,17 @@ def summarise(results):
             cause[k][0] += v[1]
             cause[k][1] += v[2]
     out["cleared_by_cause_backstop"] = {CLASSES[k]: v for k, v in cause.items()}
+    acts = {}
+    for r in results:
+        for name, v in r["actions"].items():
+            acc = acts.setdefault(name, [0, 0, 0, 0, 0])
+            for i, x in enumerate(v):
+                acc[i] += x
+    if acts:
+        out["actions"] = {name: dict(zip(["dispatched", "resolved", "abandoned", "active_ticks", "from_detector"],
+                                         [x / n for x in v])) for name, v in acts.items()}
+    out["per_seed"] = {str(r["seed"]): {"incidents_resolved": r["incidents_resolved"],
+                                        "victims_lost": (r["world"][2] if r["world"] else None)} for r in results}
     worlds = [r["world"] for r in results if r["world"]]
     if worlds:
         seen = sum(w[1] for w in worlds)
@@ -229,6 +243,10 @@ def main():
         w = summary["world"]
         print(f"victims lost / seed: {w['victims_lost']:.1f} of {w['victims_seen']:.1f} ({100*w['victim_loss_fraction']:.1f}%)  "
               f"escalations: {w['escalations']:.1f}  aftershocks: {w['aftershock_events']:.1f} (team hits {w['aftershock_team_hits']:.1f})")
+    if "actions" in summary:
+        print("actions per seed (mean): " + "; ".join(
+            f"{k}: started {v['dispatched']:.1f}, resolved {v['resolved']:.1f}, abandoned {v['abandoned']:.1f}, "
+            f"active ticks {v['active_ticks']:.0f}" for k, v in summary["actions"].items()))
     if any(v != [0, 0] for v in summary["cleared_by_cause_backstop"].values()):
         print("cleared by [cause, backstop]: " +
               ", ".join(f"{c}={v}" for c, v in summary["cleared_by_cause_backstop"].items()))
