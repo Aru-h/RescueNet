@@ -1600,6 +1600,7 @@ function refreshMap3dSettingsUI() {
   fxSel.value = st.effects; red.checked = !!st.reduceMotion; lit.value = st.lighting;
   fxSel.disabled = !st.fxAvailable;
   note.textContent = !st.fxAvailable ? "Hazard effects unavailable (module failed to load)."
+    : st.autoReduced === "lite" ? "Frames were slow even with effects off, so shadows are off and rendering is at 1x - pick an effects level to retry."
     : st.autoReduced ? `Effects auto-reduced to "${st.autoReduced}" to keep the map smooth - pick a level to retry.` : "";
 }
 // ---- 3D camera: follow the selected team / fly to the selected incident ----

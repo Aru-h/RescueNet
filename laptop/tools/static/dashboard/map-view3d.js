@@ -161,9 +161,9 @@
     scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xfff3df, 2.3);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(1536, 1536);
     const sc = sun.shadow.camera;
-    sc.left = -32; sc.right = 32; sc.top = 32; sc.bottom = -32; sc.near = 1; sc.far = 140;
+    sc.left = -28; sc.right = 28; sc.top = 28; sc.bottom = -28; sc.near = 1; sc.far = 140;
     sun.shadow.radius = 4;      // blur the shadow edges (soft shadows)
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.03;
@@ -833,14 +833,34 @@
     function watchFrameRate(now) {
       const dt = prevLoopAt ? now - prevLoopAt : 0;
       prevLoopAt = now;
-      if (!settings.autoQuality || !fx || fx.level === "off" || dt <= 0 || dt > 250) { slowFrames = 0; return; }
+      if (!settings.autoQuality || lite || dt <= 0 || dt > 250) { slowFrames = 0; return; }
       slowFrames = dt > 26 ? slowFrames + 1 : Math.max(0, slowFrames - 2);
       if (slowFrames > 90) {
         slowFrames = 0;
-        const next = fx.level === "high" ? "low" : "off";
-        fx.setLevel(next); autoReduced = next;
-        if (api.onSettings) api.onSettings(api.settingsState());
+        if (fx && fx.level !== "off") {
+          const next = fx.level === "high" ? "low" : "off";
+          fx.setLevel(next); autoReduced = next;
+          if (api.onSettings) api.onSettings(api.settingsState());
+        } else enterLite();
       }
+    }
+    // Last resort when frames are still slow with effects off: drop shadows
+    // and render at 1x pixel density. Undone by choosing an effects level.
+    let lite = false;
+    function enterLite() {
+      if (lite) return;
+      lite = true; autoReduced = "lite";
+      renderer.shadowMap.enabled = false;
+      renderer.setPixelRatio(1); renderer.setSize(view.w, view.h, false);
+      scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; });
+      if (api.onSettings) api.onSettings(api.settingsState());
+    }
+    function leaveLite() {
+      if (!lite) return;
+      lite = false;
+      renderer.shadowMap.enabled = true;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); renderer.setSize(view.w, view.h, false);
+      scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; });
     }
 
     function loop(now) {
@@ -934,7 +954,7 @@
       Object.assign(settings, partial);
       saveSettings({ effects: settings.effects, reduceMotion: settings.reduceMotion, lighting: settings.lighting, autoQuality: settings.autoQuality });
       if (fx) {
-        if (partial.effects !== undefined) { autoReduced = null; slowFrames = 0; fx.setLevel(settings.effects); }
+        if (partial.effects !== undefined) { autoReduced = null; slowFrames = 0; leaveLite(); fx.setLevel(settings.effects); }
         if (partial.reduceMotion !== undefined) fx.setMotion(!settings.reduceMotion);
       }
       if (partial.lighting !== undefined) applyLighting();

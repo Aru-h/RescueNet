@@ -105,6 +105,17 @@ export function createBuildings(THREE, ctx) {
       g.applyMatrix4(_m);
       flat.push(tint(g, color));
     }
+    // A thin flat decal (a crack segment) on a wall: two triangles instead of a box.
+    // `face` is the wall's outward direction as a rotation about Y (0: +Z, PI: -Z, PI/2: +X, -PI/2: -X).
+    function decal(len, ang, cx, cy, cz, face, color) {
+      const g = new THREE.PlaneGeometry(len, 0.016);
+      _e.set(0, face, 0); _q.setFromEuler(_e);
+      _m.compose(_p.set(0, 0, 0), _q, _s.set(1, 1, 1));
+      const rz = new THREE.Matrix4().makeRotationZ(ang);
+      g.applyMatrix4(rz); g.applyMatrix4(_m);
+      g.applyMatrix4(new THREE.Matrix4().makeTranslation(cx, cy, cz));
+      flat.push(tint(g, color));
+    }
     // A textured wall segment facing +Z/-Z/+X/-X, centred at (cx, h/2, cz).
     function wall(width, height, cx, cz, face, color, y0) {
       const g = new THREE.PlaneGeometry(width, height);
@@ -149,8 +160,8 @@ export function createBuildings(THREE, ctx) {
         } else {
           // Cracks: short dark zig-zags down each wall.
           const crackC = col.setRGB(0.05, 0.05, 0.06).clone();
-          const sides = [[e.x0, e.x1, e.y1 + 0.006, 0], [e.x0, e.x1, e.y0 - 0.006, 0], [e.y0, e.y1, e.x1 + 0.006, 1], [e.y0, e.y1, e.x0 - 0.006, 1]];
-          for (const [a0, a1, off, alongZ] of sides) {
+          const sides = [[e.x0, e.x1, e.y1 + 0.006, 0, 0], [e.x0, e.x1, e.y0 - 0.006, 0, Math.PI], [e.y0, e.y1, e.x1 + 0.006, 1, Math.PI / 2], [e.y0, e.y1, e.x0 - 0.006, 1, -Math.PI / 2]];
+          for (const [a0, a1, off, alongZ, face] of sides) {
             const n = 1 + (r() < 0.6 ? 1 : 0);
             for (let c = 0; c < n; c++) {
               let u = a0 + (a1 - a0) * (0.15 + r() * 0.7), y = Ht * (0.55 + r() * 0.4);
@@ -159,8 +170,11 @@ export function createBuildings(THREE, ctx) {
                 const du = (r() - 0.5) * 0.14, dy = -(0.05 + r() * 0.08);
                 const len = Math.hypot(du, dy), ang = Math.atan2(dy, du);
                 const mx = u + du / 2, my = y + dy / 2;
-                if (alongZ) box(0.012, len, 0.012, off, my, mx, crackC, Math.atan2(du, dy), 0, 0);
-                else box(len, 0.012, 0.012, mx, my, off, crackC, 0, 0, ang);
+                // In the decal's local frame +x is world +x (wall +Z), -x (wall -Z), -z (wall +X), +z (wall -X).
+                const flip = face === Math.PI || face === Math.PI / 2;
+                const la = Math.atan2(dy, flip ? -du : du);
+                if (alongZ) decal(len, la, off, my, mx, face, crackC);
+                else decal(len, la, mx, my, off, face, crackC);
                 u += du; y += dy;
               }
             }
@@ -173,7 +187,7 @@ export function createBuildings(THREE, ctx) {
         const Hw = H0 * 0.55;
         walls(Hw);
         box(w, 0.03, d, cx, Hw + 0.015, cz, roofC);
-        const cell = 0.34, nx = Math.max(1, Math.round(w / cell)), nz = Math.max(1, Math.round(d / cell));
+        const cell = 0.46, nx = Math.max(1, Math.round(w / cell)), nz = Math.max(1, Math.round(d / cell));
         let sum = 0, cnt = 0;
         for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
           if (r() < 0.28) continue;                                         // gap where the top has fallen away
@@ -185,7 +199,7 @@ export function createBuildings(THREE, ctx) {
         // A slab that has come down and leans on a wall.
         box(Math.min(w, 0.6) * 0.9, 0.04, Math.min(d, 0.5) * 0.7, cx + (r() - 0.5) * w * 0.3, Hw * 0.7, e.y1 + 0.06, concrete, -0.5 - r() * 0.3, 0, (r() - 0.5) * 0.3);
         // Debris around the base.
-        for (let k = 0; k < 5; k++) {
+        for (let k = 0; k < 4; k++) {
           const s = 0.05 + r() * 0.1, side = r() * 4 | 0;
           const px = side < 2 ? e.x0 + r() * w : (side === 2 ? e.x1 + 0.1 + r() * 0.25 : e.x0 - 0.1 - r() * 0.25);
           const pz = side < 2 ? (side === 0 ? e.y1 + 0.1 + r() * 0.25 : e.y0 - 0.1 - r() * 0.25) : e.y0 + r() * d;
@@ -198,7 +212,7 @@ export function createBuildings(THREE, ctx) {
         const Hm = Math.max(0.1, H0 * 0.28);
         const rub = [0x6b665f, 0x58544e, 0x7a736a, 0x4b4843].map((c) => new THREE.Color(c));
         box(w * 1.02, 0.03, d * 1.02, cx, 0.015, cz, rub[3]);
-        const n = 12 + Math.floor(w * d * 6);
+        const n = 9 + Math.floor(w * d * 4);
         for (let k = 0; k < n; k++) {
           const px = e.x0 + r() * w, pz = e.y0 + r() * d;
           const near = 1 - Math.min(1, Math.hypot((px - cx) / (w / 2 + 0.01), (pz - cz) / (d / 2 + 0.01)));
