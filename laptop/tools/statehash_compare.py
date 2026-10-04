@@ -5,12 +5,19 @@
 
 Each log may contain anything; only lines holding `STATEHASH tick=N all=...`
 are read (a board console prefix such as `tron: ` or an IDE timestamp is
-ignored). Ticks are matched by number, so a candidate that printed a
-different subset is compared on the ticks both have.
+ignored). Ticks are matched by number.
 
-Exit 0: every common tick matches. Exit 1: first mismatch is reported with
-the sub-hash that diverged (teams / inc / flt / rec), which says which part
-of the state split first. Exit 2: nothing to compare.
+A MISSING line is a failure, not noise: the board prints a STATEHASH every N
+ticks and the firmware never drops one on purpose (it waits for room in the log
+buffer; if it still cannot, it prints "REQUIRED lines LOST"). So any tick that
+one log has inside the other log's tick range, but the other lacks, fails the
+comparison. Pass --allow-missing only to compare logs printed with different
+intervals (e.g. a PC run against a board run).
+
+Exit 0: every compared tick matches and none is missing. Exit 1: a mismatch
+(reported with the sub-hash that diverged: teams / inc / flt / rec, which says
+which part of the state split first) or a missing line. Exit 2: nothing to
+compare.
 
 core/state_hash.h explains what is hashed and why sub-hashes are kept.
 """
@@ -32,11 +39,21 @@ def load(path):
     return out
 
 
+def missing_ticks(have, other):
+    """Ticks `have` printed inside `other`'s tick range that `other` lacks."""
+    if not other:
+        return []
+    lo, hi = min(other), max(other)
+    return sorted(t for t in have if lo <= t <= hi and t not in other)
+
+
 def main(argv):
-    if len(argv) != 3:
+    args = [a for a in argv[1:] if a != "--allow-missing"]
+    allow_missing = len(args) != len(argv) - 1
+    if len(args) != 2:
         print(__doc__)
         return 2
-    ref, cand = load(argv[1]), load(argv[2])
+    ref, cand = load(args[0]), load(args[1])
     common = sorted(set(ref) & set(cand))
     if not common:
         print("no common STATEHASH ticks (reference has %d, candidate has %d)" % (len(ref), len(cand)))
@@ -48,6 +65,16 @@ def main(argv):
             for f in bad:
                 print("  %-5s ref=%s cand=%s" % (f, ref[tick][f], cand[tick][f]))
             print("%d of %d common ticks matched before this one" % (common.index(tick), len(common)))
+            return 1
+    if not allow_missing:
+        gap_in_cand = missing_ticks(ref, cand)
+        gap_in_ref = missing_ticks(cand, ref)
+        if gap_in_cand or gap_in_ref:
+            if gap_in_cand:
+                print("MISSING in candidate: STATEHASH ticks %s (reference has them)" % gap_in_cand)
+            if gap_in_ref:
+                print("MISSING in reference: STATEHASH ticks %s (candidate has them)" % gap_in_ref)
+            print("a missing STATEHASH line is a failure; see --allow-missing only for different intervals")
             return 1
     print("MATCH: %d common ticks (%d..%d) identical in all five hashes"
           % (len(common), common[0], common[-1]))

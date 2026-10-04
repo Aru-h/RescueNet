@@ -9,6 +9,7 @@
 static ID g_log_mbf;
 static ID g_uart_mtx;
 static volatile uint32_t g_log_dropped;
+static volatile uint32_t g_log_lost_required;
 static volatile uint8_t g_log_running; /* set by the logger task once it loops */
 
 static uint8_t g_log_stack[BOARD_LOGGER_STACK_BYTES] __attribute__((aligned(8)));
@@ -79,6 +80,38 @@ void board_log_emit(const UB *text, INT len)
     }
 }
 
+uint32_t board_log_lost_required(void)
+{
+    return g_log_lost_required;
+}
+
+void board_log_emit_reliable(const UB *text, INT len)
+{
+    if (len <= 0)
+    {
+        return;
+    }
+    if (len > BOARD_LOG_LINE_MAX)
+    {
+        len = BOARD_LOG_LINE_MAX;
+    }
+
+    if (!g_log_running)
+    {
+        board_log_emit(text, len); /* direct path: cannot be dropped */
+        return;
+    }
+
+    if (tk_snd_mbf(g_log_mbf, text, len, BOARD_LOG_RELIABLE_WAIT_MS) != E_OK)
+    {
+        UINT imask;
+
+        DI(imask);
+        g_log_lost_required++;
+        EI(imask);
+    }
+}
+
 void board_log_puts(const char *text)
 {
     board_log_emit((const UB *)text, (INT)strlen(text));
@@ -88,6 +121,7 @@ static void board_logger_task(INT stacd, void *exinf)
 {
     UB line[BOARD_LOG_LINE_MAX];
     uint32_t reported_drops = 0u;
+    uint32_t reported_lost = 0u;
 
     (void)stacd;
     (void)exinf;
@@ -102,6 +136,18 @@ static void board_logger_task(INT stacd, void *exinf)
         {
             board_uart_tx_lock();
             board_log_write(line, n);
+            board_uart_tx_unlock();
+        }
+
+        if (g_log_lost_required != reported_lost)
+        {
+            UB note[64];
+            INT len;
+
+            reported_lost = g_log_lost_required;
+            len = tm_sprintf(note, (const UB *)"log: %lu REQUIRED lines LOST\n", (unsigned long)reported_lost);
+            board_uart_tx_lock();
+            board_log_write(note, len);
             board_uart_tx_unlock();
         }
 

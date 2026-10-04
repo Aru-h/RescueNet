@@ -56,6 +56,25 @@ void board_log_puts(const char *text);
 
 #define BOARD_LOG(...) BOARD_LOG_N(BOARD_LOG_LINE_MAX, __VA_ARGS__)
 
+/* For lines that must not be lost (STATEHASH, and later telemetry): waits up
+   to BOARD_LOG_RELIABLE_WAIT_MS for room in the buffer instead of dropping.
+   The wait lets the logger task run, so it is normally instantaneous. If even
+   that times out the line is counted in board_log_lost_required() and the
+   logger prints "log: N REQUIRED lines LOST". Never call it while holding a
+   lock another task needs (the sim calls it after releasing the comms mutex). */
+#define BOARD_LOG_RELIABLE_WAIT_MS 500
+
+void board_log_emit_reliable(const UB *text, INT len);
+
+#define BOARD_LOG_RELIABLE(...)                                     \
+    do {                                                            \
+        UB board_log_line_[BOARD_LOG_LINE_MAX];                     \
+        INT board_log_len_ = tm_sprintf(board_log_line_, __VA_ARGS__); \
+        board_log_emit_reliable(board_log_line_, board_log_len_);   \
+    } while (0)
+
+uint32_t board_log_lost_required(void);
+
 /* Lines dropped because the buffer was full, since boot. */
 uint32_t board_log_dropped(void);
 

@@ -1078,6 +1078,10 @@ LOCAL void sim_compute_task(INT stacd, void *exinf)
             uint32_t start_tick;
             uint32_t tick;
             UINT ptn;
+#if BOARD_STATE_HASH_INTERVAL > 0u
+            StateHash_t sh;
+            uint8_t have_hash = 0u;
+#endif
 
             /* Blocks until the link task has seen the laptop authorise a tick
                (it keeps receiving, relaying and heartbeating meanwhile). */
@@ -1128,23 +1132,32 @@ LOCAL void sim_compute_task(INT stacd, void *exinf)
 #if BOARD_STATE_HASH_INTERVAL > 0u
             if((tick % BOARD_STATE_HASH_INTERVAL) == 0u)
             {
-                StateHash_t sh;
-
-                state_hash_compute(&sh);
-                /* tm_printf has no 64-bit conversions: each hash goes out
-                   as two zero-padded 32-bit halves, which concatenate to
-                   the same 16 hex digits the PC prints. */
-                BOARD_LOG((UB*)"STATEHASH tick=%lu all=%08lx%08lx teams=%08lx%08lx inc=%08lx%08lx flt=%08lx%08lx rec=%08lx%08lx\n",
-                          (unsigned long)tick,
-                          (unsigned long)(sh.all >> 32), (unsigned long)(uint32_t)sh.all,
-                          (unsigned long)(sh.teams >> 32), (unsigned long)(uint32_t)sh.teams,
-                          (unsigned long)(sh.incidents >> 32), (unsigned long)(uint32_t)sh.incidents,
-                          (unsigned long)(sh.faults >> 32), (unsigned long)(uint32_t)sh.faults,
-                          (unsigned long)(sh.recovery >> 32), (unsigned long)(uint32_t)sh.recovery);
+                state_hash_compute(&sh); /* under the lock: a consistent state */
+                have_hash = 1u;
             }
 #endif
 
             (void)tk_unl_mtx(g_mtx_comms);
+
+#if BOARD_STATE_HASH_INTERVAL > 0u
+            if(have_hash)
+            {
+                /* After the unlock, and through the reliable path: a STATEHASH
+                   line is the evidence the board run is checked against, so it
+                   waits for room in the log buffer instead of being dropped
+                   (and it must not wait while holding the comms mutex).
+                   tm_printf has no 64-bit conversions: each hash goes out as
+                   two zero-padded 32-bit halves, which concatenate to the same
+                   16 hex digits the PC prints. */
+                BOARD_LOG_RELIABLE((UB*)"STATEHASH tick=%lu all=%08lx%08lx teams=%08lx%08lx inc=%08lx%08lx flt=%08lx%08lx rec=%08lx%08lx\n",
+                                   (unsigned long)tick,
+                                   (unsigned long)(sh.all >> 32), (unsigned long)(uint32_t)sh.all,
+                                   (unsigned long)(sh.teams >> 32), (unsigned long)(uint32_t)sh.teams,
+                                   (unsigned long)(sh.incidents >> 32), (unsigned long)(uint32_t)sh.incidents,
+                                   (unsigned long)(sh.faults >> 32), (unsigned long)(uint32_t)sh.faults,
+                                   (unsigned long)(sh.recovery >> 32), (unsigned long)(uint32_t)sh.recovery);
+            }
+#endif
 
             /* The between-ticks pass (radio, step, heartbeat) now belongs to
                the link task: ask for it and wait until it is done, which keeps
