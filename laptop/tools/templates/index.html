@@ -1974,7 +1974,7 @@ function renderOverrideBox() {
     // /api/run-live/override (laptop/debug.c's stdin-fed OVERRIDE line),
     // "board" to /api/board/override (a real USART1 frame) - two
     // independent paths, not one route with two labels.
-    const destText = liveRunMode === "board" ? "Sent to the board (USART1)." : "Applied in the simulator.";
+    const destText = liveRunMode === "board" ? "Sent to the board (USART1)." : "Will apply in the simulator when you confirm.";
     box.innerHTML = `
       <div class="override-card">
         <div class="override-title">⚠ Proposed Override</div>

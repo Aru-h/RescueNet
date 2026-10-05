@@ -1401,10 +1401,13 @@ def _run_control_state_check(page, console_errors):
     control's request ever came back non-ok instead of updating state."""
     page.select_option("#faultProfile", "none")
     page.fill("#seed", "31")
-    page.fill("#ticks", "45")
+    # RUN_CONTROL_TICKS x 150 ms is the whole run: long enough that it cannot end
+    # before the pause / resume steps below (they take ~9 s even on a slow machine),
+    # short enough that (c) can still wait for the natural end.
+    page.fill("#ticks", str(RUN_CONTROL_TICKS))
     page.fill("#tickDelay", "150")
     page.click("#liveBtn")
-    page.wait_for_timeout(1000)
+    page.wait_for_function("() => document.getElementById('runStateLabel').textContent === 'running' && window._lastFrame && window._lastFrame.tick >= 3", timeout=15000)
 
     # (a) An override for a nonexistent incident_id (999999) must only
     # show its own error, never touch the run: frames keep arriving for
@@ -1423,6 +1426,9 @@ def _run_control_state_check(page, console_errors):
       return true;
     }""")
     check(injected, "(a) able to stage a pending override on the live run")
+    pending_text = page.evaluate("() => document.getElementById('overrideBox').textContent")
+    check("Will apply in the simulator when you confirm." in pending_text and "Applied in the simulator" not in pending_text,
+          f"(a) a pending override says it will apply when you confirm, not that it was applied (got {' '.join(pending_text.split())!r})")
     page.click("#overrideConfirmBtn")
     page.wait_for_timeout(400)
     override_failed = page.evaluate("() => document.getElementById('overrideBox').textContent")
@@ -1439,7 +1445,11 @@ def _run_control_state_check(page, console_errors):
           f"(a) run state is still 'running' 5s after a failed override (got {state_after_5s!r})")
 
     # (b) A genuine pause actually stops frames; resume actually
-    # resumes them.
+    # resumes them.  The run must still be going: if it has already ended
+    # the scenario is wrong (too few ticks), not the dashboard.
+    tick_before_pause = page.evaluate("() => window._lastFrame.tick")
+    check(page.eval_on_selector("#runStateLabel", "el => el.textContent") == "running" and tick_before_pause < RUN_CONTROL_TICKS - 20,
+          f"(b) the run is still going when Pause is clicked (tick {tick_before_pause} of {RUN_CONTROL_TICKS})")
     page.click("#pauseLiveBtn")
     page.wait_for_timeout(300)
     state_paused = page.eval_on_selector("#runStateLabel", "el => el.textContent")
@@ -1459,7 +1469,7 @@ def _run_control_state_check(page, console_errors):
     check(tick_after_resume > tick_while_paused,
           f"(b) frames resume arriving after Resume (tick {tick_while_paused} -> {tick_after_resume})")
 
-    # (c) Let the run finish naturally (ticks=45 is short), then
+    # (c) Let the run finish naturally, then
     # confirm no run control is left visible/clickable - regression for
     # the bug where a stale "paused" UI state left Resume clickable
     # forever after the server-side run had already ended, 409-ing on
@@ -1855,6 +1865,7 @@ def _replay_check(page, console_errors):
 
 
 DEMO_RECORDING = "demo_seed1002_combined_600ticks.jsonl.gz"
+RUN_CONTROL_TICKS = 80      # x 150 ms = 12 s run (see _run_control_check)
 
 
 def _timeline_state(page):
