@@ -15,6 +15,7 @@
 #include "mission_execution_twin.h"
 #include "mission_link.h"
 #include "recovery_manager_config.h"
+#include "recovery_planner.h"
 #include "watchdog.h"
 #include "consensus.h"
 
@@ -68,6 +69,14 @@ typedef RecoverySignal_t (*RecoveryEvaluatorFn)(
 
 static RecoveryManagerTeamState_t g_recovery_state[NUM_TEAMS];
 static RecoveryDispatchState_t g_recovery_dispatch_state[NUM_TEAMS];
+
+/* Step 3.5 (--recovery=utility): the rule-based evaluators' own verdict, with their own hysteresis, kept
+ * apart from the planner-owned g_recovery_state. It is the Simplex floor the planner may not go below. */
+static RecoveryManagerTeamState_t g_rule_state[NUM_TEAMS];
+/* Last AI class scores (mobility, communication, resource) and streak flag, written by
+ * evaluate_fault_predictor() for the planner; read-only side channel, no effect in any other mode. */
+static float g_planner_ai[NUM_TEAMS][3];
+static uint8_t g_planner_streak_ok[NUM_TEAMS];
 static RecoveryMetricsTeamState_t g_recovery_metrics_state[NUM_TEAMS];
 /* Per-evaluator verdicts for the tick just computed by recovery_manager_
  * step() - see recovery_manager.h's recovery_manager_get_evaluator_verdict()
@@ -1371,6 +1380,9 @@ static RecoverySignal_t evaluate_fault_predictor(
        corroboration check further down. */
     sustained = predictor_persistence_streak_update(team->team_id, confidence)
                     >= FAULT_PERSISTENCE_TRIP_TICKS;
+    for(uint8_t f = 0; f < 3u; f++)
+        g_planner_ai[team->team_id][f] = scores.score[f];
+    g_planner_streak_ok[team->team_id] = sustained;
 
     /* With FAULT_MODEL_LOADED=0 (the default build), fault_predictor_run()
      * returns all-zero scores, so confidence is always <= 0 here and this
@@ -1636,6 +1648,9 @@ void recovery_manager_init(void)
         g_recovery_state[team_id].last_assigned_task_slot = g_teams[team_id].assigned_task_slot;
         g_recovery_state[team_id].last_status = g_teams[team_id].status;
         g_recovery_dispatch_state[team_id] = (RecoveryDispatchState_t){0};
+        g_rule_state[team_id] = g_recovery_state[team_id];
+        g_planner_ai[team_id][0] = g_planner_ai[team_id][1] = g_planner_ai[team_id][2] = 0.0f;
+        g_planner_streak_ok[team_id] = 0u;
 
         for(uint8_t slot = 0; slot < RECOVERY_MANAGER_EVAL_SLOT_COUNT; slot++)
         {
@@ -1804,8 +1819,94 @@ void recovery_manager_step(void)
             consensus_get_result(team_id, CONSENSUS_CLASS_COMMUNICATION).tier, team_id);
 #endif
 
-        (void)recovery_build_status(&g_recovery_state[team_id], signals,
-            RECOVERY_MANAGER_EVALUATOR_COUNT, stage);
+        if(fault_profile_planner_layer(PLANNER_LAYER_TEAM) || (fault_profile_planner_on() && g_planner.calib_dump))
+        {
+            /* Cost-based planner owns the verdict. The rule-based evaluators (everything but the AI) still run
+             * through their own hysteresis: that stable action is the Simplex floor (D2). */
+            RecoverySignal_t rule_signals[RECOVERY_MANAGER_EVALUATOR_COUNT];
+            RecoveryManagerTeamState_t *rs = &g_rule_state[team_id];
+            PlannerEvidence_t ev;
+            RecoveryStatus_t planned;
+
+            if(team->assigned_task_pool != rs->last_assigned_task_pool ||
+               team->assigned_task_slot != rs->last_assigned_task_slot ||
+               (rs->last_status == STATUS_RESTING && team->status != STATUS_RESTING))
+            {
+                rs->status.recommendation = RECOVERY_ACTION_CONTINUE_MONITORING;
+                rs->status.reason = RECOVERY_REASON_NONE;
+                rs->status.confidence = 0.0f;
+                rs->status.escalation_level = RECOVERY_ACTION_CONTINUE_MONITORING;
+                rs->pending_action = RECOVERY_ACTION_CONTINUE_MONITORING;
+                rs->pending_reason = RECOVERY_REASON_NONE;
+                rs->pending_streak = 0u;
+                rs->cooldown_ticks = 0u;
+            }
+            rs->last_assigned_task_pool = team->assigned_task_pool;
+            rs->last_assigned_task_slot = team->assigned_task_slot;
+            rs->last_status = team->status;
+
+            for(size_t i = 0; i < RECOVERY_MANAGER_EVALUATOR_COUNT; i++)
+                rule_signals[i] = signals[i];
+            rule_signals[RM_EVAL_IDX_FAULT_PREDICTOR] = recovery_make_signal(
+                RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
+            (void)recovery_build_status(rs, rule_signals, RECOVERY_MANAGER_EVALUATOR_COUNT, stage);
+
+            for(uint8_t f = 0; f < 3u; f++)
+                ev.ai_score[f] = g_planner_ai[team_id][f];
+            ev.cons_y[0] = ev.cons_y[1] = 0.0f;
+            ev.cons_elevated = 0u;
+#if CONSENSUS_ENFORCE
+            {
+                ConsensusResult_t mob = consensus_get_result(team_id, CONSENSUS_CLASS_MOBILITY);
+                ConsensusResult_t comm = consensus_get_result(team_id, CONSENSUS_CLASS_COMMUNICATION);
+
+                ev.cons_y[0] = mob.y;
+                ev.cons_y[1] = comm.y;
+                ev.cons_elevated = (uint8_t)(mob.tier == CONSENSUS_TIER_ELEVATED || comm.tier == CONSENSUS_TIER_ELEVATED);
+            }
+#endif
+            ev.wd_conf = watchdog.anomaly_confidence;
+            ev.wd_flag = watchdog.anomaly_detected;
+            /* The watchdog's dominant failure mode, mapped to the fault classes the planner prices:
+             * mobility (mobility degradation, task-execution delay), communication, resource
+             * (fatigue exhaustion, equipment degradation). UNKNOWN / NONE carry no class. */
+            switch(watchdog.dominant_failure_mode)
+            {
+                case WATCHDOG_FAILURE_MOBILITY_DEGRADATION:
+                case WATCHDOG_FAILURE_TASK_EXECUTION_DELAY:
+                    ev.wd_class = 0u;
+                    break;
+                case WATCHDOG_FAILURE_COMMUNICATION_FAILURE:
+                    ev.wd_class = 1u;
+                    break;
+                case WATCHDOG_FAILURE_FATIGUE_EXHAUSTION:
+                case WATCHDOG_FAILURE_EQUIPMENT_DEGRADATION:
+                    ev.wd_class = 2u;
+                    break;
+                default:
+                    ev.wd_class = 255u;
+                    break;
+            }
+            ev.streak_ok = g_planner_streak_ok[team_id];
+            ev.rule_floor = (uint8_t)rs->status.recommendation;
+            ev.rule_reason = (uint8_t)rs->status.reason;
+
+            if(planner_team_decide(team, &ev, &planned))
+            {
+                state->status = planned;
+            }
+            else
+            {
+                (void)recovery_build_status(&g_recovery_state[team_id], signals,
+                    RECOVERY_MANAGER_EVALUATOR_COUNT, stage);
+            }
+        }
+        else
+        {
+            (void)recovery_build_status(&g_recovery_state[team_id], signals,
+                RECOVERY_MANAGER_EVALUATOR_COUNT, stage);
+            planner_note_recommendation(team_id, (uint8_t)g_recovery_state[team_id].status.recommendation);
+        }
         recovery_metrics_note_recommendation(
             team_id,
             g_recovery_state[team_id].status.recommendation);

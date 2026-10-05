@@ -162,11 +162,66 @@ extern CausalRoadParams_t g_causal_roads;
 #define CAUSAL_FIX_LABEL        0x01u  /* environment label = "this team's route touches a damaged cell" */
 #define CAUSAL_FIX_ENV_NO_RTB   0x02u  /* an environment detection never drives a team-level reaction (RETURN_TO_SAFE_ZONE, ...) */
 #define CAUSAL_FIX_TRUE_COST    0x04u  /* the progress tracker's remaining cost ignores the REROUTE overlay */
-#define CAUSAL_FIXES_ALL        0x07u
+#define CAUSAL_FIX_STALL        0x08u  /* evaluators are stall-aware: a team held at a partial-debris cell is not evidence of a mobility / progress fault */
+#define CAUSAL_FIXES_ALL        0x0Fu
 extern uint8_t g_causal_fixes;
 void fault_config_set_causal_fixes(uint8_t mask);
-/* 1 under the causal profile when this fix is enabled. CAUSAL_FIX_LABEL also needs consequential roads (the label is the route-touch signal). */
+/* 1 under the causal profile when this fix is enabled. CAUSAL_FIX_LABEL and CAUSAL_FIX_STALL also need consequential roads
+ * (the label is the route-touch signal; the stalls are the roads' debris crossings). */
 int fault_profile_causal_fix(unsigned fix);
+
+/* Step 3.5 cost-based recovery planner (docs/RECOVERY_PLANNER_PROPOSAL.md).
+ * --recovery=utility, causal profile only; the fixed gates stay the default. */
+typedef enum
+{
+    RECOVERY_MODE_FIXED = 0,
+    RECOVERY_MODE_UTILITY
+} RecoveryMode_t;
+
+#define PLANNER_LAYER_TEAM     0x01u  /* Layer A: stay / go home per team-fault */
+#define PLANNER_LAYER_TASKS    0x02u  /* Layer B: REROUTE / CLEAR_ROAD / REINFORCE / RELAY decided by cost */
+#define PLANNER_LAYER_PREEMPT  0x04u  /* pull a busy team onto a system task */
+#define PLANNER_LAYERS_ALL     0x07u
+
+#define PLANNER_P_AI        0u  /* AI + watchdog + consensus */
+#define PLANNER_P_WATCHDOG  1u  /* watchdog + consensus only (the AI's scores are ignored) */
+#define PLANNER_P_ORACLE    2u  /* ground-truth fault flags: laptop evaluation upper bound, never on a board */
+
+typedef struct
+{
+    uint8_t layers;           /* PLANNER_LAYER_* mask */
+    uint8_t p_source;         /* PLANNER_P_* */
+    uint8_t approval;         /* 0 deny (default), 1 auto-approve (laptop upper bound) */
+    uint8_t log_enabled;      /* laptop decision log (--planner-log) */
+    uint8_t calib_dump;       /* laptop calibration histograms (--planner-calib) */
+    uint8_t preempt_k;        /* nearest busy teams considered per task */
+    uint16_t preempt_cooldown_ticks;
+    float v_mult;             /* x the derived exchange rate V (D1 sweep: 0.5, 1, 2) */
+    float margin_frac;        /* rho: relative switch margin (tuned on dev seeds) */
+    /* Constants measured from the baseline (docs/SPECIALIZATION_LOAD.md) or derived from
+     * existing constants; every one is overridable for the +-50% sensitivity runs. */
+    float n_ref_victims;      /* victims per victim-bearing incident: 171.9 victims / 33.9 incidents per seed = 5.07 */
+    float age_ref_ticks;      /* typical age at first response: 226 spawn-to-discovery + 40 queue wait = 266 */
+    float reassign_delay;     /* ticks a released task waits for another team: measured mean wait 40.1-44.1 */
+    float ref_travel_ticks;   /* mean route length of a task leg: 10.1 cells (reroute probe) */
+    float ref_stage_ticks;    /* mean ticks of one stage: ref_travel + stage work / mean work rate */
+    float rate_window_ticks;  /* horizon of the crossing-rate average: one hour of ticks */
+    float blocked_detour;     /* extra steps a team pays to go round one fully blocked cell (assumed 2) */
+    float cblind;             /* IT per tick a team with a comm fault is invisible to consensus (assumed) */
+    float repair_mobility;    /* go-home repair effectiveness: cause-cleared by rest (CAUSAL_MOBILITY_REPAIR_REST_TICKS) */
+    float repair_resource;    /* resupply at the safe zone (CAUSAL_RESOURCE_RESUPPLY_LEVEL) */
+    float repair_comm;        /* assumed: the safe zone's link margin is better than the field */
+    float repair_scale;       /* sensitivity multiplier on the three repair values */
+    float crossing_scale;     /* sensitivity multiplier on the crossing delay */
+    float p_log_floor;        /* decisions with a fault probability at or above this are logged */
+} PlannerParams_t;
+
+extern PlannerParams_t g_planner;
+extern RecoveryMode_t g_recovery_mode;
+/* 1 under the causal profile with --recovery=utility. */
+int fault_profile_planner_on(void);
+/* 1 when additionally this layer is enabled. */
+int fault_profile_planner_layer(unsigned layer);
 /* 1 only under the causal profile with consequential roads enabled. */
 int fault_profile_causal_roads_on(void);
 

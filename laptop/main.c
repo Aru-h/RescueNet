@@ -23,6 +23,27 @@
 #include "mission_state.h" /* TICK_TIME_SEC */
 #include "consensus.h"
 #include "fault_predictor.h" /* FAULT_MODEL_LOADED - --model-info */
+#include "recovery_planner.h"
+
+/* Planner decision log (--planner-log): one row per non-trivial decision. Laptop only; not part of the
+ * dataset or the causal sidecar, and no simulation effect. */
+static FILE *g_planner_log;
+static uint32_t g_planner_log_seed;
+
+static void planner_log_sink(const PlannerDecision_t *d)
+{
+    static const char *const layer[3] = { "A", "B", "preempt" };
+
+    if(g_planner_log == NULL)
+        return;
+    fprintf(g_planner_log, "%u,%u,%s,%u,%u,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%u,%d,%d,%d,%.3f\n",
+            g_planner_log_seed, d->tick, layer[d->layer < 3u ? d->layer : 0u], d->team, d->chosen,
+            d->alt == 255u ? -1 : (int)d->alt,
+            (double)d->p[0], (double)d->p[1], (double)d->p[2],
+            (double)d->p_ai[0], (double)d->p_ai[1], (double)d->p_ai[2],
+            (double)d->cost_fault, (double)d->cost_action, (double)d->cost_alt, (double)d->margin,
+            (unsigned)d->flags, (int)d->target_x, (int)d->target_y, (int)d->aux, (double)d->aux_cost);
+}
 
 static uint64_t monotonic_ms(void)
 {
@@ -204,7 +225,8 @@ int main(int argc, char **argv)
     uint8_t causal_env_min = 0, causal_env_max = 0;
     uint8_t causal_env_delay = 0;
     int roads_flag_given = 0;
-    int causal_fixes_mask = -1;   /* -1 = not given (default: all fixes on under causal) */
+    int causal_fixes_mask = -1;
+    int planner_flag_given = 0;    /* any --planner* flag */   /* -1 = not given (default: all fixes on under causal) */
     int causal_reroute_penalty = -1;
     int live_mode = 0;
     int mission_feed_mode = 0; /* --mission-feed, see laptop/mission_feed.h */
@@ -400,6 +422,123 @@ int main(int argc, char **argv)
             continue;
         }
 
+        /* Step 3.5 recovery planner (causal only): --recovery=fixed|utility and --planner* */
+        if(strncmp(argv[i], "--recovery=", 11) == 0)
+        {
+            const char *v = argv[i] + 11;
+
+            if(strcmp(v, "utility") == 0)
+                g_recovery_mode = RECOVERY_MODE_UTILITY;
+            else if(strcmp(v, "fixed") == 0)
+                g_recovery_mode = RECOVERY_MODE_FIXED;
+            else
+            {
+                fprintf(stderr, "invalid --recovery '%s' (need fixed or utility)\n", v);
+                exit(2);
+            }
+            continue;
+        }
+        if(strncmp(argv[i], "--planner", 9) == 0)
+        {
+            const char *a = argv[i];
+
+            planner_flag_given = 1;
+            if(strncmp(a, "--planner=", 10) == 0)
+            {
+                char buf[64];
+                char *tok;
+                unsigned mask = 0;
+
+                strncpy(buf, a + 10, sizeof(buf) - 1);
+                buf[sizeof(buf) - 1] = 0;
+                if(strcmp(buf, "all") == 0)
+                    mask = PLANNER_LAYERS_ALL;
+                else if(strcmp(buf, "none") == 0)
+                    mask = 0;   /* evidence and calibration only (--planner-calib); the fixed gates decide */
+                else
+                    for(tok = strtok(buf, ","); tok != NULL; tok = strtok(NULL, ","))
+                    {
+                        if(strcmp(tok, "team") == 0) mask |= PLANNER_LAYER_TEAM;
+                        else if(strcmp(tok, "tasks") == 0) mask |= PLANNER_LAYER_TASKS;
+                        else if(strcmp(tok, "preempt") == 0) mask |= PLANNER_LAYER_PREEMPT;
+                        else { fprintf(stderr, "invalid --planner '%s' (need all or a list of team,tasks,preempt)\n", a + 10); exit(2); }
+                    }
+                g_planner.layers = (uint8_t)mask;
+            }
+            else if(strncmp(a, "--planner-approval=", 19) == 0)
+            {
+                if(strcmp(a + 19, "deny") == 0) g_planner.approval = 0;
+                else if(strcmp(a + 19, "auto") == 0) g_planner.approval = 1;
+                else { fprintf(stderr, "invalid --planner-approval '%s' (need deny or auto)\n", a + 19); exit(2); }
+            }
+            else if(strncmp(a, "--planner-p=", 12) == 0)
+            {
+                if(strcmp(a + 12, "ai") == 0) g_planner.p_source = PLANNER_P_AI;
+                else if(strcmp(a + 12, "watchdog") == 0) g_planner.p_source = PLANNER_P_WATCHDOG;
+                else if(strcmp(a + 12, "oracle") == 0) g_planner.p_source = PLANNER_P_ORACLE;
+                else { fprintf(stderr, "invalid --planner-p '%s' (need ai, watchdog or oracle)\n", a + 12); exit(2); }
+            }
+            else if(strncmp(a, "--planner-v=", 12) == 0)
+            {
+                char *end;
+                double x = strtod(a + 12, &end);
+                if(*end != 0 || !(x > 0.0 && x <= 100.0)) { fprintf(stderr, "invalid --planner-v '%s' (need a multiplier > 0)\n", a + 12); exit(2); }
+                g_planner.v_mult = (float)x;
+            }
+            else if(strncmp(a, "--planner-margin=", 17) == 0)
+            {
+                char *end;
+                double x = strtod(a + 17, &end);
+                if(*end != 0 || !(x >= 0.0 && x <= 10.0)) { fprintf(stderr, "invalid --planner-margin '%s' (need 0-10)\n", a + 17); exit(2); }
+                g_planner.margin_frac = (float)x;
+            }
+            else if(strncmp(a, "--planner-set=", 14) == 0)
+            {
+                char buf[160];
+                char *tok;
+
+                strncpy(buf, a + 14, sizeof(buf) - 1);
+                buf[sizeof(buf) - 1] = 0;
+                for(tok = strtok(buf, ","); tok != NULL; tok = strtok(NULL, ","))
+                {
+                    char *eq = strchr(tok, '=');
+                    char *end;
+                    double x;
+                    float *dst = NULL;
+
+                    if(eq == NULL) { fprintf(stderr, "invalid --planner-set item '%s' (need name=value)\n", tok); exit(2); }
+                    *eq = 0;
+                    x = strtod(eq + 1, &end);
+                    if(*end != 0 || !(x >= 0.0)) { fprintf(stderr, "invalid --planner-set value for '%s'\n", tok); exit(2); }
+                    if(strcmp(tok, "reassign") == 0) dst = &g_planner.reassign_delay;
+                    else if(strcmp(tok, "travel") == 0) dst = &g_planner.ref_travel_ticks;
+                    else if(strcmp(tok, "stage") == 0) dst = &g_planner.ref_stage_ticks;
+                    else if(strcmp(tok, "window") == 0) dst = &g_planner.rate_window_ticks;
+                    else if(strcmp(tok, "detour") == 0) dst = &g_planner.blocked_detour;
+                    else if(strcmp(tok, "cblind") == 0) dst = &g_planner.cblind;
+                    else if(strcmp(tok, "repair_mob") == 0) dst = &g_planner.repair_mobility;
+                    else if(strcmp(tok, "repair_res") == 0) dst = &g_planner.repair_resource;
+                    else if(strcmp(tok, "repair_comm") == 0) dst = &g_planner.repair_comm;
+                    else if(strcmp(tok, "repair") == 0) dst = &g_planner.repair_scale;
+                    else if(strcmp(tok, "crossing") == 0) dst = &g_planner.crossing_scale;
+                    else if(strcmp(tok, "nref") == 0) dst = &g_planner.n_ref_victims;
+                    else if(strcmp(tok, "ageref") == 0) dst = &g_planner.age_ref_ticks;
+                    else { fprintf(stderr, "unknown --planner-set name '%s'\n", tok); exit(2); }
+                    *dst = (float)x;
+                }
+            }
+            else if(strcmp(a, "--planner-log") == 0)
+                g_planner.log_enabled = 1;
+            else if(strcmp(a, "--planner-calib") == 0)
+                g_planner.calib_dump = 1;
+            else
+            {
+                fprintf(stderr, "unknown flag %s\n", a);
+                exit(2);
+            }
+            continue;
+        }
+
         /* Step 3.2 plumbing fixes, causal only: on | off | label,rtb,cost */
         if(strncmp(argv[i], "--causal-fixes=", 15) == 0)
         {
@@ -422,9 +561,11 @@ int main(int argc, char **argv)
                         mask |= CAUSAL_FIX_ENV_NO_RTB;
                     else if(strcmp(tok, "cost") == 0)
                         mask |= CAUSAL_FIX_TRUE_COST;
+                    else if(strcmp(tok, "stall") == 0)
+                        mask |= CAUSAL_FIX_STALL;
                     else
                     {
-                        fprintf(stderr, "invalid --causal-fixes '%s' (need on, off, or a list of label,rtb,cost)\n", v);
+                        fprintf(stderr, "invalid --causal-fixes '%s' (need on, off, or a list of label,rtb,cost,stall)\n", v);
                         exit(2);
                     }
                 }
@@ -573,6 +714,18 @@ int main(int argc, char **argv)
         }
         fault_config_set_causal_reroute_penalty((uint16_t)causal_reroute_penalty);
     }
+    if(g_recovery_mode == RECOVERY_MODE_UTILITY && fault_profile != FAULT_PROFILE_CAUSAL)
+    {
+        fprintf(stderr, "--recovery=utility only applies to --fault-profile=causal\n");
+        return 2;
+    }
+    if(planner_flag_given && g_recovery_mode != RECOVERY_MODE_UTILITY)
+    {
+        fprintf(stderr, "--planner* flags need --recovery=utility\n");
+        return 2;
+    }
+    if(g_recovery_mode == RECOVERY_MODE_UTILITY && (g_planner.layers & PLANNER_LAYER_TASKS))
+        causal_actions_flag = (int)CAUSAL_ACTIONS_ALL;   /* the planner decides when each action starts; the mechanics are Step 3's */
     fault_config_set_causal_actions((uint8_t)causal_actions_flag);
     if(fault_stress_given && fault_profile != FAULT_PROFILE_CAUSAL)
     {
@@ -591,9 +744,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "[FAULT] profile=causal fault_stress=%g causal_actions=%s env_backstop=%u-%u env_crossing_delay=%u roads=%s\n", (double)fault_stress,
                 causal_actions_flag == (int)CAUSAL_ACTIONS_ALL ? "on" : (causal_actions_flag ? "partial" : "off"), causal_env_max ? causal_env_min : 5u, causal_env_max ? causal_env_max : 12u, (unsigned)causal_env_delay,
                 g_causal_roads.enabled ? "on" : "off");
+    if(g_recovery_mode == RECOVERY_MODE_UTILITY)
+        fprintf(stderr, "[FAULT] recovery=utility layers=%u p=%s approval=%s v_mult=%g margin=%g\n", (unsigned)g_planner.layers,
+                g_planner.p_source == PLANNER_P_AI ? "ai" : (g_planner.p_source == PLANNER_P_WATCHDOG ? "watchdog" : "oracle"),
+                g_planner.approval ? "auto" : "deny", (double)g_planner.v_mult, (double)g_planner.margin_frac);
     if(fault_profile == FAULT_PROFILE_CAUSAL)
-        fprintf(stderr, "[FAULT] fixes label=%d env_no_rtb=%d true_cost=%d\n",
-                fault_profile_causal_fix(CAUSAL_FIX_LABEL), fault_profile_causal_fix(CAUSAL_FIX_ENV_NO_RTB), fault_profile_causal_fix(CAUSAL_FIX_TRUE_COST));
+        fprintf(stderr, "[FAULT] fixes label=%d env_no_rtb=%d true_cost=%d stall=%d\n",
+                fault_profile_causal_fix(CAUSAL_FIX_LABEL), fault_profile_causal_fix(CAUSAL_FIX_ENV_NO_RTB), fault_profile_causal_fix(CAUSAL_FIX_TRUE_COST),
+                fault_profile_causal_fix(CAUSAL_FIX_STALL));
     if(fault_profile == FAULT_PROFILE_CAUSAL && g_causal_roads.enabled)
         fprintf(stderr, "[FAULT] roads partial_pct=%u delay=%u persist=%u-%u clear_work=%u-%u cost_per_tick=%u astar=%s\n",
                 g_causal_roads.partial_pct, g_causal_roads.crossing_delay_ticks,
@@ -612,12 +770,25 @@ int main(int argc, char **argv)
     uint32_t seed_count = positional_count >= 2 ? positional_args[1] : 1;
     uint32_t ticks_per_seed = positional_count >= 3 ? positional_args[2] : 10000;
 
+    if(g_planner.log_enabled)
+    {
+        g_planner_log = fopen("tron_planner_log.csv", "w");
+        if(g_planner_log != NULL)
+        {
+            fprintf(g_planner_log, "world_seed,tick,layer,team,chosen,alt,p_mobility,p_communication,p_resource,"
+                                   "p_ai_mobility,p_ai_communication,p_ai_resource,cost_fault_or_benefit,cost_action,cost_alt,margin,"
+                                   "flags,target_x,target_y,aux,aux_cost\n");
+            planner_set_log_sink(planner_log_sink);
+        }
+    }
+
     /* Counter loop, not `seed < first_seed + seed_count`: that sum can
      * overflow uint32_t for large inputs and run zero (or wrong) seeds. */
     for(uint32_t seed_index = 0; seed_index < seed_count; ++seed_index)
     {
         uint32_t seed = first_seed + seed_index;
 
+        g_planner_log_seed = seed;
         sim_start_seed(seed, fault_profile);
 
         if(link_margin_map)
@@ -809,6 +980,41 @@ int main(int argc, char **argv)
                 fprintf(stderr, "[DIAG ENVLABEL] fix=%d label_ticks=%u label_episodes=%u\n",
                     fault_profile_causal_fix(CAUSAL_FIX_LABEL), rs->label_ticks, rs->label_episodes);
             }
+            {
+                const PlannerStats_t *ps = planner_stats();
+
+                fprintf(stderr, "[DIAG PLANNER] mode=%s decisions=%u go_home_planner=%u go_home_floor=%u stay_with_p=%u ai_cap_blocks=%u "
+                                "approvals_requested=%u approvals_granted=%u approvals_denied=%u go_home_events=%u go_home_near_stall=%u action_changes=%u reversals10=%u\n",
+                        g_recovery_mode == RECOVERY_MODE_UTILITY ? "utility" : "fixed", ps->decisions, ps->go_home_planner, ps->go_home_floor,
+                        ps->stay_with_p, ps->ai_cap_blocks, ps->approvals_requested, ps->approvals_granted, ps->approvals_denied,
+                        ps->go_home_events, ps->go_home_near_stall, ps->action_changes, ps->reversals10);
+                fprintf(stderr, "[DIAG PLANNER_B] eval_wanted_reroute=%u eval_wanted_clear_road=%u eval_wanted_reinforce=%u eval_wanted_relay=%u "
+                                "preempt_considered=%u preempt_clear_road=%u preempt_reinforce=%u blocked_cost=%u blocked_approval=%u blocked_finish=%u "
+                                "preempt_net_sum=%.2f succeeded_clear=%u failed_clear=%u succeeded_reinforce=%u failed_reinforce=%u\n",
+                        ps->wanted[0], ps->wanted[1], ps->wanted[2], ps->wanted[3], ps->preempt_considered, ps->preempt_done[CAUSAL_ACTION_CLEAR_ROAD],
+                        ps->preempt_done[CAUSAL_ACTION_REINFORCE_INCIDENT], ps->preempt_blocked_cost, ps->preempt_blocked_approval,
+                        ps->preempt_blocked_finish, (double)ps->preempt_net_sum_x100 / 100.0,
+                        ps->preempt_succeeded[CAUSAL_ACTION_CLEAR_ROAD], ps->preempt_failed[CAUSAL_ACTION_CLEAR_ROAD],
+                        ps->preempt_succeeded[CAUSAL_ACTION_REINFORCE_INCIDENT], ps->preempt_failed[CAUSAL_ACTION_REINFORCE_INCIDENT]);
+            }
+            if(g_planner.calib_dump)
+            {
+                const PlannerCalib_t *pc = planner_calib();
+
+                for(int s = 0; s < 3; s++)
+                    for(int c = 0; c < 3; c++)
+                        for(int b = 0; b < 32; b++)
+                        {
+                            if(pc->n[s][c][b] != 0u)
+                                fprintf(stderr, "[PLANNERCAL] kind=raw src=%d class=%d bin=%d n=%u pos=%u\n", s, c, b, pc->n[s][c][b], pc->pos[s][c][b]);
+                            if(pc->cal_n[s][c][b] != 0u)
+                                fprintf(stderr, "[PLANNERCAL] kind=cal src=%d class=%d bin=%d n=%u pos=%u sum=%.4f\n", s, c, b, pc->cal_n[s][c][b], pc->cal_pos[s][c][b], (double)pc->cal_sum[s][c][b]);
+                        }
+                for(int c = 0; c < 3; c++)
+                    for(int b = 0; b < 32; b++)
+                        if(pc->fused_n[c][b] != 0u)
+                            fprintf(stderr, "[PLANNERCAL] kind=fused src=3 class=%d bin=%d n=%u pos=%u sum=%.4f\n", c, b, pc->fused_n[c][b], pc->fused_pos[c][b], (double)pc->fused_sum[c][b]);
+            }
             for(uint8_t a = 0; a < NUM_CAUSAL_ACTIONS; a++)
                 fprintf(stderr, "[DIAG ACTION] name=%s dispatched=%u resolved=%u abandoned=%u active_ticks=%u from_detector=%u\n",
                     action_names[a], as->dispatched[a], as->resolved[a], as->abandoned[a],
@@ -828,6 +1034,9 @@ int main(int argc, char **argv)
                 fprintf(stderr, "[DIAG FAULT] class=%u onsets=%u cleared_by_cause=%u cleared_by_backstop=%u exposure_ticks=%u episode_ticks=%u\n",
                     c, cs->onsets[c], cs->cleared_by_cause[c], cs->cleared_by_backstop[c],
                     cs->exposure_ticks[c], cs->active_ticks_total[c]);
+            for(uint8_t c = 0; c < NUM_OPERATIONAL_FAULT_CLASSES; c++)
+                fprintf(stderr, "[DIAG FAULTEND] class=%u cause_ticks=%u cause_planned_ticks=%u\n",
+                    c, cs->ticks_by_cause[c], cs->planned_by_cause[c]);
         }
 
         extern uint32_t g_diag_discovered_by_type[NUM_INCIDENT_TYPES];

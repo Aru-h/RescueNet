@@ -31,4 +31,10 @@ bool team_can_accept_incident(const TeamState_t *team,const IncidentState_t *inc
  */
 float get_soft_stamina_floor(const TeamState_t *team);
 
+
+/* Step 3.5 planner preemption: assign a specific, already-free team to an OPEN system task or as the
+ * support team of an incident, with exactly the bookkeeping the allocator itself does. Return 1 on success. */
+uint8_t allocator_assign_system_task(uint8_t team_id, uint8_t slot);
+uint8_t allocator_assign_support(uint8_t team_id, uint8_t incident_slot);
+
 #endif

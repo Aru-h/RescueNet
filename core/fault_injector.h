@@ -20,6 +20,8 @@ typedef struct
     uint32_t cleared_by_backstop[NUM_OPERATIONAL_FAULT_CLASSES];
     uint32_t exposure_ticks[NUM_OPERATIONAL_FAULT_CLASSES];
     uint32_t active_ticks_total[NUM_OPERATIONAL_FAULT_CLASSES]; /* sum of episode lengths */
+    uint32_t ticks_by_cause[NUM_OPERATIONAL_FAULT_CLASSES];     /* ... of episodes ended by the cause being removed */
+    uint32_t planned_by_cause[NUM_OPERATIONAL_FAULT_CLASSES];   /* ... and what their backstop timers had drawn (recovery_tick - start_tick) */
 } CausalFaultStats_t;
 
 const CausalFaultStats_t *fault_injector_causal_stats(void);

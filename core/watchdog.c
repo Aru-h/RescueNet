@@ -1,4 +1,6 @@
 #include "watchdog.h"
+#include "causal_actions.h"
+#include "fault_config.h"
 
 #include <math.h>
 #include <stddef.h>
@@ -214,22 +216,29 @@ static void update_movement_stalls(
         uint8_t stalled = team->loc_x == watchdog->last_loc_x &&
             team->loc_y == watchdog->last_loc_y;
         uint8_t mask = (uint8_t)((1u << WATCHDOG_STALL_WINDOW_TICKS) - 1u);
+        /* Causal stall-aware fix: a step held at a known partial-debris cell is a road delay, not a mobility
+         * symptom. That tick is not sampled (like a re-tasked leg's skipped move). */
+        uint8_t excused = (uint8_t)(stalled && fault_profile_causal_fix(CAUSAL_FIX_STALL) &&
+                                    causal_actions_debris_held_at(team->team_id, g_current_tick));
 
-        watchdog->stall_history = (uint8_t)(((watchdog->stall_history << 1) | stalled) & mask);
-        if(watchdog->stall_samples < WATCHDOG_STALL_WINDOW_TICKS)
-            watchdog->stall_samples++;
+        if(!excused)
+        {
+            watchdog->stall_history = (uint8_t)(((watchdog->stall_history << 1) | stalled) & mask);
+            if(watchdog->stall_samples < WATCHDOG_STALL_WINDOW_TICKS)
+                watchdog->stall_samples++;
 
-        if(stall_count(watchdog->stall_history) >= WATCHDOG_STALL_CONFIRM_COUNT)
-        {
-            watchdog->confirmed_mobility_impairment = 1;
-            watchdog->travel_degradation_seen = 1;
-        }
-        else if(watchdog->stall_samples >= WATCHDOG_STALL_WINDOW_TICKS &&
-                watchdog->stall_history == 0u)
-        {
-            /* A full window of clean moves: the team is travelling at
-             * full speed again. */
-            watchdog->confirmed_mobility_impairment = 0;
+            if(stall_count(watchdog->stall_history) >= WATCHDOG_STALL_CONFIRM_COUNT)
+            {
+                watchdog->confirmed_mobility_impairment = 1;
+                watchdog->travel_degradation_seen = 1;
+            }
+            else if(watchdog->stall_samples >= WATCHDOG_STALL_WINDOW_TICKS &&
+                    watchdog->stall_history == 0u)
+            {
+                /* A full window of clean moves: the team is travelling at
+                 * full speed again. */
+                watchdog->confirmed_mobility_impairment = 0;
+            }
         }
     }
     else if(team->status != STATUS_EN_ROUTE || leg_changed)

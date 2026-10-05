@@ -9,7 +9,8 @@ diffs). `--causal-fixes=off` restores the Step 3.1 behaviour exactly (checked:
 dataset and the first 23 sidecar columns byte-identical to the Step 3.1 build,
 actions off and on).
 
-`--causal-fixes=on|off|<list of label,rtb,cost>`, default **on**. The list form is
+`--causal-fixes=on|off|<list of label,rtb,cost,stall>`, default **on** (the `stall` fix is section 4, added
+in Step 3.5; the results below were taken before it). The list form is
 for ablations. Each fix is one bit (`CAUSAL_FIX_*`, `core/fault_config.h`).
 
 ## 1. The environment label is route exposure (`label`)
@@ -79,12 +80,50 @@ terrain cost (`simulation_true_remaining_cost()`, `core/simulation.c`). The
 overlay still steers the step. With no overlay (true-cost A*, or REROUTE off)
 nothing changes.
 
+## 4. Stall-aware evaluators (`stall`, added in Step 3.5)
+
+Found while building the recovery planner: a team crossing a partial-debris cell is held for
+four ticks (the crossing stall). The movement-stall evaluators read that as a mobility fault:
+the watchdog's stall window (`core/watchdog.c`, `update_movement_stalls`), the peers' consensus
+observer (`core/consensus.c`, `mobility_observe`), the AI's `moved_this_tick` feature
+(`core/fault_predictor_features.c`) and the mission twin's expected-progress tracker
+(`core/mission_execution_twin.c`). With the fix, a tick on which the team was held at a known
+debris cell (`causal_actions_debris_held_at()`, a 16-tick ring per team in
+`core/causal_actions.c`) is not sampled as a stall. A team stalled for any other reason is
+unaffected. Probe before the fix (20 dev seeds): 4.4% of working team-ticks were near a stall,
+but 30.4% of go-home events were (6.8x; 1028 of 3387).
+
+`--causal-fixes` takes the token `stall`; `on` and the default now mean `label,rtb,cost,stall`
+(`CAUSAL_FIXES_ALL = 0x0F`); it needs roads on and is a no-op without them. Causal profile only.
+Checked: `--causal-fixes=label,rtb,cost` reproduces the Step 3.2 build byte for byte (dataset and
+sidecar, causal profile, actions off and on, seeds 1001 and 3001); C1 md5, the other profiles'
+datasets and their `--diag` stderr are unchanged.
+
+Effect on go-home events and incidents (per seed; "near a stall" = within 12 ticks after a held
+step; full table with the planner in `docs/RECOVERY_PLANNER_RESULTS.md`):
+
+| Condition | Go-home events before | after | Near a stall before | after | Incidents before | after |
+|---|---|---|---|---|---|---|
+| Fixed gates, AI off, dev / held-out | 169.3 / 140.5 | 124.5 / 114.2 | 55.6 / 28.3 | 3.9 / 1.9 | 40.10 / 41.90 | 43.60 / 43.05 |
+| Fixed gates, AI on, dev / held-out | 210.8 / 190.7 | 148.6 / 142.9 | 80.9 / 68.5 | 3.1 / 3.3 | 38.70 / 37.05 | 41.85 / 40.70 |
+| Planner (no AI), dev / held-out | 170.8 / 160.0 | 124.6 / 116.5 | 56.5 / 54.0 | 3.1 / 2.7 | 41.25 / 41.35 | 43.45 / 42.35 |
+
+Held-out here is seeds 3001-3020 (see the provenance note in
+`docs/RECOVERY_PLANNER_RESULTS.md`); the Step 3.2 tables below used 2001-2020.
+
 ## Results
 
 Causal profile, `--fault-stress=7`, roads on, 3000 ticks. Development seeds
 1001-1020, held-out seeds 2001-2020, pooled 40; paired 95% bootstrap CIs
 (`laptop/tools/paired_compare.py`). Scripts and run directories as in
 `docs/CONSEQUENTIAL_ROADS.md`.
+
+> **Provenance caveat (added in Step 3.5).** The held-out range 2001-2020 used here, and in Steps
+> 3 and 3.1 (`docs/CONSEQUENTIAL_ROADS.md`), overlaps the seeds 2001-2008 the AI's thresholds were
+> tuned on (`ml/MODEL_REPORT.md` section 3). The held-out and pooled columns of every **AI-on**
+> row are therefore not fully out-of-sample; **AI-off rows and the development seeds are not
+> affected**. Step 3.5 moved held-out to the unused range 3001-3020; see
+> `docs/RECOVERY_PLANNER_RESULTS.md`. These tables were not re-run on the new range.
 
 ### Label exposure and episode length (AI off, actions off)
 

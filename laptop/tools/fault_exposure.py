@@ -36,6 +36,7 @@ ACTION_RE = re.compile(
 ROADS_RE = re.compile(
     r"\[DIAG ROADS\] enabled=(\d+) partial=(\d+) blocked=(\d+) block_downgraded=(\d+) "
     r"max_blocked_cells=(\d+) audit_ticks=(\d+) audit_violations=(\d+)")
+PLANNER_RE = re.compile(r"\[DIAG PLANNER(?:_B)?\] (.*)")
 ENVLABEL_RE = re.compile(r"\[DIAG ENVLABEL\] fix=(\d+) label_ticks=(\d+) label_episodes=(\d+)")
 FAULT_RE = re.compile(
     r"\[DIAG FAULT\] class=(\d+) onsets=(\d+) cleared_by_cause=(\d+) "
@@ -78,6 +79,10 @@ def run_seed(tron, profile, seed, ticks, extra):
         actions = {m.group(1): [int(g) for g in m.groups()[1:]] for m in ACTION_RE.finditer(proc.stderr)}
         roads = ROADS_RE.search(proc.stderr)
         roads = [int(g) for g in roads.groups()] if roads else None
+        planner = {}
+        for pm in PLANNER_RE.finditer(proc.stderr):
+            for k, v in re.findall(r"(\w+)=(-?[\d.]+)", pm.group(1)):
+                planner[k] = float(v)
         envlabel = ENVLABEL_RE.search(proc.stderr)
         envlabel = [int(g) for g in envlabel.groups()] if envlabel else None
         world = CAUSAL_RE.search(proc.stderr)
@@ -129,7 +134,7 @@ def run_seed(tron, profile, seed, ticks, extra):
             "seed": seed, "attribution": attribution, "incidents_resolved": resolved, "team_ticks": team_ticks,
             "active": active, "any_active": any_active,
             "worst_team_any": max((per_team_any.get(t, 0) / n for t, n in per_team_ticks.items()), default=0.0),
-            "episodes": episodes, "causal_diag": causal, "world": world, "actions": actions, "roads": roads, "envlabel": envlabel,
+            "episodes": episodes, "causal_diag": causal, "world": world, "actions": actions, "roads": roads, "envlabel": envlabel, "planner": planner,
         }
 
 
@@ -191,8 +196,13 @@ def summarise(results):
             "old_flag_exposure": hold_ticks / team_ticks, "old_flag_episodes_per_seed": hold_eps / n,
             "old_flag_mean_episode_ticks": (hold_ticks / hold_eps) if hold_eps else 0.0,
         }
+    planners = [r["planner"] for r in results if r.get("planner")]
+    if planners:
+        keys = sorted({k for p in planners for k in p})
+        out["planner"] = {k: sum(p.get(k, 0.0) for p in planners) / len(planners) for k in keys}
     out["per_seed"] = {str(r["seed"]): {"incidents_resolved": r["incidents_resolved"],
-                                        "victims_lost": (r["world"][2] if r["world"] else None)} for r in results}
+                                        "victims_lost": (r["world"][2] if r["world"] else None),
+                                        "planner": r.get("planner") or {}} for r in results}
     roads = [r["roads"] for r in results if r["roads"] and r["roads"][0]]
     if roads:
         out["roads"] = {
@@ -297,6 +307,9 @@ def main():
         w = summary["world"]
         print(f"victims lost / seed: {w['victims_lost']:.1f} of {w['victims_seen']:.1f} ({100*w['victim_loss_fraction']:.1f}%)  "
               f"escalations: {w['escalations']:.1f}  aftershocks: {w['aftershock_events']:.1f} (team hits {w['aftershock_team_hits']:.1f})")
+    if "planner" in summary:
+        pl = summary["planner"]
+        print("planner per seed (mean): " + ", ".join(f"{k}={v:.1f}" for k, v in pl.items() if v))
     if "env_label" in summary:
         el = summary["env_label"]
         print(f"environment label ({'route touches a damaged cell' if el['fix_on'] else 'old per-team flag'}; the 'environment' row above): "

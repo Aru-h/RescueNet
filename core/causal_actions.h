@@ -51,6 +51,11 @@ void causal_actions_path_end(void);
  * faulted cell must wait. Independent of which actions are enabled. */
 int causal_actions_crossing_stall(const TeamState_t *team, int next_x, int next_y);
 uint32_t causal_actions_stall_ticks(void);
+/* Stall-aware evaluators (CAUSAL_FIX_STALL): was this team's step held by a partial-debris crossing at `tick`
+ * (the road map is shared, so any evaluator can tell a debris stall from a mobility fault)? */
+int causal_actions_debris_held_at(uint8_t team_id, uint32_t tick);
+/* ... at any of the last `window` ticks (diagnostics). */
+int causal_actions_debris_held_within(uint8_t team_id, uint32_t window);
 
 /* Incident hooks. */
 int causal_actions_reinforce_wanted(uint8_t incident_slot);
@@ -62,6 +67,11 @@ void causal_actions_road_cleared(const IncidentState_t *task);
 uint8_t causal_actions_route_touch(const TeamState_t *team);
 /* 1 while this team's path searches carry the REROUTE overlay. */
 int causal_actions_overlay_active(const TeamState_t *team);
+/* Step 3.5 planner inputs. */
+float causal_actions_cell_touch_rate(int x, int y);
+uint32_t causal_actions_faulted_age(int x, int y);
+int causal_actions_clear_target(uint8_t slot, int *x, int *y);
+float causal_actions_reroute_gain(const TeamState_t *team);
 
 /* Bit i set = action i currently involves this team. */
 uint8_t causal_actions_team_mask(uint8_t team_id);

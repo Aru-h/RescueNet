@@ -9,6 +9,7 @@
 #include "causal_actions.h"
 #include "environment.h"
 #include "incident.h"
+#include "recovery_planner.h"
 #include "mission_state.h"
 #include "path.h"
 #include "random.h"
@@ -997,7 +998,11 @@ static void causal_clear(uint8_t team_id, OperationalFaultClass_t fault_class,
     TeamFaultState_t *fs = &g_teams[team_id].fault_state;
 
     if(how == CAUSAL_CLEAR_CAUSE_REMOVED)
+    {
         s_causal_stats.cleared_by_cause[fault_class]++;
+        s_causal_stats.ticks_by_cause[fault_class] += g_current_tick - fs->start_tick[fault_class];
+        s_causal_stats.planned_by_cause[fault_class] += fs->recovery_tick[fault_class] - fs->start_tick[fault_class];
+    }
     else
         s_causal_stats.cleared_by_backstop[fault_class]++;
     s_causal_stats.active_ticks_total[fault_class] += g_current_tick - fs->start_tick[fault_class];
@@ -1469,6 +1474,8 @@ int fault_injector_clear_cell_faults(int x, int y)
             continue;
 
         s_causal_stats.cleared_by_cause[FAULT_CLASS_ENVIRONMENT]++;
+        s_causal_stats.ticks_by_cause[FAULT_CLASS_ENVIRONMENT] += g_current_tick - fs->start_tick[FAULT_CLASS_ENVIRONMENT];
+        s_causal_stats.planned_by_cause[FAULT_CLASS_ENVIRONMENT] += fs->recovery_tick[FAULT_CLASS_ENVIRONMENT] - fs->start_tick[FAULT_CLASS_ENVIRONMENT];
         s_causal_stats.active_ticks_total[FAULT_CLASS_ENVIRONMENT] +=
             g_current_tick - fs->start_tick[FAULT_CLASS_ENVIRONMENT];
         s_causal_truth[team_id].clear_cause[FAULT_CLASS_ENVIRONMENT] = (uint8_t)CAUSAL_CLEAR_CAUSE_REMOVED;
@@ -1519,6 +1526,7 @@ void fault_injector_init(uint32_t seed)
 #endif
     }
     causal_actions_reset();
+    planner_reset();
 #if ENVIRONMENT_HAS_WORLD_STORAGE
     memset(s_road_kind, 0, sizeof(s_road_kind));
 #endif

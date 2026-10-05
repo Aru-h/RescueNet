@@ -1,4 +1,6 @@
 #include "mission_execution_twin.h"
+#include "causal_actions.h"
+#include "fault_config.h"
 
 #include <limits.h>
 #include <stddef.h>
@@ -463,6 +465,13 @@ static void reset_twin_for_current_mission(
     twin->mission_stage = resolve_expected_stage(twin);
 }
 
+/* Causal stall-aware fix: while a team is held at a known partial-debris cell the plan waits with it, so the
+ * delay is not read as lost progress. */
+static int twin_debris_held(const TeamState_t *team)
+{
+    return fault_profile_causal_fix(CAUSAL_FIX_STALL) && causal_actions_debris_held_at(team->team_id, g_current_tick);
+}
+
 static void twin_advance_expected_position(MissionExecutionTwin_t *twin, const TeamState_t *team)
 {
     int next_x = twin->expected_loc_x;
@@ -690,7 +699,7 @@ void mission_execution_twin_step(void)
                      * ahead of what the real team has actually done -
                      * see the fuller writeup on the equivalent branch
                      * below, which hits this same construction. */
-                    if(!twin_just_reset)
+                    if(!twin_just_reset && !twin_debris_held(team))
                         twin_advance_expected_position(twin, team);
                     twin->expected_operating_state = STATUS_EN_ROUTE;
                     twin->mission_stage = MISSION_STAGE_TRAVEL;
@@ -801,7 +810,7 @@ void mission_execution_twin_step(void)
              * agreement and then advance once per tick together from the
              * next tick on, same as any team whose mission wasn't just
              * reassigned. */
-            if(!twin_just_reset)
+            if(!twin_just_reset && !twin_debris_held(team))
                 twin_advance_expected_position(twin, team);
             twin->expected_operating_state = STATUS_EN_ROUTE;
         }

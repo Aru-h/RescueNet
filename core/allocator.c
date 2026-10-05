@@ -483,3 +483,43 @@ static void allocate_support_team(void)
     /* Keep the execution twin consistent with the new assignment */
     cbba_sync_mission_execution_twin();
 }
+
+uint8_t allocator_assign_system_task(uint8_t team_id, uint8_t slot)
+{
+    TeamState_t *team;
+    IncidentState_t *task;
+
+    if(team_id >= NUM_TEAMS || slot >= NUM_SYSTEM_TASKS)
+        return 0;
+    team = &g_teams[team_id];
+    task = &g_system_tasks[slot];
+    if(!task->slot_occupied || task->status != INC_OPEN || team->assigned_task_pool != TASK_POOL_NONE)
+        return 0;
+    team->status = STATUS_EN_ROUTE;
+    team->assigned_task_pool = TASK_POOL_SYSTEM;
+    team->assigned_task_slot = slot;
+    task->status = INC_ASSIGNED;
+    task->assigned_team = team_id;
+    cbba_sync_mission_execution_twin();
+    snapshot_record(g_sim_step_tick, EVENT_TEAM_ASSIGNED, team_id);
+    return 1;
+}
+
+uint8_t allocator_assign_support(uint8_t team_id, uint8_t incident_slot)
+{
+    TeamState_t *team;
+    IncidentState_t *incident;
+
+    if(team_id >= NUM_TEAMS || incident_slot >= NUM_INCIDENTS)
+        return 0;
+    team = &g_teams[team_id];
+    incident = &g_incidents[incident_slot];
+    if(!incident->slot_occupied || incident->support_team != NO_ASSIGNMENT || team->assigned_task_pool != TASK_POOL_NONE)
+        return 0;
+    incident->support_team = team_id;
+    team->assigned_task_pool = TASK_POOL_INCIDENT;
+    team->assigned_task_slot = incident_slot;
+    team->status = STATUS_EN_ROUTE;
+    cbba_sync_mission_execution_twin();
+    return 1;
+}

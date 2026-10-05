@@ -2649,3 +2649,35 @@ void abandon_task_for_recovery(TeamState_t *team)
         team_set_available(team);
     }
 }
+
+int planner_release_team_for_preempt(TeamState_t *team)
+{
+    IncidentState_t *task = NULL;
+    TaskPool_t pool;
+
+    if(team == NULL || team->heading_to_rest)
+        return 0;
+    pool = (TaskPool_t)team->assigned_task_pool;
+    if(pool == TASK_POOL_INCIDENT && team->assigned_task_slot < NUM_INCIDENTS)
+        task = &g_incidents[team->assigned_task_slot];
+    else if(pool == TASK_POOL_SYSTEM && team->assigned_task_slot < NUM_SYSTEM_TASKS)
+        task = &g_system_tasks[team->assigned_task_slot];
+
+    if(task != NULL && task->slot_occupied)
+    {
+        if(task->assigned_team == team->team_id)
+        {
+            task->assigned_team = NO_ASSIGNMENT;
+            if(task->unreachable_streak < INCIDENT_UNREACHABLE_GIVEUP_THRESHOLD)
+                task->status = INC_OPEN;
+        }
+        else if(task->support_team == team->team_id)
+            task->support_team = NO_ASSIGNMENT;
+        else
+            return 0;   /* ownership mismatch: leave it alone */
+    }
+    team->assigned_task_pool = TASK_POOL_NONE;
+    team->assigned_task_slot = NO_ASSIGNMENT;
+    release_queued_incidents(team);
+    return 1;
+}

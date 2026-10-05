@@ -81,9 +81,47 @@ int fault_profile_causal_fix(unsigned fix)
 {
     if(g_fault_config.profile != FAULT_PROFILE_CAUSAL || !(g_causal_fixes & fix))
         return 0;
-    if(fix == CAUSAL_FIX_LABEL)
+    if(fix == CAUSAL_FIX_LABEL || fix == CAUSAL_FIX_STALL)
         return g_causal_roads.enabled;
     return 1;
+}
+
+RecoveryMode_t g_recovery_mode = RECOVERY_MODE_FIXED;
+
+PlannerParams_t g_planner = {
+    .layers = PLANNER_LAYERS_ALL,
+    .p_source = PLANNER_P_AI,
+    .approval = 0,
+    .log_enabled = 0,
+    .calib_dump = 0,
+    .preempt_k = 3,
+    .preempt_cooldown_ticks = 30,   /* as RELAY_REPOSITION's cooldown (Step 3) */
+    .v_mult = 1.0f,
+    .margin_frac = 0.25f,           /* tuned on dev seeds 1001-1020 */
+    .n_ref_victims = 5.07f,
+    .age_ref_ticks = 266.0f,
+    .reassign_delay = 40.0f,
+    .ref_travel_ticks = 10.0f,
+    .ref_stage_ticks = 30.0f,
+    .rate_window_ticks = 100.0f,
+    .blocked_detour = 2.0f,
+    .cblind = 0.1f,
+    .repair_mobility = 1.0f,
+    .repair_resource = 1.0f,
+    .repair_comm = 0.5f,
+    .repair_scale = 1.0f,
+    .crossing_scale = 1.0f,
+    .p_log_floor = 0.05f,
+};
+
+int fault_profile_planner_on(void)
+{
+    return g_fault_config.profile == FAULT_PROFILE_CAUSAL && g_recovery_mode == RECOVERY_MODE_UTILITY;
+}
+
+int fault_profile_planner_layer(unsigned layer)
+{
+    return fault_profile_planner_on() && (g_planner.layers & layer) != 0u;
 }
 
 int fault_profile_causal_roads_on(void)

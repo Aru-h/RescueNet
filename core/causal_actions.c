@@ -6,6 +6,7 @@
 #include "fault_injector.h"
 #include "incident.h"
 #include "path.h"
+#include "recovery_planner.h"
 
 static CausalActionStats_t s_stats;
 
@@ -46,6 +47,13 @@ static uint32_t s_relay_cooldown_until[NUM_TEAMS];  /* tick + 1 */
 static uint8_t s_stall[NUM_TEAMS];
 static uint32_t s_stall_total;
 /* The damaged cell that makes a team's route-touch label true (-1 = none). */
+/* Ticks at which each team's step was held by a debris crossing (recent ring), for the stall-aware evaluators. */
+#define HOLD_RING 16
+static uint32_t s_hold_ring[NUM_TEAMS][HOLD_RING];   /* tick + 1, 0 = empty */
+static uint8_t s_hold_head[NUM_TEAMS];
+static float s_touch_rate[CELLS];                /* EWMA of teams whose route touches the cell, per tick (planner) */
+static int16_t s_label_px[NUM_TEAMS];            /* previous tick's label cell, to count episodes */
+static int16_t s_label_py[NUM_TEAMS];
 static int16_t s_label_x[NUM_TEAMS];
 static int16_t s_label_y[NUM_TEAMS];
 
@@ -70,6 +78,11 @@ void causal_actions_reset(void)
         s_pending_env[t] = 0;
         s_relay_cooldown_until[t] = 0;
         s_stall[t] = 0;
+        s_label_px[t] = -1;
+        s_label_py[t] = -1;
+        s_hold_head[t] = 0;
+        for(int h = 0; h < HOLD_RING; h++)
+            s_hold_ring[t][h] = 0;
     }
     for(int i = 0; i < CELLS; i++)
     {
@@ -78,6 +91,7 @@ void causal_actions_reset(void)
         s_blockers[i] = 0;
         s_faulted_since[i] = 0;
         s_clear_requested[i] = 0;
+        s_touch_rate[i] = 0.0f;
     }
     for(uint8_t i = 0; i < NUM_SYSTEM_TASKS; i++)
     {
@@ -202,6 +216,93 @@ static void refresh_cell_state(void)
     }
 }
 
+static void clear_task_target(uint8_t slot, int *tx, int *ty);
+
+/* Planner: how often teams' routes touch each damaged cell (per tick, one-hour window). */
+static void update_touch_rates(void)
+{
+    static uint8_t touches[CELLS];
+    float a = (g_planner.rate_window_ticks > 1.0f) ? 1.0f / g_planner.rate_window_ticks : 1.0f;
+
+    for(int i = 0; i < CELLS; i++)
+        touches[i] = 0;
+    /* One touch per approach episode (a team's label cell changes to this cell), not one per tick the
+     * route stays within the 8-step lookahead of it: that is the crossing rate the clearing pays back. */
+    for(uint8_t t = 0; t < NUM_TEAMS; t++)
+    {
+        if(s_label_x[t] >= 0 && in_grid(s_label_x[t], s_label_y[t]) &&
+           (s_label_x[t] != s_label_px[t] || s_label_y[t] != s_label_py[t]))
+            touches[cell_index(s_label_x[t], s_label_y[t])]++;
+        s_label_px[t] = s_label_x[t];
+        s_label_py[t] = s_label_y[t];
+    }
+    for(int i = 0; i < CELLS; i++)
+        if(s_damaged[i] != 0 || s_touch_rate[i] > 0.0f)
+            s_touch_rate[i] = s_touch_rate[i] * (1.0f - a) + (float)touches[i] * a;
+}
+
+float causal_actions_cell_touch_rate(int x, int y)
+{
+    return in_grid(x, y) ? s_touch_rate[cell_index(x, y)] : 0.0f;
+}
+
+uint32_t causal_actions_faulted_age(int x, int y)
+{
+    uint32_t since;
+
+    if(!in_grid(x, y))
+        return 0u;
+    since = s_faulted_since[cell_index(x, y)];
+    return since != 0u ? g_current_tick + 1u - since : 0u;
+}
+
+int causal_actions_clear_target(uint8_t slot, int *x, int *y)
+{
+    int tx = -1, ty = -1;
+
+    if(slot >= NUM_SYSTEM_TASKS || !g_system_tasks[slot].slot_occupied || g_system_tasks[slot].incident_type != INCIDENT_CLEAR_ROAD)
+        return 0;
+    clear_task_target(slot, &tx, &ty);
+    if(!in_grid(tx, ty))
+        return 0;
+    *x = tx;
+    *y = ty;
+    return 1;
+}
+
+/* Planner REROUTE: stall ticks the overlay would avoid minus the detour it would cost, walking the
+ * team's route with and without the overlay (blind-A* mode only; zero by construction otherwise). */
+float causal_actions_reroute_gain(const TeamState_t *team)
+{
+    int dx, dy;
+    unsigned L[2] = { 0, 0 }, Pn[2] = { 0, 0 };
+
+    if(!team_destination(team, &dx, &dy))
+        return 0.0f;
+    for(int pass = 0; pass < 2; pass++)
+    {
+        int x = team->loc_x, y = team->loc_y, steps = 0;
+
+        if(pass == 1)
+            path_set_extra_cost(s_avoid);
+        while(!(x == dx && y == dy) && steps < (int)g_causal_actions.reroute_lookahead * 4)
+        {
+            int nx = x, ny = y;
+
+            if(find_next_path_step(x, y, dx, dy, 0, &nx, &ny) <= 0)
+                break;
+            x = nx;
+            y = ny;
+            steps++;
+            if(in_grid(x, y) && fault_injector_causal_road_kind(x, y) == 1u)
+                Pn[pass]++;
+        }
+        L[pass] = (unsigned)steps;
+        path_set_extra_cost(NULL);
+    }
+    return ((float)Pn[0] - (float)Pn[1]) * (float)g_causal_roads.crossing_delay_ticks * g_planner.crossing_scale - ((float)L[1] - (float)L[0]);
+}
+
 static void step_reroute(void)
 {
     const CausalActionParams_t *k = &g_causal_actions;
@@ -234,13 +335,15 @@ static void step_reroute(void)
         {
             /* disabled: still counted as a blocker above for CLEAR_ROAD */
         }
-        else if(crossing && team->status == STATUS_EN_ROUTE)
+        else if(crossing && team->status == STATUS_EN_ROUTE &&
+                (!fault_profile_planner_layer(PLANNER_LAYER_TASKS) || planner_reroute_wanted(team)))
         {
             s_reroute_on[t] = 1;
             s_reroute_start[t] = g_current_tick;
             s_stats.dispatched[CAUSAL_ACTION_REROUTE]++;
         }
-        else if(s_pending_env[t] && team->status == STATUS_EN_ROUTE)
+        else if(s_pending_env[t] && team->status == STATUS_EN_ROUTE &&
+                (!fault_profile_planner_layer(PLANNER_LAYER_TASKS) || planner_reroute_wanted(team)))
         {
             /* Detector flagged an environment fault on this team: reroute
              * now, without waiting for the route scan to see the cell. */
@@ -331,7 +434,14 @@ static void step_clear_road(void)
                 return;
 
             persists = (g_current_tick + 1u - s_faulted_since[i]) > k->clear_road_persist_ticks;
-            if(!(persists || s_blockers[i] >= k->clear_road_teams_threshold || s_clear_requested[i]))
+            if(fault_profile_planner_layer(PLANNER_LAYER_TASKS))
+            {
+                /* Step 3.5: the cost comparison replaces the fixed persistence / blocker-count / detector triggers. */
+                if(!planner_clear_road_wanted(x, y, fault_injector_causal_road_kind(x, y), s_touch_rate[i],
+                                              g_current_tick + 1u - s_faulted_since[i]))
+                    continue;
+            }
+            else if(!(persists || s_blockers[i] >= k->clear_road_teams_threshold || s_clear_requested[i]))
                 continue;
             if(clear_task_at(x, y))
                 continue;
@@ -436,9 +546,11 @@ static void step_reinforce(void)
 
         if(s_reinforce_until[slot] == 0 && inc->victim_count > 0 && inc->assigned_team != NO_ASSIGNMENT &&
            inc->support_team == NO_ASSIGNMENT &&
-           ((s_deteriorated_at[slot] != 0 &&
-             (g_current_tick + 1u - s_deteriorated_at[slot]) <= k->reinforce_event_window) ||
-            s_reinforce_detector[slot]))
+           (fault_profile_planner_layer(PLANNER_LAYER_TASKS)
+                ? planner_reinforce_wanted(slot)   /* Step 3.5: cost, not the fixed event window */
+                : ((s_deteriorated_at[slot] != 0 &&
+                    (g_current_tick + 1u - s_deteriorated_at[slot]) <= k->reinforce_event_window) ||
+                   s_reinforce_detector[slot])))
         {
             s_reinforce_until[slot] = g_current_tick + 1u + k->reinforce_hold_ticks;
             if(s_reinforce_detector[slot])
@@ -517,10 +629,13 @@ static void step_relay(void)
             continue;
         }
 
-        if(comm_fault && team->status == STATUS_EN_ROUTE && !team->heading_to_rest &&
+        if(team->status == STATUS_EN_ROUTE && !team->heading_to_rest &&
            s_relay_cooldown_until[t] <= g_current_tick + 1u &&
-           (g_current_tick - team->fault_state.start_tick[FAULT_CLASS_COMMUNICATION]) >= k->relay_min_fault_ticks &&
-           fault_injector_causal_truth(t)->link_margin_db < 0.0f &&
+           (fault_profile_planner_layer(PLANNER_LAYER_TASKS)
+                ? planner_relay_wanted(team)   /* Step 3.5: P(comm fault) x blindness cost vs reposition cost */
+                : (comm_fault &&
+                   (g_current_tick - team->fault_state.start_tick[FAULT_CLASS_COMMUNICATION]) >= k->relay_min_fault_ticks &&
+                   fault_injector_causal_truth(t)->link_margin_db < 0.0f)) &&
            find_relay_cell(team, &s_relay_x[t], &s_relay_y[t]))
         {
             s_relay_on[t] = 1;
@@ -536,6 +651,8 @@ void causal_actions_step(void)
         return;
 
     refresh_cell_state();
+    if(fault_profile_planner_layer(PLANNER_LAYER_TASKS))
+        update_touch_rates();
     step_reroute();      /* also fills s_blockers for CLEAR_ROAD; each step honours its own enable bit */
     if(fault_profile_causal_action_enabled(CAUSAL_ACTION_CLEAR_ROAD))
         step_clear_road();
@@ -546,6 +663,9 @@ void causal_actions_step(void)
 
     for(uint8_t t = 0; t < NUM_TEAMS; t++)
         s_pending_env[t] = 0;
+
+    /* Step 3.5: pull busy teams onto system tasks nobody free will take (no-op unless --recovery=utility). */
+    planner_preempt_step();
 }
 
 void causal_actions_detector_flag(uint8_t team_id, OperationalFaultClass_t fault_class)
@@ -628,6 +748,8 @@ int causal_actions_crossing_stall(const TeamState_t *team, int next_x, int next_
         {
             s_stall[t]++;
             s_stall_total++;
+            s_hold_ring[t][s_hold_head[t]] = g_current_tick + 1u;
+            s_hold_head[t] = (uint8_t)((s_hold_head[t] + 1u) % HOLD_RING);
             return 1;
         }
     }
@@ -638,6 +760,30 @@ int causal_actions_crossing_stall(const TeamState_t *team, int next_x, int next_
 uint32_t causal_actions_stall_ticks(void)
 {
     return s_stall_total;
+}
+
+int causal_actions_debris_held_at(uint8_t team_id, uint32_t tick)
+{
+    if(team_id >= NUM_TEAMS)
+        return 0;
+    for(int h = 0; h < HOLD_RING; h++)
+        if(s_hold_ring[team_id][h] == tick + 1u)
+            return 1;
+    return 0;
+}
+
+int causal_actions_debris_held_within(uint8_t team_id, uint32_t window)
+{
+    if(team_id >= NUM_TEAMS)
+        return 0;
+    for(int h = 0; h < HOLD_RING; h++)
+    {
+        uint32_t v = s_hold_ring[team_id][h];
+
+        if(v != 0u && v - 1u <= g_current_tick && g_current_tick - (v - 1u) <= window)
+            return 1;
+    }
+    return 0;
 }
 
 int causal_actions_overlay_active(const TeamState_t *team)
@@ -793,6 +939,8 @@ void causal_actions_detector_flag(uint8_t team_id, OperationalFaultClass_t fault
 int causal_actions_move_override(TeamState_t *team) { (void)team; return 0; }
 int causal_actions_crossing_stall(const TeamState_t *team, int next_x, int next_y) { (void)team; (void)next_x; (void)next_y; return 0; }
 uint32_t causal_actions_stall_ticks(void) { return 0; }
+int causal_actions_debris_held_at(uint8_t team_id, uint32_t tick) { (void)team_id; (void)tick; return 0; }
+int causal_actions_debris_held_within(uint8_t team_id, uint32_t window) { (void)team_id; (void)window; return 0; }
 void causal_actions_path_begin(const TeamState_t *team) { (void)team; }
 void causal_actions_path_end(void) {}
 int causal_actions_reinforce_wanted(uint8_t incident_slot) { (void)incident_slot; return 0; }
@@ -801,6 +949,10 @@ float causal_actions_survival_factor(uint8_t incident_slot) { (void)incident_slo
 void causal_actions_road_cleared(const IncidentState_t *task) { (void)task; }
 uint8_t causal_actions_route_touch(const TeamState_t *team) { (void)team; return 0; }
 int causal_actions_overlay_active(const TeamState_t *team) { (void)team; return 0; }
+float causal_actions_cell_touch_rate(int x, int y) { (void)x; (void)y; return 0.0f; }
+uint32_t causal_actions_faulted_age(int x, int y) { (void)x; (void)y; return 0u; }
+int causal_actions_clear_target(uint8_t slot, int *x, int *y) { (void)slot; (void)x; (void)y; return 0; }
+float causal_actions_reroute_gain(const TeamState_t *team) { (void)team; return 0.0f; }
 uint8_t causal_actions_team_mask(uint8_t team_id) { (void)team_id; return 0; }
 const CausalActionStats_t *causal_actions_stats(void) { return &s_stats; }
 

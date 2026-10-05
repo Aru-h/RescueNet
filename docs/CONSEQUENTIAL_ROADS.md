@@ -172,6 +172,14 @@ reads `navigable` and `travelCost` only, matching `core/path.c`.
 > the oracle-detector collapse and about two thirds of the blind-A* REROUTE loss;
 > the investigations at the end of this file describe what they fix.
 
+> **Provenance caveat (added in Step 3.5).** The held-out range 2001-2020 used here, and in Steps
+> 3 and 3.1 (`docs/CONSEQUENTIAL_ROADS.md`), overlaps the seeds 2001-2008 the AI's thresholds were
+> tuned on (`ml/MODEL_REPORT.md` section 3). The held-out and pooled columns of every **AI-on**
+> row are therefore not fully out-of-sample; **AI-off rows and the development seeds are not
+> affected**. Step 3.5 moved held-out to the unused range 3001-3020; see
+> `docs/RECOVERY_PLANNER_RESULTS.md`. These tables were not re-run on the new range.
+
+
 Causal profile, `--fault-stress=7`, 3000 ticks, AI predictor off unless stated.
 Development seeds 1001-1020 (where `cost_per_tick` was tuned), held-out seeds
 2001-2020, and the pooled 40. Every difference is paired by seed with a 95%

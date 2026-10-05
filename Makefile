@@ -1292,7 +1292,7 @@ check-causal-profile: $(TARGET)
 	@cmp $(CAUSAL_DET_DIR)/a/tron_causal_truth.csv $(CAUSAL_DET_DIR)/b/tron_causal_truth.csv
 	@echo "check-causal-profile: unknown profile rejected, causal-only flags gated, causal dataset + truth sidecar reproducible (recovery actions on)"
 
-.PHONY: check-causal-fault-exposure check-causal-profile check-causal-roads-connectivity check-causal-fixes check-causal-env-no-rtb
+.PHONY: check-causal-fault-exposure check-causal-profile check-causal-roads-connectivity check-causal-fixes check-causal-env-no-rtb check-recovery-planner
 
 # Consequential roads (Step 3.1): over full causal runs, no passable cell may
 # be cut off from every safe zone by a full road blockage (the connectivity
@@ -1328,3 +1328,30 @@ check-causal-fixes: $(TARGET)
 # Step 3.2 fix 2: a perfect environment detector changes nothing (actions off).
 check-causal-env-no-rtb: $(TARGET)
 	@bash laptop/tools/check_env_no_rtb.sh
+
+# Step 3.5 cost-based recovery planner (--recovery=utility, causal only). Flags are gated, an explicit
+# --recovery=fixed is the default behaviour byte for byte, a utility run is reproducible (dataset, sidecar and
+# decision log), and the planner's invariants hold on its own decision log: the Simplex floor is never undercut,
+# approvals are deny-by-default, a preempted team is not preempted again within the cooldown.
+PLANNER_DET_DIR = build/planner-determinism
+check-recovery-planner: $(TARGET)
+	@rm -rf $(PLANNER_DET_DIR) && mkdir -p $(PLANNER_DET_DIR)/a $(PLANNER_DET_DIR)/b $(PLANNER_DET_DIR)/f $(PLANNER_DET_DIR)/d $(PLANNER_DET_DIR)/u
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --recovery=bogus >/dev/null 2>&1; then echo "FAIL: unknown --recovery accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --recovery=utility >/dev/null 2>&1; then echo "FAIL: --recovery=utility accepted without causal"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --planner-log >/dev/null 2>&1; then echo "FAIL: --planner* accepted without --recovery=utility"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --recovery=utility --planner-approval=bogus >/dev/null 2>&1; then echo "FAIL: unknown --planner-approval accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --recovery=utility --planner=bogus >/dev/null 2>&1; then echo "FAIL: unknown --planner layer accepted"; exit 1; fi
+	@cd $(PLANNER_DET_DIR)/f && ../../../$(TARGET) 1003 1 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) >/dev/null 2>&1
+	@cd $(PLANNER_DET_DIR)/d && ../../../$(TARGET) 1003 1 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --recovery=fixed >/dev/null 2>&1
+	@cmp $(PLANNER_DET_DIR)/f/tron_snapshot_dataset.csv $(PLANNER_DET_DIR)/d/tron_snapshot_dataset.csv
+	@cmp $(PLANNER_DET_DIR)/f/tron_causal_truth.csv $(PLANNER_DET_DIR)/d/tron_causal_truth.csv
+	@cd $(PLANNER_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --recovery=utility --planner-log >/dev/null 2>&1
+	@cd $(PLANNER_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --recovery=utility --planner-log >/dev/null 2>&1
+	@cmp $(PLANNER_DET_DIR)/a/tron_snapshot_dataset.csv $(PLANNER_DET_DIR)/b/tron_snapshot_dataset.csv
+	@cmp $(PLANNER_DET_DIR)/a/tron_causal_truth.csv $(PLANNER_DET_DIR)/b/tron_causal_truth.csv
+	@cmp $(PLANNER_DET_DIR)/a/tron_planner_log.csv $(PLANNER_DET_DIR)/b/tron_planner_log.csv
+	@python3 laptop/tools/check_planner_log.py $(PLANNER_DET_DIR)/a/tron_planner_log.csv deny
+	@cd $(PLANNER_DET_DIR)/u && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --recovery=utility --planner-approval=auto --planner-p=oracle --planner-log >/dev/null 2>&1
+	@python3 laptop/tools/check_planner_log.py $(PLANNER_DET_DIR)/u/tron_planner_log.csv auto
+	@python3 laptop/tools/check_planner_log.py --selftest
+	@echo "check-recovery-planner: flags gated, --recovery=fixed == default, utility run reproducible, floor / approval / cooldown invariants hold"
