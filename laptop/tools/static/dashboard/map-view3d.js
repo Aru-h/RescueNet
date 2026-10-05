@@ -445,7 +445,9 @@
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.anisotropy = 4;
         g = {
-          solid: new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: true, fog: false }),
+          // alphaTest: only the visible pixels write depth. Without it the sprite's fully transparent
+          // corners write depth too and cut square holes in the (later-drawn) fire / smoke / dust behind it.
+          solid: new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: true, alphaTest: 0.5, fog: false }),
           ghost: new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.38, depthTest: true, depthWrite: false, depthFunc: THREE.GreaterDepth, fog: false }),
         };
         glyphCache.set(key, g);
@@ -600,6 +602,7 @@
       dynDisposables.push(geo, mat);
     }
 
+    let markersVisible = true;
     let incidentHits = [], safezoneHits = [], pinInfo = [], pinSprites = [], pulseCount = 0, haloList = [], escList = [], escPulses = [];
     const workMax = new Map(), lastPri = new Map();
     let trackTick = null, hoverIncident = null;
@@ -663,6 +666,7 @@
         const scale = (GLYPH_PX / PIN_R_PX) * PIN_R_WORLD;
         const s = new THREE.Sprite(new THREE.SpriteMaterial()); s.position.set(wx, headZ, wy); s.scale.set(scale, scale, 1); s.renderOrder = 5;
         const gh = new THREE.Sprite(new THREE.SpriteMaterial()); gh.position.copy(s.position); gh.scale.copy(s.scale); gh.renderOrder = 6;
+        s.visible = gh.visible = markersVisible;
         dynGroup.add(s, gh);
         // Urgency as motion: a glow halo behind P1 (pulsing) and P2 (steady); P3/P4 none.
         let ring = "none";
@@ -1282,6 +1286,8 @@
       // Height the 3D view gives a building (where markers stand on it), for tests/tooling.
       buildingHeight(id) { const e = curModel && curModel.prep.byId.get(id); return e && bld ? bld.heightOf(e) : null; },
       projector, render, setSize,
+      // Tooling / tests: hide or show every incident pin and team marker sprite (to compare renders with and without them).
+      setMarkersVisible(on) { markersVisible = !!on; dynGroup.traverse((o) => { if (o.isSprite) o.visible = markersVisible; }); teamViews.forEach((v) => { v.solid.visible = v.ghost.visible = markersVisible; }); drawNow(performance.now(), false); },
       // Is a ground point (at height z) on screen and in front of the camera?
       isVisible(wx, wy, z) { tmpV.set(wx, z || 0, wy).project(camera); return tmpV.z > -1 && tmpV.z < 1 && Math.abs(tmpV.x) <= 1 && Math.abs(tmpV.y) <= 1; },
       setActive(on) { active = !!on; if (!active && rafId) { cancelAnimationFrame(rafId); rafId = 0; } else kick(); },

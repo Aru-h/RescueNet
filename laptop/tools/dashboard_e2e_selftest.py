@@ -431,6 +431,7 @@ def _view3d_check(page, console_errors, screenshot_dir):
     _view3d_labels_check(page)
     _view3d_pins_check(page, console_errors)
     _view3d_pin_details_check(page, console_errors)
+    _view3d_pin_depth_check(page, console_errors)
     _view3d_card_follow_check(page, console_errors)
     _card_modes_check(page, console_errors)
 
@@ -1121,9 +1122,9 @@ def _card_modes_check(page, console_errors):
         page.mouse.move(t0["x"], t0["y"], steps=4); page.wait_for_timeout(120)
         over = st()
         check(over["hov"] == "block" and over["pin"] != "block", f"[{mode}] hovering a marker shows a temporary card (not a pinned one) ({over})")
-        page.mouse.move(t0["x"] - 90, t0["y"] - 90, steps=3); page.wait_for_timeout(120)
+        page.mouse.move(t0["x"] - 90, t0["y"] - 90)       # one jump off the marker, then look straight away (the 300 ms grace must still be running)
         grace = st()
-        page.wait_for_timeout(450)
+        page.wait_for_timeout(500)
         gone = st()
         check(grace["hov"] == "block" and gone["hov"] != "block", f"[{mode}] the hover card is still there right after leaving (grace) and gone ~300 ms later ({grace['hov']} -> {gone['hov']})")
         # 2. click pins; hovering another marker shows a temporary card without replacing it; hovering the pinned one adds nothing
@@ -1178,6 +1179,62 @@ def _card_modes_check(page, console_errors):
     page.evaluate("() => setMapViewMode('3d')"); page.wait_for_timeout(300)
     real_errors = real_console_errors(console_errors)
     check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the card-mode checks (got {real_errors[:5]})")
+
+
+def _view3d_pin_depth_check(page, console_errors):
+    """A pin must not cut a square hole in the fire / smoke behind it: only
+    the pin's visible pixels may write depth. Compare three renders of the
+    same frozen scene around a fire incident - effects off (bare ground), and
+    effects on with the pins hidden / shown: just outside the pin's round
+    shape but inside its sprite square, the pixels must show the effects."""
+    res = page.evaluate("""async () => {
+      const orig = window._lastFrame;
+      map3d.setSettings({ reduceMotion: true, effects: 'high', autoQuality: false }); map3d.cancelCamera(); hideMapCard(); mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH);
+      // A lone fire incident (no neighbouring markers) so only its own pin is in the picture.
+      const tpl = mapHitTargets.find((h) => h.type === 'incident' && h.data.type === 7 && h.data.pool !== 1) || mapHitTargets.find((h) => h.type === 'incident' && h.data.pool !== 1);
+      const fr = JSON.parse(JSON.stringify(orig)); fr.tick += 2000; fr.teams = [];
+      const base = fr.incidents.find((i) => i.id === tpl.data.id);
+      fr.incidents = [Object.assign({}, base, { type: 7, priority: 2, status: 0, building_id: -1, victims: 3, assigned_team: 255, support_team: 255, discovered: 1 })];
+      drawFrame(fr, true);
+      const cv = document.getElementById('map3dCanvas'), tmp = document.createElement('canvas'), tctx = tmp.getContext('2d', { willReadFrequently: true });
+      const grab = async () => { drawFrame(fr, true); const url = cv.toDataURL('image/png'); const img = new Image(); img.src = url; await img.decode();
+        tmp.width = img.width; tmp.height = img.height; tctx.drawImage(img, 0, 0); return { d: tctx.getImageData(0, 0, img.width, img.height), k: img.width / cv.clientWidth }; };
+      const out = [];
+      for (const fire of [mapHitTargets.find((h) => h.type === 'incident')]) {
+        const st = map3d.state; st.az = (35 * Math.PI) / 180; st.el = (32 * Math.PI) / 180; st.tx = fire.wx; st.tz = fire.wy; mapCamera.orbit(0, 0);
+        mapCamera.zoomAt(mapCamera.state.viewW / 2, mapCamera.state.viewH / 2, 3.2); drawFrame(fr, true);
+        const pin = () => map3d.incidentPins().find((p) => p.ids.includes(fire.data.id));
+        for (let i = 0; i < 14; i++) { if (pin().lod !== 0) break; mapCamera.zoomAt(mapCamera.state.viewW / 2, mapCamera.state.viewH / 2, 1.12); drawFrame(fr, true); }
+        if (pin().lod !== 0) { mapCamera.zoomAt(mapCamera.state.viewW / 2, mapCamera.state.viewH / 2, 1 / 1.12); drawFrame(fr, true); }
+        if (pin().lod !== 0) continue;                       // badges only appear at higher levels of detail: keep the plain pin
+        const f = mapHitTargets.find((h) => h.type === 'incident' && h.data.id === fire.data.id), c = mapCamera.worldToScreen(f.wx, f.wy, f.wz || 0), head = pin().headPx;
+        map3d.setMarkersVisible(false); const hidden = await grab();
+        map3d.setMarkersVisible(true); const shown = await grab();
+        map3d.setSettings({ effects: 'off' }); const bare = await grab(); map3d.setSettings({ effects: 'high' });
+        const k = shown.k, W = shown.d.width;
+        let region = 0, vsBare = 0, vsHidden = 0;
+        const half = Math.round(head * 2.6 * k), cx = Math.round(c.x * k), cy = Math.round(c.y * k), inner = head * 1.5 * k;
+        for (let y = cy - half; y <= cy + half; y++) for (let x = cx - half; x <= cx + half; x++) {
+          if (x < 0 || y < 0 || x >= W || y >= shown.d.height || Math.hypot(x - cx, y - cy) <= inner) continue;
+          region++; const i = (y * W + x) * 4;
+          const diff = (a, b) => Math.abs(a.d.data[i] - b.d.data[i]) + Math.abs(a.d.data[i + 1] - b.d.data[i + 1]) + Math.abs(a.d.data[i + 2] - b.d.data[i + 2]) > 24;
+          if (diff(shown, bare)) vsBare++;
+          if (diff(shown, hidden)) vsHidden++;
+        }
+        out.push({ id: fire.data.id, head, region, vsBare, vsHidden });
+      }
+      drawFrame(orig, true);
+      map3d.setSettings({ reduceMotion: false, effects: 'low', autoQuality: true }); map3d.setMarkersVisible(true);
+      mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true);
+      return out; }""")
+    check(len(res) > 0, f"[3d] pin depth check: found a fire incident to test ({len(res)} usable)")
+    best = max(res, key=lambda r: r["vsBare"]) if res else None
+    check(best is not None and best["vsBare"] >= 25,
+          f"[3d] with the pin in front, the pixels just outside its round shape but inside its sprite square show the fire effects, not the bare ground ({best['vsBare'] if best else 0} of {best['region'] if best else 0} differ from bare ground)")
+    check(best is not None and best["vsHidden"] <= max(4, best["region"] * 0.01),
+          f"[3d] and they match the render with the pin hidden - the pin's transparent corners hide nothing ({best['vsHidden'] if best else 0} of {best['region'] if best else 0} differ)")
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the pin depth check (got {real_errors[:5]})")
 
 
 def _route_accuracy_check(page):
