@@ -1269,7 +1269,9 @@ CAUSAL_STRESS ?= 7
 # pinning teams in a faulted state. Bounds are assumed guard rails, not
 # calibrated values.
 check-causal-fault-exposure: $(TARGET)
-	@$(PYTHON) $(TOOLS_DIR)/fault_exposure.py --tron ./$(TARGET) --profile causal --stress $(CAUSAL_STRESS) --extra-arg=--causal-actions=on --seeds 1001-1008 --ticks 3000 --check
+	@$(PYTHON) $(TOOLS_DIR)/fault_exposure.py --tron ./$(TARGET) --profile causal --stress $(CAUSAL_STRESS) --extra-arg=--causal-actions=on --extra-arg=--causal-persist=off --seeds 1001-1008 --ticks 3000 --check
+	@$(PYTHON) $(TOOLS_DIR)/fault_exposure.py --tron ./$(TARGET) --profile causal --stress 2 --seeds 1001-1008 --ticks 3000 --check
+	@$(PYTHON) $(TOOLS_DIR)/fault_exposure.py --tron ./$(TARGET) --profile causal --stress $(CAUSAL_STRESS) --seeds 1001-1008 --ticks 3000 --check
 
 # Causal profile plumbing: an unknown --fault-profile is an error, --fault-stress
 # is rejected for other profiles, and a causal run is reproducible - the main

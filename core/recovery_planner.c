@@ -850,6 +850,9 @@ int planner_team_decide(const TeamState_t *team, const PlannerEvidence_t *ev, Re
         }
     }
 #endif
+    (void)prevent_benefit;   /* only the laptop's preventive options use these */
+    (void)prevent_cost;
+    (void)prevent;
 
     {
         uint8_t go = (uint8_t)(floor_goes_home || planner_go);

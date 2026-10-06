@@ -252,6 +252,7 @@ def check(summary):
     relaxed = roads_on and not label_fix   # the old per-team flag holds for hours by design; the label does not
     if roads_on and summary["roads"]["audit_violations"] > 0:
         problems.append(f"{summary['roads']['audit_violations']} cells cut off from every safe zone by road blocks")
+    persist_on = any(k.startswith("persist") for k in summary.get("persist", {}))
     for c, s in summary["classes"].items():
         # Consequential roads: damage persists for hours by design, so the
         # environment class legitimately holds a fault most of the time.
@@ -260,6 +261,14 @@ def check(summary):
                 problems.append(f"environment: exposure {s['exposure']:.3f} > 0.95")
             if s["max_duration"] > 2400 + 2:
                 problems.append(f"environment: longest episode {s['max_duration']} ticks > 2402")
+            continue
+        if persist_on and c in ("mobility", "resource"):
+            # Step 3.6: these faults persist until remedied, so there is no 14-tick backstop; they are bounded by
+            # exposure (a loop that pins teams faulted) and by chattering, and no episode may outlast the run.
+            if s["exposure"] > 0.80:
+                problems.append(f"{c}: exposure {s['exposure']:.3f} > 0.80")
+            if s["onsets_per_team_ktick"] > MAX_ONSETS_PER_TEAM_KTICK:
+                problems.append(f"{c}: {s['onsets_per_team_ktick']:.1f} episodes/team/1000 ticks > {MAX_ONSETS_PER_TEAM_KTICK}")
             continue
         if s["exposure"] > MAX_CLASS_EXPOSURE:
             problems.append(f"{c}: exposure {s['exposure']:.3f} > {MAX_CLASS_EXPOSURE}")
@@ -272,8 +281,8 @@ def check(summary):
             continue
         if c in MAX_EPISODE_TICKS and s["max_duration"] > MAX_EPISODE_TICKS[c]:
             problems.append(f"{c}: longest episode {s['max_duration']} ticks > backstop {MAX_EPISODE_TICKS[c]}")
-    any_bound = 0.97 if relaxed else MAX_ANY_EXPOSURE
-    team_bound = 0.99 if relaxed else MAX_TEAM_ANY_EXPOSURE
+    any_bound = 0.97 if (relaxed or persist_on) else MAX_ANY_EXPOSURE
+    team_bound = 0.99 if (relaxed or persist_on) else MAX_TEAM_ANY_EXPOSURE
     if summary["any_exposure"] > any_bound:
         problems.append(f"any-fault exposure {summary['any_exposure']:.3f} > {any_bound}")
     if summary["worst_team_any_exposure"] > team_bound:
