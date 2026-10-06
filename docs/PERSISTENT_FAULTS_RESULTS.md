@@ -166,7 +166,37 @@ Not predicted: the shipped AI helping at stress 7; the planner taking 9-14 rest 
 
 ## Robustness (reported, never used to choose a value)
 
-(pending: the 72 robustness runs finish after this section was written; see the next commit)
+Each persistence parameter was changed one at a time (natural-recovery mean 542 / 2168 ticks instead of 1084;
+field-repair time x0.5 / x2; field-repair success 0.5 / 0.8 instead of 2/3; escalation multiplier 0.5 / 2 instead of
+1.5; a one-tick field dwell), with fixed gates (`rf_*`) and the planner without the AI (`rp_*`) at stress 2 and
+stress 7, on development seeds 1001-1020 and held-out seeds 3001-3020 (72 runs). These runs are reported only. No value
+in the main configuration was chosen or changed because of them.
+
+Planner minus fixed gates, incidents resolved per seed, pooled over 40 seeds (paired bootstrap 95% CI):
+
+| Variant | Stress 2 | Stress 7 |
+|---|---|---|
+| natural 542 | -0.33 [-1.52, +0.88] | +0.42 [-0.75, +1.65] |
+| natural 2168 | +0.15 [-0.75, +1.05] | -0.45 [-1.90, +1.02] |
+| field time x0.5 | -0.42 [-1.40, +0.53] | +0.12 [-1.32, +1.60] |
+| field time x2 | -0.28 [-1.27, +0.72] | -0.82 [-2.17, +0.55] |
+| success 0.5 | -0.20 [-1.23, +0.80] | -0.68 [-2.05, +0.70] |
+| success 0.8 | -0.25 [-1.23, +0.72] | -0.20 [-1.55, +1.20] |
+| escalation x0.5 | +0.68 [-0.15, +1.50] | +0.25 [-0.88, +1.38] |
+| escalation x2 | -0.80 [-1.90, +0.33] | +0.28 [-1.02, +1.55] |
+| field dwell 1 tick | -0.30 [-1.48, +0.88] | -0.25 [-1.40, +0.93] |
+
+Victims lost per seed, pooled, planner minus fixed gates: every one of the 18 intervals includes zero (point estimates
+between -1.07 and +0.55 victims per seed).
+
+Reading: in all 18 variant/stress cells the pooled interval for planner against fixed gates includes zero, for
+incidents resolved and for victims lost. The sign of the point estimate changes between variants, so there is no
+parameter direction in which the planner reliably helps or hurts. A few single-set intervals exclude zero (held-out
+only: stress 2 field time x0.5, -1.30 [-2.45, -0.20], and escalation x2, -1.70 [-3.30, -0.10]); they do not appear in
+the pooled set or on the development seeds, and with 36 dev/held-out cells per outcome a couple of such cases are
+expected by chance, so I do not read them as an effect. The main-table conclusion (the planner is not distinguishable
+from fixed gates under this fault model) is unchanged by every one-at-a-time perturbation tested. This does not show
+the two are equal, only that 40 seeds cannot separate them. Hazard-oracle headroom was not rerun per variant.
 
 ## Checks
 
