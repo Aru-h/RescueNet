@@ -94,14 +94,26 @@ accepted code-audit findings, implementation notes) is in
     and excludes the team from it for 30 ticks so another team takes it.
     Details, with file and line: `docs/RECOVERY_ACTION_SEMANTICS.md`.
 
+15. **Field repair is implemented but almost never completes.** Under the causal profile
+    (`--causal-persist=on`, the default) LOCAL_RECOVERY on a working team starts a field repair of 34-102 ticks, but the
+    rule gates escalate to RETURN_TO_SAFE_ZONE within a few ticks and cancel it (at stress 7: 134.7 repairs started per
+    seed, 0.2 completed). Whether field repair would help if the gates held a repair in progress has not been tested
+    (`docs/PERSISTENT_FAULTS_RESULTS.md`).
+16. **The persistent-fault parameters are derived or assumed, not measured.** The 10.8 h natural-recovery tail and the
+    0.68 h field-repair time come from my derivation from a secondary source's availability figures; the 2/3
+    field-repair success rate and the 6-20 h MTBF come from search summaries of Carlson and Murphy (2005). None were
+    checked against the papers. The base-repair dwell, escalation rate, exclusion windows and forecast horizon are
+    assumptions (`docs/PERSISTENT_FAULTS_PROPOSAL.md` sections 3 and 9.1). The evaluation stress of 7 was never derived
+    from data; stress 2 matches the literature MTBF.
+
 ## D. Dashboard
 
-15. **Manual overrides work only in simulation mode.** Dragging a team onto an
+17. **Manual overrides work only in simulation mode.** Dragging a team onto an
     incident is not available in replay mode or when the dashboard is
     connected to the board. After an override is committed, normal rules
     (such as item 12) still apply.
-16. **Replay take-over needs a matching simulator.** A recording can be taken
+18. **Replay take-over needs a matching simulator.** A recording can be taken
     over only by the same simulator build that made it (same code, AI on or
     off); otherwise the dashboard refuses rather than show a diverging run.
-17. **Tested on macOS and Linux.** Windows is not tested. Absolute results
+19. **Tested on macOS and Linux.** Windows is not tested. Absolute results
     differ slightly between platforms for the same seed.
