@@ -1,5 +1,7 @@
 #include "incident.h"
 #include "causal_actions.h"
+#include "fault_injector.h"
+#include "allocator.h"
 #include "mission_state.h"
 #include "cbba.h"
 #include "simulation.h"
@@ -992,13 +994,16 @@ static void update_incident_work(IncidentState_t *incident, TaskPool_t pool) //i
     if(!is_valid_team_id(incident->assigned_team)) return;
     if(g_teams[incident->assigned_team].status!=STATUS_ON_SCENE) return;
     if(g_teams[incident->assigned_team].equipment_level == 0) return;
+    /* Causal field repair / maintenance (Step 3.6): a held team makes no progress. */
+    if(fault_injector_causal_team_held(incident->assigned_team)) return;
 
     extern uint32_t g_diag_work_progress_calls;
     g_diag_work_progress_calls++;
 
     uint8_t work_rate = incident_work_rate_for_team(incident->assigned_team);
 
-    if(is_valid_team_id(incident->support_team) && g_teams[incident->support_team].status==STATUS_ON_SCENE)
+    if(is_valid_team_id(incident->support_team) && g_teams[incident->support_team].status==STATUS_ON_SCENE &&
+       !fault_injector_causal_team_held(incident->support_team))
     {
         work_rate += incident_work_rate_for_team(incident->support_team);
 
@@ -1255,6 +1260,9 @@ void incident_cancel_system_task(IncidentState_t *task)
 
 void complete_incident_stage(IncidentState_t *incident) //incident
 {
+    /* Causal ABORT exclusions last until the stage completes (Step 3.6). */
+    allocator_exclusion_stage_complete(incident->incident_id);
+
     /* Causal profile only: the road is cleared, the faults on that cell end,
      * the task resolves and its team is released. */
     if(incident->incident_type == INCIDENT_CLEAR_ROAD)

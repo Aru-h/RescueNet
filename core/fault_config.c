@@ -72,6 +72,36 @@ CausalRoadParams_t g_causal_roads = {
 
 uint8_t g_causal_fixes = CAUSAL_FIXES_ALL;
 
+/* Step 3.6 persistent faults. Sources and "assumed" markers: docs/PERSISTENT_FAULTS_PROPOSAL.md section 9.1. */
+CausalPersistParams_t g_causal_persist_params = {
+    .natural_mean_ticks = 1084.0f,
+    .field_min_ticks = 34,
+    .field_max_ticks = 102,
+    .field_success = 2.0f / 3.0f,
+    .base_dwell_min_ticks = 17,
+    .base_dwell_max_ticks = 51,
+    .escalation_mult = 1.5f,
+    .maintenance_wear_cut = 0.3f,
+    .realloc_exclusion_ticks = 30,
+    .forecast_horizon_ticks = 100.0f,
+};
+uint8_t g_causal_persist = CAUSAL_PERSIST_ON;
+
+void fault_config_set_causal_persist(uint8_t mode)
+{
+    g_causal_persist = (mode > CAUSAL_PERSIST_ON) ? (uint8_t)CAUSAL_PERSIST_ON : mode;
+}
+
+int fault_profile_causal_persist(void)
+{
+    return g_fault_config.profile == FAULT_PROFILE_CAUSAL && g_causal_persist != CAUSAL_PERSIST_OFF;
+}
+
+int fault_profile_causal_field_repair(void)
+{
+    return g_fault_config.profile == FAULT_PROFILE_CAUSAL && g_causal_persist == CAUSAL_PERSIST_ON;
+}
+
 void fault_config_set_causal_fixes(uint8_t mask)
 {
     g_causal_fixes = (uint8_t)(mask & CAUSAL_FIXES_ALL);

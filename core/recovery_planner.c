@@ -88,6 +88,7 @@ typedef struct
     uint8_t last_status;
     uint32_t rest_end_tick;        /* tick the team last left RESTING */
     uint32_t preempt_until;        /* tick + 1: no new preemption of this team before */
+    uint32_t prevent_until;        /* Step 3.6: no new preventive action for this team before this tick */
     float p[3];                    /* fused P, last Layer A step */
 } PlannerTeamState_t;
 
@@ -161,6 +162,7 @@ void planner_reset(void)
         s_team[t].last_status = 0;
         s_team[t].rest_end_tick = 0;
         s_team[t].preempt_until = 0;
+        s_team[t].prevent_until = 0;
         s_team[t].p[0] = s_team[t].p[1] = s_team[t].p[2] = 0.0f;
         s_pre[t].active = 0;
     }
@@ -306,6 +308,203 @@ static uint8_t request_approval(uint8_t *flags)
     return 0;
 }
 
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+/* ----------------------------------------------------------------------
+ * Persistent faults (Step 3.6). A mobility or resource fault now lasts until it is remedied, so a team that stays
+ * faulted pays the fault's per-tick harm until its next rest (or the long natural-recovery tail), whichever comes
+ * first. The harm rates are the simulator's own documented effects (core/simulation.c move_team, core/incident.c
+ * team_effective_work_rate), the durations are the world's parameters (docs/PERSISTENT_FAULTS_PROPOSAL.md section
+ * 9.1); nothing here is tuned. Escalation uses the class's baseline hazard (the planner does not see hidden
+ * wear) and is linearised to avoid libm. Laptop only (the board never runs the causal profile).
+ * ---------------------------------------------------------------------- */
+typedef struct
+{
+    float stay, go, fr;     /* total expected cost (IT) of staying, going home, repairing in the field */
+    float harm[3];          /* harm of a persistent fault of each class if the team stays (before weighting by P) */
+    float u_x;
+    uint8_t fr_class;       /* class a field repair would address (0 mobility, 2 resource), 255 none */
+} PersistCosts_t;
+
+static float s_leg[NUM_TEAMS];
+static uint32_t s_leg_tick_plus1[NUM_TEAMS];
+
+static float persist_leg_ticks(const TeamState_t *team)
+{
+    uint8_t zone;
+    float leg = 0.0f;
+
+    if(s_leg_tick_plus1[team->team_id] == g_current_tick + 1u)
+        return s_leg[team->team_id];
+    zone = find_nearest_safe_zone(team);
+    if(zone != NO_SAFE_ZONE)
+    {
+        uint16_t steps = find_path_steps(team->loc_x, team->loc_y, g_safezones[zone].loc_x, g_safezones[zone].loc_y);
+
+        leg = (steps == UINT16_MAX) ? 200.0f : (float)steps;
+    }
+    s_leg[team->team_id] = leg;
+    s_leg_tick_plus1[team->team_id] = g_current_tick + 1u;
+    return leg;
+}
+
+static float persist_rate(uint8_t f, float sev, float base_rate, float t_frac, float w_frac, float u_x)
+{
+    float slow_work = (base_rate > sev) ? sev / (base_rate - sev) : sev;
+    float slow_trav = (sev >= 4.0f) ? 2.0f : (sev >= 3.0f ? 1.0f : 0.0f);
+
+    if(f == 0u)
+        return (t_frac * slow_trav + w_frac * slow_work) * u_x;
+    return w_frac * slow_work * u_x;
+}
+
+/* Expected cost of each response given the fault probabilities p (per class). */
+static void persist_costs(const TeamState_t *team, const float p[3], PersistCosts_t *o)
+{
+    const CausalPersistParams_t *pp = &g_causal_persist_params;
+    const IncidentState_t *task = team_task(team);
+    float travel, work, remaining, t_frac, w_frac, base_rate, t_rest_work, d_stay, margin;
+    float t_fr = ((float)pp->field_min_ticks + (float)pp->field_max_ticks) / 2.0f;
+    float dwell = ((float)pp->base_dwell_min_ticks + (float)pp->base_dwell_max_ticks) / 2.0f;
+
+    task_remaining(team, task, &travel, &work);
+    if(task == NULL)
+    {
+        travel = g_planner.ref_travel_ticks;
+        work = g_planner.ref_stage_ticks - g_planner.ref_travel_ticks;
+    }
+    remaining = fmaxf_(travel + work, 1.0f);
+    t_frac = travel / remaining;
+    w_frac = work / remaining;
+    o->u_x = (task != NULL) ? incident_urgency(task) : s_ctx.ubar;
+    base_rate = (float)team_base_work_rate(team->equipment_level);
+    t_rest_work = fmaxf_((team->stamina - get_soft_stamina_floor(team)) / STAMINA_OPERATION_COST, 1.0f);
+    d_stay = fminf_(pp->natural_mean_ticks, t_rest_work);
+
+    o->stay = 0.0f;
+    o->fr_class = 255u;
+    {
+        float best = 0.0f;
+
+        for(uint8_t f = 0; f < 3u; f++)
+        {
+            float sev = team->fault_state.active[f] ? (float)team->fault_state.severity[f] : (float)g_fault_config.effect_strength[f];
+            float h;
+
+            if(f == 1u)
+                h = fminf_((float)g_fault_config.duration_max_ticks[f], 10.0f) * g_planner.cblind;
+            else
+            {
+                float lam = ((f == 0u) ? g_causal_params.mob_hazard_base : g_causal_params.res_hazard_base) * g_fault_stress;
+                float p_esc = fminf_(1.0f, pp->escalation_mult * lam * d_stay);
+                float r0 = persist_rate(f, sev, base_rate, t_frac, w_frac, o->u_x);
+                float r1 = persist_rate(f, fminf_(sev + 1.0f, 4.0f), base_rate, t_frac, w_frac, o->u_x);
+
+                h = r0 * d_stay + p_esc * (r1 - r0) * d_stay * 0.5f;
+            }
+            o->harm[f] = h;
+            o->stay += p[f] * h;
+            if(f != 1u && p[f] * h > best)
+            {
+                best = p[f] * h;
+                o->fr_class = f;
+            }
+        }
+    }
+    o->go = o->fr = o->stay;
+    margin = fmaxf_(2.0f * o->u_x, g_planner.margin_frac * o->stay);
+    if(o->stay <= margin)
+        return;
+
+    {
+        float t_leg = persist_leg_ticks(team);
+        float t_rest = fmaxf_(rest_ticks_needed(team), p[0] * dwell);
+        float act_go = (t_leg + t_rest) * s_ctx.q + ((task != NULL) ? o->u_x * g_planner.reassign_delay : 0.0f);
+        float fault_go = 0.0f;
+
+        for(uint8_t f = 0; f < 3u; f++)
+        {
+            if(f == 1u)
+            {
+                float rep = g_planner.repair_comm * g_planner.repair_scale;
+
+                fault_go += p[f] * o->harm[f] * (1.0f - (rep > 1.0f ? 1.0f : rep));
+            }
+            else
+            {
+                float sev = team->fault_state.active[f] ? (float)team->fault_state.severity[f] : (float)g_fault_config.effect_strength[f];
+
+                fault_go += p[f] * persist_rate(f, sev, base_rate, t_frac, w_frac, o->u_x) * t_leg;
+            }
+        }
+        o->go = fault_go + act_go;
+    }
+    if(o->fr_class != 255u && fault_profile_causal_field_repair() &&
+       (team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE))
+    {
+        /* The task halts while the team repairs itself (u_x per tick); with probability (1 - success) the fault stays. */
+        o->fr = o->stay - p[o->fr_class] * pp->field_success * o->harm[o->fr_class] + t_fr * o->u_x;
+    }
+}
+
+/* Preventive options (needs a forecast source): returns 0 none, 1 PREVENT (rest at base), 2 PREVENT_FIELD. */
+static uint8_t persist_prevent_choice(const TeamState_t *team, float *benefit_out, float *cost_out)
+{
+    const CausalPersistParams_t *pp = &g_causal_persist_params;
+    const IncidentState_t *task = team_task(team);
+    float now[2], after_rest[2], after_field[2];
+    float best_c[2] = {0.0f, 0.0f};
+    float margin_floor;
+    float t_fr = ((float)pp->field_min_ticks + (float)pp->field_max_ticks) / 2.0f;
+    float u_x = (task != NULL) ? incident_urgency(task) : s_ctx.ubar;
+    float cost_rest, cost_field, ben_rest, ben_field;
+    uint8_t choice = 0;
+
+    fault_injector_causal_forecast(team->team_id, 0u, now);
+    fault_injector_causal_forecast(team->team_id, 1u, after_rest);
+    fault_injector_causal_forecast(team->team_id, 2u, after_field);
+    s_stats.prevent_considered++;
+
+    /* Cost of a fault of class c that occurs, under the best response (the planner will respond to it). */
+    for(uint8_t k = 0; k < 2u; k++)
+    {
+        float pv[3] = {0.0f, 0.0f, 0.0f};
+        PersistCosts_t c;
+        float m;
+
+        pv[k == 0u ? 0u : 2u] = 1.0f;
+        persist_costs(team, pv, &c);
+        m = c.stay;
+        if(c.go < m) m = c.go;
+        if(c.fr < m) m = c.fr;
+        best_c[k] = m;
+    }
+    ben_rest = (now[0] - after_rest[0]) * best_c[0] + (now[1] - after_rest[1]) * best_c[1];
+    ben_field = (now[0] - after_field[0]) * best_c[0];
+    margin_floor = 1.0f + g_planner.margin_frac;
+    cost_rest = (2.0f * persist_leg_ticks(team) + rest_ticks_needed(team)) * s_ctx.q + ((task != NULL) ? u_x * g_planner.reassign_delay : 0.0f);
+    cost_field = t_fr * u_x;
+    *benefit_out = 0.0f;
+    *cost_out = 0.0f;
+
+    if((g_planner.prevent & PLANNER_PREVENT_REST) && ben_rest > cost_rest * margin_floor)
+    {
+        choice = 1;
+        *benefit_out = ben_rest;
+        *cost_out = cost_rest;
+    }
+    if((g_planner.prevent & PLANNER_PREVENT_FIELD) && fault_profile_causal_field_repair() && task != NULL &&
+       (team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE) &&
+       ben_field > cost_field * margin_floor &&
+       (choice == 0u || (ben_field - cost_field) > (ben_rest - cost_rest)))
+    {
+        choice = 2;
+        *benefit_out = ben_field;
+        *cost_out = cost_field;
+    }
+    return choice;
+}
+#endif /* ENVIRONMENT_HAS_WORLD_STORAGE */
+
 /* ----------------------------------------------------------------------
  * P(fault | evidence)
  * ---------------------------------------------------------------------- */
@@ -336,7 +535,7 @@ static void fuse_probabilities(const TeamState_t *team, const PlannerEvidence_t 
     {
         float a = 0.0f, w = 0.0f, c = 0.0f;
 
-        if(g_planner.p_source == PLANNER_P_ORACLE)
+        if(g_planner.p_source == PLANNER_P_ORACLE || g_planner.p_source == PLANNER_P_BOTH)
         {
             p[f] = team->fault_state.active[f] ? 1.0f : 0.0f;
             p_ai[f] = 0.0f;
@@ -396,6 +595,9 @@ int planner_team_decide(const TeamState_t *team, const PlannerEvidence_t *ev, Re
     uint8_t flags = 0;
     uint8_t floor_goes_home;
     uint8_t planner_go = 0;
+    uint8_t planner_fr = 0;    /* Step 3.6: field repair chosen (LOCAL_RECOVERY on a working team) */
+    uint8_t prevent = 0;       /* Step 3.6: 1 PREVENT (rest at base), 2 PREVENT_FIELD (in-field maintenance) */
+    float prevent_benefit = 0.0f, prevent_cost = 0.0f;
     uint8_t go_action;
     float pmax = 0.0f;
     float cost_stay = 0.0f, cost_go = 0.0f, margin = 0.0f, fault_go = 0.0f, act_go = 0.0f;
@@ -446,7 +648,67 @@ int planner_team_decide(const TeamState_t *team, const PlannerEvidence_t *ev, Re
         s_stats.go_home_floor++;
         flags |= PLANNER_FLAG_FORCED_FLOOR;
     }
-    else if(pmax >= g_planner.p_log_floor || pmax > 0.0f)
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+    else if(fault_profile_causal_persist() && pmax > 0.0f)
+    {
+        /* Persistent faults: price staying, going home and (with field repair) repairing in place. */
+        PersistCosts_t c;
+        float gain_go, gain_fr;
+
+        persist_costs(team, p, &c);
+        cost_stay = c.stay;
+        margin = fmaxf_(2.0f * c.u_x, g_planner.margin_frac * cost_stay);
+        cost_go = c.go;
+        fault_go = c.go;
+        act_go = 0.0f;
+        gain_go = cost_stay - c.go;
+        gain_fr = cost_stay - c.fr;
+        if(cost_stay > margin && g_current_tick >= s->rest_end_tick + g_planner.preempt_cooldown_ticks)
+        {
+            if(c.fr_class != 255u && fault_profile_causal_field_repair() && gain_fr > margin && gain_fr >= gain_go)
+                planner_fr = 1;
+            else if(gain_go > margin)
+                planner_go = 1;
+        }
+        if(planner_fr)
+        {
+            cost_go = c.fr;
+            fault_go = c.fr;
+        }
+
+        if(planner_go)
+        {
+            uint8_t ai_only = (uint8_t)(!ev->wd_flag && !ev->cons_elevated && !ev->streak_ok);
+
+            if(ai_only && g_planner.p_source == PLANNER_P_AI && team->status != STATUS_AVAILABLE)
+            {
+                uint8_t from_ai = 0;
+
+                for(uint8_t f = 0; f < 3u; f++)
+                    if(p_ai[f] > p_oth[f] && p[f] >= 0.5f * pmax)
+                        from_ai = 1;
+                if(from_ai)
+                {
+                    planner_go = 0;
+                    flags |= PLANNER_FLAG_AI_CAP;
+                    s_stats.ai_cap_blocks++;
+                }
+            }
+        }
+        if(planner_go && is_last_specialist(team))
+        {
+            if(!request_approval(&flags))
+                planner_go = 0;
+        }
+        if(planner_go)
+            s_stats.go_home_planner++;
+        else if(planner_fr)
+            s_stats.fr_chosen++;
+        else if(pmax >= g_planner.p_log_floor)
+            s_stats.stay_with_p++;
+    }
+#endif
+    else if(!fault_profile_causal_persist() && (pmax >= g_planner.p_log_floor || pmax > 0.0f))
     {
         const IncidentState_t *task = team_task(team);
         float travel, work, remaining, u_x, d_stay[3], sev[3];
@@ -554,6 +816,41 @@ int planner_team_decide(const TeamState_t *team, const PlannerEvidence_t *ev, Re
             s_stats.stay_with_p++;
     }
 
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+    /* A field repair in progress is not interrupted by the planner itself (the rule floor still can). */
+    if(!floor_goes_home && !planner_go && !planner_fr && fault_injector_causal_field_state(team->team_id) != 0u &&
+       fault_injector_causal_field_state(team->team_id) != 3u)
+        planner_fr = 1;
+
+    /* Preventive options: only with a forecast source (the hazard oracle) and an option enabled. */
+    if(!floor_goes_home && !planner_go && !planner_fr && g_planner.prevent != 0u && fault_profile_causal_persist() &&
+       (g_planner.p_source == PLANNER_P_HAZARD || g_planner.p_source == PLANNER_P_BOTH) &&
+       in_service(team) && fault_injector_causal_field_state(team->team_id) == 0u &&
+       g_current_tick >= s->rest_end_tick + g_planner.preempt_cooldown_ticks && g_current_tick >= s->prevent_until)
+    {
+        prevent = persist_prevent_choice(team, &prevent_benefit, &prevent_cost);
+        if(prevent == 1u && is_last_specialist(team) && !request_approval(&flags))
+            prevent = 0;
+        if(prevent == 1u)
+        {
+            s_stats.prevent_rest++;
+            s->prevent_until = g_current_tick + (uint32_t)g_causal_persist_params.forecast_horizon_ticks;
+            fault_injector_causal_prevent_order(team->team_id);
+            planner_go = 1;
+        }
+        else if(prevent == 2u)
+        {
+            if(fault_injector_causal_field_start(team->team_id, 3u))
+            {
+                s_stats.prevent_field++;
+                s->prevent_until = g_current_tick + (uint32_t)g_causal_persist_params.forecast_horizon_ticks;
+            }
+            else
+                prevent = 0;
+        }
+    }
+#endif
+
     {
         uint8_t go = (uint8_t)(floor_goes_home || planner_go);
         RecoveryAction_t action;
@@ -563,6 +860,11 @@ int planner_team_decide(const TeamState_t *team, const PlannerEvidence_t *ev, Re
         {
             action = (RecoveryAction_t)go_action;
             reason = floor_goes_home ? (RecoveryReason_t)ev->rule_reason : RECOVERY_REASON_PREDICTED_FAULT;
+        }
+        else if(planner_fr)
+        {
+            action = RECOVERY_ACTION_LOCAL_RECOVERY;
+            reason = RECOVERY_REASON_PREDICTED_FAULT;
         }
         else if(floor_action == RECOVERY_ACTION_REQUEST_TASK_REALLOCATION)
         {

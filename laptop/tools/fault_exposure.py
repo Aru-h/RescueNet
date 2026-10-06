@@ -36,7 +36,10 @@ ACTION_RE = re.compile(
 ROADS_RE = re.compile(
     r"\[DIAG ROADS\] enabled=(\d+) partial=(\d+) blocked=(\d+) block_downgraded=(\d+) "
     r"max_blocked_cells=(\d+) audit_ticks=(\d+) audit_violations=(\d+)")
-PLANNER_RE = re.compile(r"\[DIAG PLANNER(?:_B)?\] (.*)")
+PLANNER_RE = re.compile(r"\[DIAG PLANNER(?:_B|_P)?\] (.*)")
+# Step 3.6 persistence lines: [DIAG FAULTEND] / [DIAG PERSIST] / [DIAG FIELD] / [DIAG PREVENT], keyed by class or kind.
+PERSIST_RE = re.compile(r"\[DIAG (FAULTEND|PERSIST|FIELD|PREVENT)\] (.*)")
+FAULT_LINE_RE = re.compile(r"\[DIAG FAULT\] class=(\d+) (.*)")
 ENVLABEL_RE = re.compile(r"\[DIAG ENVLABEL\] fix=(\d+) label_ticks=(\d+) label_episodes=(\d+)")
 FAULT_RE = re.compile(
     r"\[DIAG FAULT\] class=(\d+) onsets=(\d+) cleared_by_cause=(\d+) "
@@ -83,6 +86,17 @@ def run_seed(tron, profile, seed, ticks, extra):
         for pm in PLANNER_RE.finditer(proc.stderr):
             for k, v in re.findall(r"(\w+)=(-?[\d.]+)", pm.group(1)):
                 planner[k] = float(v)
+        persist = {}
+        for pm in PERSIST_RE.finditer(proc.stderr):
+            body = pm.group(2)
+            key = re.match(r"(?:class|kind)=(\d+)", body)
+            tag = f"{pm.group(1).lower()}{key.group(1)}_" if key else f"{pm.group(1).lower()}_"
+            for k, v in re.findall(r"(\w+)=(-?[\d.]+)", body):
+                if k not in ("class", "kind"):
+                    persist[tag + k] = float(v)
+        for fm in FAULT_LINE_RE.finditer(proc.stderr):
+            for k, v in re.findall(r"(\w+)=(-?[\d.]+)", fm.group(2)):
+                persist[f"fault{fm.group(1)}_{k}"] = float(v)
         envlabel = ENVLABEL_RE.search(proc.stderr)
         envlabel = [int(g) for g in envlabel.groups()] if envlabel else None
         world = CAUSAL_RE.search(proc.stderr)
@@ -134,7 +148,7 @@ def run_seed(tron, profile, seed, ticks, extra):
             "seed": seed, "attribution": attribution, "incidents_resolved": resolved, "team_ticks": team_ticks,
             "active": active, "any_active": any_active,
             "worst_team_any": max((per_team_any.get(t, 0) / n for t, n in per_team_ticks.items()), default=0.0),
-            "episodes": episodes, "causal_diag": causal, "world": world, "actions": actions, "roads": roads, "envlabel": envlabel, "planner": planner,
+            "episodes": episodes, "causal_diag": causal, "world": world, "actions": actions, "roads": roads, "envlabel": envlabel, "planner": planner, "persist": persist,
         }
 
 
@@ -196,13 +210,17 @@ def summarise(results):
             "old_flag_exposure": hold_ticks / team_ticks, "old_flag_episodes_per_seed": hold_eps / n,
             "old_flag_mean_episode_ticks": (hold_ticks / hold_eps) if hold_eps else 0.0,
         }
+    persists = [r["persist"] for r in results if r.get("persist")]
+    if persists:
+        keys = sorted({k for p in persists for k in p})
+        out["persist"] = {k: sum(p.get(k, 0.0) for p in persists) / len(persists) for k in keys}
     planners = [r["planner"] for r in results if r.get("planner")]
     if planners:
         keys = sorted({k for p in planners for k in p})
         out["planner"] = {k: sum(p.get(k, 0.0) for p in planners) / len(planners) for k in keys}
     out["per_seed"] = {str(r["seed"]): {"incidents_resolved": r["incidents_resolved"],
                                         "victims_lost": (r["world"][2] if r["world"] else None),
-                                        "planner": r.get("planner") or {}} for r in results}
+                                        "planner": r.get("planner") or {}, "persist": r.get("persist") or {}} for r in results}
     roads = [r["roads"] for r in results if r["roads"] and r["roads"][0]]
     if roads:
         out["roads"] = {

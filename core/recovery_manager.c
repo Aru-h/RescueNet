@@ -10,6 +10,8 @@
 #include "fault_buffer.h"
 #include "fault_predictor.h"
 #include "causal_actions.h"
+#include "fault_injector.h"
+#include "mission_state_utils.h"
 #include "feature_pack.h"
 #include "incident.h"
 #include "mission_execution_twin.h"
@@ -1918,6 +1920,25 @@ void recovery_manager_step(void)
     g_recovery_metrics.evaluation_ticks++;
 }
 
+/* Causal action semantics (Step 3.6, CAUSAL_FIX_SEMANTICS): release the team's task (progress kept) and exclude
+ * the team from that incident so another team takes it; the team stays where it is, AVAILABLE. */
+static void causal_release_in_place(TeamState_t *team, uint32_t until_tick, uint8_t kind)
+{
+    uint32_t incident_id = 0;
+
+    if(team->assigned_task_pool == TASK_POOL_INCIDENT && team->assigned_task_slot < NUM_INCIDENTS)
+        incident_id = g_incidents[team->assigned_task_slot].incident_id;
+    else if(team->assigned_task_pool == TASK_POOL_SYSTEM && team->assigned_task_slot < NUM_SYSTEM_TASKS)
+        incident_id = g_system_tasks[team->assigned_task_slot].incident_id;
+
+    if(!planner_release_team_for_preempt(team))
+        return;
+    if(incident_id != 0u)
+        allocator_exclude_team(team->team_id, incident_id, until_tick);
+    team_set_available(team);
+    g_diag_exclusions[kind]++;
+}
+
 void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
 {
     TeamState_t *team;
@@ -2000,6 +2021,16 @@ void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
             {
                 abandon_task_for_recovery(team);
             }
+            else if(fault_profile_causal_field_repair() &&
+                    (team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE))
+            {
+                /* Causal field repair (Step 3.6): a working team with an active mobility or resource fault
+                 * stops and repairs itself in the field (it keeps its task, makes no progress meanwhile). */
+                if(team->fault_state.active[FAULT_CLASS_MOBILITY])
+                    (void)fault_injector_causal_field_start(team_id, 1u);
+                else if(team->fault_state.active[FAULT_CLASS_RESOURCE])
+                    (void)fault_injector_causal_field_start(team_id, 2u);
+            }
             break;
 
         case RECOVERY_ACTION_RETURN_TO_SAFE_ZONE:
@@ -2020,6 +2051,9 @@ void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
             break;
 
         case RECOVERY_ACTION_REQUEST_TASK_REALLOCATION:
+            if(fault_profile_causal_fix(CAUSAL_FIX_SEMANTICS) &&
+               (team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE) && !team->heading_to_rest)
+                causal_release_in_place(team, g_current_tick + g_causal_persist_params.realloc_exclusion_ticks, 1u);
             if(g_realloc_done_tick != g_current_tick)
             {
                 allocate_all_incidents();
@@ -2036,7 +2070,10 @@ void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
              * instantly, regardless of stamina/equipment recovery progress). */
             if(team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE)
             {
-                abandon_task_for_recovery(team);
+                if(fault_profile_causal_fix(CAUSAL_FIX_SEMANTICS))
+                    causal_release_in_place(team, ALLOCATOR_EXCLUDE_UNTIL_STAGE, 0u);   /* distinct from RETURN */
+                else
+                    abandon_task_for_recovery(team);
             }
             break;
     }

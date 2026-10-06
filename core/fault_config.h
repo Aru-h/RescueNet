@@ -163,12 +163,41 @@ extern CausalRoadParams_t g_causal_roads;
 #define CAUSAL_FIX_ENV_NO_RTB   0x02u  /* an environment detection never drives a team-level reaction (RETURN_TO_SAFE_ZONE, ...) */
 #define CAUSAL_FIX_TRUE_COST    0x04u  /* the progress tracker's remaining cost ignores the REROUTE overlay */
 #define CAUSAL_FIX_STALL        0x08u  /* evaluators are stall-aware: a team held at a partial-debris cell is not evidence of a mobility / progress fault */
-#define CAUSAL_FIXES_ALL        0x0Fu
+#define CAUSAL_FIX_SEMANTICS    0x10u  /* ABORT_MISSION is distinct from RETURN_TO_SAFE_ZONE; REQUEST_TASK_REALLOCATION releases the task (Step 3.6) */
+#define CAUSAL_FIXES_ALL        0x1Fu
 extern uint8_t g_causal_fixes;
 void fault_config_set_causal_fixes(uint8_t mask);
 /* 1 under the causal profile when this fix is enabled. CAUSAL_FIX_LABEL and CAUSAL_FIX_STALL also need consequential roads
  * (the label is the route-touch signal; the stalls are the roads' debris crossings). */
 int fault_profile_causal_fix(unsigned fix);
+
+/* Step 3.6 persistent faults (docs/PERSISTENT_FAULTS_PROPOSAL.md). Mobility and resource faults no longer end on a
+ * 6-14 tick timer: they end by base repair (go home), field repair, or a long natural-recovery tail, and an
+ * unremedied fault can escalate. --causal-persist=off restores Step 3.5 byte for byte; timer = persistence and
+ * escalation without field repair (LOCAL_RECOVERY keeps its old behaviour); on = everything (default). */
+#define CAUSAL_PERSIST_OFF    0u
+#define CAUSAL_PERSIST_TIMER  1u
+#define CAUSAL_PERSIST_ON     2u
+
+typedef struct
+{
+    float    natural_mean_ticks;     /* exponential tail of an unattended fault: 10.8 h = 1084 ticks (derived, to verify) */
+    uint16_t field_min_ticks;        /* field repair / maintenance duration, uniform: 34 ... */
+    uint16_t field_max_ticks;        /* ... 102 ticks (mean 68 = 0.68 h, derived, to verify) */
+    float    field_success;          /* per attempt: 2/3 of failures are repairable in the field (Carlson & Murphy 2005, to verify) */
+    uint16_t base_dwell_min_ticks;   /* mobility base-repair dwell at a safe zone, uniform 17 ... (assumed: half the field time) */
+    uint16_t base_dwell_max_ticks;   /* ... 51 ticks */
+    float    escalation_mult;        /* escalation hazard = this x the class's current onset hazard (the existing cascade factor 1.5) */
+    float    maintenance_wear_cut;   /* PREVENT_FIELD wear reduction = wear_rest_reduction (routine maintenance), 0.3 */
+    uint16_t realloc_exclusion_ticks;/* REQUEST_TASK_REALLOCATION: the team is excluded from the released task this long (30) */
+    float    forecast_horizon_ticks; /* hazard-oracle horizon H = 100 ticks (one hour, assumed) */
+} CausalPersistParams_t;
+
+extern CausalPersistParams_t g_causal_persist_params;
+extern uint8_t g_causal_persist;      /* CAUSAL_PERSIST_*; default ON under the causal profile */
+void fault_config_set_causal_persist(uint8_t mode);
+int fault_profile_causal_persist(void);          /* 1 under the causal profile with persistence (timer or on) */
+int fault_profile_causal_field_repair(void);     /* 1 under the causal profile with persistence = on */
 
 /* Step 3.5 cost-based recovery planner (docs/RECOVERY_PLANNER_PROPOSAL.md).
  * --recovery=utility, causal profile only; the fixed gates stay the default. */
@@ -186,11 +215,17 @@ typedef enum
 #define PLANNER_P_AI        0u  /* AI + watchdog + consensus */
 #define PLANNER_P_WATCHDOG  1u  /* watchdog + consensus only (the AI's scores are ignored) */
 #define PLANNER_P_ORACLE    2u  /* ground-truth fault flags: laptop evaluation upper bound, never on a board */
+#define PLANNER_P_HAZARD    3u  /* watchdog + consensus detector, plus the hazard oracle forecast (Step 3.6; laptop only) */
+#define PLANNER_P_BOTH      4u  /* ground-truth fault flags AND the hazard oracle forecast (Step 3.6; laptop only) */
+
+#define PLANNER_PREVENT_REST   0x01u  /* PREVENT: go home and rest before a predicted fault */
+#define PLANNER_PREVENT_FIELD  0x02u  /* PREVENT_FIELD: in-field maintenance, no trip */
 
 typedef struct
 {
     uint8_t layers;           /* PLANNER_LAYER_* mask */
     uint8_t p_source;         /* PLANNER_P_* */
+    uint8_t prevent;          /* PLANNER_PREVENT_* mask (default 0: no preventive action; needs a forecast source) */
     uint8_t approval;         /* 0 deny (default), 1 auto-approve (laptop upper bound) */
     uint8_t log_enabled;      /* laptop decision log (--planner-log) */
     uint8_t calib_dump;       /* laptop calibration histograms (--planner-calib) */

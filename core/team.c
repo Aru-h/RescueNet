@@ -7,6 +7,7 @@
 #include "allocator.h"
 #include "recovery_manager.h"
 #include "recovery_manager_config.h"
+#include "fault_injector.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -451,6 +452,11 @@ void update_team(TeamState_t *team) //team
                      * treated the same way here. */
                     if(recovery_manager_get_recommendation(team->team_id) == RECOVERY_ACTION_RETURN_TO_SAFE_ZONE ||
                        recovery_manager_get_recommendation(team->team_id) == RECOVERY_ACTION_LOCAL_RECOVERY)
+                        break;
+
+                    /* Causal PREVENT (Step 3.6): a team sent home to rest before a fault stays until the
+                     * routine-maintenance dwell has run (0 for every other profile and every other team). */
+                    if(fault_injector_causal_rest_hold(team->team_id))
                         break;
 
                     if(team->stamina >= MAX_STAMINA)

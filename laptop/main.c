@@ -226,6 +226,7 @@ int main(int argc, char **argv)
     uint8_t causal_env_delay = 0;
     int roads_flag_given = 0;
     int causal_fixes_mask = -1;
+    int causal_persist_mode = -1;  /* Step 3.6: -1 = not given (default on under causal) */
     int planner_flag_given = 0;    /* any --planner* flag */   /* -1 = not given (default: all fixes on under causal) */
     int causal_reroute_penalty = -1;
     int live_mode = 0;
@@ -476,7 +477,17 @@ int main(int argc, char **argv)
                 if(strcmp(a + 12, "ai") == 0) g_planner.p_source = PLANNER_P_AI;
                 else if(strcmp(a + 12, "watchdog") == 0) g_planner.p_source = PLANNER_P_WATCHDOG;
                 else if(strcmp(a + 12, "oracle") == 0) g_planner.p_source = PLANNER_P_ORACLE;
-                else { fprintf(stderr, "invalid --planner-p '%s' (need ai, watchdog or oracle)\n", a + 12); exit(2); }
+                else if(strcmp(a + 12, "hazard") == 0) g_planner.p_source = PLANNER_P_HAZARD;
+                else if(strcmp(a + 12, "both") == 0) g_planner.p_source = PLANNER_P_BOTH;
+                else { fprintf(stderr, "invalid --planner-p '%s' (need ai, watchdog, oracle, hazard or both)\n", a + 12); exit(2); }
+            }
+            else if(strncmp(a, "--planner-prevent=", 18) == 0)
+            {
+                if(strcmp(a + 18, "none") == 0) g_planner.prevent = 0;
+                else if(strcmp(a + 18, "rest") == 0) g_planner.prevent = PLANNER_PREVENT_REST;
+                else if(strcmp(a + 18, "field") == 0) g_planner.prevent = PLANNER_PREVENT_FIELD;
+                else if(strcmp(a + 18, "both") == 0) g_planner.prevent = PLANNER_PREVENT_REST | PLANNER_PREVENT_FIELD;
+                else { fprintf(stderr, "invalid --planner-prevent '%s' (need none, rest, field or both)\n", a + 18); exit(2); }
             }
             else if(strncmp(a, "--planner-v=", 12) == 0)
             {
@@ -563,14 +574,63 @@ int main(int argc, char **argv)
                         mask |= CAUSAL_FIX_TRUE_COST;
                     else if(strcmp(tok, "stall") == 0)
                         mask |= CAUSAL_FIX_STALL;
+                    else if(strcmp(tok, "semantics") == 0)
+                        mask |= CAUSAL_FIX_SEMANTICS;
                     else
                     {
-                        fprintf(stderr, "invalid --causal-fixes '%s' (need on, off, or a list of label,rtb,cost,stall)\n", v);
+                        fprintf(stderr, "invalid --causal-fixes '%s' (need on, off, or a list of label,rtb,cost,stall,semantics)\n", v);
                         exit(2);
                     }
                 }
             }
             causal_fixes_mask = (int)mask;
+            continue;
+        }
+
+        /* Persistent faults (Step 3.6), causal only: off | timer | on. */
+        if(strncmp(argv[i], "--causal-persist=", 17) == 0)
+        {
+            const char *v = argv[i] + 17;
+
+            if(strcmp(v, "off") == 0) causal_persist_mode = (int)CAUSAL_PERSIST_OFF;
+            else if(strcmp(v, "timer") == 0) causal_persist_mode = (int)CAUSAL_PERSIST_TIMER;
+            else if(strcmp(v, "on") == 0) causal_persist_mode = (int)CAUSAL_PERSIST_ON;
+            else { fprintf(stderr, "invalid --causal-persist '%s' (need off, timer or on)\n", v); exit(2); }
+            continue;
+        }
+
+        /* Robustness runs (Step 3.6): override persistence parameters, never used to choose a value.
+         * --causal-persist-set=natural=<ticks>,field_scale=<x>,success=<p>,esc=<x>,dwell_field=1 */
+        if(strncmp(argv[i], "--causal-persist-set=", 21) == 0)
+        {
+            char buf[160];
+            char *tok;
+
+            strncpy(buf, argv[i] + 21, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = 0;
+            for(tok = strtok(buf, ","); tok != NULL; tok = strtok(NULL, ","))
+            {
+                char *eq = strchr(tok, '=');
+                float v;
+
+                if(eq == NULL) { fprintf(stderr, "invalid --causal-persist-set token '%s'\n", tok); exit(2); }
+                *eq = 0;
+                v = (float)atof(eq + 1);
+                if(strcmp(tok, "natural") == 0) g_causal_persist_params.natural_mean_ticks = v;
+                else if(strcmp(tok, "field_scale") == 0)
+                {
+                    g_causal_persist_params.field_min_ticks = (uint16_t)(34.0f * v + 0.5f);
+                    g_causal_persist_params.field_max_ticks = (uint16_t)(102.0f * v + 0.5f);
+                }
+                else if(strcmp(tok, "success") == 0) g_causal_persist_params.field_success = v;
+                else if(strcmp(tok, "esc") == 0) g_causal_persist_params.escalation_mult = 1.5f * v;
+                else if(strcmp(tok, "dwell_field") == 0 && v != 0.0f)
+                {
+                    g_causal_persist_params.base_dwell_min_ticks = g_causal_persist_params.field_min_ticks;
+                    g_causal_persist_params.base_dwell_max_ticks = g_causal_persist_params.field_max_ticks;
+                }
+                else { fprintf(stderr, "invalid --causal-persist-set key '%s'\n", tok); exit(2); }
+            }
             continue;
         }
 
@@ -693,6 +753,25 @@ int main(int argc, char **argv)
     }
     if(causal_fixes_mask >= 0)
         fault_config_set_causal_fixes((uint8_t)causal_fixes_mask);
+    if(causal_persist_mode >= 0 && fault_profile != FAULT_PROFILE_CAUSAL)
+    {
+        fprintf(stderr, "--causal-persist only applies to --fault-profile=causal\n");
+        return 2;
+    }
+    if(causal_persist_mode >= 0)
+        fault_config_set_causal_persist((uint8_t)causal_persist_mode);
+    if(g_planner.prevent != 0 &&
+       g_planner.p_source != PLANNER_P_HAZARD && g_planner.p_source != PLANNER_P_BOTH)
+    {
+        fprintf(stderr, "--planner-prevent needs a forecast source: --planner-p=hazard or both\n");
+        return 2;
+    }
+    if((g_planner.p_source == PLANNER_P_HAZARD || g_planner.p_source == PLANNER_P_BOTH) && fault_profile == FAULT_PROFILE_CAUSAL &&
+       g_causal_persist == CAUSAL_PERSIST_OFF)
+    {
+        fprintf(stderr, "--planner-p=hazard|both needs --causal-persist=timer|on (the forecast is the persistent-fault model's)\n");
+        return 2;
+    }
     if(roads_flag_given && fault_profile != FAULT_PROFILE_CAUSAL)
     {
         fprintf(stderr, "--causal-roads / --roads-* only apply to --fault-profile=causal\n");
@@ -746,12 +825,20 @@ int main(int argc, char **argv)
                 g_causal_roads.enabled ? "on" : "off");
     if(g_recovery_mode == RECOVERY_MODE_UTILITY)
         fprintf(stderr, "[FAULT] recovery=utility layers=%u p=%s approval=%s v_mult=%g margin=%g\n", (unsigned)g_planner.layers,
-                g_planner.p_source == PLANNER_P_AI ? "ai" : (g_planner.p_source == PLANNER_P_WATCHDOG ? "watchdog" : "oracle"),
+                g_planner.p_source == PLANNER_P_AI ? "ai" : (g_planner.p_source == PLANNER_P_WATCHDOG ? "watchdog" :
+                    (g_planner.p_source == PLANNER_P_ORACLE ? "oracle" : (g_planner.p_source == PLANNER_P_HAZARD ? "hazard" : "both"))),
                 g_planner.approval ? "auto" : "deny", (double)g_planner.v_mult, (double)g_planner.margin_frac);
     if(fault_profile == FAULT_PROFILE_CAUSAL)
-        fprintf(stderr, "[FAULT] fixes label=%d env_no_rtb=%d true_cost=%d stall=%d\n",
+        fprintf(stderr, "[FAULT] fixes label=%d env_no_rtb=%d true_cost=%d stall=%d semantics=%d\n",
                 fault_profile_causal_fix(CAUSAL_FIX_LABEL), fault_profile_causal_fix(CAUSAL_FIX_ENV_NO_RTB), fault_profile_causal_fix(CAUSAL_FIX_TRUE_COST),
-                fault_profile_causal_fix(CAUSAL_FIX_STALL));
+                fault_profile_causal_fix(CAUSAL_FIX_STALL), fault_profile_causal_fix(CAUSAL_FIX_SEMANTICS));
+    if(fault_profile == FAULT_PROFILE_CAUSAL)
+        fprintf(stderr, "[FAULT] persist=%s natural_mean=%g field=%u-%u success=%g dwell=%u-%u escalation=x%g prevent=%u\n",
+                g_causal_persist == CAUSAL_PERSIST_ON ? "on" : (g_causal_persist == CAUSAL_PERSIST_TIMER ? "timer" : "off"),
+                (double)g_causal_persist_params.natural_mean_ticks, (unsigned)g_causal_persist_params.field_min_ticks,
+                (unsigned)g_causal_persist_params.field_max_ticks, (double)g_causal_persist_params.field_success,
+                (unsigned)g_causal_persist_params.base_dwell_min_ticks, (unsigned)g_causal_persist_params.base_dwell_max_ticks,
+                (double)g_causal_persist_params.escalation_mult, (unsigned)g_planner.prevent);
     if(fault_profile == FAULT_PROFILE_CAUSAL && g_causal_roads.enabled)
         fprintf(stderr, "[FAULT] roads partial_pct=%u delay=%u persist=%u-%u clear_work=%u-%u cost_per_tick=%u astar=%s\n",
                 g_causal_roads.partial_pct, g_causal_roads.crossing_delay_ticks,
@@ -988,6 +1075,8 @@ int main(int argc, char **argv)
                         g_recovery_mode == RECOVERY_MODE_UTILITY ? "utility" : "fixed", ps->decisions, ps->go_home_planner, ps->go_home_floor,
                         ps->stay_with_p, ps->ai_cap_blocks, ps->approvals_requested, ps->approvals_granted, ps->approvals_denied,
                         ps->go_home_events, ps->go_home_near_stall, ps->action_changes, ps->reversals10);
+                fprintf(stderr, "[DIAG PLANNER_P] fr_chosen=%u prevent_considered=%u prevent_rest=%u prevent_field=%u\n",
+                        ps->fr_chosen, ps->prevent_considered, ps->prevent_rest, ps->prevent_field);
                 fprintf(stderr, "[DIAG PLANNER_B] eval_wanted_reroute=%u eval_wanted_clear_road=%u eval_wanted_reinforce=%u eval_wanted_relay=%u "
                                 "preempt_considered=%u preempt_clear_road=%u preempt_reinforce=%u blocked_cost=%u blocked_approval=%u blocked_finish=%u "
                                 "preempt_net_sum=%.2f succeeded_clear=%u failed_clear=%u succeeded_reinforce=%u failed_reinforce=%u\n",
@@ -1037,6 +1126,19 @@ int main(int argc, char **argv)
             for(uint8_t c = 0; c < NUM_OPERATIONAL_FAULT_CLASSES; c++)
                 fprintf(stderr, "[DIAG FAULTEND] class=%u cause_ticks=%u cause_planned_ticks=%u\n",
                     c, cs->ticks_by_cause[c], cs->planned_by_cause[c]);
+            if(fault_profile_causal_persist())
+            {
+                const CausalPersistStats_t *ps = fault_injector_causal_persist_stats();
+                extern uint32_t g_diag_exclusions[3];
+                for(uint8_t c = 0; c < NUM_OPERATIONAL_FAULT_CLASSES; c++)
+                    fprintf(stderr, "[DIAG PERSIST] class=%u escalations=%u field_ticks_total=%u\n",
+                        c, ps->escalations[c], ps->ticks_by_field[c]);
+                for(uint8_t k = 0; k < 3u; k++)
+                    fprintf(stderr, "[DIAG FIELD] kind=%u started=%u ok=%u failed=%u cancelled=%u\n",
+                        k, ps->field_started[k], ps->field_ok[k], ps->field_failed[k], ps->field_cancelled[k]);
+                fprintf(stderr, "[DIAG PREVENT] held_ticks=%u prevent_orders=%u prevent_done=%u abort_releases=%u realloc_releases=%u exclusion_refusals=%u\n",
+                    ps->field_ticks, ps->prevent_orders, ps->prevent_done, g_diag_exclusions[0], g_diag_exclusions[1], g_diag_exclusions[2]);
+            }
         }
 
         extern uint32_t g_diag_discovered_by_type[NUM_INCIDENT_TYPES];

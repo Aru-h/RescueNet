@@ -28,6 +28,43 @@ static void allocate_support_team(void);
  * that every team on the other side of the river could reach. That is
  * a property of the (team, task) pair, so it is checked here, where the
  * pair is chosen. */
+/* Step 3.6 exclusions: one (incident id, until tick) per team. */
+static uint32_t s_excl_id[NUM_TEAMS];
+static uint32_t s_excl_until[NUM_TEAMS];
+uint32_t g_diag_exclusions[3];
+
+void allocator_exclusion_reset(void)
+{
+    for(uint8_t t = 0; t < NUM_TEAMS; t++)
+    {
+        s_excl_id[t] = 0;
+        s_excl_until[t] = 0;
+    }
+    g_diag_exclusions[0] = g_diag_exclusions[1] = g_diag_exclusions[2] = 0;
+}
+
+void allocator_exclude_team(uint8_t team_id, uint32_t incident_id, uint32_t until_tick)
+{
+    if(team_id >= NUM_TEAMS)
+        return;
+    s_excl_id[team_id] = incident_id;
+    s_excl_until[team_id] = until_tick;
+}
+
+void allocator_exclusion_stage_complete(uint32_t incident_id)
+{
+    for(uint8_t t = 0; t < NUM_TEAMS; t++)
+        if(s_excl_until[t] == ALLOCATOR_EXCLUDE_UNTIL_STAGE && s_excl_id[t] == incident_id)
+            s_excl_until[t] = 0;
+}
+
+static uint8_t team_excluded_from(const TeamState_t *team, const IncidentState_t *incident)
+{
+    return (uint8_t)(s_excl_until[team->team_id] != 0u && s_excl_id[team->team_id] == incident->incident_id &&
+                     (s_excl_until[team->team_id] == ALLOCATOR_EXCLUDE_UNTIL_STAGE ||
+                      g_current_tick < s_excl_until[team->team_id]));
+}
+
 static uint8_t team_has_route_to_task(const TeamState_t *team, const IncidentState_t *task)
 {
     return find_path_cost(team->loc_x, team->loc_y, task->loc_x, task->loc_y) != UINT16_MAX;
@@ -235,6 +272,13 @@ bool team_can_accept_incident(const TeamState_t *team, const IncidentState_t *in
 {
     if(team == NULL || incident == NULL)
         return false;
+
+    /* Causal ABORT / REALLOCATION (Step 3.6): the team gave this incident up. */
+    if(team_excluded_from(team, incident))
+    {
+        g_diag_exclusions[2]++;
+        return false;
+    }
 
     /* Fog-of-war: an incident nobody's found yet is invisible to CBBA
      * entirely, not just deprioritized. System tasks (RETURN_TO_SAFE_ZONE,

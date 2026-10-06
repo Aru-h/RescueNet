@@ -37,6 +37,16 @@ static int16_t s_causal_prev_x[NUM_TEAMS];
 static int16_t s_causal_prev_y[NUM_TEAMS];
 static uint8_t s_causal_prev_valid[NUM_TEAMS];
 static uint32_t s_causal_last_rest_tick[NUM_TEAMS];
+/* Step 3.6 persistent faults: field repair / maintenance holds, the mobility base-repair dwell drawn at onset,
+ * PREVENT rest orders, escalation flags, and the last crossed cell's roughness (for the hazard forecast). */
+static CausalPersistStats_t s_persist_stats;
+static uint8_t s_field_kind[NUM_TEAMS];               /* 0 none, 1 mobility repair, 2 resource repair, 3 maintenance */
+static uint32_t s_field_end[NUM_TEAMS];
+static uint8_t s_dwell_need[NUM_TEAMS];
+static uint8_t s_prevent_order[NUM_TEAMS];
+static uint32_t s_prevent_tick[NUM_TEAMS];
+static uint8_t s_escalated[NUM_TEAMS][NUM_OPERATIONAL_FAULT_CLASSES];
+static float s_rough_last[NUM_TEAMS];
 /* Mission model bookkeeping, per incident slot (valid while the stored id
  * matches the slot's current incident_id). */
 static uint32_t s_causal_inc_id[NUM_INCIDENTS];
@@ -62,6 +72,14 @@ static uint32_t causal_hash(uint32_t tick, uint32_t team_id, uint32_t salt)
 /* Salts: onset roll = class * 2, duration draw = class * 2 + 1. */
 #define CAUSAL_SALT_ONSET(c)    ((uint32_t)(c) * 2u)
 #define CAUSAL_SALT_DURATION(c) ((uint32_t)(c) * 2u + 1u)
+/* Step 3.6 salts (the existing ones in use are 0-9, 100-102, 200, 300, 400-401, 410, 600). */
+#define CAUSAL_SALT_NATURAL(c)  (700u + (uint32_t)(c))
+#define CAUSAL_SALT_ESCALATE(c) (710u + (uint32_t)(c))
+#define CAUSAL_SALT_DWELL       720u
+#define CAUSAL_SALT_FIELD_TIME  721u
+#define CAUSAL_SALT_FIELD_OK    722u
+
+static uint32_t causal_persist_natural_ticks(uint8_t team_id, OperationalFaultClass_t fault_class);
 
 const CausalFaultStats_t *fault_injector_causal_stats(void)
 {
@@ -86,6 +104,11 @@ static float causal_unit(uint32_t tick, uint32_t a, uint32_t salt)
 
 static uint32_t fault_duration_for_class(uint8_t team_id, OperationalFaultClass_t fault_class)
 {
+    /* Step 3.6: mobility and resource faults persist (a long natural-recovery tail, not a 6-14 tick timer). */
+    if(fault_profile_causal_persist() &&
+       (fault_class == FAULT_CLASS_MOBILITY || fault_class == FAULT_CLASS_RESOURCE))
+        return causal_persist_natural_ticks(team_id, fault_class);
+
     /* Consequential roads: unattended damage persists for hours (uint16
      * ticks; the shared duration ranges below are 8-bit). */
     if(fault_class == FAULT_CLASS_ENVIRONMENT && fault_profile_causal_roads_on())
@@ -990,6 +1013,15 @@ static void causal_register_onset(uint8_t team_id, OperationalFaultClass_t fault
     s_causal_truth[team_id].onset_cause[fault_class] = (uint8_t)cause;
     if(fault_class == FAULT_CLASS_MOBILITY)
         s_causal_repair_ticks[team_id] = 0;
+    s_escalated[team_id][fault_class] = 0;
+    if(fault_class == FAULT_CLASS_MOBILITY && fault_profile_causal_persist())
+    {
+        const CausalPersistParams_t *pp = &g_causal_persist_params;
+        uint32_t span = (uint32_t)pp->base_dwell_max_ticks - pp->base_dwell_min_ticks + 1u;
+
+        s_dwell_need[team_id] = (uint8_t)(pp->base_dwell_min_ticks +
+                                          causal_hash(g_current_tick, team_id, CAUSAL_SALT_DWELL) % span);
+    }
 }
 
 static void causal_clear(uint8_t team_id, OperationalFaultClass_t fault_class,
@@ -997,7 +1029,11 @@ static void causal_clear(uint8_t team_id, OperationalFaultClass_t fault_class,
 {
     TeamFaultState_t *fs = &g_teams[team_id].fault_state;
 
-    if(how == CAUSAL_CLEAR_CAUSE_REMOVED)
+    if(how == CAUSAL_CLEAR_FIELD_REPAIR)
+    {
+        s_persist_stats.ticks_by_field[fault_class] += g_current_tick - fs->start_tick[fault_class];
+    }
+    else if(how == CAUSAL_CLEAR_CAUSE_REMOVED)
     {
         s_causal_stats.cleared_by_cause[fault_class]++;
         s_causal_stats.ticks_by_cause[fault_class] += g_current_tick - fs->start_tick[fault_class];
@@ -1010,7 +1046,8 @@ static void causal_clear(uint8_t team_id, OperationalFaultClass_t fault_class,
 
     /* A field repair removes a fraction of the wear; a fault that merely
      * ran out its backstop leaves the wear (and so the hazard) where it was. */
-    if(fault_class == FAULT_CLASS_MOBILITY && how == CAUSAL_CLEAR_CAUSE_REMOVED)
+    if(fault_class == FAULT_CLASS_MOBILITY &&
+       (how == CAUSAL_CLEAR_CAUSE_REMOVED || how == CAUSAL_CLEAR_FIELD_REPAIR))
         s_causal_wear[team_id] *= 1.0f - g_causal_params.wear_repair_reduction;
 
     recover_fault(team_id, fault_class);
@@ -1034,7 +1071,8 @@ static uint8_t causal_cause_removed(uint8_t team_id, OperationalFaultClass_t fau
         case FAULT_CLASS_MOBILITY:
             /* Field repair: dwell at a safe zone (RESTING only ever
              * happens there). Progress is counted by the caller. */
-            return s_causal_repair_ticks[team_id] >= CAUSAL_MOBILITY_REPAIR_REST_TICKS;
+            return s_causal_repair_ticks[team_id] >=
+                   (fault_profile_causal_persist() ? s_dwell_need[team_id] : CAUSAL_MOBILITY_REPAIR_REST_TICKS);
 
         case FAULT_CLASS_COMMUNICATION:
             /* Hysteresis: the fault starts below 0 dB but only clears once
@@ -1288,6 +1326,202 @@ static float causal_track_team(uint8_t team_id)
     return rough_now;
 }
 
+
+/* ------------------------------------------------------------------
+ * Step 3.6 persistent faults (docs/PERSISTENT_FAULTS_PROPOSAL.md).
+ * ------------------------------------------------------------------ */
+static uint32_t causal_persist_natural_ticks(uint8_t team_id, OperationalFaultClass_t fault_class)
+{
+    float u = causal_unit(g_current_tick, team_id, CAUSAL_SALT_NATURAL(fault_class));
+    float t = -g_causal_persist_params.natural_mean_ticks * logf(1.0f - u);
+
+    if(t < 1.0f)
+        t = 1.0f;
+    if(t > 100000.0f)
+        t = 100000.0f;
+    return (uint32_t)t;
+}
+
+const CausalPersistStats_t *fault_injector_causal_persist_stats(void)
+{
+    return &s_persist_stats;
+}
+
+/* An unremedied fault can step up one severity level (mobility 3 to 4, resource 2 to 3), at the class's current
+ * onset hazard times the existing cascade factor 1.5. */
+static void causal_escalate(uint8_t team_id, OperationalFaultClass_t fault_class, float hazard)
+{
+    TeamFaultState_t *fs = &g_teams[team_id].fault_state;
+    float p = 1.0f - expf(-g_causal_persist_params.escalation_mult * hazard);
+
+    if(s_escalated[team_id][fault_class] || fs->severity[fault_class] >= 4u)
+        return;
+    if(causal_unit(g_current_tick, team_id, CAUSAL_SALT_ESCALATE(fault_class)) < p)
+    {
+        fs->severity[fault_class]++;
+        s_escalated[team_id][fault_class] = 1;
+        s_persist_stats.escalations[fault_class]++;
+    }
+}
+
+static uint8_t field_team_in_service(const TeamState_t *team)
+{
+    return (uint8_t)((team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE) && !team->heading_to_rest);
+}
+
+int fault_injector_causal_field_start(uint8_t team_id, uint8_t kind)
+{
+    TeamState_t *team;
+    const CausalPersistParams_t *pp = &g_causal_persist_params;
+    uint32_t span;
+
+    if(!fault_profile_causal_field_repair() || team_id >= NUM_TEAMS || kind < 1u || kind > 3u)
+        return 0;
+    team = &g_teams[team_id];
+    if(s_field_kind[team_id] != 0u || !field_team_in_service(team))
+        return 0;
+    if(kind == 1u && !team->fault_state.active[FAULT_CLASS_MOBILITY])
+        return 0;
+    if(kind == 2u && !team->fault_state.active[FAULT_CLASS_RESOURCE])
+        return 0;
+
+    span = (uint32_t)pp->field_max_ticks - pp->field_min_ticks + 1u;
+    s_field_kind[team_id] = kind;
+    s_field_end[team_id] = g_current_tick + pp->field_min_ticks +
+                           causal_hash(g_current_tick, team_id, CAUSAL_SALT_FIELD_TIME) % span;
+    s_persist_stats.field_started[kind - 1u]++;
+    return 1;
+}
+
+uint8_t fault_injector_causal_field_state(uint8_t team_id)
+{
+    return team_id < NUM_TEAMS ? s_field_kind[team_id] : 0u;
+}
+
+int fault_injector_causal_team_held(uint8_t team_id)
+{
+    return team_id < NUM_TEAMS && s_field_kind[team_id] != 0u;
+}
+
+/* Runs at the start of the tick, before movement and work. */
+static void causal_field_step(uint8_t team_id)
+{
+    TeamState_t *team = &g_teams[team_id];
+    CausalTeamTruth_t *truth = &s_causal_truth[team_id];
+    uint8_t kind = s_field_kind[team_id];
+    uint8_t valid;
+    OperationalFaultClass_t cls = (kind == 1u) ? FAULT_CLASS_MOBILITY : FAULT_CLASS_RESOURCE;
+
+    truth->field_state = 0;
+    if(kind == 0u)
+        return;
+    valid = field_team_in_service(team);
+    if(kind != 3u && !team->fault_state.active[cls])
+        valid = 0;
+    if(!valid)
+    {
+        s_persist_stats.field_cancelled[kind - 1u]++;
+        s_field_kind[team_id] = 0;
+        return;
+    }
+
+    causal_actions_note_hold(team_id);
+    s_persist_stats.field_ticks++;
+    truth->field_state = kind;
+
+    if(g_current_tick >= s_field_end[team_id])
+    {
+        uint8_t ok = 1;
+
+        if(kind != 3u)
+            ok = (uint8_t)(causal_unit(g_current_tick, team_id, CAUSAL_SALT_FIELD_OK) <
+                           g_causal_persist_params.field_success);
+        if(ok)
+        {
+            if(kind == 1u)
+                causal_clear(team_id, FAULT_CLASS_MOBILITY, CAUSAL_CLEAR_FIELD_REPAIR);
+            else if(kind == 2u)
+            {
+                if(team->equipment_level < CAUSAL_RESOURCE_RESUPPLY_LEVEL)
+                    team->equipment_level = CAUSAL_RESOURCE_RESUPPLY_LEVEL;
+                causal_clear(team_id, FAULT_CLASS_RESOURCE, CAUSAL_CLEAR_FIELD_REPAIR);
+            }
+            else
+                s_causal_wear[team_id] *= 1.0f - g_causal_persist_params.maintenance_wear_cut;
+            s_persist_stats.field_ok[kind - 1u]++;
+        }
+        else
+            s_persist_stats.field_failed[kind - 1u]++;
+        s_field_kind[team_id] = 0;
+    }
+}
+
+void fault_injector_causal_prevent_order(uint8_t team_id)
+{
+    if(!fault_profile_causal_persist() || team_id >= NUM_TEAMS || s_prevent_order[team_id])
+        return;
+    s_prevent_order[team_id] = 1;
+    s_prevent_tick[team_id] = g_current_tick;
+    s_persist_stats.prevent_orders++;
+}
+
+/* A PREVENT order keeps the team RESTING until the routine-maintenance dwell has removed wear. */
+int fault_injector_causal_rest_hold(uint8_t team_id)
+{
+    return team_id < NUM_TEAMS && s_prevent_order[team_id] &&
+           s_causal_rest_dwell[team_id] < CAUSAL_MOBILITY_REPAIR_REST_TICKS;
+}
+
+static void causal_prevent_step(uint8_t team_id)
+{
+    const TeamState_t *team = &g_teams[team_id];
+
+    if(!s_prevent_order[team_id])
+        return;
+    if(team->status == STATUS_RESTING && s_causal_rest_dwell[team_id] >= CAUSAL_MOBILITY_REPAIR_REST_TICKS)
+    {
+        s_prevent_order[team_id] = 0;
+        s_persist_stats.prevent_done++;
+    }
+    else if(g_current_tick - s_prevent_tick[team_id] > 400u)
+        s_prevent_order[team_id] = 0;   /* the team never got home (re-tasked or stuck): the order lapses */
+}
+
+/* Hazard-oracle forecast from the hidden state: P(onset within H ticks) = 1 - exp(-H * h). */
+void fault_injector_causal_forecast(uint8_t team_id, uint8_t after, float out[2])
+{
+    const CausalFaultParams_t *k = &g_causal_params;
+    const TeamState_t *team;
+    float wear, depletion, since_rest, cascade, h_mob, h_res, horizon;
+
+    out[0] = out[1] = 0.0f;
+    if(!fault_profile_is_causal() || team_id >= NUM_TEAMS)
+        return;
+    team = &g_teams[team_id];
+    horizon = g_causal_persist_params.forecast_horizon_ticks;
+    wear = s_causal_wear[team_id];
+    since_rest = (float)s_causal_truth[team_id].ticks_since_rest;
+    depletion = 1.0f - (float)team->equipment_level / (float)EQ_MAX_LEVEL;
+    cascade = team->fault_state.active[FAULT_CLASS_MOBILITY] ? k->res_mobility_cascade : 1.0f;
+    if(after == 1u)
+    {
+        wear *= 1.0f - k->wear_rest_reduction;
+        since_rest = 0.0f;
+        depletion = 0.0f;
+        cascade = 1.0f;
+    }
+    else if(after == 2u)
+        wear *= 1.0f - g_causal_persist_params.maintenance_wear_cut;
+
+    h_mob = clampf((k->mob_hazard_base + k->mob_hazard_per_wear * wear + k->mob_hazard_rough * s_rough_last[team_id]) *
+                       g_fault_stress, 0.0f, k->hazard_cap);
+    h_res = clampf((k->res_hazard_base + k->res_hazard_battery * depletion * depletion +
+                    k->res_hazard_since_rest * clampf(since_rest / k->res_since_rest_horizon, 0.0f, 2.0f)) *
+                       cascade * g_fault_stress, 0.0f, k->hazard_cap);
+    out[0] = 1.0f - expf(-horizon * h_mob);
+    out[1] = 1.0f - expf(-horizon * h_res);
+}
+
 static void causal_step(void)
 {
     const CausalFaultParams_t *k = &g_causal_params;
@@ -1307,11 +1541,21 @@ static void causal_step(void)
 #endif
     causal_mission_model_step();
 
+    if(fault_profile_causal_persist())
+    {
+        for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+        {
+            causal_field_step(team_id);
+            causal_prevent_step(team_id);
+        }
+    }
+
     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
     {
         TeamState_t *team = &g_teams[team_id];
         CausalTeamTruth_t *truth = &s_causal_truth[team_id];
         float rough_now = causal_track_team(team_id);
+        s_rough_last[team_id] = rough_now;
 
         /* Hazards, per tick, from state plus a small baseline. */
         float t_base = k->mob_hazard_base;
@@ -1329,6 +1573,16 @@ static void causal_step(void)
 
         truth->hazard_mobility = h_mob;
         truth->hazard_resource = h_res;
+        for(uint8_t c = 0; c < NUM_OPERATIONAL_FAULT_CLASSES; c++)
+            truth->escalated[c] = s_escalated[team_id][c];
+        if(fault_profile_causal_persist())
+        {
+            float risk[2];
+
+            fault_injector_causal_forecast(team_id, 0u, risk);
+            truth->risk_mobility = risk[0];
+            truth->risk_resource = risk[1];
+        }
 
         for(uint8_t fault_class = 0; fault_class < NUM_OPERATIONAL_FAULT_CLASSES; fault_class++)
         {
@@ -1359,6 +1613,9 @@ static void causal_step(void)
                     causal_clear(team_id, class_id, CAUSAL_CLEAR_CAUSE_REMOVED);
                 else if(g_current_tick >= team->fault_state.recovery_tick[fault_class])
                     causal_clear(team_id, class_id, CAUSAL_CLEAR_BACKSTOP);
+                else if(fault_profile_causal_persist() &&
+                        (class_id == FAULT_CLASS_MOBILITY || class_id == FAULT_CLASS_RESOURCE))
+                    causal_escalate(team_id, class_id, class_id == FAULT_CLASS_MOBILITY ? h_mob : h_res);
                 continue;
             }
 
@@ -1505,6 +1762,25 @@ float fault_injector_causal_shadow_at(int x, int y)
     return causal_shadow_db(x, y);
 }
 
+#else /* !ENVIRONMENT_HAS_WORLD_STORAGE: the board never injects causal faults */
+
+static uint32_t causal_persist_natural_ticks(uint8_t team_id, OperationalFaultClass_t fault_class)
+{
+    (void)team_id; (void)fault_class;
+    return 0;
+}
+const CausalPersistStats_t *fault_injector_causal_persist_stats(void) { return &s_persist_stats; }
+int fault_injector_causal_field_start(uint8_t team_id, uint8_t kind) { (void)team_id; (void)kind; return 0; }
+uint8_t fault_injector_causal_field_state(uint8_t team_id) { (void)team_id; return 0u; }
+int fault_injector_causal_team_held(uint8_t team_id) { (void)team_id; return 0; }
+void fault_injector_causal_prevent_order(uint8_t team_id) { (void)team_id; }
+int fault_injector_causal_rest_hold(uint8_t team_id) { (void)team_id; return 0; }
+void fault_injector_causal_forecast(uint8_t team_id, uint8_t after, float out[2])
+{
+    (void)team_id; (void)after;
+    out[0] = out[1] = 0.0f;
+}
+
 #endif /* ENVIRONMENT_HAS_WORLD_STORAGE (causal model) */
 
 void fault_injector_init(uint32_t seed)
@@ -1519,12 +1795,21 @@ void fault_injector_init(uint32_t seed)
         s_causal_prev_y[t] = 0;
         s_causal_prev_valid[t] = 0;
         s_causal_last_rest_tick[t] = 0;
+        s_field_kind[t] = 0;
+        s_field_end[t] = 0;
+        s_dwell_need[t] = 0;
+        s_prevent_order[t] = 0;
+        s_prevent_tick[t] = 0;
+        s_rough_last[t] = 0.0f;
+        memset(s_escalated[t], 0, sizeof(s_escalated[t]));
         memset(&s_causal_truth[t], 0, sizeof(s_causal_truth[t]));
 #if ENVIRONMENT_HAS_WORLD_STORAGE
         s_label_now[t] = 0;
         s_label_prev[t] = 0;
 #endif
     }
+    memset(&s_persist_stats, 0, sizeof(s_persist_stats));
+    allocator_exclusion_reset();
     causal_actions_reset();
     planner_reset();
 #if ENVIRONMENT_HAS_WORLD_STORAGE

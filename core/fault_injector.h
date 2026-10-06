@@ -43,8 +43,9 @@ typedef enum
 typedef enum
 {
     CAUSAL_CLEAR_NONE = 0,
-    CAUSAL_CLEAR_CAUSE_REMOVED,
-    CAUSAL_CLEAR_BACKSTOP
+    CAUSAL_CLEAR_CAUSE_REMOVED,   /* base repair: the team rested at a safe zone (mobility, resource) or the link recovered */
+    CAUSAL_CLEAR_BACKSTOP,        /* the drawn timer ran out; under persistence this is the natural-recovery tail */
+    CAUSAL_CLEAR_FIELD_REPAIR     /* a field repair succeeded (Step 3.6) */
 } CausalClearCause_t;
 
 /* Per-team ground truth for the tick the injector just stepped. Written to
@@ -63,6 +64,11 @@ typedef struct
     /* Bit 0: the team's route (next 8 steps) crosses a partially blocked cell;
      * bit 1: it passes within one cell of a fully blocked cell. Sidecar only. */
     uint8_t route_touch;
+    /* Step 3.6, sidecar only. */
+    uint8_t field_state;          /* 0 none, 1 mobility repair, 2 resource repair, 3 maintenance, held this tick */
+    uint8_t escalated[NUM_OPERATIONAL_FAULT_CLASSES]; /* the active fault of this class has escalated */
+    float risk_mobility;          /* hazard-oracle P(onset within the forecast horizon), mobility */
+    float risk_resource;          /* ... resource */
 } CausalTeamTruth_t;
 
 const CausalTeamTruth_t *fault_injector_causal_truth(uint8_t team_id);
@@ -112,5 +118,39 @@ typedef struct
 } CausalWorldStats_t;
 
 const CausalWorldStats_t *fault_injector_causal_world_stats(void);
+
+/* ------------------------------------------------------------------
+ * Step 3.6 persistent faults (docs/PERSISTENT_FAULTS_PROPOSAL.md). Causal
+ * profile only; every function below returns 0 / does nothing otherwise
+ * and on a board.
+ * ------------------------------------------------------------------ */
+typedef struct
+{
+    uint32_t escalations[NUM_OPERATIONAL_FAULT_CLASSES];
+    uint32_t field_started[3];       /* 0 mobility repair, 1 resource repair, 2 maintenance (PREVENT_FIELD) */
+    uint32_t field_ok[3];
+    uint32_t field_failed[3];        /* repair attempts that failed (the fault stays) */
+    uint32_t field_cancelled[3];     /* the team left or the fault ended first */
+    uint32_t field_ticks;            /* team-ticks held for a field repair or maintenance */
+    uint32_t ticks_by_field[NUM_OPERATIONAL_FAULT_CLASSES]; /* episode lengths of faults ended by a field repair */
+    uint32_t prevent_orders;         /* PREVENT (rest at base) orders given */
+    uint32_t prevent_done;           /* ... that completed their rest */
+} CausalPersistStats_t;
+
+const CausalPersistStats_t *fault_injector_causal_persist_stats(void);
+
+/* Start a field activity on a working team: kind 1 = repair its active mobility fault,
+ * 2 = repair its active resource fault, 3 = routine maintenance (wear only). Returns 1 when started.
+ * A team is held (no movement, no work) until it completes; leaving the task cancels it. */
+int fault_injector_causal_field_start(uint8_t team_id, uint8_t kind);
+uint8_t fault_injector_causal_field_state(uint8_t team_id);   /* 0 when not held */
+int fault_injector_causal_team_held(uint8_t team_id);          /* 1 while a field activity holds the team this tick */
+/* PREVENT: the planner has sent the team home to rest before a fault; it stays RESTING until the repair dwell
+ * has removed wear (the existing 4-tick routine maintenance). */
+void fault_injector_causal_prevent_order(uint8_t team_id);
+int fault_injector_causal_rest_hold(uint8_t team_id);
+/* Hazard-oracle forecast: P(onset within the horizon) for mobility [0] and resource [1], from the hidden state.
+ * after: 0 as is, 1 after a rest at a safe zone, 2 after in-field maintenance. Laptop only. */
+void fault_injector_causal_forecast(uint8_t team_id, uint8_t after, float out[2]);
 
 #endif

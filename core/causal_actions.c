@@ -762,6 +762,14 @@ uint32_t causal_actions_stall_ticks(void)
     return s_stall_total;
 }
 
+void causal_actions_note_hold(uint8_t team_id)
+{
+    if(team_id >= NUM_TEAMS)
+        return;
+    s_hold_ring[team_id][s_hold_head[team_id]] = g_current_tick + 1u;
+    s_hold_head[team_id] = (uint8_t)((s_hold_head[team_id] + 1u) % HOLD_RING);
+}
+
 int causal_actions_debris_held_at(uint8_t team_id, uint32_t tick)
 {
     if(team_id >= NUM_TEAMS)
@@ -939,6 +947,7 @@ void causal_actions_detector_flag(uint8_t team_id, OperationalFaultClass_t fault
 int causal_actions_move_override(TeamState_t *team) { (void)team; return 0; }
 int causal_actions_crossing_stall(const TeamState_t *team, int next_x, int next_y) { (void)team; (void)next_x; (void)next_y; return 0; }
 uint32_t causal_actions_stall_ticks(void) { return 0; }
+void causal_actions_note_hold(uint8_t team_id) { (void)team_id; }
 int causal_actions_debris_held_at(uint8_t team_id, uint32_t tick) { (void)team_id; (void)tick; return 0; }
 int causal_actions_debris_held_within(uint8_t team_id, uint32_t window) { (void)team_id; (void)window; return 0; }
 void causal_actions_path_begin(const TeamState_t *team) { (void)team; }

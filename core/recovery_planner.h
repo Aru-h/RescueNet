@@ -82,6 +82,10 @@ typedef struct
     uint32_t preempt_failed[4];     /* preempted team left the job before it finished */
     uint32_t go_home_events;        /* recommendation changes into RETURN_TO_SAFE_ZONE / ABORT_MISSION for a working team (any mode) */
     uint32_t go_home_near_stall;    /* ... within 12 ticks after the team was held at a debris cell */
+    uint32_t fr_chosen;             /* Step 3.6: Layer A chose a field repair (LOCAL_RECOVERY on a working team) */
+    uint32_t prevent_considered;    /* Step 3.6: preventive options evaluated with a forecast */
+    uint32_t prevent_rest;          /* PREVENT (rest at base) chosen */
+    uint32_t prevent_field;         /* PREVENT_FIELD (in-field maintenance) chosen */
     uint32_t action_changes;        /* recommendation changes per team (chattering) */
     uint32_t reversals10;           /* a change that undoes the previous change within 10 ticks */
 } PlannerStats_t;

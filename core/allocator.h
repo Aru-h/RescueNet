@@ -37,4 +37,14 @@ float get_soft_stamina_floor(const TeamState_t *team);
 uint8_t allocator_assign_system_task(uint8_t team_id, uint8_t slot);
 uint8_t allocator_assign_support(uint8_t team_id, uint8_t incident_slot);
 
+
+/* Step 3.6 causal action semantics: a team that aborted or asked for reallocation is excluded from that incident
+ * (ABORT_MISSION until its current stage completes, REQUEST_TASK_REALLOCATION for a fixed number of ticks), so
+ * another team takes it. All zero, and a no-op, outside the causal profile. */
+#define ALLOCATOR_EXCLUDE_UNTIL_STAGE 0xFFFFFFFFu
+void allocator_exclusion_reset(void);
+void allocator_exclude_team(uint8_t team_id, uint32_t incident_id, uint32_t until_tick);
+void allocator_exclusion_stage_complete(uint32_t incident_id);
+extern uint32_t g_diag_exclusions[3];   /* [0] ABORT releases, [1] REALLOC releases, [2] candidate refusals */
+
 #endif

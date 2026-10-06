@@ -1292,7 +1292,7 @@ check-causal-profile: $(TARGET)
 	@cmp $(CAUSAL_DET_DIR)/a/tron_causal_truth.csv $(CAUSAL_DET_DIR)/b/tron_causal_truth.csv
 	@echo "check-causal-profile: unknown profile rejected, causal-only flags gated, causal dataset + truth sidecar reproducible (recovery actions on)"
 
-.PHONY: check-causal-fault-exposure check-causal-profile check-causal-roads-connectivity check-causal-fixes check-causal-env-no-rtb check-recovery-planner
+.PHONY: check-causal-fault-exposure check-causal-profile check-causal-roads-connectivity check-causal-fixes check-causal-env-no-rtb check-recovery-planner check-causal-persistence
 
 # Consequential roads (Step 3.1): over full causal runs, no passable cell may
 # be cut off from every safe zone by a full road blockage (the connectivity
@@ -1355,3 +1355,26 @@ check-recovery-planner: $(TARGET)
 	@python3 laptop/tools/check_planner_log.py $(PLANNER_DET_DIR)/u/tron_planner_log.csv auto
 	@python3 laptop/tools/check_planner_log.py --selftest
 	@echo "check-recovery-planner: flags gated, --recovery=fixed == default, utility run reproducible, floor / approval / cooldown invariants hold"
+
+# Step 3.6: persistent faults, field repair, action semantics, hazard-oracle forecast.
+PERSIST_DET_DIR = build/causal-persistence
+check-causal-persistence: $(TARGET)
+	@rm -rf $(PERSIST_DET_DIR) && mkdir -p $(PERSIST_DET_DIR)/a $(PERSIST_DET_DIR)/b $(PERSIST_DET_DIR)/off $(SELFTEST_BIN_DIR)
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-persist=on >/dev/null 2>&1; then echo "FAIL: --causal-persist accepted without causal"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-persist=bogus >/dev/null 2>&1; then echo "FAIL: unknown --causal-persist accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --recovery=utility --planner-prevent=both >/dev/null 2>&1; then echo "FAIL: --planner-prevent accepted without a forecast source"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --recovery=utility --planner-p=hazard --causal-persist=off >/dev/null 2>&1; then echo "FAIL: hazard oracle accepted without persistence"; exit 1; fi
+	@cd $(PERSIST_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --recovery=utility --planner-p=both --planner-prevent=both --planner-log >/dev/null 2>&1
+	@cd $(PERSIST_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --recovery=utility --planner-p=both --planner-prevent=both --planner-log >/dev/null 2>&1
+	@cmp $(PERSIST_DET_DIR)/a/tron_snapshot_dataset.csv $(PERSIST_DET_DIR)/b/tron_snapshot_dataset.csv
+	@cmp $(PERSIST_DET_DIR)/a/tron_causal_truth.csv $(PERSIST_DET_DIR)/b/tron_causal_truth.csv
+	@cmp $(PERSIST_DET_DIR)/a/tron_planner_log.csv $(PERSIST_DET_DIR)/b/tron_planner_log.csv
+	@head -1 $(PERSIST_DET_DIR)/a/tron_causal_truth.csv | grep -q "field_state,escalated_mobility,escalated_resource,risk_mobility_h,risk_resource_h" || { echo "FAIL: persistence sidecar columns missing"; exit 1; }
+	@cd $(PERSIST_DET_DIR)/off && ../../../$(TARGET) 1003 1 600 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-persist=off >/dev/null 2>&1
+	@if head -1 $(PERSIST_DET_DIR)/off/tron_causal_truth.csv | grep -q field_state; then echo "FAIL: --causal-persist=off wrote persistence columns"; exit 1; fi
+	@python3 laptop/tools/check_causal_persist.py $(PERSIST_DET_DIR)/a/tron_causal_truth.csv $(PERSIST_DET_DIR)/a/tron_snapshot_dataset.csv
+	@$(CC) $(SELFTEST_CFLAGS) -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=1 \
+		-o $(SELFTEST_BIN_DIR)/causal_persist_selftest $(TOOLS_DIR)/causal_persist_selftest.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LAPTOP_DIR)/mission_feed.c $(LAPTOP_DIR)/mission_mirror.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./causal_persist_selftest
+	@echo "check-causal-persistence: flags gated, runs reproducible, sidecar columns only with persistence, action semantics and field-repair hold verified"

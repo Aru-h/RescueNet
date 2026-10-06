@@ -56,6 +56,9 @@ uint32_t causal_actions_stall_ticks(void);
 int causal_actions_debris_held_at(uint8_t team_id, uint32_t tick);
 /* ... at any of the last `window` ticks (diagnostics). */
 int causal_actions_debris_held_within(uint8_t team_id, uint32_t window);
+/* A field repair / maintenance holds the team this tick: recorded in the same hold ring, so the stall-aware
+ * evaluators excuse it exactly as a debris crossing. */
+void causal_actions_note_hold(uint8_t team_id);
 
 /* Incident hooks. */
 int causal_actions_reinforce_wanted(uint8_t incident_slot);

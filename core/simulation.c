@@ -259,6 +259,10 @@ void move_team(TeamState_t *team) //simulation
     if(team->status != STATUS_EN_ROUTE)
         return;
 
+    /* Causal field repair / maintenance (Step 3.6): the team stands still while it works on itself. */
+    if(fault_injector_causal_team_held(team->team_id))
+        return;
+
     if(team->fault_state.active[FAULT_CLASS_MOBILITY])
     {
         uint8_t severity = team->fault_state.severity[FAULT_CLASS_MOBILITY];
