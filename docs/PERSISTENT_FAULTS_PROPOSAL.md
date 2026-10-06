@@ -1,8 +1,9 @@
 # Step 3.6 proposal: faults that need fixing (causal profile only)
 
-Status: **proposal, nothing implemented.** The planner, the AI and every file in `core/` are
-untouched while this is written. Section 9 is the pre-registration: it is meant to be committed
-before any planner or AI comparison is run, with the parameter values and predictions fixed.
+Status: **approved with amendments (section 12); pre-registered in section 9, committed before
+any planner or AI comparison is run.** The planner, the AI and every file in `core/` were
+untouched while this was written. Implementation and the evaluation follow the pre-registration
+commit.
 
 ## 0. Why
 
@@ -25,7 +26,7 @@ Everything below applies only under `--fault-profile=causal`. Other profiles sta
 ## 1. The fault model
 
 **Flags (proposed).** `--causal-persist=on|off` (the model below; `off` reproduces Step 3.5
-byte for byte; default `on` once v1 is frozen) and a new `--causal-fixes` token `semantics` (the
+byte for byte; default **`on`** under the causal profile in v1) and a new `--causal-fixes` token `semantics` (the
 two action bugs, section 4). Each part is separately switchable so the effect of each can be
 measured: `persist`, `repair` (field repair) and `semantics`.
 
@@ -74,11 +75,13 @@ Fault onset rates at the current model, 5 seeds (1001-1005), 3000 ticks = 30 h, 
 | 7 | 0.60 | 1.7 h | 4.5% | 0.47 | 2.1 h | 3.9% |
 
 The field-robot literature gives MTBF 6-20 h (section 3). That is **stress 1-2**, not stress 7.
-Stress 7 is the evaluation point used since Step 3 (I did not find a recorded derivation for it). With
+Stress 7 is the evaluation point used since Step 3; **it was never derived from data** (I found no
+recorded derivation; a note to that effect is added to the earlier docs). With
 persistent faults the active share rises from ~4% to an expected ~30% at stress 7 (section 8),
-which is a heavily loaded fleet. I therefore pre-register **both** stress 7 (continuity with
-Step 3.5) and stress 2 (literature-consistent) as co-primary, and report both. I will not
-select between them afterwards.
+which is a heavily loaded fleet. **Framing (decided by the user, section 12):** **stress 2 is the realistic headline** (its MTBF
+matches the literature); **stress 7 is reported as a harsh-conditions stress test** (and keeps
+continuity with Step 3.5). Both are co-primary in the analysis, are always reported side by side,
+and I will not select between them afterwards.
 
 ## 3. Grounding, with what is verified and what is not
 
@@ -157,25 +160,37 @@ the hazard, not the random draws. (An even stronger "dice oracle" that also know
 possible; I propose not to build it unless the hazard oracle shows headroom.) It is combined with
 the detector oracle in the combination `--planner-p=both`.
 
-**Preventive action.** A new Layer A option **PREVENT**: go home and rest *before* a fault, using
-the existing RETURN and rest mechanics (so it also removes 30% of wear and resets time-since-rest
-and the equipment). The planner takes it only when
+**Preventive actions.** Two new Layer A options, both available only when a forecast source is
+present (so the no-AI planner and the current AI are unaffected). Each is taken only when its
+expected benefit beats its cost by the planner's existing margin (0.25):
 
-`sum_c [P_c(stay) - P_c(after rest)] * C_fault_c  >  cost(trip + dwell + return) * (1 + margin)`
+`sum_c [P_c(stay) - P_c(after action)] * C_fault_c  >  cost(action) * (1 + margin)`
 
-where `P_c(after rest)` is the oracle's own hazard recomputed for the post-rest state (wear x 0.7,
-time-since-rest 0, equipment full), `C_fault_c` is the new world's expected cost of a fault of
-class c (time to remedy x degraded rate, derived from section 1, not tuned), and the margin is
-the planner's existing 0.25. Without a forecast source the PREVENT branch is off, so the
-no-AI planner and the current AI are not affected. A real model could supply the forecast later
-(the retrained AI, section 7).
+`P_c(after action)` is the oracle's own hazard recomputed for the post-action state;
+`C_fault_c` is the new world's expected cost of a fault of class c (time to remedy x degraded
+rate plus escalation, derived from section 1, not tuned).
+
+| Option | What it does | Time cost | What it changes | Constants used |
+|---|---|---|---|---|
+| **PREVENT** (rest at base) | go home, rest, come back, with the existing RETURN and rest mechanics | trip + rest + return (about 100 team-ticks; resource rests are longer) | wear x (1 - 0.30), time-since-rest reset to 0, equipment resupplied | `wear_rest_reduction` = 30% (existing) |
+| **PREVENT_FIELD** (in-field maintenance, no trip) | the team stops where it is for the maintenance time, keeps its task, makes no progress meanwhile | **the field-repair time: uniform 34-102 ticks, mean 68 (0.68 h, source S3)**; there is no figure for routine maintenance, so I use the repair figure (A10) | **wear only**: wear x (1 - 0.30). It does not reset time-since-rest and does not resupply equipment, so it acts on the mobility hazard only. | wear reduction = **`wear_rest_reduction` = 30%**, the existing constant for routine maintenance (the code comment in `fault_injector.c` calls a rest without a fault "routine maintenance"); **not** the 60% `wear_repair_reduction`, which is for repairing an actual fault. Always completes (A11). |
+
+Both reuse the field-repair stationary-hold mechanism (section 1), so evaluators excuse the hold
+exactly as for a field repair. An option is selectable with `--planner-prevent=none|rest|field|both`
+(default `none`; the pre-registered runs say which is used). The report gives the hazard-oracle
+headroom with **each option available separately and with both**. A real model could supply the
+forecast later (the retrained AI, section 7).
 
 **Predicted result.** The preventable part of the hazard is only the wear/time-since-rest part
 (the Step 3 model was set so that wear is the attributed cause of 30-60% of mobility onsets,
 `docs/CAUSAL_FAULT_MODEL.md`, a tuned value; S6 suggests most real faults are random). At stress 7, P(fault in the next hour) is about 45% for mobility already, and
 a rest lowers the hazard by perhaps a third, so the gain is about 0.15 x C_fault per class, while
-the trip plus rest plus return costs on the order of 100 team-ticks. I expect PREVENT to be
-rarely chosen and the hazard-oracle headroom to be about 0.
+the trip plus rest plus return costs on the order of 100 team-ticks. For PREVENT_FIELD the gain is smaller still (wear only, mobility only) but so is the cost
+(~68 against ~100+ team-ticks). With the numbers above (mobility hazard ~0.006 per tick at stress 7,
+wear about half of it, 30% removal, H = 100: P falls by about 0.08; fault cost about 50
+team-ticks) the expected benefit is ~4 team-ticks against a cost of ~68, a factor of about 17.
+I expect **neither** option to be chosen more than a handful of times per run and the hazard-oracle
+headroom to be about 0 with each option and with both. This is a prediction, not a measurement.
 
 ## 7. Dataset and labels for the later AI retrain
 
@@ -231,6 +246,10 @@ from sections 1-3; assumptions are marked A and are not changed after seeing res
 | ABORT exclusion | until the incident's current stage completes | A8, assumed |
 | REALLOC exclusion | 30 ticks | the planner's existing cooldown |
 | Forecast horizon H | 100 ticks (1 h) | A9: one shift-hour; matches the planner's rate window; assumed |
+| PREVENT_FIELD time | uniform 34-102 ticks (the field-repair time) | S3 derived; A10 (no routine-maintenance figure exists) |
+| PREVENT_FIELD wear reduction | 30% = `wear_rest_reduction` (routine maintenance) | existing constant |
+| PREVENT_FIELD success | always completes | A11, assumed |
+| `--causal-persist` default | on under the causal profile | user decision |
 | Planner (V, margin, all layers) | exactly as Step 3.5 (V x1, margin 0.25); not re-tuned | pre-registered |
 | Calibration tables | **not refitted on the new dynamics for the headline planner**; see 9.4 | pre-registered |
 | Stress points | 7 and 2, both primary | section 2 |
@@ -246,13 +265,17 @@ World ladder (fixed gates, AI off): Step 3.5 world (`persist` off); `persist`; `
 1. fixed gates, AI off (**F**)
 2. planner, no AI (**P**)
 3. planner + detector oracle (**P-det**)
-4. planner + hazard oracle (**P-haz**)
-5. planner + both oracles (**P-both**)
+4. planner + hazard oracle (**P-haz**), run with each preventive option available: PREVENT only
+   (`rest`), PREVENT_FIELD only (`field`), and both (`both`)
+5. planner + both oracles (**P-both**), with `--planner-prevent=both`
 6. fixed gates + shipped AI, planner + shipped AI (context only)
 
 Paired differences on incidents resolved and victims lost, dev / held-out / pooled, 95% bootstrap
 CIs. Plus the fault-ending breakdown per class (base repair, field repair success, field repair
 failure, natural recovery, escalations) and the active share of team-ticks.
+
+Stress framing in every table: stress 2 first as the realistic headline, stress 7 as the
+harsh-conditions stress test.
 
 Robustness (reported, never used to choose a value): natural-recovery mean x0.5/x2, field time
 x0.5/x2, field success 0.5/0.8, escalation x0.5/x2, base dwell = field time, all on the v1 world,
@@ -271,9 +294,12 @@ seed.
 | 3 | `repair` token alone on the fixed gates | small positive (0 to +2) at stress 7, about 0 at stress 2 | low |
 | 4 | **P minus F** (planner no AI vs fixed gates) | **positive**, +1 to +3 at stress 7; 0 to +1 at stress 2 (CI may include 0) | medium |
 | 5 | **P-det minus P** (detector headroom) | **positive but small**: +0.5 to +2 at stress 7, about 0 at stress 2. The rules already confirm faults in ~10 ticks, so only misses remain. | low |
-| 6 | **P-haz minus P** (forecaster headroom) | **about 0** (at most +1) at both stress points; PREVENT chosen rarely | medium |
+| 6a | **P-haz[rest] minus P** (forecaster headroom, PREVENT available) | **about 0** (at most +1) at both stress points; PREVENT chosen at most a few times per run | medium |
+| 6b | **P-haz[field] minus P** (PREVENT_FIELD available) | **about 0** (at most +1) at both stress points; expected benefit is ~1/17 of the cost at stress 7 and lower at stress 2 | medium |
+| 6c | **P-haz[both] minus P** (both available) | **about 0**; no larger than the larger of 6a and 6b by more than noise | medium |
 | 7 | P-both minus P | about the sum of 5 and 6, so dominated by 5 | low |
-| 8 | Hazard headroom <= detector headroom | yes at both stress points | medium |
+| 8 | Hazard headroom (6c) <= detector headroom (5) | yes at both stress points | medium |
+| 8b | Number of PREVENT / PREVENT_FIELD actions taken per seed | under 2 each at both stress points | low |
 | 9 | Planner + shipped AI minus P | about 0 or negative (the AI is trained on the old model) | medium |
 | 10 | Victims lost | no conclusion expected: intervals include 0 | high |
 | 11 | End causes | most faults end by base repair at stress 7; natural recovery under 10% | medium |
@@ -318,5 +344,17 @@ cannot run here).
   low number; that is itself a finding and is why stress 2 is co-primary.
 * Risk: the S3 derivation (availability to MTTR) is mine and unverified. The robustness runs
   bound its influence but do not remove it.
-* Not decided here, for you: the submitted-build branch edit (section 4), and whether v1 freezes
-  with `persist` on by default.
+* Open questions of the proposal were settled in section 12.
+
+## 12. Decisions (user approval)
+
+1. Stress 2 is the realistic headline (matches the 6-20 h MTBF literature); stress 7 is reported
+   as a harsh-conditions stress test; both stay co-primary. Earlier docs get a note that stress 7
+   was never derived from data.
+2. v1 freezes with `--causal-persist` **on** by default under the causal profile.
+3. `submission/single-board-dk` is not touched. Both action bugs are added to `KNOWN_LIMITATIONS.md`
+   on `feature/causal-faults`, noting they exist in the submitted build and in the default profiles.
+4. A second preventive option, PREVENT_FIELD, is added next to PREVENT (section 6), with a
+   pre-registered prediction for each, and the hazard-oracle headroom reported with each available.
+5. Everything else as proposed. Commit as Harush Temkar, no trailers; push `feature/causal-faults`
+   after the pre-registration commit and again with the results.

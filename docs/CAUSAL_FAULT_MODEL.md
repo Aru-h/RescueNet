@@ -52,6 +52,12 @@ above this, which is why evaluation runs need a stress value.
 **Recommended evaluation stress: 7.** See "Results" for what it does and does
 not match.
 
+> **Note on stress 7 (added in Step 3.6).** The evaluation stress of 7 used since Step 3 was **never
+> derived from data**. At stress 7 the measured mobility and resource MTBFs per team are about 1.7 h
+> and 2.1 h; the field-robot literature quoted in `docs/CAUSAL_FAULT_MODEL.md` (MTBF 6-20 h) matches
+> **stress 1-2** (stress 2: 4.4 h and 6.6 h). From Step 3.6 on, stress 2 is the realistic headline and
+> stress 7 is reported as a harsh-conditions stress test. See `docs/PERSISTENT_FAULTS_PROPOSAL.md`.
+
 ## Behaviour per class
 
 | Class | Onset | Cleared by |

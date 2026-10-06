@@ -5,6 +5,12 @@
 `docs/CAUSAL_PLUMBING_FIXES.md`. What ends a fault and the recovery-action bugs:
 `docs/RECOVERY_ACTION_SEMANTICS.md`.
 
+> **Note on stress 7 (added in Step 3.6).** The evaluation stress of 7 used since Step 3 was **never
+> derived from data**. At stress 7 the measured mobility and resource MTBFs per team are about 1.7 h
+> and 2.1 h; the field-robot literature quoted in `docs/CAUSAL_FAULT_MODEL.md` (MTBF 6-20 h) matches
+> **stress 1-2** (stress 2: 4.4 h and 6.6 h). From Step 3.6 on, stress 2 is the realistic headline and
+> stress 7 is reported as a harsh-conditions stress test. See `docs/PERSISTENT_FAULTS_PROPOSAL.md`.
+
 Setup for every number below: causal profile, `--fault-stress=7`, roads on, true-cost A*,
 all four causal fixes on, 3000 ticks, 20 seeds per set. **Development seeds 1001-1020**
 (the only seeds used for tuning and calibration), **held-out seeds 3001-3020**, pooled = 40

@@ -74,14 +74,34 @@ accepted code-audit findings, implementation notes) is in
     another team usually finishes it later. This applies to every assignment,
     including manual overrides.
 
+13. **ABORT_MISSION and RETURN_TO_SAFE_ZONE do the same thing.** For a team that
+    is working, both release its task and send it to a safe zone
+    (`recovery_dispatch()`, `core/recovery_manager.c`, both call
+    `abandon_task_for_recovery()`). ABORT adds no quarantine of the task and no
+    different team state, so the recovery ladder has two rungs that act
+    identically. Present in every fault profile and in the submitted build
+    (`submission/single-board-dk`). Under the causal profile with the
+    `semantics` fix (`--causal-fixes`, on by default there) ABORT instead
+    releases the task, excludes the team from that incident until its stage
+    completes and leaves the team where it is; the default profiles and the
+    submitted build keep the old behaviour.
+14. **REQUEST_TASK_REALLOCATION never releases the team's task.** It only re-runs
+    the allocator, which already runs every tick and only assigns open work to
+    teams with nothing to do, so the faulted team keeps its task and the action
+    does nothing on a laptop (on a board it adds one redundant allocation
+    round). Present in every fault profile and in the submitted build. Under the
+    causal profile with the `semantics` fix it releases the task (progress kept)
+    and excludes the team from it for 30 ticks so another team takes it.
+    Details, with file and line: `docs/RECOVERY_ACTION_SEMANTICS.md`.
+
 ## D. Dashboard
 
-13. **Manual overrides work only in simulation mode.** Dragging a team onto an
+15. **Manual overrides work only in simulation mode.** Dragging a team onto an
     incident is not available in replay mode or when the dashboard is
     connected to the board. After an override is committed, normal rules
     (such as item 12) still apply.
-14. **Replay take-over needs a matching simulator.** A recording can be taken
+16. **Replay take-over needs a matching simulator.** A recording can be taken
     over only by the same simulator build that made it (same code, AI on or
     off); otherwise the dashboard refuses rather than show a diverging run.
-15. **Tested on macOS and Linux.** Windows is not tested. Absolute results
+17. **Tested on macOS and Linux.** Windows is not tested. Absolute results
     differ slightly between platforms for the same seed.

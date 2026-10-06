@@ -172,6 +172,12 @@ reads `navigable` and `travelCost` only, matching `core/path.c`.
 > the oracle-detector collapse and about two thirds of the blind-A* REROUTE loss;
 > the investigations at the end of this file describe what they fix.
 
+> **Note on stress 7 (added in Step 3.6).** The evaluation stress of 7 used since Step 3 was **never
+> derived from data**. At stress 7 the measured mobility and resource MTBFs per team are about 1.7 h
+> and 2.1 h; the field-robot literature quoted in `docs/CAUSAL_FAULT_MODEL.md` (MTBF 6-20 h) matches
+> **stress 1-2** (stress 2: 4.4 h and 6.6 h). From Step 3.6 on, stress 2 is the realistic headline and
+> stress 7 is reported as a harsh-conditions stress test. See `docs/PERSISTENT_FAULTS_PROPOSAL.md`.
+
 > **Provenance caveat (added in Step 3.5).** The held-out range 2001-2020 used here, and in Steps
 > 3 and 3.1 (`docs/CONSEQUENTIAL_ROADS.md`), overlaps the seeds 2001-2008 the AI's thresholds were
 > tuned on (`ml/MODEL_REPORT.md` section 3). The held-out and pooled columns of every **AI-on**
