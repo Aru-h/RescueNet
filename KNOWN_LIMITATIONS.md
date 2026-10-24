@@ -113,3 +113,20 @@ accepted code-audit findings, implementation notes) is in
     (3D: outside the map, one cell wide); in 2.5D the glyph stands upright on
     its cell and can cover part of a neighbouring cell on screen. Recordings
     made before the field existed show no gateways.
+20. **Some evacuation gateways cannot be reached by some teams (world
+    generation, not changed in v1).** An audit of seeds 1001-1100 (300
+    gateways) with the simulator's own pathfinder (`find_path_steps`, the A*
+    teams use, at world creation) found every gateway reachable from at least
+    one safe zone, but not always from all of them:
+    - 21 of 300 gateways are unreachable from some safe zone (seeds 1027,
+      1034, 1041, 1047, 1050, 1051, 1069);
+    - 7 of 300 are unreachable from some team's starting position (seeds 1034,
+      1047, 1069). Worst cases: seed 1034 gateway 0 at (18,35), reachable from
+      only 1 of 10 team starts; seed 1047 gateway 1 at (35,21), reachable from
+      none of the 10 team starts (one safe zone can reach it).
+    This is a property of how `core/environment.c` places gateways (a
+    non-water border cell, then a road is carved to the nearest road; the
+    result can still sit on a part of the map a team's start is cut off from,
+    for example by the river). It is not a dashboard issue and was left
+    unchanged so every dataset stays identical. A candidate for an opt-in world
+    revision that picks gateways reachable from every safe zone.
