@@ -106,3 +106,10 @@ accepted code-audit findings, implementation notes) is in
     incident. It starts empty when the dashboard connects to an incident
     that is already partly worked, and shows nothing when the remaining work
     is sent as 0.
+19. **Evacuation gateway markers show where an exit is, nothing more.** The
+    simulator sends each gateway's position only (STATICENV `gateways`), so the
+    card has no evacuee counts and nothing says whether a gateway is reachable
+    for a given team. In 2D and 3D the marker stays inside its own edge cell
+    (3D: outside the map, one cell wide); in 2.5D the glyph stands upright on
+    its cell and can cover part of a neighbouring cell on screen. Recordings
+    made before the field existed show no gateways.

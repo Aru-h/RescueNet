@@ -1778,6 +1778,14 @@ function setReplayTerrainMap(map) { terrainMap = map; }
 // simulator re-sends it when buildings are destroyed). Replay: the one that
 // was current at the frame being replayed (Replay.envAt), so scrubbing shows
 // damage as it was then - and 2D, 2.5D and 3D always show the same city.
+// The seed of the run being shown (a replay's header, else the live run's): the 3D terrain ring is seeded from it,
+// so a run always gets the same landscape. null when unknown (the 3D view then derives one from the layout).
+let liveRunSeed = null;
+function terrainSeed() {
+  if (window.Replay && Replay.isActive() && Replay.header && Number.isFinite(+Replay.header.seed)) return +Replay.header.seed;
+  return Number.isFinite(liveRunSeed) ? liveRunSeed : null;
+}
+
 function currentEnvironment() {
   if (window.Replay && Replay.isActive() && Replay.envAt) {
     const env = Replay.envAt(Replay.currentIndex);
@@ -1804,7 +1812,7 @@ function drawFrame(frame, skipInspector) {
     // #mapCanvas (2D) is left clear for the drag/drop overlays. Hit
     // targets come back in the same shape as every other mode's.
     mapHitTargets.push(...map3d.render({
-      env, terrainMap, frame, fogViewMode, selectedMarker,
+      env, terrainMap, frame, fogViewMode, selectedMarker, seed: terrainSeed(),
       teamColors: TEAM_COLORS, outlineBuildingId: mapCardBuildingId,
     }));
   } else if (mapCamera.state.viewMode === "iso") {
@@ -1824,6 +1832,7 @@ function drawFrame(frame, skipInspector) {
     MapRender.drawEpicenter(mapCtx, mapCamera, env);
     MapRender.drawHazardCells(mapCtx, mapCamera, frame.hazard_cells || []);
     mapHitTargets.push(...MapRender.drawSafezones(mapCtx, mapCamera, frame.safezones));
+    mapHitTargets.push(...MapRender.drawGateways(mapCtx, mapCamera, env));   // evacuation exits on the map edge
     // Operator view: hide anything the system itself hasn't discovered
     // yet (mirrors team_can_accept_incident()'s fog-of-war gate in the
     // allocator - an operator watching this board in real life would
@@ -2018,7 +2027,7 @@ function handleMapClick(evt) {
   if (suppressNextClick) { suppressNextClick = false; return; }
   const { sx, sy } = screenPointFromEvent(evt);
   const best = hitTestAt(sx, sy);
-  selectedMarker = best ? { type: best.type, id: best.data.id } : null;
+  selectedMarker = best && best.type !== "gateway" ? { type: best.type, id: best.data.id } : null;   // a gateway shows its card but is not a selectable team / incident
   if (window.DashboardSelection) DashboardSelection.set(selectedMarker);
   renderInspector();
   updateCamButton();
@@ -2221,11 +2230,17 @@ function buildSafezoneCardHTML(d) {
   return `<div class="map-card-header">Safe Zone #${d.id}</div>${mapCardRow("Occupancy", `${d.evacuees} / ${d.capacity}`)}`;
 }
 
+function buildGatewayCardHTML(d) {
+  return `<div class="map-card-header">Evacuation gateway #${d.id}</div>${mapCardRow("Position", `(${d.x}, ${d.y})`)}` +
+    `<div style="margin-top:4px;color:var(--muted);font-size:11.5px;max-width:240px;">Teams carry evacuees here from safe zones to leave the map.</div>`;
+}
+
 function buildMapCardHTML(hit) {
   const d = hit.data;
   if (hit.type === "team") return buildTeamCardHTML(d);
   if (hit.type === "incident") return (d.groupIncidents && d.groupIncidents.length > 1) ? buildIncidentGroupCardHTML(d) : buildIncidentCardHTML(d);
   if (hit.type === "safezone") return buildSafezoneCardHTML(d);
+  if (hit.type === "gateway") return buildGatewayCardHTML(d);
   return "";
 }
 
@@ -2302,7 +2317,7 @@ function mapCardDockInfo(hit) {
 }
 function mapCardLabel(hit) {
   const d = hit.data;
-  return hit.type === "team" ? `Team ${d.i !== undefined ? d.i : d.id}` : hit.type === "incident" ? `Incident #${d.id}` : "Safe zone";
+  return hit.type === "team" ? `Team ${d.i !== undefined ? d.i : d.id}` : hit.type === "incident" ? `Incident #${d.id}` : hit.type === "gateway" ? `Gateway #${d.id}` : "Safe zone";
 }
 // Bring the camera to a marker: fly in 3D, pan in 2D / 2.5D.
 function goToMarker(hit) {
@@ -2956,6 +2971,7 @@ async function runLive(takeover) {
     fault_profile: document.getElementById("faultProfile").value,
     tick_delay_ms: parseInt(document.getElementById("tickDelay").value || "150"),
   };
+  liveRunSeed = takeover && window.Replay && Replay.header && Number.isFinite(+Replay.header.seed) ? +Replay.header.seed : body.seed;
 
   liveAbortController = new AbortController();
   telemetryReset();
@@ -3112,6 +3128,7 @@ DetectionTimeline.init(document.getElementById("timelineCanvas"), document.getEl
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:6px;height:6px;background:#f85149;border-radius:50%;vertical-align:0px;"></span></span><span>Team has an injected fault</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:7px;height:7px;background:#a371f7;transform:rotate(45deg);vertical-align:0px;"></span></span><span>Team manually overridden by you</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:9px;height:9px;border:1.5px solid #3fb950;"></span></span><span>Safe zone</span></div>
+          <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid #2fe0a0;"></span></span><span><b>Evacuation gateway</b> (EXIT n): where teams take evacuees off the map from safe zones. It sits on the map edge, drawn as a tunnel mouth in a hill with an arrow pointing out (2D / 2.5D: a mountain glyph); in 3D a green beacon and label stand on the rock rim, and the label hides when zoomed out.</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:9px;background:rgba(158,178,207,0.7);vertical-align:-1px;"></span></span><span>Road (brighter = arterial)</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:9px;background:repeating-linear-gradient(45deg,rgba(6,9,13,0.9),rgba(6,9,13,0.9) 2px,rgba(230,237,243,0.4) 2px,rgba(230,237,243,0.4) 3px);vertical-align:-1px;"></span></span><span>Blocked / rubble</span></div>
           <div class="legend-row"><span class="legend-sym"><span style="display:inline-block;width:12px;height:9px;border:1px dashed rgba(248,81,73,0.75);vertical-align:-1px;position:relative;">&#10005;</span></span><span>Road blocked</span></div>

@@ -396,6 +396,79 @@
     return hits;
   }
 
+
+  // ---------- evacuation gateways ----------
+  // The map-edge exits where teams take evacuated people off the map. They
+  // come from STATICENV's "gateways" ([{id,x,y}]); recordings made before
+  // that field existed simply have none, and nothing is drawn.
+  const GATEWAY_COLOR = "#2fe0a0"; // mint: clearly apart from the safe zones' leaf green (#3fb950)
+  function gatewayList(env) {
+    const g = env && env.gateways;
+    if (!Array.isArray(g)) return [];
+    return g.filter((e) => e && Number.isFinite(e.x) && Number.isFinite(e.y)).map((e) => ({ id: e.id, x: e.x, y: e.y }));
+  }
+  // The unit vector (world x, y) from the map interior out through the nearest edge.
+  function gatewayOutward(g, W, H) {
+    const dN = g.y, dS = H - 1 - g.y, dW = g.x, dE = W - 1 - g.x, m = Math.min(dN, dS, dW, dE);
+    if (m === dN) return { x: 0, y: -1 };
+    if (m === dS) return { x: 0, y: 1 };
+    if (m === dW) return { x: -1, y: 0 };
+    return { x: 1, y: 0 };
+  }
+  // A mountain with a tunnel arch, drawn inside the gateway's own edge cell (so it
+  // never covers a neighbouring cell - on a river bank that could be water), with
+  // an arrow pointing off the map and the "EXIT n" label OUTSIDE the map edge, where
+  // there is nothing to cover. `box` comes from gatewayGlyphBox(); `dir` is the unit
+  // screen vector pointing out of the map.
+  function drawGatewayGlyph(ctx, box, dir, id, label, view) {
+    const s = box.size, cx = box.cx, cy = box.cy;
+    if (s < 5) return;                                                            // far too small to read: draw nothing rather than a smudge
+    const rock = "#26332d", rim = "rgba(3,5,10,0.9)", lw = Math.max(1, Math.min(1.6, s / 9));
+    ctx.save(); ctx.lineJoin = "round"; ctx.lineCap = "round";
+    const x0 = cx - s / 2, y1 = cy + s / 2;                                        // the box: base line y1
+    const peak = (px, w, h) => { ctx.beginPath(); ctx.moveTo(px - w / 2, y1); ctx.lineTo(px, y1 - h); ctx.lineTo(px + w / 2, y1); ctx.closePath(); };
+    const bigX = x0 + s * 0.6, bigW = s * 0.78, bigH = s * 0.92, smlX = x0 + s * 0.24, smlW = s * 0.5, smlH = s * 0.56;
+    ctx.lineWidth = lw + 2.2; ctx.strokeStyle = rim; peak(smlX, smlW, smlH); ctx.stroke(); peak(bigX, bigW, bigH); ctx.stroke();
+    ctx.lineWidth = lw; ctx.strokeStyle = GATEWAY_COLOR; ctx.fillStyle = rock;
+    peak(smlX, smlW, smlH); ctx.fill(); ctx.stroke(); peak(bigX, bigW, bigH); ctx.fill(); ctx.stroke();
+    const aw = s * 0.2, ah = s * 0.34;                                             // tunnel mouth at the foot of the big peak
+    ctx.beginPath(); ctx.moveTo(bigX - aw, y1); ctx.lineTo(bigX - aw, y1 - ah + aw); ctx.arc(bigX, y1 - ah + aw, aw, Math.PI, 0); ctx.lineTo(bigX + aw, y1); ctx.closePath();
+    ctx.fillStyle = "#03050a"; ctx.fill(); ctx.lineWidth = Math.max(1, lw * 0.8); ctx.strokeStyle = GATEWAY_COLOR; ctx.stroke();
+    // arrow out of the map, just beyond the edge (kept on the canvas)
+    const L = Math.max(5, s * 0.34), Wd = L * 0.6, ppx = -dir.y, ppy = dir.x, vw = view.state.viewW, vh = view.state.viewH;
+    let ex = cx + dir.x * (s * 0.5 + L * 0.55), ey = cy + dir.y * (s * 0.5 + L * 0.55);
+    ex = Math.max(L * 0.7, Math.min(vw - L * 0.7, ex)); ey = Math.max(L * 0.7, Math.min(vh - L * 0.7, ey));
+    ctx.beginPath(); ctx.moveTo(ex + dir.x * L * 0.6, ey + dir.y * L * 0.6); ctx.lineTo(ex - dir.x * L * 0.4 + ppx * Wd, ey - dir.y * L * 0.4 + ppy * Wd); ctx.lineTo(ex - dir.x * L * 0.4 - ppx * Wd, ey - dir.y * L * 0.4 - ppy * Wd); ctx.closePath();
+    ctx.fillStyle = GATEWAY_COLOR; ctx.fill(); ctx.lineWidth = 1.2; ctx.strokeStyle = rim; ctx.stroke();
+    if (label && s >= 16) {                                                        // hidden when zoomed out (no clutter) or when it would not fit on the canvas
+      ctx.font = "bold 10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      const t = "EXIT " + id, tw = ctx.measureText(t).width, th = 11, off = s * 0.5 + L * 1.2 + (Math.abs(dir.y) > 0.5 ? th / 2 : tw / 2) + 3;
+      const lx = cx + dir.x * off, ly = cy + dir.y * off;
+      if (lx - tw / 2 >= 0 && lx + tw / 2 <= vw && ly - th / 2 >= 0 && ly + th / 2 <= vh) {
+        ctx.lineWidth = 3; ctx.strokeStyle = rim; ctx.strokeText(t, lx, ly); ctx.fillStyle = GATEWAY_COLOR; ctx.fillText(t, lx, ly);
+      }
+    }
+    ctx.restore();
+  }
+  // The glyph's footprint on screen: the gateway's own cell (2D: exactly the cell; 2.5D: a little smaller, the
+  // upright glyph is drawn standing on it). Also returned to tests, which check it against the water cells.
+  function gatewayGlyphBox(view, g) {
+    const W = view.state.worldW, H = view.state.worldH, o = gatewayOutward(g, W, H);
+    const a = view.worldToScreen(g.x, g.y, 0), b = view.worldToScreen(g.x + o.x, g.y + o.y, 0);
+    let dx = b.x - a.x, dy = b.y - a.y; const px = Math.hypot(dx, dy) || 1; dx /= px; dy /= px;
+    const iso = view.state.viewMode === "iso", size = iso ? px * 0.8 : px;
+    return { cx: a.x, cy: a.y, size, px, dir: { x: dx, y: dy }, x0: a.x - size / 2, x1: a.x + size / 2, y0: a.y - size / 2, y1: a.y + size / 2 };
+  }
+  function gatewayHit(g) { return { type: "gateway", id: g.id, wx: g.x, wy: g.y, wr: 0.7, low: true, data: g }; }   // low: never wins over a team / incident
+  // 2D: drawn on the ground layer; returns the hit targets.
+  function drawGateways(ctx, view, env) {
+    return gatewayList(env).map((g) => {
+      const box = gatewayGlyphBox(view, g);
+      drawGatewayGlyph(ctx, box, box.dir, g.id, true, view);
+      return gatewayHit(g);
+    });
+  }
+
   // Visible incidents (not resolved; in operator view not undiscovered),
   // grouped one cluster per building_id (incidents with no building are
   // singleton clusters), members and clusters both sorted worst-first.
@@ -1190,6 +1263,14 @@
     const markers = []; // { key, z0, draw(), over() , ...} - ordered below
     const hidden = [];  // markers to re-draw as a faded outline on top
 
+    // Evacuation gateways: upright objects on the map edge like the rest.
+    gatewayList(env).forEach((g) => {
+      const box = gatewayGlyphBox(view, g);
+      const foot = footingZ(prep, g.x, g.y);
+      markers.push({ key: g.x + g.y, z0: foot - 1, kind: 0, draw: () => drawGatewayGlyph(ctx, box, box.dir, g.id, true, view), occ: occluders(prep, slope, g.x, g.y, 0.8) });
+      hits.push(gatewayHit(g));
+    });
+
     // Incidents.
     model.incidents.forEach((mi) => {
       const { members, inc, wx, wy, worldSize, foot, headZ, color, isSel } = mi;
@@ -1392,7 +1473,8 @@
         dist = Math.sqrt(dx * dx + dy * dy);
         limit = h.wr;
       }
-      if (dist <= limit && dist < bestDist) { best = h; bestDist = dist; }
+      const rank = dist + (h.low ? 1e6 : 0);        // a "low" target (gateway) only wins when no other target is in reach
+      if (dist <= limit && rank < bestDist) { best = h; bestDist = rank; }
     }
     return best;
   }
@@ -1400,6 +1482,7 @@
   global.MapRender = {
     drawGrid, drawTerrain, drawBuildings, drawEpicenter, drawHazardCells,
     drawSafezones, drawIncidents, drawTeams, hitTestWorld,
+    gatewayList, gatewayOutward, drawGateways, drawGatewayGlyph, gatewayGlyphBox, GATEWAY_COLOR,
     buildingFootprintWorldRect,
     drawIsoScene, markerScreenGeom, buildingHeight, setRedrawCallback,
     // Shared with the WebGL view (map-view3d.js) so 3D reuses this data
