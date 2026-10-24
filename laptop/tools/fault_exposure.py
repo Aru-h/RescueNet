@@ -108,6 +108,10 @@ def run_seed(tron, profile, seed, ticks, extra):
         per_team_any = {}
         per_team_ticks = {}
         episodes = {c: [] for c in CLASSES}
+        # Teams in service (Step 4): per team-tick, in this priority order: resting (status RESTING), returning
+        # (heading to a rest zone), faulted (a mobility or resource fault is active), else in service, split into
+        # working (en route or on scene) and available.
+        svc = {"resting": 0, "returning": 0, "faulted": 0, "working": 0, "available": 0}
         open_start = {}
         last_cycle = {}
         with open(os.path.join(work, "tron_snapshot_dataset.csv"), newline="") as fh:
@@ -118,6 +122,17 @@ def run_seed(tron, profile, seed, ticks, extra):
                 cycle = int(row["cycle"])
                 flags = [int(row[f"fault_active_{c}"]) for c in CLASSES]
                 team_ticks += 1
+                st_now = int(row["status"])
+                if st_now == 3:
+                    svc["resting"] += 1
+                elif int(row["heading_to_rest"]):
+                    svc["returning"] += 1
+                elif flags[0] or flags[2]:
+                    svc["faulted"] += 1
+                elif st_now in (1, 2):
+                    svc["working"] += 1
+                else:
+                    svc["available"] += 1
                 per_team_ticks[team] = per_team_ticks.get(team, 0) + 1
                 if any(flags):
                     any_active += 1
@@ -148,7 +163,7 @@ def run_seed(tron, profile, seed, ticks, extra):
             "seed": seed, "attribution": attribution, "incidents_resolved": resolved, "team_ticks": team_ticks,
             "active": active, "any_active": any_active,
             "worst_team_any": max((per_team_any.get(t, 0) / n for t, n in per_team_ticks.items()), default=0.0),
-            "episodes": episodes, "causal_diag": causal, "world": world, "actions": actions, "roads": roads, "envlabel": envlabel, "planner": planner, "persist": persist,
+            "service": svc, "episodes": episodes, "causal_diag": causal, "world": world, "actions": actions, "roads": roads, "envlabel": envlabel, "planner": planner, "persist": persist,
         }
 
 
@@ -220,7 +235,8 @@ def summarise(results):
         out["planner"] = {k: sum(p.get(k, 0.0) for p in planners) / len(planners) for k in keys}
     out["per_seed"] = {str(r["seed"]): {"incidents_resolved": r["incidents_resolved"],
                                         "victims_lost": (r["world"][2] if r["world"] else None),
-                                        "planner": r.get("planner") or {}, "persist": r.get("persist") or {}} for r in results}
+                                        "planner": r.get("planner") or {}, "persist": r.get("persist") or {},
+                                        "service": {k: v / r["team_ticks"] for k, v in r["service"].items()}} for r in results}
     roads = [r["roads"] for r in results if r["roads"] and r["roads"][0]]
     if roads:
         out["roads"] = {
