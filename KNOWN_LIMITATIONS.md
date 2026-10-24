@@ -97,8 +97,11 @@ accepted code-audit findings, implementation notes) is in
 15. **Field repair is implemented but almost never completes.** Under the causal profile
     (`--causal-persist=on`, the default) LOCAL_RECOVERY on a working team starts a field repair of 34-102 ticks, but the
     rule gates escalate to RETURN_TO_SAFE_ZONE within a few ticks and cancel it (at stress 7: 134.7 repairs started per
-    seed, 0.2 completed). Whether field repair would help if the gates held a repair in progress has not been tested
-    (`docs/PERSISTENT_FAULTS_RESULTS.md`).
+    seed, 0.2 completed). Step 3.7 tested a gate change that holds a repair in progress (opt-in token
+    `--causal-fixes=...,hold-repair`): mobility repairs then complete (25.6 per seed at stress 7) but the fixed gates resolve
+    3.12 fewer incidents and lose 5.05 more victims per seed at stress 7, so it is not part of the default world.
+    Resource repairs still almost never complete because equipment runs out during the hold, and a hold does not stop the
+    working costs (`docs/HOLD_REPAIR.md`, `docs/PERSISTENT_FAULTS_RESULTS.md`).
 16. **The persistent-fault parameters are derived or assumed, not measured.** The 10.8 h natural-recovery tail and the
     0.68 h field-repair time come from my derivation from a secondary source's availability figures; the 2/3
     field-repair success rate and the 6-20 h MTBF come from search summaries of Carlson and Murphy (2005). None were
