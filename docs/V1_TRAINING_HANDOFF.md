@@ -1,6 +1,5 @@
 # Training a model for the v1 world: hand-off notes
 
-> **DRAFT (committed mid-run).** Section 8 ("what a new model must beat") is filled in from the Step 4 sweep when it finishes, and the `--sets` option used in section 7 is added to `final_eval.sh` after the sweep (a running bash script must not be edited). Everything else is final.
 
 For the owner of the fault-predictor model. **Nothing here has been run for a new model**: no training data was generated,
 no model was trained, calibrated or exported, `ml/` and the shipped weights are untouched. These are the commands, seed
@@ -95,7 +94,7 @@ additional, outside check: score the exported model on them in closed loop (sect
   (mean 1084 ticks), and an unremedied one can escalate a severity step. In the old data they ended on a 6-14 tick timer.
   Consequences: far more positive rows per class, long runs of nearly identical consecutive rows (the effective sample
   size is much smaller than the row count), labels that stay on while the team rests or returns to base, and strong
-  dependence on the stress level. Class exposure and base rates per stress level are in section 8.
+  dependence on the stress level. Class exposure per stress level is in section 8.
 * **About half of all team-ticks are resting even with no faults.** At stress 2 a team spends roughly 45% of its time
   resting and about 40% in service (working or available). A model can look good by learning "resting" cues; evaluate
   closed-loop, not only by offline AUC.
@@ -147,7 +146,34 @@ into `core/`. The header must define the same symbols as `core/fault_predictor_w
 
 ## 8. What a new model must beat
 
-*(filled in from the Step 4 results, `docs/FINAL_EVALUATION.md`; see that file for intervals and limits)*
+From `docs/FINAL_EVALUATION.md` (v1 world, 40 seeds pooled, 95% paired intervals). The shipped model is the **context** row, not a
+fair baseline: it was trained on the old fault model. Incidents resolved per seed:
+
+| Stress | Fixed gates F | Planner P | Planner + perfect detector PD (ceiling) | Shipped model on fixed gates FA | Shipped model on planner PA |
+|---|---|---|---|---|---|
+| 1 | 44.30 | 44.45 | 45.60 | 44.48 | 44.08 |
+| 2 (realistic headline) | 42.52 | 42.33 | 42.67 | 42.08 | 42.48 |
+| 3.5 | 39.83 | 40.23 | 40.12 | 40.27 | 40.27 |
+| 7 (harsh stress test) | 34.23 | 33.25 | 35.00 | 35.90 | 34.48 |
+
+What these numbers say a model can and cannot win:
+
+* **Ceiling.** The detector-oracle headroom (PD minus P) is +1.15 [+0.15, +2.17] at stress 1, +0.35 [-0.53, +1.25] at stress 2,
+  -0.10 [-1.23, +1.02] at stress 3.5 and +1.75 [+0.47, +2.98] at stress 7 incidents per seed. At the realistic stress 2 there is
+  essentially nothing for any detector to win (the interval includes 0); the largest possible gain anywhere is about 5%.
+* **The shipped model's gain**, to be matched or exceeded: at stress 7, +1.68 [+0.05, +3.12] on the fixed gates (FA minus F)
+  and +1.23 [+0.20, +2.25] on the planner (PA minus P); at stress 1, 2 and 3.5 its gain is indistinguishable from 0 (point
+  estimates -0.45 to +0.45). A new model has to beat these in the same rows, and at stress 7 there is only about +0.5
+  between the shipped model's planner gain and the ceiling.
+* **Noise floor.** Differences below about one incident per seed are not resolvable with 40 seeds. A model that scores a
+  point estimate above the shipped one but with an interval that overlaps it has not shown an improvement.
+* **Victims lost** shows no reliable change anywhere (every pooled interval includes 0); do not claim a victims-lost gain from
+  one comparison.
+* **Fault load** to expect in your training data (fixed gates, share of team-ticks with the fault active): mobility 6.9 /
+  11.8 / 17.3 / 26.2%, resource 3.5 / 6.0 / 9.4 / 14.8%, communication about 1.0-1.3%, environment (route-touch label) 1.9 /
+  3.6 / 5.6 / 8.7%, mission about 0%, at stress 1 / 2 / 3.5 / 7. Mission is essentially never active; do not expect to learn it.
+* Report your own candidate with `final_eval.sh` (section 7) and the held-out seeds only once, after thresholds and
+  calibration are fixed on validation and development seeds.
 
 ## 9. Things that are easy to get wrong
 

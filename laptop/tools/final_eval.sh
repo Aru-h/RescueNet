@@ -30,7 +30,9 @@
 #   --figures DIR         also write PNG figures there (default: $OUT/figures)
 #   --ref-3.6 DIR         compare stress 2 and 7 rows with Step 3.6 result files (D_/H_ f p pdet f_ai p_ai) per seed
 #   --jobs N              worker processes per run (default: all cores)
-#   --dev-seeds A-B, --held-seeds A-B   seed ranges (testing only; the calibrate command refuses seeds outside 1001-1020)
+#   --dev-seeds A-B, --held-seeds A-B   seed ranges (the calibrate command refuses seeds outside 1001-1020)
+#   --sets D|H|DH        which seed sets to run (default DH). `--dev-seeds 5301-5340 --sets D` evaluates on validation seeds only,
+#                         e.g. to pick thresholds without touching the held-out seeds
 #
 # `calibrate` refits core/planner_calibration.h-style tables for the candidate model on DEVELOPMENT seeds only and writes
 # $OUT/planner_calibration.h (it never touches core/).  Run it, then pass that file as --calib-header.  It is documented
@@ -44,6 +46,7 @@ if [[ $# -gt 0 && "$1" =~ ^(run|calibrate|report)$ ]]; then CMD=$1; shift; fi
 
 MODEL_HEADER=""; THRESHOLDS=""; CALIB_HEADER=""; TAG=""; OUT=""; STRESS="1 2 3.5 7"; EXTRA=""
 REFERENCE=1; FIGDIR=""; REF36=""; JOBS="$(getconf _NPROCESSORS_ONLN)"; CALIB_STRESS="7"
+SETS="DH"
 DEV_SEEDS="1001-1020"; HELD_SEEDS="3001-3020"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --figures) FIGDIR="$2"; shift 2;;
     --ref-3.6) REF36="$2"; shift 2;;
     --jobs) JOBS="$2"; shift 2;;
+    --sets) SETS="$2"; shift 2;;
     --dev-seeds) DEV_SEEDS="$2"; shift 2;;
     --held-seeds) HELD_SEEDS="$2"; shift 2;;
     -h|--help) sed -n '2,45p' "$0"; exit 0;;
@@ -131,12 +135,12 @@ sweep() {
   for st in $STRESS; do
     echo "### stress $st"
     while IFS='|' read -r name bin args; do
-      for set in D H; do run_one "$st" "$name" "$bin" "$set" "$args" causal; done
+      for set in $(echo "$SETS" | grep -o .); do run_one "$st" "$name" "$bin" "$set" "$args" causal; done
     done < <(systems)
   done
   if [[ $REFERENCE -eq 1 ]]; then
     echo "### reference: no faults (fixed gates)"
-    for set in D H; do run_one 0 F noai "$set" "" none; done
+    for set in $(echo "$SETS" | grep -o .); do run_one 0 F noai "$set" "" none; done
   fi
 }
 

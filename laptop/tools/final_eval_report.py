@@ -203,6 +203,39 @@ def main():
         res["headroom_vs_service"] = {"stress": ok, "teams_in_service": xs, "headroom": ys, "rho_stress": rho_str,
                                       "rho_service": rho_cap}
 
+    # ---- gap to the no-fault reference (descriptive)
+    if p0:
+        w("## How much of the loss to faults a perfect detector recovers (descriptive, not pre-registered)\n")
+        w("Incidents resolved per seed: no-fault reference (fixed gates) minus the planner, and the detector headroom as a share of that gap. "
+          "Caveat: the reference is `--fault-profile=none`, the original world without the causal profile's roads, aftershocks and "
+          "route damage, so part of this gap is not caused by operational faults.\n")
+        w("| Stress | No faults | Planner P | Loss to faults | Detector headroom PD minus P | Share of the loss recovered |")
+        w("|---|---|---|---|---|---|")
+        for st in stresses:
+            pp = level(out, st, "P", "incidents_resolved")[2]
+            if pp and st in head:
+                gap = mean(p0) - mean(pp)
+                w(f"| {st} | {mean(p0):.2f} | {mean(pp):.2f} | {gap:.2f} | {head[st][0]:+.2f} | {100 * head[st][0] / gap:.0f}% |")
+        w("")
+
+    # ---- fault exposure by class (fixed gates)
+    w("## Fault exposure by class (fixed gates F; share of team-ticks with the fault active, development and held-out averaged)\n")
+    w("| Stress | mobility | communication | resource | environment (route-touch label) | mission |")
+    w("|---|---|---|---|---|---|")
+    exposure = {}
+    for st in stresses:
+        vals = []
+        for s in "DH":
+            pth = os.path.join(out, f"s{st}", f"{s}_F.json")
+            if os.path.exists(pth):
+                vals.append(json.load(open(pth)).get("classes", {}))
+        if vals:
+            row = [mean([v[c]["exposure"] for v in vals if c in v]) for c in ("mobility", "communication", "resource", "environment", "mission")]
+            exposure[st] = row
+            w(f"| {st} | " + " | ".join(f"{100 * x:.1f}%" for x in row) + " |")
+    res["exposure"] = exposure
+    w("")
+
     # ---- fault ending
     w("## What ends a fault (fixed gates F, mean per seed over all seeds)\n")
     w("| Stress | Class | Onsets | Base repair (go-home) | Field repair | Natural recovery | Still active |")
@@ -265,7 +298,7 @@ def main():
             lo, hi = ci(r)
             return mean(r), mean(r) - lo, hi - mean(r)
 
-        sx = [float(s) for s in ok]
+        sx = list(range(len(ok)))   # evenly spaced stress levels (labelled below)
         fig, ax = plt.subplots(1, 2, figsize=(11, 4.2), constrained_layout=True)
         for (base, other, lab, c, mk) in (("P", "PD", "detector headroom (planner + oracle minus planner)", col["PD"], "o"),
                                           ("F", "FA", "AI gain on fixed gates *", col["FA"], "s"),
@@ -283,7 +316,6 @@ def main():
         for x_ in ax:
             x_.axhline(0, color="#888", lw=0.8)
             x_.set_ylabel("paired difference, incidents / seed (95% CI)", fontsize=9)
-        ax[0].set_xscale("log")
         ax[0].set_xticks(sx)
         ax[0].set_xticklabels([str(s) for s in ok])
         ax[0].legend(fontsize=8, loc="upper left")
@@ -299,13 +331,13 @@ def main():
                 if p:
                     random.seed(0)
                     bs = sorted(mean([random.choice(p) for _ in p]) for _ in range(2000))
-                    xs_.append(float(st)); ys_.append(mean(p)); lo_.append(mean(p) - bs[50]); hi_.append(bs[1949] - mean(p))
+                    xs_.append(float(stresses.index(st))); ys_.append(mean(p)); lo_.append(mean(p) - bs[50]); hi_.append(bs[1949] - mean(p))
             if xs_:
                 ax.errorbar(xs_, ys_, yerr=[lo_, hi_], marker="o", capsize=2, color=col[sy],
                             label=f"{sy} {LONG[sy]}" + (" *" if sy in AI_SYSTEMS else ""))
         if p0:
             ax.axhline(mean(p0), color="#888", ls="--", lw=0.8, label="no faults (reference)")
-        ax.set_xscale("log"); ax.set_xticks([float(s) for s in stresses]); ax.set_xticklabels(stresses)
+        ax.set_xticks(list(range(len(stresses)))); ax.set_xticklabels(stresses)
         ax.set_xlabel("fault stress (x baseline)"); ax.set_ylabel("incidents resolved per seed (mean, 95% CI)")
         ax.legend(fontsize=7)
         fig.savefig(os.path.join(a.figures, "incidents_vs_stress.png"), dpi=150)
