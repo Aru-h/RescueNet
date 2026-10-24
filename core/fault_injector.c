@@ -42,6 +42,10 @@ static uint32_t s_causal_last_rest_tick[NUM_TEAMS];
 static CausalPersistStats_t s_persist_stats;
 static uint8_t s_field_kind[NUM_TEAMS];               /* 0 none, 1 mobility repair, 2 resource repair, 3 maintenance */
 static uint32_t s_field_end[NUM_TEAMS];
+static uint8_t s_field_tried[NUM_TEAMS][2];            /* hold-repair H2: a repair was attempted on the current mobility / resource fault */
+static uint8_t s_hold_cause[NUM_TEAMS];                /* hold-repair: what would end the running repair (attribution only) */
+static uint32_t s_field_ok_tick[NUM_TEAMS];            /* tick a repair last succeeded (hold-repair H3) */
+static uint8_t s_field_ok_valid[NUM_TEAMS];
 static uint8_t s_dwell_need[NUM_TEAMS];
 static uint8_t s_prevent_order[NUM_TEAMS];
 static uint32_t s_prevent_tick[NUM_TEAMS];
@@ -1043,6 +1047,10 @@ static void causal_clear(uint8_t team_id, OperationalFaultClass_t fault_class,
         s_causal_stats.cleared_by_backstop[fault_class]++;
     s_causal_stats.active_ticks_total[fault_class] += g_current_tick - fs->start_tick[fault_class];
     s_causal_truth[team_id].clear_cause[fault_class] = (uint8_t)how;
+    if(fault_class == FAULT_CLASS_MOBILITY)
+        s_field_tried[team_id][0] = 0;
+    else if(fault_class == FAULT_CLASS_RESOURCE)
+        s_field_tried[team_id][1] = 0;
 
     /* A field repair removes a fraction of the wear; a fault that merely
      * ran out its backstop leaves the wear (and so the hazard) where it was. */
@@ -1385,6 +1393,17 @@ int fault_injector_causal_field_start(uint8_t team_id, uint8_t kind)
     if(kind == 2u && !team->fault_state.active[FAULT_CLASS_RESOURCE])
         return 0;
 
+    if(kind <= 2u && fault_profile_causal_fix(CAUSAL_FIX_HOLD_REPAIR))
+    {
+        /* H2: one attempt per fault episode; a failed repair means this fault is not field-repairable. */
+        if(s_field_tried[team_id][kind - 1u])
+        {
+            s_persist_stats.hold_h2_refused++;
+            return 0;
+        }
+        s_field_tried[team_id][kind - 1u] = 1;
+    }
+    s_hold_cause[team_id] = 0;
     span = (uint32_t)pp->field_max_ticks - pp->field_min_ticks + 1u;
     s_field_kind[team_id] = kind;
     s_field_end[team_id] = g_current_tick + pp->field_min_ticks +
@@ -1401,6 +1420,27 @@ uint8_t fault_injector_causal_field_state(uint8_t team_id)
 int fault_injector_causal_team_held(uint8_t team_id)
 {
     return team_id < NUM_TEAMS && s_field_kind[team_id] != 0u;
+}
+
+void fault_injector_causal_hold_note(uint8_t team_id, uint8_t cause)
+{
+    if(team_id < NUM_TEAMS && s_field_kind[team_id] != 0u)
+        s_hold_cause[team_id] = cause;
+}
+
+void fault_injector_causal_hold_count(uint8_t counter, uint8_t idx)
+{
+    if(counter == 0u && idx < 3u)
+        s_persist_stats.hold_capped[idx]++;
+    else if(counter == 1u && idx < 2u)
+        s_persist_stats.hold_lifted[idx]++;
+    else if(counter == 2u)
+        s_persist_stats.hold_h3_resets++;
+}
+
+int fault_injector_causal_field_just_repaired(uint8_t team_id)
+{
+    return team_id < NUM_TEAMS && s_field_ok_valid[team_id] && s_field_ok_tick[team_id] + 1u == g_current_tick;   /* fault_injector_step() runs before the tick counter advances */
 }
 
 /* Runs at the start of the tick, before movement and work. */
@@ -1420,7 +1460,20 @@ static void causal_field_step(uint8_t team_id)
         valid = 0;
     if(!valid)
     {
+        uint8_t why;
+
         s_persist_stats.field_cancelled[kind - 1u]++;
+        if(!field_team_in_service(team))
+        {
+            if(team->heading_to_rest)
+                why = (s_hold_cause[team_id] >= 1u && s_hold_cause[team_id] <= 3u) ? (uint8_t)(s_hold_cause[team_id] - 1u) : 5u;
+            else
+                why = 3u;
+        }
+        else
+            why = 4u;
+        s_persist_stats.cancel_cause[kind - 1u][why]++;
+        s_hold_cause[team_id] = 0;
         s_field_kind[team_id] = 0;
         return;
     }
@@ -1449,9 +1502,12 @@ static void causal_field_step(uint8_t team_id)
             else
                 s_causal_wear[team_id] *= 1.0f - g_causal_persist_params.maintenance_wear_cut;
             s_persist_stats.field_ok[kind - 1u]++;
+            s_field_ok_tick[team_id] = g_current_tick;
+            s_field_ok_valid[team_id] = 1;
         }
         else
             s_persist_stats.field_failed[kind - 1u]++;
+        s_hold_cause[team_id] = 0;
         s_field_kind[team_id] = 0;
     }
 }
@@ -1773,6 +1829,9 @@ const CausalPersistStats_t *fault_injector_causal_persist_stats(void) { return &
 int fault_injector_causal_field_start(uint8_t team_id, uint8_t kind) { (void)team_id; (void)kind; return 0; }
 uint8_t fault_injector_causal_field_state(uint8_t team_id) { (void)team_id; return 0u; }
 int fault_injector_causal_team_held(uint8_t team_id) { (void)team_id; return 0; }
+void fault_injector_causal_hold_note(uint8_t team_id, uint8_t cause) { (void)team_id; (void)cause; }
+void fault_injector_causal_hold_count(uint8_t counter, uint8_t idx) { (void)counter; (void)idx; }
+int fault_injector_causal_field_just_repaired(uint8_t team_id) { (void)team_id; return 0; }
 void fault_injector_causal_prevent_order(uint8_t team_id) { (void)team_id; }
 int fault_injector_causal_rest_hold(uint8_t team_id) { (void)team_id; return 0; }
 void fault_injector_causal_forecast(uint8_t team_id, uint8_t after, float out[2])
@@ -1797,6 +1856,10 @@ void fault_injector_init(uint32_t seed)
         s_causal_last_rest_tick[t] = 0;
         s_field_kind[t] = 0;
         s_field_end[t] = 0;
+        s_field_tried[t][0] = s_field_tried[t][1] = 0;
+        s_hold_cause[t] = 0;
+        s_field_ok_tick[t] = 0;
+        s_field_ok_valid[t] = 0;
         s_dwell_need[t] = 0;
         s_prevent_order[t] = 0;
         s_prevent_tick[t] = 0;

@@ -53,6 +53,16 @@ def main(d, names):
         print("field activity (mean per seed): " + ", ".join(
             f"{lbl}: started {mean(rows, f'field{k}_started'):.1f} ok {mean(rows, f'field{k}_ok'):.1f} failed {mean(rows, f'field{k}_failed'):.1f} cancelled {mean(rows, f'field{k}_cancelled'):.1f}"
             for k, lbl in [(0, "mobility repair"), (1, "resource repair"), (2, "maintenance")]))
+        if any("holdcancel0_stamina" in r.get("persist", {}) for r in rows):
+            hc = lambda k, key: mean(rows, f"holdcancel{k}_{key}")
+            for k, lbl in [(0, "mobility repair"), (1, "resource repair")]:
+                print(f"hold-repair, {lbl}: cancelled by stamina trigger {hc(k, 'stamina'):.2f}, other-class trigger {hc(k, 'other_class'):.2f}, "
+                      f"planner above floor {hc(k, 'planner'):.2f}, task released/resolved {hc(k, 'released'):.2f}, "
+                      f"fault ended another way {hc(k, 'fault_ended'):.2f}, other/unattributed {hc(k, 'other'):.2f}")
+            h = lambda key: mean(rows, f"hold_{key}")
+            print(f"hold-repair: recommendations capped RETURN {h('capped_return'):.1f} REALLOC {h('capped_realloc'):.1f} ABORT {h('capped_abort'):.1f}; "
+                  f"cap lifted by stamina {h('lifted_stamina'):.1f}, other class {h('lifted_other'):.1f}; "
+                  f"second attempts refused {h('h2_refused'):.1f}; resets after success {h('h3_resets'):.1f}")
         pl = lambda k: mean(rows, k, "planner")
         print(f"planner: field repair chosen {pl('fr_chosen'):.1f}, prevent considered {pl('prevent_considered'):.0f}, "
               f"PREVENT {pl('prevent_rest'):.2f}, PREVENT_FIELD {pl('prevent_field'):.2f}; held ticks {mean(rows, 'prevent_held_ticks'):.0f}, "

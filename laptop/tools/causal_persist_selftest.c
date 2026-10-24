@@ -20,7 +20,7 @@
 static int g_fail;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); g_fail++; } } while (0)
 
-static int working_team(uint8_t skip_mask)
+static int working_team(uint16_t skip_mask)
 {
     for(uint8_t t = 0; t < NUM_TEAMS; t++)
     {
@@ -38,7 +38,7 @@ static int working_team(uint8_t skip_mask)
 
 static void run_until_working(int n_needed, int *teams)
 {
-    uint8_t mask = 0;
+    uint16_t mask = 0;   /* 16 bits: NUM_TEAMS is 10, an 8-bit mask would drop teams 8 and 9 */
     int found = 0;
 
     for(int guard = 0; guard < 3000 && found < n_needed; guard++)
@@ -51,7 +51,7 @@ static void run_until_working(int n_needed, int *teams)
             teams[k] = working_team(mask);
             if(teams[k] < 0)
                 break;
-            mask |= (uint8_t)(1u << teams[k]);
+            mask |= (uint16_t)(1u << teams[k]);
             found++;
         }
     }

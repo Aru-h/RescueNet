@@ -135,6 +135,14 @@ typedef struct
     uint32_t ticks_by_field[NUM_OPERATIONAL_FAULT_CLASSES]; /* episode lengths of faults ended by a field repair */
     uint32_t prevent_orders;         /* PREVENT (rest at base) orders given */
     uint32_t prevent_done;           /* ... that completed their rest */
+    /* Step 3.7 hold-repair (statistics only). Cancel cause per repair kind: 0 stamina trigger, 1 other-class trigger,
+     * 2 planner choice above the floor, 3 task released or resolved (team not sent home), 4 the fault ended by
+     * another route, 5 other / unattributed. */
+    uint32_t cancel_cause[3][6];
+    uint32_t hold_capped[3];         /* rule-based recommendation capped at LOCAL_RECOVERY, by original action: RETURN, REALLOC, ABORT */
+    uint32_t hold_lifted[2];         /* ticks the cap was lifted: 0 stamina trigger, 1 other-class trigger */
+    uint32_t hold_h2_refused;        /* repair attempts refused (one attempt per fault episode) */
+    uint32_t hold_h3_resets;         /* recovery state reset after a successful repair */
 } CausalPersistStats_t;
 
 const CausalPersistStats_t *fault_injector_causal_persist_stats(void);
@@ -145,6 +153,12 @@ const CausalPersistStats_t *fault_injector_causal_persist_stats(void);
 int fault_injector_causal_field_start(uint8_t team_id, uint8_t kind);
 uint8_t fault_injector_causal_field_state(uint8_t team_id);   /* 0 when not held */
 int fault_injector_causal_team_held(uint8_t team_id);          /* 1 while a field activity holds the team this tick */
+/* Step 3.7 (hold-repair). The recovery manager reports, each tick a repair runs, what would end it if it ended now
+ * (0 nothing, 1 stamina trigger, 2 other-class trigger, 3 planner choice above the floor); used only to attribute a
+ * cancellation. hold_count: 0 capped[idx], 1 lifted[idx], 2 H3 reset. just_repaired: 1 on the tick a repair succeeded. */
+void fault_injector_causal_hold_note(uint8_t team_id, uint8_t cause);
+void fault_injector_causal_hold_count(uint8_t counter, uint8_t idx);
+int fault_injector_causal_field_just_repaired(uint8_t team_id);
 /* PREVENT: the planner has sent the team home to rest before a fault; it stays RESTING until the repair dwell
  * has removed wear (the existing 4-tick routine maintenance). */
 void fault_injector_causal_prevent_order(uint8_t team_id);

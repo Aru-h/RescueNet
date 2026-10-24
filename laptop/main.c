@@ -576,9 +576,11 @@ int main(int argc, char **argv)
                         mask |= CAUSAL_FIX_STALL;
                     else if(strcmp(tok, "semantics") == 0)
                         mask |= CAUSAL_FIX_SEMANTICS;
+                    else if(strcmp(tok, "hold-repair") == 0)
+                        mask |= CAUSAL_FIX_HOLD_REPAIR;
                     else
                     {
-                        fprintf(stderr, "invalid --causal-fixes '%s' (need on, off, or a list of label,rtb,cost,stall,semantics)\n", v);
+                        fprintf(stderr, "invalid --causal-fixes '%s' (need on, off, or a list of label,rtb,cost,stall,semantics,hold-repair)\n", v);
                         exit(2);
                     }
                 }
@@ -760,6 +762,11 @@ int main(int argc, char **argv)
     }
     if(causal_persist_mode >= 0)
         fault_config_set_causal_persist((uint8_t)causal_persist_mode);
+    if(causal_fixes_mask >= 0 && (causal_fixes_mask & (int)CAUSAL_FIX_HOLD_REPAIR) && g_causal_persist != CAUSAL_PERSIST_ON)
+    {
+        fprintf(stderr, "--causal-fixes=...hold-repair needs --causal-persist=on (only that mode has field repair)\n");
+        return 2;
+    }
     if(g_planner.prevent != 0 &&
        g_planner.p_source != PLANNER_P_HAZARD && g_planner.p_source != PLANNER_P_BOTH)
     {
@@ -1136,6 +1143,16 @@ int main(int argc, char **argv)
                 for(uint8_t k = 0; k < 3u; k++)
                     fprintf(stderr, "[DIAG FIELD] kind=%u started=%u ok=%u failed=%u cancelled=%u\n",
                         k, ps->field_started[k], ps->field_ok[k], ps->field_failed[k], ps->field_cancelled[k]);
+                if(fault_profile_causal_fix(CAUSAL_FIX_HOLD_REPAIR))
+                {
+                    for(uint8_t k = 0; k < 2u; k++)
+                        fprintf(stderr, "[DIAG HOLDCANCEL] kind=%u stamina=%u other_class=%u planner=%u released=%u fault_ended=%u other=%u\n",
+                            k, ps->cancel_cause[k][0], ps->cancel_cause[k][1], ps->cancel_cause[k][2],
+                            ps->cancel_cause[k][3], ps->cancel_cause[k][4], ps->cancel_cause[k][5]);
+                    fprintf(stderr, "[DIAG HOLD] capped_return=%u capped_realloc=%u capped_abort=%u lifted_stamina=%u lifted_other=%u h2_refused=%u h3_resets=%u\n",
+                        ps->hold_capped[0], ps->hold_capped[1], ps->hold_capped[2], ps->hold_lifted[0], ps->hold_lifted[1],
+                        ps->hold_h2_refused, ps->hold_h3_resets);
+                }
                 fprintf(stderr, "[DIAG PREVENT] held_ticks=%u prevent_orders=%u prevent_done=%u abort_releases=%u realloc_releases=%u exclusion_refusals=%u\n",
                     ps->field_ticks, ps->prevent_orders, ps->prevent_done, g_diag_exclusions[0], g_diag_exclusions[1], g_diag_exclusions[2]);
             }

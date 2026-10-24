@@ -165,6 +165,10 @@ extern CausalRoadParams_t g_causal_roads;
 #define CAUSAL_FIX_STALL        0x08u  /* evaluators are stall-aware: a team held at a partial-debris cell is not evidence of a mobility / progress fault */
 #define CAUSAL_FIX_SEMANTICS    0x10u  /* ABORT_MISSION is distinct from RETURN_TO_SAFE_ZONE; REQUEST_TASK_REALLOCATION releases the task (Step 3.6) */
 #define CAUSAL_FIXES_ALL        0x1Fu
+/* Step 3.7 (docs/HOLD_REPAIR.md): the rule gates leave an in-progress field repair alone unless something is
+ * observably worse. Opt-in: NOT part of CAUSAL_FIXES_ALL, so --causal-fixes=on and the default are the v1 world. */
+#define CAUSAL_FIX_HOLD_REPAIR  0x20u
+#define CAUSAL_FIXES_VALID      0x3Fu
 extern uint8_t g_causal_fixes;
 void fault_config_set_causal_fixes(uint8_t mask);
 /* 1 under the causal profile when this fix is enabled. CAUSAL_FIX_LABEL and CAUSAL_FIX_STALL also need consequential roads

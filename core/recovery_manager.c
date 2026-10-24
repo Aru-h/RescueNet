@@ -1697,6 +1697,78 @@ static RecoverySignal_t recovery_consensus_cap(RecoverySignal_t signal,
 }
 #endif
 
+/* Step 3.7 hold-repair (docs/HOLD_REPAIR.md, causal profile with field repair only). While a mobility or resource
+ * field repair runs on a team, the rule-based recommendation is capped at LOCAL_RECOVERY unless something is
+ * observably worse. Worse = the stamina evaluator asks for RETURN_TO_SAFE_ZONE or stronger, or the other repairable
+ * class's evaluator does (equipment for a mobility repair, mobility for a resource repair). Observable signals only:
+ * no injector ground truth is read here. Returns the trigger (0 none, 1 stamina, 2 other class). */
+static uint8_t recovery_hold_trigger(uint8_t kind, const RecoverySignal_t *signals)
+{
+    if(signals[RM_EVAL_IDX_STAMINA].action >= RECOVERY_ACTION_RETURN_TO_SAFE_ZONE)
+        return 1u;
+    if(kind == 1u && signals[RM_EVAL_IDX_EQUIPMENT].action >= RECOVERY_ACTION_RETURN_TO_SAFE_ZONE)
+        return 2u;
+    if(kind == 2u && signals[RM_EVAL_IDX_MOBILITY].action >= RECOVERY_ACTION_RETURN_TO_SAFE_ZONE)
+        return 2u;
+    return 0u;
+}
+
+/* Applies the cap to st (g_recovery_state in fixed-gate mode, g_rule_state in planner mode). count_stats is 0 for
+ * the second application on the same team and tick. Returns the trigger that lifted the cap (0 when not lifted). */
+static uint8_t recovery_hold_cap(uint8_t team_id, RecoveryManagerTeamState_t *st,
+                                 const RecoverySignal_t *signals, uint8_t count_stats)
+{
+    uint8_t kind;
+    uint8_t trig;
+
+    if(!fault_profile_causal_fix(CAUSAL_FIX_HOLD_REPAIR))
+        return 0u;
+    kind = fault_injector_causal_field_state(team_id);
+    if(kind != 1u && kind != 2u)
+        return 0u;
+    trig = recovery_hold_trigger(kind, signals);
+    if(count_stats)
+        fault_injector_causal_hold_note(team_id, trig);
+    if(st->status.recommendation <= RECOVERY_ACTION_LOCAL_RECOVERY)
+        return trig;
+    if(trig != 0u)
+    {
+        if(count_stats)
+            fault_injector_causal_hold_count(1u, (uint8_t)(trig - 1u));
+        return trig;
+    }
+    if(count_stats)
+    {
+        switch(st->status.recommendation)
+        {
+            case RECOVERY_ACTION_RETURN_TO_SAFE_ZONE:
+                fault_injector_causal_hold_count(0u, 0u);
+                break;
+            case RECOVERY_ACTION_REQUEST_TASK_REALLOCATION:
+                fault_injector_causal_hold_count(0u, 1u);
+                break;
+            default:
+                fault_injector_causal_hold_count(0u, 2u);
+                break;
+        }
+    }
+    st->status.recommendation = RECOVERY_ACTION_LOCAL_RECOVERY;
+    st->status.escalation_level = (uint8_t)RECOVERY_ACTION_LOCAL_RECOVERY;
+    return 0u;
+}
+
+static void recovery_state_reset(RecoveryManagerTeamState_t *st)
+{
+    st->status.recommendation = RECOVERY_ACTION_CONTINUE_MONITORING;
+    st->status.reason = RECOVERY_REASON_NONE;
+    st->status.confidence = 0.0f;
+    st->status.escalation_level = RECOVERY_ACTION_CONTINUE_MONITORING;
+    st->pending_action = RECOVERY_ACTION_CONTINUE_MONITORING;
+    st->pending_reason = RECOVERY_REASON_NONE;
+    st->pending_streak = 0u;
+    st->cooldown_ticks = 0u;
+}
+
 void recovery_manager_step(void)
 {
     static const RecoveryEvaluatorFn evaluators[RECOVERY_MANAGER_EVALUATOR_COUNT] =
@@ -1720,6 +1792,7 @@ void recovery_manager_step(void)
         RecoverySignal_t signals[RECOVERY_MANAGER_EVALUATOR_COUNT];
         MissionStage_t stage;
         RecoveryManagerTeamState_t *state = &g_recovery_state[team_id];
+        uint8_t hold_trig = 0u;
 
         /* A team's assignment can legitimately change out from under a
          * still-active recovery recommendation - most notably,
@@ -1770,6 +1843,14 @@ void recovery_manager_step(void)
          * re-enters RESTING the same tick, gets promoted back to AVAILABLE
          * the moment it's eligible again, and repeats every couple of
          * ticks - observed directly via this exact seed/team. */
+        /* hold-repair H3: a repair that just succeeded leaves no stale escalation behind. */
+        if(fault_profile_causal_fix(CAUSAL_FIX_HOLD_REPAIR) && fault_injector_causal_field_just_repaired(team_id))
+        {
+            recovery_state_reset(state);
+            recovery_state_reset(&g_rule_state[team_id]);
+            fault_injector_causal_hold_count(2u, 0u);
+        }
+
         if(team->assigned_task_pool != state->last_assigned_task_pool ||
            team->assigned_task_slot != state->last_assigned_task_slot ||
            (state->last_status == STATUS_RESTING && team->status != STATUS_RESTING))
@@ -1852,6 +1933,7 @@ void recovery_manager_step(void)
             rule_signals[RM_EVAL_IDX_FAULT_PREDICTOR] = recovery_make_signal(
                 RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
             (void)recovery_build_status(rs, rule_signals, RECOVERY_MANAGER_EVALUATOR_COUNT, stage);
+            hold_trig = recovery_hold_cap(team_id, rs, rule_signals, 1u);
 
             for(uint8_t f = 0; f < 3u; f++)
                 ev.ai_score[f] = g_planner_ai[team_id][f];
@@ -1896,17 +1978,23 @@ void recovery_manager_step(void)
             if(planner_team_decide(team, &ev, &planned))
             {
                 state->status = planned;
+                /* hold-repair: the planner's own choice above the floor stands; it is only attributed. */
+                if(fault_profile_causal_fix(CAUSAL_FIX_HOLD_REPAIR) && hold_trig == 0u &&
+                   planned.recommendation >= RECOVERY_ACTION_RETURN_TO_SAFE_ZONE)
+                    fault_injector_causal_hold_note(team_id, 3u);
             }
             else
             {
                 (void)recovery_build_status(&g_recovery_state[team_id], signals,
                     RECOVERY_MANAGER_EVALUATOR_COUNT, stage);
+                (void)recovery_hold_cap(team_id, &g_recovery_state[team_id], signals, 0u);
             }
         }
         else
         {
             (void)recovery_build_status(&g_recovery_state[team_id], signals,
                 RECOVERY_MANAGER_EVALUATOR_COUNT, stage);
+            (void)recovery_hold_cap(team_id, &g_recovery_state[team_id], signals, 1u);
             planner_note_recommendation(team_id, (uint8_t)g_recovery_state[team_id].status.recommendation);
         }
         recovery_metrics_note_recommendation(

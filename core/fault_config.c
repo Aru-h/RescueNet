@@ -104,7 +104,7 @@ int fault_profile_causal_field_repair(void)
 
 void fault_config_set_causal_fixes(uint8_t mask)
 {
-    g_causal_fixes = (uint8_t)(mask & CAUSAL_FIXES_ALL);
+    g_causal_fixes = (uint8_t)(mask & CAUSAL_FIXES_VALID);
 }
 
 int fault_profile_causal_fix(unsigned fix)
@@ -113,6 +113,8 @@ int fault_profile_causal_fix(unsigned fix)
         return 0;
     if(fix == CAUSAL_FIX_LABEL || fix == CAUSAL_FIX_STALL)
         return g_causal_roads.enabled;
+    if(fix == CAUSAL_FIX_HOLD_REPAIR)
+        return g_causal_persist == CAUSAL_PERSIST_ON;   /* only the mode that has field repair */
     return 1;
 }
 

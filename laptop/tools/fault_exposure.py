@@ -38,7 +38,7 @@ ROADS_RE = re.compile(
     r"max_blocked_cells=(\d+) audit_ticks=(\d+) audit_violations=(\d+)")
 PLANNER_RE = re.compile(r"\[DIAG PLANNER(?:_B|_P)?\] (.*)")
 # Step 3.6 persistence lines: [DIAG FAULTEND] / [DIAG PERSIST] / [DIAG FIELD] / [DIAG PREVENT], keyed by class or kind.
-PERSIST_RE = re.compile(r"\[DIAG (FAULTEND|PERSIST|FIELD|PREVENT)\] (.*)")
+PERSIST_RE = re.compile(r"\[DIAG (FAULTEND|PERSIST|FIELD|PREVENT|HOLDCANCEL|HOLD)\] (.*)")
 FAULT_LINE_RE = re.compile(r"\[DIAG FAULT\] class=(\d+) (.*)")
 ENVLABEL_RE = re.compile(r"\[DIAG ENVLABEL\] fix=(\d+) label_ticks=(\d+) label_episodes=(\d+)")
 FAULT_RE = re.compile(

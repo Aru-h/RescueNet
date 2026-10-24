@@ -1358,6 +1358,24 @@ check-recovery-planner: $(TARGET)
 	@python3 laptop/tools/check_planner_log.py --selftest
 	@echo "check-recovery-planner: flags gated, --recovery=fixed == default, utility run reproducible, floor / approval / cooldown invariants hold"
 
+# Step 3.7: the rule gates hold a field repair (docs/HOLD_REPAIR.md).
+HOLD_DET_DIR = build/hold-repair
+HOLD_FIXES = label,rtb,cost,stall,semantics
+check-hold-repair: $(TARGET)
+	@rm -rf $(HOLD_DET_DIR) && mkdir -p $(HOLD_DET_DIR)/a $(HOLD_DET_DIR)/b $(HOLD_DET_DIR)/off $(HOLD_DET_DIR)/def
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-persist=timer --causal-fixes=$(HOLD_FIXES),hold-repair >/dev/null 2>&1; then echo "FAIL: hold-repair accepted without --causal-persist=on"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-fixes=$(HOLD_FIXES),hold-repair >/dev/null 2>&1; then echo "FAIL: hold-repair accepted without the causal profile"; exit 1; fi
+	@cd $(HOLD_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-fixes=$(HOLD_FIXES),hold-repair --diag >/dev/null 2>diag.log
+	@cd $(HOLD_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-fixes=$(HOLD_FIXES),hold-repair >/dev/null 2>&1
+	@cmp $(HOLD_DET_DIR)/a/tron_snapshot_dataset.csv $(HOLD_DET_DIR)/b/tron_snapshot_dataset.csv
+	@cmp $(HOLD_DET_DIR)/a/tron_causal_truth.csv $(HOLD_DET_DIR)/b/tron_causal_truth.csv
+	@cd $(HOLD_DET_DIR)/off && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-fixes=$(HOLD_FIXES) >/dev/null 2>&1
+	@cd $(HOLD_DET_DIR)/def && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) >/dev/null 2>&1
+	@cmp $(HOLD_DET_DIR)/off/tron_snapshot_dataset.csv $(HOLD_DET_DIR)/def/tron_snapshot_dataset.csv
+	@cmp $(HOLD_DET_DIR)/off/tron_causal_truth.csv $(HOLD_DET_DIR)/def/tron_causal_truth.csv
+	@python3 laptop/tools/check_hold_repair.py $(HOLD_DET_DIR)/a/diag.log
+	@echo "check-hold-repair: token gated, runs reproducible, the default world is unchanged without the token, repair accounting consistent"
+
 # Step 3.6: persistent faults, field repair, action semantics, hazard-oracle forecast.
 PERSIST_DET_DIR = build/causal-persistence
 check-causal-persistence: $(TARGET)
