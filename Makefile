@@ -569,7 +569,7 @@ RECOVERY_PREDICTOR_STRESS_TEST_BIN = build/recovery_predictor_stress_test
 check-recovery-predictor-stress:
 	@mkdir -p build
 	@echo "  CC      $(TOOLS_DIR)/recovery_predictor_stress_test.c"
-	@$(CC) $(CFLAGS) -I$(CORE_DIR) \
+	@$(CC) $(CFLAGS) -I$(CORE_DIR) -I$(TOOLS_DIR) \
 		-o $(RECOVERY_PREDICTOR_STRESS_TEST_BIN) \
 		$(TOOLS_DIR)/recovery_predictor_stress_test.c \
 		$(TOOLS_DIR)/recovery_predictor_stress_test_stubs.c \
@@ -587,7 +587,7 @@ REALLOC_GATE_TEST_BIN = build/realloc_gate_test
 check-realloc-gate:
 	@mkdir -p build
 	@echo "  CC      $(TOOLS_DIR)/realloc_gate_test.c"
-	@$(CC) $(CFLAGS) -I$(CORE_DIR) \
+	@$(CC) $(CFLAGS) -I$(CORE_DIR) -I$(TOOLS_DIR) \
 		-o $(REALLOC_GATE_TEST_BIN) \
 		$(TOOLS_DIR)/realloc_gate_test.c \
 		$(TOOLS_DIR)/realloc_gate_test_stubs.c \

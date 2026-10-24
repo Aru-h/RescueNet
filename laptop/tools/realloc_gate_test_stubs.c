@@ -126,3 +126,5 @@ void snapshot_record(uint32_t cycle, EventType_t event_type, uint8_t team_id)
 {
     (void)cycle; (void)event_type; (void)team_id;
 }
+
+#include "causal_link_stubs.inc"

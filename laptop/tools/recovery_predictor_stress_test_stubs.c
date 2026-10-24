@@ -103,3 +103,6 @@ void abandon_task_for_recovery(TeamState_t *team) { (void)team; }
 float get_soft_stamina_floor(const TeamState_t *team) { (void)team; return 0.0f; }
 void assign_incident(uint8_t team_id, uint8_t incident_slot) { (void)team_id; (void)incident_slot; }
 void allocate_all_incidents(void) { }
+
+#define STUB_NEED_ALLOCATOR_SYMS
+#include "causal_link_stubs.inc"
