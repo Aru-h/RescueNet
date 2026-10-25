@@ -338,6 +338,108 @@ Same conventions as B1a. Per-run data: `docs/data/headroom/tier1b_supply_demand_
 M5 is also run at stress 1 and 3.5 on both seed sets (the pre-registered rule for confirmed survivors); that result follows
 in B1c.
 
+## B1c. Tier 1, capacity yardstick (K1, K2) and every Tier 1 probe in team-equivalents
+
+Per-run data: `docs/data/headroom/tier1c_capacity.csv` (binary B1).
+
+### Capacity sensitivity (what a team in service is worth)
+
+| Capacity change | Stress | Incidents / seed [95% CI] | Mean teams in service (change) | Victims lost (positive = fewer) | Spawned |
+|---|---|---|---|---|---|
+| K1 rest duration x0.5 | 2 | +3.25 [+2.64, +3.87] | +0.6 [+0.5, +0.7] | +3.07 [+2.26, +3.89] | +2.4 |
+| K1 rest duration x0.5 | 7 | +3.62 [+2.93, +4.32] | +0.4 [+0.4, +0.5] | +3.18 [+2.31, +4.06] | +2.1 |
+| K1 stamina drain x0.5 | 2 | +3.93 [+3.19, +4.64] | +0.8 [+0.6, +0.9] | +2.38 [+1.63, +3.12] | +3.2 |
+| K1 stamina drain x0.5 | 7 | +2.77 [+2.15, +3.40] | +0.3 [+0.3, +0.4] | +2.03 [+1.13, +2.94] | +1.9 |
+| K1 rest duration x0.75 | 2 | +1.71 [+1.16, +2.27] | +0.3 [+0.2, +0.4] | +1.52 [+0.61, +2.45] | +1.1 |
+| K1 rest duration x0.75 | 7 | +2.32 [+1.67, +2.97] | +0.3 [+0.2, +0.4] | +1.44 [+0.65, +2.23] | +1.0 |
+| K1 stamina drain x0.75 | 2 | +2.19 [+1.68, +2.70] | +0.4 [+0.3, +0.5] | +1.53 [+0.81, +2.26] | +1.7 |
+| K1 stamina drain x0.75 | 7 | +1.50 [+0.88, +2.11] | +0.2 [+0.1, +0.3] | +1.27 [+0.43, +2.11] | +1.0 |
+| K1 rest duration x1.5 | 2 | -3.84 [-4.55, -3.15] | -0.8 [-0.9, -0.6] | -2.09 [-2.99, -1.14] | -2.5 |
+| K1 rest duration x1.5 | 7 | -3.98 [-4.70, -3.25] | -0.5 [-0.6, -0.4] | -2.07 [-3.12, -1.01] | -2.1 |
+| K1 stamina drain x1.5 | 2 | -4.42 [-5.00, -3.85] | -0.9 [-1.0, -0.8] | -2.49 [-3.30, -1.68] | -3.4 |
+| K1 stamina drain x1.5 | 7 | -3.75 [-4.37, -3.13] | -0.5 [-0.5, -0.4] | -2.09 [-3.08, -1.09] | -2.0 |
+| K1 rest duration x2 | 2 | -6.55 [-7.26, -5.83] | -1.3 [-1.4, -1.2] | -3.97 [-4.92, -2.96] | -4.1 |
+| K1 rest duration x2 | 7 | -7.20 [-8.01, -6.39] | -0.9 [-1.0, -0.8] | -4.13 [-5.07, -3.22] | -3.6 |
+| K1 stamina drain x2 | 2 | -8.35 [-9.01, -7.68] | -1.7 [-1.8, -1.6] | -5.00 [-5.92, -4.06] | -6.0 |
+| K1 stamina drain x2 | 7 | -6.50 [-7.09, -5.93] | -0.8 [-0.9, -0.7] | -3.40 [-4.37, -2.43] | -4.1 |
+| K2 1 team(s) offline | 2 | -2.73 [-3.49, -1.98] | -0.5 [-0.7, -0.4] | -1.55 [-2.53, -0.57] | -1.7 |
+| K2 1 team(s) offline | 7 | -2.52 [-3.33, -1.71] | -0.3 [-0.4, -0.2] | -1.69 [-2.62, -0.77] | -1.1 |
+| K2 2 team(s) offline | 2 | -5.73 [-6.45, -5.02] | -1.1 [-1.3, -1.0] | -3.24 [-4.24, -2.22] | -3.5 |
+| K2 2 team(s) offline | 7 | -5.43 [-6.22, -4.65] | -0.7 [-0.8, -0.6] | -2.79 [-3.78, -1.81] | -2.5 |
+| K2 3 team(s) offline | 2 | -9.71 [-10.67, -8.79] | -1.9 [-2.1, -1.8] | -5.09 [-6.15, -4.03] | -5.3 |
+| K2 3 team(s) offline | 7 | -7.64 [-8.56, -6.70] | -0.9 [-1.1, -0.8] | -3.79 [-4.99, -2.61] | -3.6 |
+
+(The team-equivalent column of this table is the change in mean teams in service measured by the time budget, not a
+division by the slope.)
+
+**Yardstick (least-squares fit of mean incidents on mean teams in service over the baseline and the eight K1 runs,
+100 development seeds, seed-bootstrap 95% CI): 5.0 [4.7, 5.4] incidents per extra team in service at stress 2, and 8.1
+[7.5, 8.6] at stress 7.** Take a team out of service entirely (K2) and the fleet loses 2.7 (stress 2) and 2.5 (stress 7)
+incidents for one team, 5.7 and 5.4 for two, 9.7 and 7.6 for three: about 2.5 incidents for the first team and more
+for each next one (the effect is convex), while one team offline removes only about 0.5 of a team-equivalent of
+in-service time (a team is in service about 37 percent of the time at stress 2), which is consistent with the slope.
+Making rest 25 percent shorter or stamina last 25 percent longer is worth 1.5 to 2.3 incidents per seed, and halving
+either is worth 2.8 to 3.9. **Capacity is the strongest lever measured so far by an order of magnitude over
+information or forecasting.** Caveat (Addendum A, item 2): arrivals respond to capacity (spawned incidents rise by
+2 to 3 per seed with +3 to +4 incidents resolved), so the slope is inflated by demand response and team-equivalents are
+**understated**.
+
+### Every Tier 1 probe in team-equivalents (headroom divided by the slope of the same stress)
+
+| Probe | Stress | Incidents / seed [95% CI] | Team-equivalents [95% CI] |
+|---|---|---|---|
+| D2 detector oracle, no delay (PD) | 2 | +0.28 [-0.33, +0.89] | +0.1 [-0.1, +0.2] |
+| D2 detector oracle, no delay (PD) | 7 | +0.01 [-0.84, +0.85] | +0.0 [-0.1, +0.1] |
+| D2 detector oracle delayed 5 ticks | 2 | +0.21 [-0.44, +0.86] | +0.0 [-0.1, +0.2] |
+| D2 detector oracle delayed 5 ticks | 7 | -0.07 [-0.88, +0.74] | -0.0 [-0.1, +0.1] |
+| D2 detector oracle delayed 10 ticks | 2 | +0.25 [-0.41, +0.91] | +0.0 [-0.1, +0.2] |
+| D2 detector oracle delayed 10 ticks | 7 | +0.32 [-0.50, +1.14] | +0.0 [-0.1, +0.1] |
+| D2 detector oracle delayed 20 ticks | 2 | +0.05 [-0.69, +0.79] | +0.0 [-0.1, +0.2] |
+| D2 detector oracle delayed 20 ticks | 7 | -0.27 [-1.09, +0.55] | -0.0 [-0.1, +0.1] |
+| D2 detector oracle delayed 40 ticks | 2 | +0.06 [-0.67, +0.78] | +0.0 [-0.1, +0.2] |
+| D2 detector oracle delayed 40 ticks | 7 | -0.53 [-1.36, +0.28] | -0.1 [-0.2, +0.0] |
+| D3a oracle, 30% misses / 1% false alarms | 2 | +0.26 [-0.43, +0.95] | +0.1 [-0.1, +0.2] |
+| D3a oracle, 30% misses / 1% false alarms | 7 | +0.01 [-0.72, +0.73] | +0.0 [-0.1, +0.1] |
+| S1 hazard forecast + prevention x1 (level ii) | 2 | +0.02 [-0.31, +0.35] | +0.0 [-0.1, +0.1] |
+| S1 hazard forecast + prevention x1 (level ii) | 7 | -0.19 [-0.68, +0.30] | -0.0 [-0.1, +0.0] |
+| S1 draw-aware forecast + prevention x1 (level i) | 2 | -0.17 [-0.73, +0.40] | -0.0 [-0.1, +0.1] |
+| S1 draw-aware forecast + prevention x1 (level i) | 7 | -0.38 [-1.10, +0.33] | -0.0 [-0.1, +0.0] |
+| S1 hazard forecast + prevention x0.5 (level ii) | 2 | +0.02 [-0.31, +0.35] | +0.0 [-0.1, +0.1] |
+| S1 hazard forecast + prevention x0.5 (level ii) | 7 | -0.19 [-0.68, +0.30] | -0.0 [-0.1, +0.0] |
+| S1 draw-aware forecast + prevention x0.5 (level i) | 2 | +0.37 [-0.28, +1.02] | +0.1 [-0.1, +0.2] |
+| S1 draw-aware forecast + prevention x0.5 (level i) | 7 | -0.54 [-1.23, +0.16] | -0.1 [-0.2, +0.0] |
+| S1 hazard forecast + prevention x0.25 (level ii) | 2 | +0.02 [-0.31, +0.35] | +0.0 [-0.1, +0.1] |
+| S1 hazard forecast + prevention x0.25 (level ii) | 7 | -0.19 [-0.68, +0.30] | -0.0 [-0.1, +0.0] |
+| S1 draw-aware forecast + prevention x0.25 (level i) | 2 | +0.20 [-0.41, +0.82] | +0.0 [-0.1, +0.2] |
+| S1 draw-aware forecast + prevention x0.25 (level i) | 7 | -0.63 [-1.36, +0.09] | -0.1 [-0.2, +0.0] |
+| M1 survival-rate urgency (level ii) | 2 | -0.19 [-0.80, +0.41] | -0.0 [-0.2, +0.1] |
+| M1 survival-rate urgency (level ii) | 7 | -0.35 [-0.92, +0.23] | -0.0 [-0.1, +0.0] |
+| M1 realised-death urgency (level i) | 2 | -0.32 [-0.86, +0.22] | -0.1 [-0.2, +0.0] |
+| M1 realised-death urgency (level i) | 7 | -0.47 [-1.11, +0.16] | -0.1 [-0.1, +0.0] |
+| M2 fire-spread foresight, 50 ticks | 2 | +0.04 [-0.65, +0.73] | +0.0 [-0.1, +0.2] |
+| M2 fire-spread foresight, 50 ticks | 7 | -0.11 [-0.81, +0.58] | -0.0 [-0.1, +0.1] |
+| M3 aftershock-collapse foresight, 50 ticks | 2 | -0.01 [-0.71, +0.68] | -0.0 [-0.1, +0.1] |
+| M3 aftershock-collapse foresight, 50 ticks | 7 | -0.49 [-1.27, +0.28] | -0.1 [-0.2, +0.0] |
+| M4 hazard-arrival foresight, 10 ticks | 2 | +0.52 [-0.04, +1.10] | +0.1 [-0.0, +0.2] |
+| M4 hazard-arrival foresight, 10 ticks | 7 | -0.15 [-0.73, +0.43] | -0.0 [-0.1, +0.0] |
+| M4 hazard-arrival foresight, 50 ticks | 2 | -0.15 [-0.76, +0.46] | -0.0 [-0.2, +0.1] |
+| M4 hazard-arrival foresight, 50 ticks | 7 | +0.15 [-0.57, +0.88] | +0.0 [-0.1, +0.1] |
+| M4 hazard-arrival foresight, 200 ticks | 2 | -0.18 [-0.79, +0.43] | -0.0 [-0.2, +0.1] |
+| M4 hazard-arrival foresight, 200 ticks | 7 | +0.16 [-0.56, +0.89] | +0.0 [-0.1, +0.1] |
+| M5 discovery oracle (no fog of war) | 2 | +1.89 [+1.15, +2.63] | +0.4 [+0.2, +0.5] |
+| M5 discovery oracle (no fog of war) | 7 | +3.23 [+2.41, +4.08] | +0.4 [+0.3, +0.5] |
+| DQ1 central optimal assignment | 2 | +1.23 [+0.65, +1.82] | +0.2 [+0.1, +0.4] |
+| DQ1 central optimal assignment | 7 | +0.82 [+0.17, +1.47] | +0.1 [+0.0, +0.2] |
+| DQ2 perfect comms (no comm faults, no bus loss) | 2 | +0.70 [+0.10, +1.38] | +0.1 [+0.0, +0.3] |
+| DQ2 perfect comms (no comm faults, no bus loss) | 7 | +0.54 [-0.01, +1.10] | +0.1 [+0.0, +0.1] |
+
+**Reading.** The confirmed information headroom, M5, is worth about 0.4 of a team-equivalent at both stresses ([0.2,
+0.5] at stress 2 and [0.3, 0.5] at stress 7 on the development seeds), about as much as shortening every rest by a
+quarter (rest x0.75 is +0.3 team-equivalents). The best coordination upper bound (DQ1) is about 0.2 at stress 2 and 0.1 at
+stress 7, and a perfect detector (PD) is worth 0.1 [-0.1, +0.2] and 0.0 [-0.1, +0.1] team-equivalents: indistinguishable from
+zero, with an upper bound of about 0.2. For scale, one team out of service costs about 0.5 team-equivalents of
+in-service time.
+
 ## C. Design note (no implementation): how a real road-knowledge version would propagate
 
 ### C.1 What is in the code today (budgets found, not assumed)
