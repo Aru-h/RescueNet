@@ -1,0 +1,130 @@
+# Headroom map (Step 5)
+
+**Status: in progress.** Pre-registration: `docs/HEADROOM_MAP_PREREG.md` (commits `1a3a3d3`, `6a08143`, `b94ded0`,
+`c577ce7`). Scale audit: `docs/SCALE_AUDIT.md`. Results tables are appended tier by tier as each tier finishes; the
+plain-language summary goes at the top when the map is complete. This version holds the parts that need no results: the
+description of the road-knowledge propagation model and its design note (Addendum C), written while the runs are
+queued.
+
+## A. Road-knowledge propagation: the model as implemented (R1-R3 and Addendum C)
+
+Source: `core/road_knowledge.c`, `core/road_knowledge.h`. Hooks: `core/path.c` (`get_movement_cost`, `can_traverse_cell`
+ask the planning view), `core/causal_actions.c` (`causal_actions_crossing_stall` stops a team whose planned step enters
+a truly blocked cell; the action layer sees only fleet-known damage), `core/sim_runner.c` (once per tick).
+
+* **One shared table**, not a per-team map. `s_belief[x][y]` holds the believed kind (clear, partial debris, blocked) and
+  the tick it was learned. The pathfinder, the CBBA bids, the reachability checks and the rest-zone choice all read it
+  (the pathfinder has no team argument, so a per-team picture is not possible without a core change).
+* **Observation.** Every tick each team observes the cells within Chebyshev distance `radius` of itself (default 1: its
+  own cell and 8 neighbours; the strict variant R1s uses 0). A team that plans a step into a truly blocked cell is
+  stopped there and observes it that tick; a team that steps onto unknown partial debris observes it on entry.
+* **Report.** If the observed kind differs from the table and no report of that kind is pending, a report is made. It is
+  **lost** if the observing team has an active communication-class fault (this flag is the only link to the comms layer)
+  or with probability `loss` (default 0.05, the consensus bus default of decision D4; a hash of seed, tick, team and
+  cell, never a shared RNG stream). Otherwise it is **delivered at tick + `latency`** (default 2) to every team at once
+  (due-tick delivery; one pending slot per cell). R3 sets latency 0, loss 0 and lets communication-faulted teams report.
+* **Belief.** The table is overwritten by later reports of either kind (damage or clear), and a believed damage that
+  nobody re-observes expires after **2400 ticks** (the longest unattended damage lasts). Stale beliefs (a cell believed
+  damaged that has cleared) are therefore possible and counted (`stale_cell_ticks`).
+* **R2 prior.** Unknown cells are planned at base cost plus `round(pi x 12)` where `pi` comes from the Omori rate of the
+  last 1500 ticks spread over the grid; in this simulator it rounds to 0 to 2 cost units and carries no spatial
+  information, because the causal model places damage at hashed epicentres on teams' routes (no intensity or
+  building-density structure).
+* Laptop-only. The board build links stubs that always return the true map. It does not use `comms_transport`, `vbus`
+  or any frame, and it does not change any wire format, enum or schema.
+
+**What it does not model:** per-team maps; hop-by-hop relaying or any dependence on who can hear whom; distance- or
+terrain-dependent delay; scouting (sending a team to look); aerial observation; smoke or terrain visibility; reports that
+carry a timestamp and are merged by recency; and the road information that already travels on the mission link (see C.5).
+
+Because everybody knows everything after `latency` ticks, **the value of road information measured with it is a lower
+bound** (the real propagation is slower and lossier). The Addendum C sensitivity (latency 0-100, loss 0.05-0.5, radius
+0-4) measures how much the lower bound moves; its result goes in section B when it has run.
+
+## C. Design note (no implementation): how a real road-knowledge version would propagate
+
+### C.1 What is in the code today (budgets found, not assumed)
+
+| Item | Value | Where |
+|---|---|---|
+| Consensus beacon | 12-byte header + 2 votes x 2 classes x 10 teams = **52 bytes** payload, one broadcast per team per tick | `core/consensus.h` `CONSENSUS_BEACON_SIZE`; sent in `consensus.c` (`vbus_send(... CONSENSUS_FRAME_BEACON ...)`) |
+| Frame limit | payload at most **144 bytes**; wire = 7 header + payload + 21 trailer (16-byte tag, 4-byte counter, 1-byte checksum) = 172 bytes at most | `core/lora_frame.h` |
+| Beacon on air | 80 bytes on the wire; SF7, BW 125 kHz, CR 4/5 gives about **144 ms**, 0.40 percent of a 36 s tick per team, 4 percent of the channel for 10 teams (computed, `vbus` charges the same formula) | `core/lora_radio_params.h`, `core/vbus.h` |
+| Spare room in a beacon frame | 144 - 52 = **92 bytes**, i.e. 23 road reports of 4 bytes | computed |
+| Full frame on air | 172 bytes gives about **277 ms**, 0.77 percent of a tick per team, 7.7 percent of the channel for 10 teams (computed) | |
+| Bus | broadcast, IID loss default 5 percent, inbox 16 frames, **collisions not modelled** | `core/vbus.h` |
+| Map to the boards today | the **true** map, one 37-byte row payload (40 bytes with magic and checksum) per grid row, sent at start, on any change in the row, and periodically | `core/mission_link.h` section 5c |
+| Duty cycle | the code says the IN865 conditions are duty-cycle and power limited; the numeric limit is not in the repository (to verify; 1 percent is the usual figure) | `core/lora_radio_params.h` |
+| State hash | **none found** (searched core/ and laptop/); the nearest equivalents are the dataset and `make check-evaluate-determinism` | |
+
+### C.2 Route 1: piggyback road reports on the consensus beacon
+
+* **Format.** Append `n` reports after the 52 bytes: `x` (6 bits), `y` (6 bits), `kind` (2 bits), `tick` (low 10 bits, ticks
+  are 36 s so 10 bits is 10 hours, ample against the 2400-tick belief expiry once unwrapped by the receiver) = 3-4 bytes.
+  A count byte and a version bump (`CONSENSUS_BEACON_VERSION` 2) make old receivers reject the frame rather than
+  misread it; this is a **wire change** and so needs your decision.
+* **Per-team map.** `kind` (2 bits) plus the learned tick (16 bits) per cell: 36 x 36 x 3 bytes = about **3.9 kB per team,
+  39 kB for 10 teams** in RAM (the DK has far more), or 1.3 kB per team if the tick is stored at 8-bit resolution.
+  Merge rule: **latest timestamp wins**, ties by team id (commutative, idempotent, so lost and duplicated beacons are
+  harmless). A team re-sends the last few reports it received (gossip), so information spreads beyond one radio hop
+  even though the bus is a single broadcast domain (here every team hears every beacon with probability 0.95, so the
+  spread is the loss, not the range).
+* **Budget.** Up to 23 reports per beacon fit with no new frame and no new airtime beyond the longer frame (144 ms to
+  277 ms per team per tick, 4 to 7.7 percent of the channel). A world with 10-20 damaged cells per 3000 ticks needs
+  far fewer than one report per beacon on average, so the typical beacon grows by a few bytes. The risk is the
+  collision rate, which the bus does not model (pure ALOHA at 7.7 percent offered load loses about 14 percent of
+  frames against the 5 percent assumed), and the duty-cycle limit (to verify).
+* **Determinism.** Everything is a function of the received beacons, which are already deterministic (hash-based
+  loss, ascending delivery order). The merge needs no randomness.
+* **Code changes.** `core/consensus.c` and `consensus.h` (pack, unpack, static assert on size), a new per-team belief
+  table, `core/path.c` (see C.4), `core/causal_actions.c` (the stop-and-observe hook is per team already), the board
+  build (the table is static and fits).
+
+### C.3 Route 2: a dedicated road-report message over `comms_transport`
+
+* **Format.** A new frame type (the frame-type enum has room: 0-7 used, bit mask `COMMS_FRAME_TYPE_BIT`), payload
+  `n x 4` bytes plus a header; 144 bytes holds 30 reports. Sent only when a team has something new (event driven), so
+  the airtime is zero on quiet ticks, against 144 ms every tick for the beacon.
+* **Cost.** One frame of 28 + 4 n bytes: 40 bytes on the wire for one report (about 82 ms, computed), a full frame
+  277 ms. At 10-20 reports per seed this is under 0.1 percent of the channel. It needs an ACK or a periodic
+  re-broadcast (as the mission-link map rows do) because a lost report is not retried by a beacon cadence.
+* **Mission link.** The existing map rows carry the true map from the laptop to the boards. In a knowledge version
+  the laptop must send the **believed** map to a board (or none, with boards building their own), which changes what the
+  map-row frame means (**a semantic change with no format change**) and must be decided with the dashboard.
+* **Cost of the route.** A new frame type is an enum and wire addition (your rule: stop and ask).
+
+### C.4 Common requirements for either route
+
+* **`path.c` team argument.** The pathfinder keeps file-scope statics and a cache keyed by (start, destination,
+  equipment flags); a per-team view needs `team_id` threaded through `find_path_cost`, `find_next_path_step*` and every
+  caller (CBBA bid, allocator reachability, `find_nearest_safe_zone`, the movement code, the aftershock route scan), and
+  the path cache key must include the team (or the cache must be per team). That is a core change beyond a hook. The
+  planning-view function already exists (`road_knowledge_planning_view`) and would take the team.
+* **Per-team memory and merge cost.** 39 kB (or 13 kB) total; a merge per received report, trivial.
+* **State hash / determinism.** No state hash exists to extend; the new table would be added to the dataset or sidecar
+  (not the 75-feature contract) so the check targets can compare runs.
+* **Mission-link wire format.** Unchanged for route 1 (it rides in the beacon, which is a vbus/consensus frame, not a
+  mission-link frame). Route 2 adds a frame type. Either way the laptop's world authority must stop sending the true
+  map to the boards for the belief to mean anything.
+* **Board build.** `ENVIRONMENT_HAS_WORLD_STORAGE` is 0 on the board, so the truth side stays on the laptop; the belief
+  table is plain static arrays and fits.
+* **Dashboard.** `route.js` rebuilds a route from the true `STATICMAP`. To show what each team knows: emit the believed
+  kind and learned tick per changed cell per team (change-only, expected tens of events per seed), a per-team belief
+  revision counter, and observation events (team, cell, tick); render a "known vs true" overlay (cells the team plans
+  through that are damaged but unknown; stale beliefs), and reconstruct a team's route from its own belief, not the
+  global map. The map-render layer needs a team selector.
+
+### C.5 Recommendation and the value that would justify it
+
+**Route 1 (beacon piggyback)** if the sensitivity shows that road information is worth building: it adds no new frame
+type, rides a message every team already sends and every team already hears, and gives the merge semantics (latest
+timestamp wins) for free. Route 2 is cheaper on airtime but is a new wire message and needs ACK logic.
+
+**What ceiling would justify building it.** The cost is a core change (the team argument in the pathfinder), a beacon
+version bump, 39 kB of RAM, 4 to 8 percent more channel load and a dashboard layer. I would not build it for a value
+under the materiality threshold of this map (+1.0 incident or -1.0 victim per seed, about 2.5 percent of throughput).
+The R1 value (omniscient minus the shared-picture belief) is the upper limit of what any road-information system can add
+in the **current** world; if the confirmed value at stress 2 (the realistic setting) is below that threshold, building
+a real propagation model is not justified by this world, and the justification would have to come from a world with
+more road damage than the v1 world produces (11-18 damaged cells per 3000 ticks at stress 7). The results of
+section B decide this; they are not yet in.

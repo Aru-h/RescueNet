@@ -82,6 +82,10 @@ add("R_share", "R3 minus R1: value of better sharing", "R3", "R1", 3, "probe", "
 add("ACT_omni", "REROUTE+CLEAR_ROAD on vs off, omniscient", "ACT", "P", 3, "probe", "implemented")
 add("ACT_R1", "REROUTE+CLEAR_ROAD on vs off, under R1", "R1_act", "R1", 3, "probe", "implemented")
 add("ACT_R2", "REROUTE+CLEAR_ROAD on vs off, under R2", "R2_act", "R2", 3, "probe", "implemented")
+for _k, _lab in [("RK_lat_0", "latency 0"), ("RK_lat_10", "latency 10"), ("RK_lat_30", "latency 30"), ("RK_lat_100", "latency 100"),
+                 ("RK_loss_0.2", "loss 0.2"), ("RK_loss_0.5", "loss 0.5"), ("RK_rad_2", "radius 2"), ("RK_rad_4", "radius 4")]:
+    add(_k + "_val", f"C: value of road information at {_lab} (omniscient minus setting)", "P", _k, 5, "probe", "ceiling")
+    add(_k + "_act", f"C: REROUTE+CLEAR_ROAD on vs off at {_lab}", _k + "_act", _k, 5, "probe", "implemented")
 add("GAP", "reference: no faults (fixed gates) minus P", "NOFAULT", "P", 0, "ref", "")
 
 

@@ -91,6 +91,17 @@ CONFIGS["R1"] = ("noai", P_WD + ["--probe-roadknow=obs"])
 CONFIGS["R1s"] = ("noai", P_WD + ["--probe-roadknow=obs", "--probe-road-radius=0"])
 CONFIGS["R2"] = ("noai", P_WD + ["--probe-roadknow=prior"])
 CONFIGS["R3"] = ("noai", P_WD + ["--probe-roadknow=obs", "--probe-road-share=instant"])
+# Addendum C: propagation sensitivity around R1 (radius 1, latency 2, loss 0.05)
+RK = {}
+for v in (0, 10, 30, 100):
+    RK[f"RK_lat_{v}"] = [f"--probe-road-latency={v}"]
+for v in (0.2, 0.5):
+    RK[f"RK_loss_{v:g}"] = [f"--probe-road-loss={v:g}"]
+for v in (2, 4):
+    RK[f"RK_rad_{v}"] = [f"--probe-road-radius={v}"]
+for k, a in RK.items():
+    CONFIGS[k] = ("noai", P_WD + ["--probe-roadknow=obs"] + a)
+    CONFIGS[k + "_act"] = ("noai", P_WD + ["--probe-roadknow=obs"] + a + ["--causal-actions=reroute,clear_road"])
 CONFIGS["ACT"] = ("noai", P_WD + ["--causal-actions=reroute,clear_road"])
 CONFIGS["R1_act"] = ("noai", P_WD + ["--probe-roadknow=obs", "--causal-actions=reroute,clear_road"])
 CONFIGS["R2_act"] = ("noai", P_WD + ["--probe-roadknow=prior", "--causal-actions=reroute,clear_road"])
