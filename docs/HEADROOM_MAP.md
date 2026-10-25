@@ -228,6 +228,99 @@ benefit and fails the screen.)
 Caveat for all of these: they run on the **planner (P) as baseline**, whose own information use is the thing being
 tested. Even so, the fixed gates and the planner are indistinguishable, and so are all oracle variants.
 
+## B1b. Tier 1, supply, demand and decision chunk (screen: 100 development seeds; confirmation: 100 held-out seeds)
+
+Same conventions as B1a. Per-run data: `docs/data/headroom/tier1b_supply_demand_decision.csv` (binary B1).
+
+| Probe | Stress | Incidents / seed [95% CI] | Team-equiv. | Victims lost / seed (positive = fewer) [95% CI] | Spawned | Survives screen |
+|---|---|---|---|---|---|---|
+| S1 hazard forecast + prevention x1 (level ii) | 2 | +0.02 [-0.31, +0.35] |  | -0.12 [-0.42, +0.19] | -0.1 | no |
+| S1 hazard forecast + prevention x1 (level ii) | 7 | -0.19 [-0.68, +0.30] |  | +0.21 [-0.47, +0.88] | -0.1 | no |
+| S1 draw-aware forecast + prevention x1 (level i) | 2 | -0.17 [-0.73, +0.40] |  | +0.35 [-0.42, +1.16] | -0.2 | no |
+| S1 draw-aware forecast + prevention x1 (level i) | 7 | -0.38 [-1.10, +0.33] |  | +0.18 [-0.70, +1.04] | +0.0 | no |
+| S1 hazard forecast + prevention x0.5 (level ii) | 2 | +0.02 [-0.31, +0.35] |  | -0.12 [-0.42, +0.19] | -0.1 | no |
+| S1 hazard forecast + prevention x0.5 (level ii) | 7 | -0.19 [-0.68, +0.30] |  | +0.21 [-0.47, +0.88] | -0.1 | no |
+| S1 draw-aware forecast + prevention x0.5 (level i) | 2 | +0.37 [-0.28, +1.02] |  | -0.04 [-0.86, +0.79] | +0.0 | no |
+| S1 draw-aware forecast + prevention x0.5 (level i) | 7 | -0.54 [-1.23, +0.16] |  | +0.09 [-0.88, +1.04] | -0.1 | no |
+| S1 hazard forecast + prevention x0.25 (level ii) | 2 | +0.02 [-0.31, +0.35] |  | -0.12 [-0.42, +0.19] | -0.1 | no |
+| S1 hazard forecast + prevention x0.25 (level ii) | 7 | -0.19 [-0.68, +0.30] |  | +0.21 [-0.47, +0.88] | -0.1 | no |
+| S1 draw-aware forecast + prevention x0.25 (level i) | 2 | +0.20 [-0.41, +0.82] |  | +0.04 [-0.80, +0.90] | -0.0 | no |
+| S1 draw-aware forecast + prevention x0.25 (level i) | 7 | -0.63 [-1.36, +0.09] |  | -0.12 [-1.09, +0.81] | -0.1 | no |
+| M1 survival-rate urgency (level ii) | 2 | -0.19 [-0.80, +0.41] |  | +0.27 [-0.55, +1.07] | -0.1 | no |
+| M1 survival-rate urgency (level ii) | 7 | -0.35 [-0.92, +0.23] |  | +0.41 [-0.45, +1.30] | -0.4 | no |
+| M1 realised-death urgency (level i) | 2 | -0.32 [-0.86, +0.22] |  | -0.21 [-1.01, +0.59] | -0.3 | no |
+| M1 realised-death urgency (level i) | 7 | -0.47 [-1.11, +0.16] |  | -0.05 [-1.03, +0.90] | -0.6 | no |
+| M2 fire-spread foresight, 50 ticks | 2 | +0.04 [-0.65, +0.73] |  | -0.53 [-1.38, +0.32] | +0.1 | no |
+| M2 fire-spread foresight, 50 ticks | 7 | -0.11 [-0.81, +0.58] |  | -0.11 [-1.19, +0.97] | -0.1 | no |
+| M3 aftershock-collapse foresight, 50 ticks | 2 | -0.01 [-0.71, +0.68] |  | -0.06 [-0.93, +0.79] | +0.1 | no |
+| M3 aftershock-collapse foresight, 50 ticks | 7 | -0.49 [-1.27, +0.28] |  | +0.55 [-0.46, +1.57] | -0.4 | no |
+| M4 hazard-arrival foresight, 10 ticks | 2 | +0.52 [-0.04, +1.10] |  | +0.66 [-0.17, +1.51] | +0.1 | no |
+| M4 hazard-arrival foresight, 10 ticks | 7 | -0.15 [-0.73, +0.43] |  | +0.22 [-0.64, +1.07] | +0.2 | no |
+| M4 hazard-arrival foresight, 50 ticks | 2 | -0.15 [-0.76, +0.46] |  | -0.33 [-1.20, +0.54] | -0.0 | no |
+| M4 hazard-arrival foresight, 50 ticks | 7 | +0.15 [-0.57, +0.88] |  | +0.65 [-0.48, +1.79] | +0.1 | no |
+| M4 hazard-arrival foresight, 200 ticks | 2 | -0.18 [-0.79, +0.43] |  | -0.26 [-1.12, +0.60] | -0.1 | no |
+| M4 hazard-arrival foresight, 200 ticks | 7 | +0.16 [-0.56, +0.89] |  | +0.70 [-0.43, +1.83] | +0.1 | no |
+| M5 discovery oracle (no fog of war) | 2 | +1.89 [+1.15, +2.63] |  | +1.82 [+0.93, +2.71] | +0.1 | incidents, victims |
+| M5 discovery oracle (no fog of war) | 7 | +3.23 [+2.41, +4.08] |  | +1.79 [+0.83, +2.73] | +0.3 | incidents, victims |
+| DQ1 central optimal assignment | 2 | +1.23 [+0.65, +1.82] |  | +0.96 [+0.10, +1.82] | +0.8 | incidents |
+| DQ1 central optimal assignment | 7 | +0.82 [+0.17, +1.47] |  | +1.51 [+0.51, +2.52] | +0.5 | victims |
+| DQ2 perfect comms (no comm faults, no bus loss) | 2 | +0.70 [+0.10, +1.38] |  | +0.39 [-0.31, +1.10] | +0.1 | no |
+| DQ2 perfect comms (no comm faults, no bus loss) | 7 | +0.54 [-0.01, +1.10] |  | +0.51 [-0.28, +1.31] | +0.2 | no |
+
+### Confirmation (held-out seeds 3001-3100, Holm over the whole screened family, m = 112 at this point)
+
+| Probe | Stress | Metric | Screen | Held-out [95% CI] | p | Holm p | Confirmed |
+|---|---|---|---|---|---|---|---|
+| M5 discovery oracle (no fog of war) | 2 | incidents | +1.89 [+1.15, +2.63] | +1.71 [+1.05, +2.40] | 0.0001 | 0.011 | yes |
+| M5 discovery oracle (no fog of war) | 2 | victims | +1.82 [+0.93, +2.71] | +1.37 [+0.42, +2.34] | 0.0058 | 0.632 | no |
+| M5 discovery oracle (no fog of war) | 7 | incidents | +3.23 [+2.41, +4.08] | +3.10 [+2.28, +3.95] | 0.0001 | 0.011 | yes |
+| M5 discovery oracle (no fog of war) | 7 | victims | +1.79 [+0.83, +2.73] | +1.06 [-0.09, +2.23] | 0.0702 | 1.000 | no |
+| DQ1 central optimal assignment | 2 | incidents | +1.23 [+0.65, +1.82] | +1.05 [+0.41, +1.70] | 0.0017 | 0.187 | no |
+| DQ1 central optimal assignment | 7 | victims | +1.51 [+0.51, +2.52] | +1.30 [+0.35, +2.31] | 0.0087 | 0.940 | no |
+
+**Result.**
+
+* **M5, the discovery oracle (every incident revealed the tick it spawns), is the only confirmed headroom so far:
+  +1.71 [+1.05, +2.40] incidents at stress 2 and +3.10 [+2.28, +3.95] at stress 7 on the held-out seeds, Holm-adjusted
+  p = 0.011 for both.** That is 4 percent and 9 percent of throughput. It is not demand-driven (spawned incidents rise by
+  only 0.1 and 0.3 per seed against gains of 1.9 and 3.2). The victims-lost gain (about 1.4 to 1.8 fewer per seed in the
+  screen) has the right sign on the held-out seeds but does not pass the Holm correction. The Step 3 measurement that
+  fog of war dominates the time to first response (spawn to discovery 226 ticks on average) agrees with this.
+  **Realisable?** Not by a fault forecaster: it is search, reporting and sensing (more scouts, aerial survey, reports from
+  the public, better coverage), i.e. information about *where incidents are*, not about *which team will fail*.
+* **DQ1, the central optimal assignment (an upper bound on coordination, laptop-only), shows +1.05 [+0.41, +1.70]
+  incidents at stress 2 and 1.30 fewer victims lost at stress 7 on the held-out seeds: the same sign with a CI that
+  excludes 0, but it does not pass the Holm correction over this large family (adjusted p 0.19 and 0.94), so it is not
+  confirmed.** At stress 2 the incident gain is also flagged demand-driven by the pre-registered rule (spawned
+  incidents +0.8 against a gain of +1.2). Reading: the in-process auction (CBBA with bundles, already a converged
+  greedy) is within about one incident of an optimal one-to-one assignment; better coordination is worth at most about
+  that much.
+* **Perfect communications (DQ2)** is worth +0.70 [+0.10, +1.38] and +0.54 [-0.01, +1.10]: positive but below the
+  materiality threshold, so it does not survive.
+* **Everything else is a null:** cheaper prevention (S1), the survival-based urgency rule (M1, both levels), and foresight
+  of fire spread, collapse or hazard arrivals (M2, M3, M4 at 10, 50 and 200 ticks) are all within about +-0.7 incidents
+  of 0 with CIs that include 0.
+* **S1 at the hazard-rate level is a literal null, not a measurement of cheap prevention:** the three prevention
+  prices give identical numbers because the in-field maintenance option (the only one whose price the probe scales) is
+  **never chosen** at the hazard-rate forecast, even at a quarter of the cost (0 uses per seed against 9.3 rest-at-base
+  preventions that the scaling does not touch). At the perfect-foresight level it is used (5.9 uses per seed at the
+  full price, 24.9 at a quarter) and still gives no gain (-0.38 to -0.63 incidents at stress 7).
+
+**Scorecard for this chunk.**
+
+| Prediction (Addendum B, section 10.5) | Outcome |
+|---|---|
+| S1: no survivor at stress 2 | Held |
+| M1 level ii: victims fall 0.5 to 2 at stress 7 | Not supported: +0.41 [-0.45, +1.30], CI includes 0 |
+| M2, M3 under +0.5 | Held |
+| M4: positive, rising to T = 50, up to +1.5 | Not held: null at every lead |
+| M5: +1 to +4 incidents, victims down 1 to 4 | **Held** for incidents (confirmed); victims not confirmed |
+| DQ1: CBBA within 1.0 incident of central | Borderline: +1.23 and +0.82 in the screen (above 1.0 at stress 2), not confirmed after Holm |
+| DQ2: +0.5 to 2 at stress 7, about 0 at stress 2 | Magnitude held at stress 7 (+0.54, CI touches 0); at stress 2 it is +0.70, not about 0 |
+
+M5 is also run at stress 1 and 3.5 on both seed sets (the pre-registered rule for confirmed survivors); that result follows
+in B1c.
+
 ## C. Design note (no implementation): how a real road-knowledge version would propagate
 
 ### C.1 What is in the code today (budgets found, not assumed)
