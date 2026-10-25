@@ -33,6 +33,8 @@ def add(cid, label, probe, base, tier, kind="probe", real=""):
     C.append(dict(id=cid, label=label, probe=probe, base=base, tier=tier, kind=kind, real=real))
 
 
+add("PA_ctx", "context: shipped AI on the planner (PA minus P)", "PA", "P", 1, "effect", "shipped model, trained on the old fault model")
+add("F_ctx", "context: fixed gates minus planner (F minus P)", "F", "P", 1, "effect", "")
 add("D2_0", "D2 detector oracle, no delay (PD)", "PD", "P", 1, "probe", "ceiling: a perfect detector")
 for k in (5, 10, 20, 40):
     add(f"D2_{k}", f"D2 detector oracle delayed {k} ticks", f"D2_{k}", "P", 1, "probe", "any real detector has delay")

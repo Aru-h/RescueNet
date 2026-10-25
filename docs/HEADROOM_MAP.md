@@ -148,6 +148,86 @@ Findings:
   headroom for a better detector is the **missed episodes**, not the delay of the caught ones. Whether catching them
   matters is what D2/D3 and the detector-oracle contrasts of Tier 1 measure.
 
+## B1a. Tier 1, information chunk (screen: 100 development seeds 1001-1100, stress 2 and 7)
+
+Headroom = probe minus matched baseline (P, or P at the same dropout), paired by seed, bootstrap 95% CI (20000
+resamples). Victims lost is shown as baseline minus probe (positive = fewer lost). Survival needs a CI lower bound above
+0 **and** a point estimate of at least +1.0 incident or 1.0 victim. Per-run data: `docs/data/headroom/tier1a_information.csv`
+(binary B1). Team-equivalents are blank until the K1 capacity runs (end of Tier 1) provide the yardstick.
+
+| Probe | Stress | Incidents / seed [95% CI] | Team-equiv. | Victims lost / seed (positive = fewer) [95% CI] | Spawned | Survives |
+|---|---|---|---|---|---|---|
+| context: shipped AI on the planner (PA minus P) | 2 | -0.05 [-0.60, +0.50] |  | -0.09 [-0.82, +0.67] | -0.2 | (not a probe) |
+| context: shipped AI on the planner (PA minus P) | 7 | +0.14 [-0.47, +0.73] |  | +0.07 [-0.81, +0.93] | -0.1 | (not a probe) |
+| context: fixed gates minus planner (F minus P) | 2 | -0.26 [-0.92, +0.41] |  | -0.13 [-1.11, +0.85] | -0.2 | (not a probe) |
+| context: fixed gates minus planner (F minus P) | 7 | -0.28 [-1.02, +0.48] |  | +0.07 [-1.13, +1.30] | -0.1 | (not a probe) |
+| D2 detector oracle, no delay (PD) | 2 | +0.28 [-0.33, +0.89] |  | -0.30 [-1.28, +0.70] | +0.3 | no |
+| D2 detector oracle, no delay (PD) | 7 | +0.01 [-0.84, +0.85] |  | -0.57 [-1.69, +0.58] | +0.4 | no |
+| D2 detector oracle delayed 5 ticks | 2 | +0.21 [-0.44, +0.86] |  | -0.52 [-1.52, +0.50] | +0.2 | no |
+| D2 detector oracle delayed 5 ticks | 7 | -0.07 [-0.88, +0.74] |  | -0.36 [-1.49, +0.77] | -0.0 | no |
+| D2 detector oracle delayed 10 ticks | 2 | +0.25 [-0.41, +0.91] |  | -0.66 [-1.62, +0.32] | +0.2 | no |
+| D2 detector oracle delayed 10 ticks | 7 | +0.32 [-0.50, +1.14] |  | +0.13 [-0.92, +1.20] | +0.6 | no |
+| D2 detector oracle delayed 20 ticks | 2 | +0.05 [-0.69, +0.79] |  | -0.62 [-1.54, +0.31] | +0.2 | no |
+| D2 detector oracle delayed 20 ticks | 7 | -0.27 [-1.09, +0.55] |  | -0.38 [-1.62, +0.86] | +0.2 | no |
+| D2 detector oracle delayed 40 ticks | 2 | +0.06 [-0.67, +0.78] |  | -0.56 [-1.50, +0.39] | +0.0 | no |
+| D2 detector oracle delayed 40 ticks | 7 | -0.53 [-1.36, +0.28] |  | -0.01 [-1.18, +1.16] | +0.0 | no |
+| D3a oracle, 30% misses / 1% false alarms | 2 | +0.26 [-0.43, +0.95] |  | -0.46 [-1.48, +0.57] | +0.1 | no |
+| D3a oracle, 30% misses / 1% false alarms | 7 | +0.01 [-0.72, +0.73] |  | -0.70 [-1.77, +0.38] | +0.3 | no |
+| D3b baseline evidence dropout 25% (effect on P) | 2 | +0.33 [-0.42, +1.05] |  | +0.59 [-0.16, +1.38] | -0.1 | (not a probe) |
+| D3b baseline evidence dropout 25% (effect on P) | 7 | -0.08 [-0.79, +0.64] |  | +0.16 [-0.79, +1.11] | +0.2 | (not a probe) |
+| D3b oracle headroom at dropout 25% | 2 | -0.25 [-1.03, +0.53] |  | -1.46 [-2.37, -0.56] | +0.4 | no |
+| D3b oracle headroom at dropout 25% | 7 | +0.05 [-0.81, +0.91] |  | +0.42 [-0.74, +1.60] | -0.2 | no |
+| D3b shipped-AI gain at dropout 25% | 2 | -0.02 [-0.60, +0.57] |  | -0.15 [-0.74, +0.43] | -0.0 | no |
+| D3b shipped-AI gain at dropout 25% | 7 | -0.02 [-0.62, +0.57] |  | +0.47 [-0.44, +1.38] | -0.4 | no |
+| D3b baseline evidence dropout 50% (effect on P) | 2 | +0.10 [-0.52, +0.72] |  | +0.01 [-0.92, +0.96] | -0.1 | (not a probe) |
+| D3b baseline evidence dropout 50% (effect on P) | 7 | -0.03 [-0.73, +0.67] |  | +0.17 [-0.81, +1.15] | -0.3 | (not a probe) |
+| D3b oracle headroom at dropout 50% | 2 | +0.25 [-0.52, +1.02] |  | -0.50 [-1.48, +0.49] | +0.2 | no |
+| D3b oracle headroom at dropout 50% | 7 | -0.48 [-1.19, +0.24] |  | -0.21 [-1.44, +1.07] | -0.0 | no |
+| D3b shipped-AI gain at dropout 50% | 2 | +0.16 [-0.39, +0.69] |  | +0.47 [-0.29, +1.23] | -0.1 | no |
+| D3b shipped-AI gain at dropout 50% | 7 | -0.11 [-0.76, +0.53] |  | +0.80 [-0.15, +1.75] | +0.1 | no |
+| D3b baseline evidence dropout 75% (effect on P) | 2 | +0.27 [-0.44, +0.97] |  | -0.09 [-0.96, +0.78] | -0.0 | (not a probe) |
+| D3b baseline evidence dropout 75% (effect on P) | 7 | +0.24 [-0.42, +0.91] |  | +0.14 [-0.84, +1.13] | +0.2 | (not a probe) |
+| D3b oracle headroom at dropout 75% | 2 | -0.33 [-1.10, +0.44] |  | -0.38 [-1.20, +0.45] | -0.0 | no |
+| D3b oracle headroom at dropout 75% | 7 | -0.15 [-0.96, +0.65] |  | -0.20 [-1.29, +0.82] | -0.1 | no |
+| D3b shipped-AI gain at dropout 75% | 2 | -0.26 [-0.83, +0.30] |  | -0.19 [-0.98, +0.59] | -0.0 | no |
+| D3b shipped-AI gain at dropout 75% | 7 | -0.14 [-0.73, +0.44] |  | +0.85 [-0.06, +1.74] | -0.4 | no |
+
+**Result: nothing survives; every incidents CI includes 0.** (The one interval that excludes 0, "oracle headroom at
+dropout 25%, stress 2, victims", is **negative**: the perfect detector lost 1.5 more victims than P there; it is not a
+benefit and fails the screen.)
+
+* **A perfect detector (PD) adds +0.28 [-0.33, +0.89] incidents at stress 2 and +0.01 [-0.84, +0.85] at stress 7.**
+  Step 4 (40 pooled seeds) had measured +0.35 and **+1.75** [+0.47, +2.98]. The stress-7 figure **does not replicate on
+  100 seeds**: with 2.5 times the seeds the estimate is 0. The same is true of the shipped AI (Step 4: +1.23 on the planner
+  at stress 7; now +0.14 [-0.47, +0.73]). The Step 4 stress-7 headline was a small-sample result and should be
+  withdrawn; the honest statement is that the headroom of detection is **indistinguishable from zero at both stresses**,
+  with a 95% upper bound of +0.9 incidents (about 2 percent of throughput).
+* **Detection delay does not matter** (D2): the oracle delayed 5, 10, 20 and 40 ticks is as good as, or as bad as, the
+  undelayed one; all within +-0.5 incidents of P. Detection **earliness** has no measurable value here.
+* **Realistic false alarms and misses do not matter** (D3a, 30 percent misses and 1 percent false alarms): +0.26 and
+  +0.01, the same as the perfect oracle.
+* **Dropping the baseline's evidence does not hurt it** (D3b): removing 25, 50 or 75 percent of the watchdog and twin
+  evidence changes P's incidents by +0.1 to +0.3 (no effect). The hook works: go-home events at stress 7 fall from 181 per
+  seed to 129 (-29 percent) at 75 percent dropout, with no change in outcome. So **a large share of the gates' go-home
+  trips contributes nothing**, and the information channels the baseline reads are not what limits it. With dropout, the
+  perfect oracle (-0.3 to +0.25) and the shipped AI (-0.3 to +0.2) are still worth nothing: the AI does not matter when
+  the baseline sees less.
+* **Context:** the shipped AI on the planner (PA minus P) is -0.05 and +0.14; the fixed gates are indistinguishable from
+  the planner (-0.26, -0.28).
+
+**Scorecard (Addendum B, section 10.5, and Addendum A).**
+
+| Prediction | Outcome |
+|---|---|
+| D1 median delay above 10 ticks, miss rate above 30 percent for communication, resource slowest | Partly: the median delay is 2-3 ticks for mobility and communication (not above 10); communication missed 85-86 percent (held); resource slowest (held) |
+| D2 headroom falls as the delay grows (Spearman -0.5 or lower at stress 7) | **Not testable**: headroom is zero at k = 0, so there is nothing to fall |
+| D3a keeps at least half of the PD headroom at stress 7 | Vacuous: PD headroom is 0 |
+| D3b P falls with dropout (about -0.5 at 25 percent, -2 at 75); oracle headroom and AI gain grow with dropout | **Not held**: P does not fall; oracle headroom and AI gain stay at 0 |
+| Overall: no information probe survives at stress 2 | **Held**; and none survives at stress 7 either |
+
+Caveat for all of these: they run on the **planner (P) as baseline**, whose own information use is the thing being
+tested. Even so, the fixed gates and the planner are indistinguishable, and so are all oracle variants.
+
 ## C. Design note (no implementation): how a real road-knowledge version would propagate
 
 ### C.1 What is in the code today (budgets found, not assumed)
