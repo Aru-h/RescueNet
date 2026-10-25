@@ -92,6 +92,18 @@ CONFIGS["R1"] = ("noai", P_WD + ["--probe-roadknow=obs"])
 CONFIGS["R1s"] = ("noai", P_WD + ["--probe-roadknow=obs", "--probe-road-radius=0"])
 CONFIGS["R2"] = ("noai", P_WD + ["--probe-roadknow=prior"])
 CONFIGS["R3"] = ("noai", P_WD + ["--probe-roadknow=obs", "--probe-road-share=instant"])
+# Tier 4 (Addendum D): recovery repertoire
+CONFIGS["RR1"] = ("noai", P_WD + ["--probe-rr=relief"])
+CONFIGS["RR1f"] = ("noai", P_WD + ["--probe-rr=relief-foresight"])
+CONFIGS["RR2a"] = ("noai", P_WD + ["--probe-rr=support-repair"])
+CONFIGS["RR3"] = ("noai", P_WD + ["--causal-actions=clear_road", "--probe-rr=lane"])
+CONFIGS["RR3_base"] = ("noai", P_WD + ["--causal-actions=clear_road"])
+CONFIGS["RR4"] = ("noai", P_WD + ["--probe-rr=degraded"])
+CONFIGS["RR5"] = ("noai", P_WD + ["--probe-rr=autonomy"])
+RR0 = ["--causal-actions=clear_road", "--probe-rr=all"]
+CONFIGS["RR0_P"] = ("noai", P_WD + RR0)
+CONFIGS["RR0_PD"] = ("noai", PL + ["--planner-p=oracle"] + RR0)
+CONFIGS["RR0_S1"] = ("noai", PL + ["--planner-p=hazard", "--planner-prevent=both"] + RR0)
 # Addendum C: propagation sensitivity around R1 (radius 1, latency 2, loss 0.05)
 RK = {}
 for v in (0, 10, 30, 100):

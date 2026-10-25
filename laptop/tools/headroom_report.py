@@ -82,6 +82,15 @@ add("R_share", "R3 minus R1: value of better sharing", "R3", "R1", 3, "probe", "
 add("ACT_omni", "REROUTE+CLEAR_ROAD on vs off, omniscient", "ACT", "P", 3, "probe", "implemented")
 add("ACT_R1", "REROUTE+CLEAR_ROAD on vs off, under R1", "R1_act", "R1", 3, "probe", "implemented")
 add("ACT_R2", "REROUTE+CLEAR_ROAD on vs off, under R2", "R2_act", "R2", 3, "probe", "implemented")
+add("RR1", "RR1 relief, rate-aware trigger", "RR1", "P", 4, "probe", "operations")
+add("RR1f", "RR1 relief, perfect-foresight trigger", "RR1f", "P", 4, "probe", "not realisable (realised faults)")
+add("RR2a", "RR2a SUPPORT-delivered repair (idle or priced preemption)", "RR2a", "P", 4, "probe", "needs spares and a free support team")
+add("RR3", "RR3 lane first (clear_road on) vs clear_road alone", "RR3", "RR3_base", 4, "probe", "Tohoku-style lane opening")
+add("RR4", "RR4 degraded mode, capability-aware bids", "RR4", "P", 4, "probe", "yes: scoring rule")
+add("RR5", "RR5 autonomy on communication loss", "RR5", "P", 4, "probe", "yes: operating rule")
+add("RR0", "RR0 all five responses (not jointly priced)", "RR0_P", "P", 4, "probe", "see components")
+add("RR_key_PD", "KEY: detector-oracle headroom with RR0 on (PD+RR0 minus P+RR0)", "RR0_PD", "RR0_P", 4, "probe", "ceiling")
+add("RR_key_S1", "KEY: hazard-oracle + prevention with RR0 on (minus P+RR0)", "RR0_S1", "RR0_P", 4, "probe", "level ii forecast")
 for _k, _lab in [("RK_lat_0", "latency 0"), ("RK_lat_10", "latency 10"), ("RK_lat_30", "latency 30"), ("RK_lat_100", "latency 100"),
                  ("RK_loss_0.2", "loss 0.2"), ("RK_loss_0.5", "loss 0.5"), ("RK_rad_2", "radius 2"), ("RK_rad_4", "radius 4")]:
     add(_k + "_val", f"C: value of road information at {_lab} (omniscient minus setting)", "P", _k, 5, "probe", "ceiling")
