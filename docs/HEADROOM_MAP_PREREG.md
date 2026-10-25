@@ -419,3 +419,59 @@ the whole screened family (every contrast x stress x metric screened, size print
 p-values beside it); survivors also at stress 1 and 3.5; every probe in one table; no parameter tuned to a probe.
 Headroom is also expressed in team-equivalents using the K1 slope of the same stress. Secondary outcomes (P1
 incidents and victims, response-time percentiles, per-type outcomes, worst-decile seeds) are reported, not tested.
+
+## 11. Addendum C (2026-10-25; road-knowledge propagation sensitivity; committed before any run of these configurations)
+
+Request: measure how sensitive the R1 result is to the simplification that road reports reach the whole fleet through a
+shared table. Run after Tier 3; it does not delay the other tiers (queued behind them). No new hook is needed: the
+sensitivity uses the flags already built (`--probe-road-latency`, `--probe-road-loss`, `--probe-road-radius`).
+
+### 11.1 What the implemented propagation model is (to be documented as such in `docs/HEADROOM_MAP.md`)
+
+One shared table (`core/road_knowledge.c`), laptop-only, not using `comms_transport`, the vbus or any frame. Each tick
+every team observes the cells within `radius` (Chebyshev) of itself. If the observed state of a cell differs from the
+fleet picture, a report is made. The report is lost if the observing team has an active communication-class fault
+(the only link to the comms layer) or with probability `loss` (a hash of seed, tick, team and cell); otherwise it is
+delivered at tick + `latency` to all teams at once (due-tick delivery, one pending slot per cell). A believed damage
+that nobody re-observes expires after 2400 ticks. Not modelled: per-team maps, hop-by-hop relaying, distance-dependent
+delay, scouting, aerial observation, terrain or smoke visibility.
+
+### 11.2 Configurations (one at a time around the R1 default: radius 1, latency 2, loss 0.05)
+
+| Axis | Values | New runs (the default R1 and the strict R1s are in Tier 3) |
+|---|---|---|
+| latency | 0, 2, 10, 30, 100 ticks | 0, 10, 30, 100 |
+| loss | 0.05, 0.2, 0.5 | 0.2, 0.5 |
+| radius | 0, 1, 2, 4 cells | 2, 4 (0 is R1s) |
+
+Each setting is also run with `--causal-actions=reroute,clear_road` against the same setting with actions off. Stress 2
+and 7, development seeds 1001-1100; survivors confirmed on 3001-3100. Value of road information at a setting =
+omniscient (P) minus the setting, as in R1; R3 (instant, no loss, communication-faulted teams also report) is the ceiling
+of this sensitivity. Radius is a visibility or scouting proxy, not a propagation parameter, and is reported as such.
+Mechanism diagnostics reported for every setting: onset-to-known delay (mean, max), reports made and lost, blocked stops,
+unknown partial-debris entries, stale cell-ticks. "Mean report delay" is the onset-to-known delay, which includes the
+time until some team first observes the cell.
+
+### 11.3 Predictions (value = omniscient minus setting, incidents per seed; positive = information matters)
+
+| Question | Prediction | Conf. |
+|---|---|---|
+| Latency 0 to 30 | value is flat: the points differ by under 0.5 incidents and the CI of each includes the others | 0.6 |
+| Latency 100 | value is larger than at 0-30 by at least 0.5 at stress 7 | 0.4 |
+| Loss 0.05 to 0.5 | flat at stress 2; a rise of 0.3-1.0 at stress 7 | 0.45 |
+| Radius 0 to 4 | value falls with radius (more scouting, less loss from not knowing) at stress 7 | 0.5 |
+| Actions (REROUTE, CLEAR_ROAD) | no setting moves incidents by more than 0.5 | 0.55 |
+| Overall | the shared-picture simplification does not matter for any claim about the sign of the value; the value stays under the +1.0 materiality threshold at stress 2 | 0.55 |
+
+Decision rule stated now: if the value is flat across latency 0-30 and loss 0.05-0.5 (all pairwise differences under
+the materiality threshold of 1.0 incident or 1.0 victim, with the CIs overlapping), the report says the simplification
+does not matter at this world's damage rate. If it falls or rises by more than the threshold over those ranges, the report
+says a real propagation model is needed before any claim about road information is made. Holm: the new contrasts
+(8 settings x omniscient-minus-setting, plus 8 actions contrasts, x 2 stresses x 2 metrics = 64 tests) join the family.
+
+### 11.4 Design note owed (no implementation)
+
+Beacon-piggyback route versus dedicated message over `comms_transport`: beacon and frame budgets found in the code,
+per-team memory, `path.c` team argument, state hash, mission-link wire format, determinism, board build, dashboard needs,
+a recommendation, and the ceiling value that would justify building it. Written after the results, in
+`docs/HEADROOM_MAP.md`.
