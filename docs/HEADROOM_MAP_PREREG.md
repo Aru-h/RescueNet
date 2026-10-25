@@ -243,3 +243,53 @@ assignment (Hungarian, at most 10 x ~15) of idle teams to open discovered incide
 `calculate_score`, plus a pairwise swap pass for en-route teams, behind a flag; its gap to CBBA is the value of
 coordination under the system's own utility. For the dashboard (no change made): what `route.js` and the map view
 would need to show what each team KNOWS versus the true map is listed in the results document.
+
+## 9. Addendum A (2026-10-25; committed before any probe code or run)
+
+Amendments from a review of this document and from facts checked in the code after the first commit. Nothing has been
+implemented or run. These override sections 4-6 where they differ.
+
+1. **S1 redefined (the first version measured the wrong thing).** Scaling only the cost the planner compares would test a
+   planner that under-estimates prevention, not cheaper prevention. `--probe-prevent-cost=M` now scales BOTH the planner's
+   cost and the real time of the preventive action it prices, by the same M. PREVENT_FIELD (in-field maintenance, no
+   trip) is priced as `t_fr * u_x` with `t_fr` the field-repair duration (34-102 ticks); the probe scales that duration
+   (the maintenance hold, `s_field_kind` 3) and the planner's `cost_field` together. PREVENT (rest at base) is a trip plus
+   rest plus a 4-tick dwell, which has no single "maintenance cost", so it is left unscaled. S1 therefore runs with
+   `--planner-prevent=both` (rest and field), M in {1, 0.5, 0.25}, at level ii (hazard) and level i (draw-aware). The
+   wear reduction a maintenance gives (0.3) is unchanged.
+2. **Demand responds to capacity: guard added.** New arrivals depend on available teams and hidden backlog, so
+   "incidents resolved" can rise because more incidents spawned. For every probe I report incidents spawned per seed,
+   victims seen per seed and the resolved share (resolved / spawned). **Rule:** any incidents-resolved survivor whose
+   gain is matched by a rise in spawned incidents of at least half the gain is flagged "demand-driven" in the table, and
+   the victims-lost result is the one I lean on. M5 (which removes the hidden-backlog penalty) and K1 change the arrival
+   process directly and are labelled so. **K1 wording corrected:** extra capacity brings extra demand, so the slope `s`
+   (incidents per extra team in service) is inflated by demand response, and team-equivalents computed from it are
+   understated, not a lower bound.
+3. **D1 uses the fixed-gate system.** The logged recommendation on a planner run is the planner's. D1 therefore needs F
+   runs (fixed gates, no planner, no AI, v1 world) at stress 2 and 7 on dev seeds; they are added to the run list, with
+   the truth sidecar and dataset kept per seed (the harness keeps `tron_causal_truth.csv` and the dataset in a per-seed
+   directory instead of a temp directory for these runs only).
+4. **Facts checked after the first commit.**
+   * Laptop vbus loss is NOT zero: `CONSENSUS_DEFAULT_LINK_LOSS = 0.05` (decision D4). R1's report loss of 0.05 is that
+     number, not a new one. C2 therefore also sets the vbus loss to 0 (`--vbus-loss=0`) in addition to suppressing
+     communication-class faults; the C2 text "already zero" is withdrawn.
+   * The AI's feature vector reads the execution twin (`fault_predictor_features.c`). D3b's dropout is therefore applied
+     ONLY at the reads in `recovery_manager.c` and in the planner's watchdog evidence, never inside the watchdog or twin
+     getters, so the AI's inputs are not degraded.
+   * Exogeneity of hazard events (M2-M4) is a hypothesis, not a verified fact: a resolved incident might clear a hazard
+     flag, and events are dropped when the incident pool is full (`g_diag_hazard_event_dropped_pool_full`), which
+     depends on behaviour. **Before any M2-M4 policy is written,** I record events under P and under PD on 5 seeds and
+     diff them. If they differ, the replay design is dropped and M2-M4 are reported as not run, with the diff.
+5. **M1 applies to incident-pool tasks only** (system tasks have no victims; `calculate_score` also scores them).
+6. **R1/R2/R3 mechanism diagnostics** (descriptive, so a null is interpretable): share of damaged cells fleet-known at
+   onset; ticks from onset to fleet-known (median, p90); number of team-ticks planned through a cell that was damaged
+   and unknown; number of teams stopped at a truly blocked cell (a stall caused by missing knowledge); stale-belief
+   events (a cell planned as damaged that was already clear). Without these, "R1 about equals omniscient" could not be
+   told from a broken hook.
+7. **Bootstrap p-values** for Holm use `(count_at_or_beyond_zero + 1) / (B + 1)` (two-sided: twice the smaller tail,
+   capped at 1), so no p is exactly 0. B = 20000.
+8. **Optimisation level.** The pilot showed -O2 output identical to -O0 on one seed of one configuration. Before the
+   screen I repeat the byte comparison on 3 seeds for F, P, PD and the AI binary (PA) and for the first of each new
+   probe flag; any difference sends the screen back to -O0.
+9. **C1 and per-team road knowledge** are on the stop-and-ask list; the question was sent to you at the start of
+   implementation, and the rest of the map proceeds without waiting.
