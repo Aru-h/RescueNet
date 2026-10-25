@@ -108,13 +108,14 @@ def percentile(v, q):
 
 
 def parse(stderr, keep_inc=False):
-    out = {"incidents": 0, "tb": {}, "diag": {}}
+    out = {"incidents": 0, "tb": {}, "diag": {}, "per_team": [0] * 10}
     inc = []
     fog_sp = fog_re = 0
     for raw in stderr.splitlines():
         m = THROUGHPUT.match(raw)
         if m:
             out["incidents"] += int(m.group(2))
+            out["per_team"][int(m.group(1))] = int(m.group(2))
             continue
         m = LINE.match(raw)
         if not m:

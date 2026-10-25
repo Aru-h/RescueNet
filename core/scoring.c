@@ -565,6 +565,9 @@ float calculate_score(
         g_scoring_weights.equipment *
             equipment_quality;
 
+    if(g_probe.rr_degraded)
+        final_score *= probe_capability_factor(team);   /* Step 5 RR4 */
+
     return final_score;
 }
 
@@ -792,6 +795,9 @@ float calculate_marginal_bundle_bid(
         *best_insert_position =
             best_position;
     }
+
+    if(g_probe.rr_degraded && best_marginal_bid > 0.0f)
+        best_marginal_bid *= probe_capability_factor(team);   /* Step 5 RR4: capability-aware bid */
 
     return best_marginal_bid;
 }

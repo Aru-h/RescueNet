@@ -144,7 +144,8 @@ void sim_tick(void)
         causal_actions_step();  /* causal profile only; no-op otherwise */
     allocate_all_incidents();
     if(g_sim_role != SIM_ROLE_BOARD)
-        probe_preposition();   /* Step 5 M2-M4; no-op unless --probe-foresight */
+        { probe_preposition();   /* Step 5 M2-M4; no-op unless --probe-foresight */
+          probe_rr_step(); }     /* Step 5 Tier 4; no-op unless --probe-rr */
     simulation_step();
 }
 

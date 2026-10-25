@@ -8,6 +8,7 @@
 #include "path.h"
 #include "allocator.h"
 #include "scoring.h"
+#include "recovery_manager_config.h"
 #include "cbba.h"
 
 HeadroomProbes_t g_probe;
@@ -27,6 +28,8 @@ uint32_t g_probe_ev_mismatch;
 #define PROBE_URGENCY_DIVISOR 3.0f
 
 static uint8_t s_offline[NUM_TEAMS];
+static uint32_t s_busy_until[NUM_TEAMS];     /* RR2a: support team committed until this tick */
+static uint8_t s_support_repair[NUM_TEAMS];   /* RR2a: this faulted team is being repaired by a support team */
 static uint32_t s_stage_id[NUM_INCIDENTS];
 static uint8_t s_stage_n[NUM_INCIDENTS];
 static uint8_t s_perim[GRID_WIDTH * GRID_HEIGHT];
@@ -67,6 +70,8 @@ void probe_reset(void)
     memset(s_stage_n, 0, sizeof(s_stage_n));
     memset(s_perim, 0, sizeof(s_perim));
     memset(s_offline, 0, sizeof(s_offline));
+    memset(s_busy_until, 0, sizeof(s_busy_until));
+    memset(s_support_repair, 0, sizeof(s_support_repair));
     if(g_probe.offline_k > 0u)
     {
         /* k teams chosen by a hash of the seed (the k smallest hash values). */
@@ -529,5 +534,174 @@ void probe_central_assign(void)
                 ag->winner[slots[c]] = (uint8_t)teams[r];
             }
         }
+    }
+}
+
+/* Tier 4 ------------------------------------------------------------------------------------------------------- */
+int probe_team_busy(uint8_t team_id)
+{
+    return team_id < NUM_TEAMS && s_busy_until[team_id] > g_current_tick;
+}
+
+float probe_field_success(uint8_t team_id, float nominal)
+{
+    /* RR2a: a support team brings parts and tools; success 0.9 instead of the self-repair 2/3 (assumed, to verify). */
+    return (team_id < NUM_TEAMS && s_support_repair[team_id]) ? 0.9f : nominal;
+}
+
+float probe_capability_factor(const TeamState_t *team)
+{
+    float work, speed = 1.0f;
+
+    if(!g_probe.rr_degraded)
+        return 1.0f;
+    if(!team->fault_state.active[FAULT_CLASS_MOBILITY] && !team->fault_state.active[FAULT_CLASS_RESOURCE])
+        return 1.0f;
+    work = (float)team_effective_work_rate(team) / (float)team_base_work_rate(team->equipment_level);
+    if(team->fault_state.active[FAULT_CLASS_MOBILITY])
+    {
+        uint8_t sev = team->fault_state.severity[FAULT_CLASS_MOBILITY];
+
+        if(sev >= 4u) speed = 1.0f / 3.0f;       /* moves one tick in three (simulation.c) */
+        else if(sev >= 3u) speed = 0.5f;         /* moves one tick in two */
+    }
+    return work * speed;
+}
+
+/* Earliest tick count until the team's stamina or equipment reaches the level at which the gates send it home. */
+static float time_to_exhaustion(const TeamState_t *t)
+{
+    float ts = (t->stamina - RECOVERY_MANAGER_STAMINA_CRITICAL_THRESHOLD) / STAMINA_OPERATION_COST;
+    float te = ((float)t->equipment_level - (float)RECOVERY_MANAGER_EQUIPMENT_CRITICAL_THRESHOLD) / 3.0f;   /* mean draw 1..5 */
+
+    return ts < te ? ts : te;
+}
+
+void probe_rr_step(void)
+{
+    if(!g_probe.rr_relief && !g_probe.rr_support_repair)
+        return;
+
+    if(g_probe.rr_relief)
+    {
+        for(uint8_t t = 0; t < NUM_TEAMS; t++)
+        {
+            TeamState_t *tired = &g_teams[t];
+            IncidentState_t *inc;
+            int best = -1;
+            float best_score = -1.0f;
+            uint16_t best_eta = 0;
+            float tte;
+
+            if(tired->status != STATUS_ON_SCENE || tired->assigned_task_pool != TASK_POOL_INCIDENT ||
+               tired->assigned_task_slot >= NUM_INCIDENTS || tired->heading_to_rest)
+                continue;
+            inc = &g_incidents[tired->assigned_task_slot];
+            if(!inc->slot_occupied || inc->status != INC_IN_PROGRESS || inc->assigned_team != t)
+                continue;
+            tte = time_to_exhaustion(tired);
+
+            /* A relief team already on scene as support: swap roles when the tired team is about to leave. */
+            if(inc->support_team < NUM_TEAMS && g_teams[inc->support_team].status == STATUS_ON_SCENE && tte <= 8.0f)
+            {
+                TeamState_t *rel = &g_teams[inc->support_team];
+
+                inc->assigned_team = rel->team_id;
+                inc->support_team = NO_ASSIGNMENT;
+                tired->assigned_task_pool = TASK_POOL_NONE;
+                tired->assigned_task_slot = NO_ASSIGNMENT;
+                tired->status = STATUS_AVAILABLE;
+                (void)begin_return_to_safe_zone(tired);
+                g_probe_stats.rr_relief_swap++;
+                continue;
+            }
+            if(inc->support_team != NO_ASSIGNMENT || inc->work_remaining == 0u)
+                continue;
+            /* nearest eligible replacement (idle, can accept, route) by the system's own score */
+            for(uint8_t r = 0; r < NUM_TEAMS; r++)
+            {
+                TeamState_t *cand = &g_teams[r];
+                uint16_t eta;
+                float sc;
+
+                if(r == t || (cand->status != STATUS_AVAILABLE && cand->status != STATUS_RESTING) || cand->assigned_task_pool != TASK_POOL_NONE ||
+                   !team_can_accept_incident(cand, inc))
+                    continue;
+                eta = find_path_cost(cand->loc_x, cand->loc_y, inc->loc_x, inc->loc_y);
+                if(eta == 0xFFFFu)
+                    continue;
+                sc = calculate_score(cand, inc);
+                if(sc > best_score)
+                {
+                    best_score = sc;
+                    best = r;
+                    best_eta = eta;
+                }
+            }
+            if(best < 0)
+                continue;
+            {
+                uint8_t go = (tte <= (float)best_eta + 1.0f);
+
+                if(!go && g_probe.rr_relief == 2u)
+                    go = (uint8_t)(fault_injector_causal_onset_within(t, (uint32_t)best_eta + 1u) != 0u);   /* realised fault coming */
+                if(go && allocator_assign_support((uint8_t)best, tired->assigned_task_slot))
+                    g_probe_stats.rr_relief_assign++;
+            }
+        }
+    }
+
+    if(g_probe.rr_support_repair)
+    {
+        for(uint8_t sup = 0; sup < NUM_TEAMS; sup++)
+        {
+            TeamState_t *st = &g_teams[sup];
+            int target = -1;
+            uint16_t best_eta = 0xFFFFu;
+
+            if(st->specialization != SPEC_SUPPORT || st->status != STATUS_AVAILABLE || st->assigned_task_pool != TASK_POOL_NONE ||
+               probe_team_busy(sup) || probe_team_offline(sup) ||
+               st->fault_state.active[FAULT_CLASS_MOBILITY] || st->fault_state.active[FAULT_CLASS_RESOURCE])
+                continue;
+            for(uint8_t f = 0; f < NUM_TEAMS; f++)
+            {
+                TeamState_t *ft = &g_teams[f];
+                uint16_t eta;
+
+                if(f == sup || s_support_repair[f] || fault_injector_causal_team_held(f) ||
+                   (ft->status != STATUS_EN_ROUTE && ft->status != STATUS_ON_SCENE) || ft->heading_to_rest ||
+                   !(ft->fault_state.active[FAULT_CLASS_MOBILITY] || ft->fault_state.active[FAULT_CLASS_RESOURCE]))
+                    continue;
+                eta = find_path_cost(st->loc_x, st->loc_y, ft->loc_x, ft->loc_y);
+                if(eta < best_eta)
+                {
+                    best_eta = eta;
+                    target = f;
+                }
+            }
+            if(target < 0 || best_eta == 0xFFFFu || best_eta > 60u)
+                continue;
+            {
+                TeamState_t *ft = &g_teams[target];
+                uint8_t kind = ft->fault_state.active[FAULT_CLASS_MOBILITY] ? 1u : 2u;
+
+                s_support_repair[target] = 1u;
+                g_probe_stats.rr_repair_try++;
+                if(fault_injector_causal_field_start((uint8_t)target, kind))
+                {
+                    /* The repair holds the faulted team from now (it waits for the helper, then is repaired); the
+                     * support team is committed for the helper's travel plus the repair. */
+                    st->loc_x = ft->loc_x;
+                    st->loc_y = ft->loc_y;
+                    g_probe_stats.rr_repair_commit++;
+                    s_busy_until[sup] = g_current_tick + best_eta + fault_injector_causal_field_remaining((uint8_t)target) + 1u;
+                }
+                else
+                    s_support_repair[target] = 0u;
+            }
+        }
+        for(uint8_t f = 0; f < NUM_TEAMS; f++)
+            if(s_support_repair[f] && !fault_injector_causal_team_held(f))
+                s_support_repair[f] = 0u;
     }
 }

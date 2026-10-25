@@ -165,6 +165,8 @@ void fault_injector_causal_prevent_order(uint8_t team_id);
 int fault_injector_causal_rest_hold(uint8_t team_id);
 /* Hazard-oracle forecast: P(onset within the horizon) for mobility [0] and resource [1], from the hidden state.
  * after: 0 as is, 1 after a rest at a safe zone, 2 after in-field maintenance. Laptop only. */
+int fault_injector_causal_onset_within(uint8_t team_id, uint32_t ticks);   /* Step 5 RR1 */
+uint32_t fault_injector_causal_field_remaining(uint8_t team_id);   /* Step 5 RR2a */
 void fault_injector_causal_road_base(int x, int y, uint8_t *cost, uint8_t *navigable);   /* Step 5 probe */
 float fault_injector_causal_future_victim_loss(uint8_t slot, uint32_t window);   /* Step 5 probe */
 void fault_injector_causal_forecast(uint8_t team_id, uint8_t after, float out[2]);

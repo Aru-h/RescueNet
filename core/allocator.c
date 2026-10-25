@@ -276,7 +276,7 @@ bool team_can_accept_incident(const TeamState_t *team, const IncidentState_t *in
     if(team == NULL || incident == NULL)
         return false;
 
-    if(probe_team_offline(team->team_id))   /* Step 5 K2: out of service */
+    if(probe_team_offline(team->team_id) || probe_team_busy(team->team_id))   /* Step 5 K2 out of service, RR2a committed */
         return false;
 
     /* Causal ABORT / REALLOCATION (Step 3.6): the team gave this incident up. */
@@ -480,7 +480,7 @@ static void allocate_support_team(void)
     for(uint8_t i = 0; i < NUM_TEAMS; i++)
     {
         if(g_teams[i].specialization == SPEC_SUPPORT &&
-           g_teams[i].status == STATUS_AVAILABLE && !probe_team_offline(i))
+           g_teams[i].status == STATUS_AVAILABLE && !probe_team_offline(i) && !probe_team_busy(i))
         {
             support = &g_teams[i];
             break;

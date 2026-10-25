@@ -1881,6 +1881,17 @@ void recovery_manager_step(void)
         for(size_t i = 0; i < RECOVERY_MANAGER_EVALUATOR_COUNT; i++)
             signals[i] = evaluators[i](team, twin, &watchdog);
 
+        if(g_probe.rr_autonomy && signals[RM_EVAL_IDX_COMMUNICATION].reason == RECOVERY_REASON_COMMUNICATION_FAILURE)
+            signals[RM_EVAL_IDX_COMMUNICATION] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);   /* Step 5 RR5 */
+        if(g_probe.rr_degraded && (team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE) && !team->heading_to_rest)
+        {
+            /* Step 5 RR4: a faulted team keeps working at its reduced rate; the stamina and progress evaluators still act. */
+            if(signals[RM_EVAL_IDX_MOBILITY].reason == RECOVERY_REASON_MOBILITY_FAILURE)
+                signals[RM_EVAL_IDX_MOBILITY] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
+            if(signals[RM_EVAL_IDX_EQUIPMENT].reason == RECOVERY_REASON_EQUIPMENT_FAULT && team->equipment_level > 0u)
+                signals[RM_EVAL_IDX_EQUIPMENT] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
+        }
+
         if(probe_dropped)
         {
             signals[RM_EVAL_IDX_PROGRESS] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);

@@ -46,6 +46,11 @@ typedef struct
     float speed[5];              /* V1: cells per tick by specialization (0 = default 1) */
     uint8_t team_mix;            /* TM1: 1 a, 2 b, 3 c (0 = default i % 5) */
     uint8_t central_alloc;       /* DQ1 */
+    /* Tier 4 recovery repertoire */
+    uint8_t rr_relief;           /* RR1: 1 rate-aware early support (hot swap), 2 plus realised fault onsets */
+    uint8_t rr_support_repair;   /* RR2a: a SUPPORT team repairs a faulted team in place */
+    uint8_t rr_degraded;         /* RR4: a faulted team keeps working, capability-aware bids */
+    uint8_t rr_autonomy;         /* RR5: communication faults do not release a team's task */
     /* M2-M4: foresight of exogenous hazard events by record and replay */
     uint8_t foresight;           /* bit 0 fire, bit 1 structural collapse; 0xFF all */
     uint16_t lead;               /* ticks of warning */
@@ -67,6 +72,12 @@ extern uint32_t g_probe_ev_mismatch;                     /* replay: events that 
 
 /* DQ1: after cbba_run(), replace the auction's assignment by a central optimal one-to-one assignment. */
 void probe_central_assign(void);
+
+/* Tier 4: once per tick after allocation (relief, support repair). */
+void probe_rr_step(void);
+int probe_team_busy(uint8_t team_id);   /* committed to a support repair: takes no new assignment */
+float probe_capability_factor(const TeamState_t *team);   /* RR4: bid multiplier for a faulted team (1.0 otherwise) */
+float probe_field_success(uint8_t team_id, float nominal);   /* RR2a: success probability of a field repair */
 
 /* K2 */
 int probe_team_offline(uint8_t team_id);
@@ -90,6 +101,7 @@ typedef struct
 {
     uint32_t oracle_misses, oracle_false_alarms;
     uint32_t dropout_team_ticks;
+    uint32_t rr_relief_assign, rr_relief_swap, rr_repair_try, rr_repair_commit, rr_repair_ok_busy_ticks;
     uint32_t tb[5][7];   /* TB: team-ticks by specialization x {resting, heading to rest, held in repair, faulted (mobility or resource, not held), on scene, en route to task, available}; the Step 4 order */
     uint32_t seen_by_prio[5], lost_by_prio[5];   /* victims seen / lost by the incident's priority at that time (index = Priority_t) */
 } HeadroomProbeStats_t;

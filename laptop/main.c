@@ -539,6 +539,22 @@ int main(int argc, char **argv)
             else if(strcmp(a, "team-mix=b") == 0) g_probe.team_mix = 2;
             else if(strcmp(a, "team-mix=c") == 0) g_probe.team_mix = 3;
             else if(strcmp(a, "central-alloc") == 0) g_probe.central_alloc = 1;
+            else if(strncmp(a, "rr=", 3) == 0)
+            {
+                char buf[96], *tok;
+
+                strncpy(buf, a + 3, sizeof(buf) - 1); buf[sizeof(buf) - 1] = 0;
+                for(tok = strtok(buf, ","); tok != NULL; tok = strtok(NULL, ","))
+                {
+                    if(strcmp(tok, "relief") == 0) g_probe.rr_relief = 1;
+                    else if(strcmp(tok, "relief-foresight") == 0) g_probe.rr_relief = 2;
+                    else if(strcmp(tok, "support-repair") == 0) g_probe.rr_support_repair = 1;
+                    else if(strcmp(tok, "degraded") == 0) g_probe.rr_degraded = 1;
+                    else if(strcmp(tok, "autonomy") == 0) g_probe.rr_autonomy = 1;
+                    else if(strcmp(tok, "all") == 0) { g_probe.rr_relief = 1; g_probe.rr_support_repair = 1; g_probe.rr_degraded = 1; g_probe.rr_autonomy = 1; }
+                    else { fprintf(stderr, "invalid --probe-rr (relief, relief-foresight, support-repair, degraded, autonomy, all)\n"); exit(2); }
+                }
+            }
             else if(strncmp(a, "foresight=", 10) == 0)
             {
                 if(strcmp(a + 10, "fire") == 0) g_probe.foresight = 1;
@@ -1379,9 +1395,10 @@ int main(int argc, char **argv)
                     g_probe_inc_log[ii].prio, g_probe_inc_log[ii].reported, g_probe_inc_log[ii].arrived, g_probe_inc_log[ii].resolved);
         }
         if(g_probe.any)
-            fprintf(stderr, "[DIAG PROBE] oracle_misses=%u oracle_false_alarms=%u dropout_team_ticks=%u events_seen=%u events_planned=%u event_mismatch=%u\n",
+            fprintf(stderr, "[DIAG PROBE] oracle_misses=%u oracle_false_alarms=%u dropout_team_ticks=%u events_seen=%u events_planned=%u event_mismatch=%u rr_relief_assign=%u rr_relief_swap=%u rr_repair_try=%u rr_repair_commit=%u\n",
                 g_probe_stats.oracle_misses, g_probe_stats.oracle_false_alarms, g_probe_stats.dropout_team_ticks,
-                g_probe_ev_seen_n, g_probe_ev_plan_n, g_probe_ev_mismatch);
+                g_probe_ev_seen_n, g_probe_ev_plan_n, g_probe_ev_mismatch, g_probe_stats.rr_relief_assign,
+                g_probe_stats.rr_relief_swap, g_probe_stats.rr_repair_try, g_probe_stats.rr_repair_commit);
 
         extern uint32_t g_diag_discovered_by_type[NUM_INCIDENT_TYPES];
         extern uint32_t g_diag_resolved_by_type[NUM_INCIDENT_TYPES];

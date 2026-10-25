@@ -1552,7 +1552,7 @@ static void causal_field_step(uint8_t team_id)
 
         if(kind != 3u)
             ok = (uint8_t)(causal_unit(g_current_tick, team_id, CAUSAL_SALT_FIELD_OK) <
-                           g_causal_persist_params.field_success);
+                           probe_field_success(team_id, g_causal_persist_params.field_success));
         if(ok)
         {
             if(kind == 1u)
@@ -1654,6 +1654,49 @@ void fault_injector_causal_forecast(uint8_t team_id, uint8_t after, float out[2]
         out[0] = hit_mob ? 1.0f : 0.0f;
         out[1] = hit_res ? 1.0f : 0.0f;
     }
+}
+
+/* Step 5 RR1 (foresight): does a mobility or resource fault begin within `ticks` (realised draws, current hazard)? */
+int fault_injector_causal_onset_within(uint8_t team_id, uint32_t ticks)
+{
+    const CausalFaultParams_t *k = &g_causal_params;
+    float p_mob, p_res;
+
+    if(team_id >= NUM_TEAMS || !fault_profile_is_causal())
+        return 0;
+    {
+        float out[2];
+        uint8_t save = g_probe.hazard_draw;
+
+        g_probe.hazard_draw = 0u;
+        fault_injector_causal_forecast(team_id, 0u, out);   /* P(onset within the horizon) = 1 - exp(-H h) */
+        g_probe.hazard_draw = save;
+        {
+            float horizon = g_causal_persist_params.forecast_horizon_ticks;
+            float h_mob = -logf(1.0f - (out[0] < 0.999f ? out[0] : 0.999f)) / horizon;
+            float h_res = -logf(1.0f - (out[1] < 0.999f ? out[1] : 0.999f)) / horizon;
+
+            p_mob = 1.0f - expf(-h_mob);
+            p_res = 1.0f - expf(-h_res);
+        }
+    }
+    (void)k;
+    for(uint32_t j = 0; j < ticks; j++)
+    {
+        if(causal_unit(g_current_tick + j, team_id, CAUSAL_SALT_ONSET(FAULT_CLASS_MOBILITY)) < p_mob)
+            return 1;
+        if(causal_unit(g_current_tick + j, team_id, CAUSAL_SALT_ONSET(FAULT_CLASS_RESOURCE)) < p_res)
+            return 1;
+    }
+    return 0;
+}
+
+/* Step 5 RR2a: ticks left of the field hold of this team. */
+uint32_t fault_injector_causal_field_remaining(uint8_t team_id)
+{
+    if(team_id >= NUM_TEAMS || s_field_kind[team_id] == 0u || s_field_end[team_id] <= g_current_tick)
+        return 0u;
+    return s_field_end[team_id] - g_current_tick;
 }
 
 static void causal_step(void)
