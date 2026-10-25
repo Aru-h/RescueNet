@@ -65,6 +65,17 @@ loss and radius.
   deleted all 54 and re-ran them with B1, so every Tier 0 result comes from B1; (5) the queue that stalled for about 20
   minutes had run nothing, so no result was affected; (6) the 16 Step 4 reference runs (P, PD, PA, F, seeds 1001-1004,
   stress 2) reproduce the Step 4 numbers exactly with the -O2 build.
+* **Full `make check-*` suite before Tier 4 (tree `98fd08c`, 53 targets run, board link targets excluded here and run
+  separately).** 47 pass. Six failed to link, and I compared each against the frozen Step 4 tree `c7408be` in a separate
+  worktree: **four fail identically at `c7408be`** (`check-consensus-selftest`, `check-fault-predictor-features-selftest`,
+  `check-zone-parity`, `check-zone-refresh`: their stub link sets lack symbols added in Step 3.x such as
+  `causal_actions_debris_held_at` and `fault_profile_causal_fix`; pre-existing, not touched here). **Two were caused by
+  my hooks** (`check-realloc-gate`, `check-recovery-predictor-stress`: their stub link sets lack the new `probe_*`
+  symbols); fixed in `laptop/tools/causal_link_stubs.inc` only (tools, no core change), both pass now. The ARM
+  single-board compile, link and symbol checks pass (`check-board-single`), with the central allocator compiled out of
+  the board build. The multi-board `check-board-link` is the known pre-existing failure (vendored BSP folder missing).
+  Byte-identity of the default output against `c7408be`: six profiles, C1 md5 `b248bea72ce2ceb81389762dccc0a749`, and
+  the causal variants with the planner (oracle and hazard), recovery actions on, and hold-repair: identical.
 * **Per-run tables** are committed in `docs/data/headroom/` (one CSV per tier: stress, configuration, seed, incidents,
   victims lost and seen, spawned, priority-1 outcomes, teams in service, key counters, wall time, binary hash); the
   analysis scripts run from them. The D1 inputs (datasets of 30 seeds) are large and not committed; `detection_delay.py`

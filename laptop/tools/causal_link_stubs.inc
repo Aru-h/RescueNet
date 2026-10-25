@@ -34,3 +34,11 @@ void team_set_available(TeamState_t *team) { team->status = STATUS_AVAILABLE; }
 uint32_t g_diag_exclusions[3];
 void allocator_exclude_team(uint8_t team_id, uint32_t incident_id, uint32_t until_tick) { (void)team_id; (void)incident_id; (void)until_tick; }
 #endif
+
+/* Step 5 probe hooks (core/headroom_probes.h): off, as in every run that is not a --probe-* run. */
+#include "headroom_probes.h"
+HeadroomProbes_t g_probe;
+void probe_central_assign(void) {}
+int probe_team_busy(uint8_t team_id) { (void)team_id; return 0; }
+int probe_team_offline(uint8_t team_id) { (void)team_id; return 0; }
+int probe_evidence_dropped(uint8_t team_id) { (void)team_id; return 0; }
