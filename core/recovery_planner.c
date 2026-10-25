@@ -1352,6 +1352,61 @@ void planner_preempt_step(void)
             log_decision(&d);
         }
     }
+
+    /* Step 5 RR2a (opt-in probe): a SUPPORT team that is not idle is pulled off its own task to repair a faulted team
+     * in place, priced with the same primitive as the other preemptions (pick_preempt_team: the support team's switch
+     * cost, the last-specialist approval, the margin). Benefit = what the faulted team's best response without help
+     * costs, minus holding it for the helper's travel plus the repair, minus the 10 percent that still fails. Counted;
+     * the forgone work of the preempted task is the switch cost. */
+    if(g_probe.rr_support_repair)
+    {
+        for(uint8_t f = 0; f < NUM_TEAMS; f++)
+        {
+            const TeamState_t *ft = &g_teams[f];
+            const IncidentState_t *ftask;
+            PersistCosts_t c;
+            float pv[3] = {0.0f, 0.0f, 0.0f};
+            float best, t_fr, u_f, with_help, benefit, net, sw;
+            uint8_t who, free_support = 0;
+            int denied = 0;
+
+            if(probe_rr_repair_pending(f) || fault_injector_causal_team_held(f) || ft->heading_to_rest ||
+               (ft->status != STATUS_EN_ROUTE && ft->status != STATUS_ON_SCENE) ||
+               !(ft->fault_state.active[FAULT_CLASS_MOBILITY] || ft->fault_state.active[FAULT_CLASS_RESOURCE]))
+                continue;
+            for(uint8_t t = 0; t < NUM_TEAMS; t++)
+                if(g_teams[t].specialization == SPEC_SUPPORT && g_teams[t].status == STATUS_AVAILABLE && !probe_team_busy(t))
+                    free_support = 1;
+            if(free_support)
+                continue;   /* an idle helper is committed for free by probe_rr_step */
+            pv[ft->fault_state.active[FAULT_CLASS_MOBILITY] ? 0 : 2] = 1.0f;
+            persist_costs(ft, pv, &c);
+            best = c.stay < c.go ? c.stay : c.go;
+            if(c.fr < best)
+                best = c.fr;
+            t_fr = ((float)g_causal_persist_params.field_min_ticks + (float)g_causal_persist_params.field_max_ticks) / 2.0f;
+            ftask = team_task(ft);
+            u_f = (ftask != NULL) ? incident_urgency(ftask) : s_ctx.ubar;
+            with_help = (g_planner.ref_travel_ticks + t_fr) * u_f + 0.1f * best;
+            benefit = best - with_help;
+            if(benefit <= 0.0f)
+                continue;
+            g_probe_stats.rr_repair_preempt_considered++;
+            who = pick_preempt_team(ft->loc_x, ft->loc_y, benefit, t_fr, 1, &net, &sw, &denied);
+            if(who == NO_ASSIGNMENT)
+                continue;
+            {
+                const IncidentState_t *own = team_task(&g_teams[who]);
+
+                if(planner_release_team_for_preempt(&g_teams[who]) && probe_rr_commit_repair(who, f))
+                {
+                    s_team[who].preempt_until = g_current_tick + 1u + g_planner.preempt_cooldown_ticks;
+                    g_probe_stats.rr_repair_preempt_done++;
+                    g_probe_stats.rr_repair_forgone_ticks += (own != NULL) ? own->work_remaining : 0u;   /* work units left on the task it was pulled off */
+                }
+            }
+        }
+    }
 }
 
 #else /* board: no world storage, no Layer B / preemption */

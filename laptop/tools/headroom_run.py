@@ -13,6 +13,7 @@ and every run passes --diag --probe-diag (output only). The baseline P also reco
 (--probe-record) that the foresight probes replay (--probe-events).
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -168,6 +169,17 @@ def parse(stderr, keep_inc=False):
     return out
 
 
+_MD5 = {}
+
+
+def bin_md5(name):
+    """Short md5 of a binary in the bin directory in use (provenance, recorded in every result)."""
+    if name not in _MD5:
+        with open(os.path.join(BIN, name), "rb") as fh:
+            _MD5[name] = hashlib.md5(fh.read()).hexdigest()[:12]
+    return _MD5[name]
+
+
 def build(args=None):
     os.makedirs(BIN, exist_ok=True)
     cf = ["cc", "-std=gnu11", "-O2", "-w", "-DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS", "-DVIRTUAL_BUS_ENABLED=1",
@@ -205,7 +217,8 @@ def run_one(out, cfg, stress, seed, ticks, keep, set_name):
         if p.returncode != 0:
             raise RuntimeError(f"{' '.join(cmd)} exited {p.returncode}\n{p.stderr[-300:]}")
         r = parse(p.stderr)
-        r.update({"seed": seed, "config": cfg, "stress": stress, "wall_s": round(time.time() - t0, 1)})
+        r.update({"seed": seed, "config": cfg, "stress": stress, "wall_s": round(time.time() - t0, 1),
+                  "bin": bin_md5(binary)})
         if keep:
             kd = os.path.join(d, "raw", str(seed))
             os.makedirs(kd, exist_ok=True)
@@ -235,7 +248,11 @@ def main():
     ap.add_argument("--ticks", type=int, default=3000)
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "headroom", "res"))
     ap.add_argument("--keep", action="store_true", help="keep the dataset and truth CSVs per seed (D1)")
+    ap.add_argument("--bin-dir", default="", help="directory with the frozen noai/ai binaries (default build/headroom/bin)")
     a = ap.parse_args()
+    global BIN
+    if a.bin_dir:
+        BIN = os.path.abspath(a.bin_dir)
     if a.cmd == "list":
         for k, (b, v) in CONFIGS.items():
             print(k, b, " ".join(v) if v is not None else "(fault-profile=none)")

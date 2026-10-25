@@ -400,7 +400,10 @@ const uint8_t *probe_perimeter_overlay(void)
     return s_perim;
 }
 
-/* DQ1 ------------------------------------------------------------------------------------------------------------ */
+/* DQ1 ------------------------------------------------------------------------------------------------------------
+ * Central optimal assignment: a laptop-only UPPER BOUND on coordination under the system's own utility, not a
+ * deployable allocator. Compiled out of every build without world storage (the boards). */
+#if ENVIRONMENT_HAS_WORLD_STORAGE
 #define DQ_MAXN 64
 /* Hungarian algorithm (minimisation), rows <= cols, a[1..n][1..m]; returns assignment col -> row in p[]. */
 static void hungarian(int n, int m, long a[DQ_MAXN + 1][DQ_MAXN + 1], int p[DQ_MAXN + 1])
@@ -537,6 +540,10 @@ void probe_central_assign(void)
     }
 }
 
+#else /* !ENVIRONMENT_HAS_WORLD_STORAGE: no central allocator on a board */
+void probe_central_assign(void) {}
+#endif /* DQ1 */
+
 /* Tier 4 ------------------------------------------------------------------------------------------------------- */
 int probe_team_busy(uint8_t team_id)
 {
@@ -575,6 +582,35 @@ static float time_to_exhaustion(const TeamState_t *t)
     float te = ((float)t->equipment_level - (float)RECOVERY_MANAGER_EQUIPMENT_CRITICAL_THRESHOLD) / 3.0f;   /* mean draw 1..5 */
 
     return ts < te ? ts : te;
+}
+
+int probe_rr_repair_pending(uint8_t faulted_id)
+{
+    return faulted_id < NUM_TEAMS && s_support_repair[faulted_id];
+}
+
+int probe_rr_commit_repair(uint8_t sup, uint8_t target)
+{
+    TeamState_t *st = &g_teams[sup], *ft = &g_teams[target];
+    uint8_t kind = ft->fault_state.active[FAULT_CLASS_MOBILITY] ? 1u : 2u;
+    uint16_t eta = find_path_cost(st->loc_x, st->loc_y, ft->loc_x, ft->loc_y);
+
+    if(eta == 0xFFFFu)
+        return 0;
+    s_support_repair[target] = 1u;
+    g_probe_stats.rr_repair_try++;
+    if(fault_injector_causal_field_start(target, kind))
+    {
+        /* The repair holds the faulted team from now (it waits for the helper, then is repaired); the support team is
+         * committed for the helper's travel plus the repair, and is taken from wherever it was. */
+        st->loc_x = ft->loc_x;
+        st->loc_y = ft->loc_y;
+        g_probe_stats.rr_repair_commit++;
+        s_busy_until[sup] = g_current_tick + eta + fault_injector_causal_field_remaining(target) + 1u;
+        return 1;
+    }
+    s_support_repair[target] = 0u;
+    return 0;
 }
 
 void probe_rr_step(void)
@@ -681,24 +717,7 @@ void probe_rr_step(void)
             }
             if(target < 0 || best_eta == 0xFFFFu || best_eta > 60u)
                 continue;
-            {
-                TeamState_t *ft = &g_teams[target];
-                uint8_t kind = ft->fault_state.active[FAULT_CLASS_MOBILITY] ? 1u : 2u;
-
-                s_support_repair[target] = 1u;
-                g_probe_stats.rr_repair_try++;
-                if(fault_injector_causal_field_start((uint8_t)target, kind))
-                {
-                    /* The repair holds the faulted team from now (it waits for the helper, then is repaired); the
-                     * support team is committed for the helper's travel plus the repair. */
-                    st->loc_x = ft->loc_x;
-                    st->loc_y = ft->loc_y;
-                    g_probe_stats.rr_repair_commit++;
-                    s_busy_until[sup] = g_current_tick + best_eta + fault_injector_causal_field_remaining((uint8_t)target) + 1u;
-                }
-                else
-                    s_support_repair[target] = 0u;
-            }
+            (void)probe_rr_commit_repair(sup, (uint8_t)target);
         }
         for(uint8_t f = 0; f < NUM_TEAMS; f++)
             if(s_support_repair[f] && !fault_injector_causal_team_held(f))

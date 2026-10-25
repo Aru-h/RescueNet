@@ -41,6 +41,35 @@ Because everybody knows everything after `latency` ticks, **the value of road in
 bound** (the real propagation is slower and lossier). The Addendum C sensitivity (latency 0-100, loss 0.05-0.5, radius
 0-4) measures how much the lower bound moves; its result goes in section B when it has run.
 
+## A2. The shared road picture understates ignorance
+
+Road knowledge is one fleet-wide table in which everybody learns everything `latency` ticks after one team sees it
+(section A). Real teams would learn more slowly, unevenly and with errors, so **the model understates how little the
+fleet knows, and the measured "value of road information" (omniscient minus the shared-picture setting) is a lower bound**
+on what road information is worth. The Addendum C sensitivity measures how much the lower bound moves with latency,
+loss and radius.
+
+## P. Provenance and integrity of the results
+
+* **Binaries are frozen per tier** (`build/headroom/frozen/<name>/`) and the runner records the binary's md5 in every
+  result and in the CSV. Tier 0 and Tier 1 use **B1** = the tree committed as `ac72fd1` (hooks for D, S, M, K, W, V, TM,
+  DQ1 and the road-knowledge module, no recovery-repertoire code), `noai` md5 `63a3f3bfb95f`, `ai` md5 `a6bbe7c30172`,
+  built with `-O2`. Results written before the runner recorded the hash are tagged B1 in the CSV because their file time
+  is after the B1 build.
+* **Checks done on the results written so far (Tier 0 baselines, before the Tier 1 sweep):** (1) run counts per
+  condition: 100 per (stress, configuration) for P, F (both stresses) and the no-fault reference, seeds 1001-1100
+  contiguous; (2) no duplicates (one file per seed, the `config` field of each file equals its directory); (3) no
+  partial runs (no `.tmp` files, every file has incidents, victims and the time budget); (4) **no mixing of binaries:
+  54 of the 100 stress-2 P results had been written by an earlier build** (before the W, V, K2, DQ1 and TM1 hooks
+  existed). I re-ran 8 of them with B1 (8 of 8 identical in incidents, victims, spawned and the time budget), then
+  deleted all 54 and re-ran them with B1, so every Tier 0 result comes from B1; (5) the queue that stalled for about 20
+  minutes had run nothing, so no result was affected; (6) the 16 Step 4 reference runs (P, PD, PA, F, seeds 1001-1004,
+  stress 2) reproduce the Step 4 numbers exactly with the -O2 build.
+* **Per-run tables** are committed in `docs/data/headroom/` (one CSV per tier: stress, configuration, seed, incidents,
+  victims lost and seen, spawned, priority-1 outcomes, teams in service, key counters, wall time, binary hash); the
+  analysis scripts run from them. The D1 inputs (datasets of 30 seeds) are large and not committed; `detection_delay.py`
+  regenerates the table from `headroom_run.py run --configs F --keep`.
+
 ## B0. Tier 0 results (read-only; 100 development seeds for the time budget, 30 for D1)
 
 ### B0.1 Time budget (TB)

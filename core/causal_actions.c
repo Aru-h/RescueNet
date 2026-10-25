@@ -1,3 +1,4 @@
+#include "headroom_probes.h"
 #include "road_knowledge.h"
 #include "causal_actions.h"
 
@@ -458,6 +459,8 @@ static void step_clear_road(void)
 
                 if(fault_profile_causal_roads_on())
                     work = (kind == 2u) ? g_causal_roads.clear_work_full : g_causal_roads.clear_work_partial;
+                if(g_probe.rr_lane && kind == 2u)   /* Step 5 RR3: open a lane first, about 30 percent of the full clearing work */
+                    work = (uint16_t)((float)g_causal_roads.clear_work_full * 0.3f + 0.5f);
 
                 /* A fully blocked cell is not a valid place to stand (a route
                  * destination must be navigable): work from a neighbour. */
@@ -866,6 +869,11 @@ void causal_actions_road_cleared(const IncidentState_t *task)
     if(slot >= NUM_SYSTEM_TASKS)
         return;
     clear_task_target(slot, &tx, &ty);
+    if(g_probe.rr_lane && fault_injector_causal_road_lane(tx, ty))
+    {
+        g_probe_stats.rr_lanes_opened++;   /* the cell stays damaged as partial debris; the normal triggers clear it later */
+        return;
+    }
     if(fault_injector_clear_cell_faults(tx, ty) > 0)
         s_stats.resolved[CAUSAL_ACTION_CLEAR_ROAD]++;
 }

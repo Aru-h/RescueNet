@@ -475,3 +475,73 @@ Beacon-piggyback route versus dedicated message over `comms_transport`: beacon a
 per-team memory, `path.c` team argument, state hash, mission-link wire format, determinism, board build, dashboard needs,
 a recommendation, and the ceiling value that would justify building it. Written after the results, in
 `docs/HEADROOM_MAP.md`.
+
+## 12. Addendum D (2026-10-25; Tier 4 recovery repertoire design, and process rules from your answers; committed before any Tier 4 run)
+
+### 12.1 Decisions received and how they are applied
+
+1. **DQ1** stays an opt-in branch, labelled an **upper bound only**, and is compiled out of the board build
+   (`core/headroom_probes.c`: the whole central allocator is inside `#if ENVIRONMENT_HAS_WORLD_STORAGE`, with an empty
+   stub otherwise). Proven by the ARM single-board compile and the byte-identity checks before Tier 4 and before the
+   final report.
+2. **Road knowledge as one shared picture** is accepted. `docs/HEADROOM_MAP.md` states that it **understates ignorance**
+   (everyone knows everything after `latency` ticks), so the value of road information is a **lower bound**.
+3. **RR2a** may preempt a SUPPORT team's own task, priced and counted (below). If it still never fires it is reported as
+   a null with the reason (SUPPORT is never idle: capacity). No parameter is tuned to make it fire.
+4. **RR3** uses no new per-cell state: "open a lane" = a fully blocked cell becomes partial debris at about 30 percent of
+   the full clearing work; the normal CLEAR_ROAD triggers clear the rest later.
+5. **Process:** byte-identity vs the frozen build (six profiles, C1 md5, and the planner, recovery-action and hold-repair
+   causal variants), the full `make check-*` suite and the ARM single-board compile are re-run before Tier 4 at scale and
+   again before the final report. Every result records the binary hash; frozen binaries are used per tier. The integrity
+   of the results already written was verified (run counts, duplicates, partial files, mixed binaries; see
+   `docs/HEADROOM_MAP.md`, provenance). One compact per-run CSV per tier is committed with the reports. No probes beyond
+   the pre-registered list.
+
+### 12.2 Tier 4 definitions (flags `--probe-rr=LIST`; tokens `relief`, `relief-foresight`, `support-repair`, `degraded`,
+`autonomy`, `lane`, `all`)
+
+* **RR1 relief / hot swap.** A team on scene with work left, no support, and a replacement that can reach the incident:
+  the replacement is sent as support early, and when it is on scene the roles swap if the tired team is within 8 ticks
+  of the gates' go-home levels (stamina critical 10, equipment critical 10). Trigger **rate-aware** (`relief`): the
+  tired team's time to exhaustion (stamina over the on-scene drain 0.33 per tick; equipment over the mean draw of 3)
+  is at most the replacement's travel time plus 1. **Perfect foresight** (`relief-foresight`): the same, or a realised
+  mobility or resource fault onset (the hash draws, current hazard) within the replacement's travel time. **Reactive**
+  (call a replacement when the gates already say go home) is exactly today's behaviour (the incident reopens and the next
+  auction assigns it), so it is reported analytically and not run. Candidates: idle or rested teams that can accept
+  the incident; the best by the system's own score. The handover cost is the replacement's travel time, which is real.
+* **RR2a support-delivered repair.** A faulted working team (mobility or resource fault, not already held, not heading
+  home) is repaired in place by a SUPPORT team: the team is held from the commit for the support team's travel plus the
+  repair (the field-repair duration 34-102 ticks), the repair succeeds with probability **0.9** (assumed; a self repair
+  is 2/3; to verify), and the support team is committed for the same time and moved to the faulted team. An **idle**
+  SUPPORT team is committed for free. If none is idle, the Step 3.5 preemption primitive prices it
+  (`pick_preempt_team` with `support_only`): benefit = the faulted team's best response without help (stay, go home or
+  self repair, from `persist_costs`) minus holding it for (reference travel + mean repair time) at its task's urgency
+  minus the 10 percent that still fails; cost = the support team's switch cost, the margin and the last-specialist
+  approval of Step 3.5. The preemption counts (`rr_preempt_considered`, `rr_preempt_done`) and the work left on the
+  preempted tasks (`rr_forgone_work`) are reported. **Equipment delivery (RR2b)** already exists in the baseline
+  (a SUPPORT team delivers an equipment cache to a depleted team); it is reported as what the sim does today and not
+  changed.
+* **RR3 lane.** With `--causal-actions=clear_road`: a CLEAR_ROAD task on a fully blocked cell needs 30 percent of the full
+  clearing work (72 of 240 units) and, when done, turns the cell into partial debris (passable at the debris cost); the
+  partial cell is cleared later by the normal triggers. Counted (`rr_lanes`).
+* **RR4 degraded mode.** A working team with a mobility or equipment fault keeps its task (the gates' mobility and
+  equipment signals are not acted on while it works and has equipment left; the stamina and progress evaluators still
+  act), and bids and scores are multiplied by its capability (effective over nominal work rate, and 1/2 or 1/3 for the
+  mobility-fault movement penalty): capability-aware allocation.
+* **RR5 autonomy.** A communication-fault verdict does not release the team's task; it keeps working its last
+  assignment. What the sim does today: a comm fault makes the gates recommend REQUEST_TASK_REALLOCATION (or ABORT at
+  severe) and cuts the team's CBBA broadcast cadence to 1 in (severity + 1) ticks.
+* **RR0** = `relief` + `support-repair` + `degraded` + `autonomy` + `lane` (with `--causal-actions=clear_road`), **not
+  priced jointly by the planner** (a joint pricing is a planner design change, beyond a hook; stop-and-ask item). Each
+  component keeps its own rule above.
+
+### 12.3 Key question and contrasts
+
+Systems: P, P + RR0, PD (detector oracle), PD + RR0, and the hazard oracle with prevention (`S1_ii_1`) with and without
+RR0, at stress 2 and 7, dev seeds 1001-1100, screened and confirmed as in section 6; each RR component alone against P.
+Key question: **does the detector-oracle headroom (PD minus P) grow when the cheaper responses are available**
+(PD+RR0 minus P+RR0 versus PD minus P)? Prediction: no; it stays under +1.0 incident at stress 2 (confidence 0.55);
+RR2a is a null because SUPPORT teams are rarely idle (about 2-4 percent of their time), with the preemption path firing
+a handful of times per seed at most (0.5); RR4 and RR5 move incidents by under 1.0 (0.5); RR1 under 1.0 (0.6); RR3 under
+0.5 (0.6). Holm: the new contrasts (7 RR contrasts + 3 key-question contrasts, x 2 stresses x 2 metrics = 40 tests)
+join the family.

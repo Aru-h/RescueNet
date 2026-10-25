@@ -89,7 +89,28 @@ for _k, _lab in [("RK_lat_0", "latency 0"), ("RK_lat_10", "latency 10"), ("RK_la
 add("GAP", "reference: no faults (fixed gates) minus P", "NOFAULT", "P", 0, "ref", "")
 
 
+CSV = None   # {(stress, config, seed): result-like dict}, filled by --csv so the analysis runs from the committed tables
+
+
+def load_csv(paths):
+    import csv
+    global CSV
+    CSV = {}
+    for p in paths:
+        with open(p, newline="") as fh:
+            for row in csv.DictReader(fh):
+                def num(k):
+                    v = row.get(k, "")
+                    return float(v) if v != "" else 0.0
+                CSV[(float(row["stress"]), row["config"], int(row["seed"]))] = {
+                    "incidents": num("incidents"), "victims_lost": num("victims_lost"), "victims_seen": num("victims_seen"),
+                    "spawned": num("spawned"), "resolved_by_prio": {"1": num("p1_resolved")}, "prio_lost": [num("p1_victims_lost")],
+                    "insvc": num("teams_in_service"), "tb": {}, "seed": int(row["seed"])}
+
+
 def load(res, stress, cfg, seeds):
+    if CSV is not None:
+        return {s: CSV[(float(stress), cfg, s)] for s in seeds if (float(stress), cfg, s) in CSV}
     d = os.path.join(res, f"s{stress:g}", cfg)
     out = {}
     for s in seeds:
@@ -109,6 +130,8 @@ def metric(r, name):
     if name == "seen":
         return float(r["victims_seen"])
     if name == "insvc":
+        if "insvc" in r:
+            return float(r["insvc"])
         return sum(sum(v.get(k, 0) for k in ("on_scene", "to_task", "available")) for v in r["tb"].values()) / 3000.0
     if name == "p1":
         return float(r.get("resolved_by_prio", {}).get("1", 0))
@@ -263,7 +286,10 @@ def main():
     ap.add_argument("--configs", default="")
     ap.add_argument("--out")
     ap.add_argument("--json")
+    ap.add_argument("--csv", default="", help="comma-separated per-run CSVs (docs/data/headroom/*.csv) to analyse instead of --res")
     a = ap.parse_args()
+    if a.csv:
+        load_csv([p for p in a.csv.split(",") if p])
     tiers = {int(t) for t in a.tiers.split(",")}
     text = ""
     if a.cmd == "screen":

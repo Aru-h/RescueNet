@@ -1691,6 +1691,28 @@ int fault_injector_causal_onset_within(uint8_t team_id, uint32_t ticks)
     return 0;
 }
 
+/* Step 5 RR3 (lane): a fully blocked cell becomes partial debris (passable at the debris cost) using only the states
+ * the damage model already has. Returns 1 when a blocked cell was opened. */
+int fault_injector_causal_road_lane(int x, int y)
+{
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+    EnvironmentCell_t *cell;
+    uint16_t cost;
+
+    if(x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT || s_road_kind[x][y] != ROAD_BLOCKED)
+        return 0;
+    cell = &g_environment[x][y];
+    cost = (uint16_t)cell->env_fault_base_cost +
+           (uint16_t)((uint16_t)g_causal_roads.crossing_delay_ticks * g_causal_roads.cost_per_tick);
+    s_road_kind[x][y] = ROAD_PARTIAL;
+    environment_set_cell_operational_state(x, y, cost > 255u ? 255u : (uint8_t)cost, s_env_fault_base_navigable[x][y], 1);
+    return 1;
+#else
+    (void)x; (void)y;
+    return 0;
+#endif
+}
+
 /* Step 5 RR2a: ticks left of the field hold of this team. */
 uint32_t fault_injector_causal_field_remaining(uint8_t team_id)
 {
