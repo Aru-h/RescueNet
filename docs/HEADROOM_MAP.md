@@ -56,6 +56,23 @@ loss and radius.
   DQ1 and the road-knowledge module, no recovery-repertoire code), `noai` md5 `63a3f3bfb95f`, `ai` md5 `a6bbe7c30172`,
   built with `-O2`. Results written before the runner recorded the hash are tagged B1 in the CSV because their file time
   is after the B1 build.
+* **Build environment of each frozen binary** (so a rebuild can be checked later; all built on this machine, the
+  same compiler, flags and OS for both). A rebuild on another machine is only valid if it reproduces the md5.
+
+  | Name | Source commit | `noai` md5 | `ai` md5 | Used for |
+  |---|---|---|---|---|
+  | B1 | `ac72fd1` | `63a3f3bfb95f94e20ef919d2cadb1ebf` | `a6bbe7c30172177e486f4db63b03dbd1` | Tiers 0-3, Addendum C |
+  | B2 | `98fd08c` | `7e33412a46a9...` (full md5 in `build/headroom/frozen/B2_98fd08c/BUILD.txt`) | `d40bd5d785b6...` | Tier 4 |
+
+  Compiler `cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0`; flags `-std=gnu11 -O2 -w -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS
+  -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=1 -Icore -Ilaptop` over `core/*.c laptop/main.c laptop/debug.c
+  laptop/snapshot.c laptop/mission_feed.c laptop/mission_mirror.c -lm` (the `ai` binary adds `-DFAULT_MODEL_LOADED=1`);
+  OS Ubuntu 24.04.4 LTS, kernel Linux 6.18.44-fc-v153 x86_64, glibc 2.39, Python 3.11.15 for the runner and analysis.
+  The binaries and their `BUILD.txt` files are kept under `build/headroom/frozen/` (not committed: binaries).
+* **Run policy (decided with you):** one machine, exactly 4 worker processes at a time and nothing else running; no
+  second session; baselines already run on the same binary are reused (for example PD is also D2 at delay 0, R1 is the
+  default of the Addendum C sensitivity), and baselines are re-run only when the binary differs (Tier 4 re-runs P and PD
+  on B2); the pre-registered sample sizes are not reduced and there is no early stopping.
 * **Checks done on the results written so far (Tier 0 baselines, before the Tier 1 sweep):** (1) run counts per
   condition: 100 per (stress, configuration) for P, F (both stresses) and the no-fault reference, seeds 1001-1100
   contiguous; (2) no duplicates (one file per seed, the `config` field of each file equals its directory); (3) no
