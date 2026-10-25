@@ -293,3 +293,129 @@ implemented or run. These override sections 4-6 where they differ.
    probe flag; any difference sends the screen back to -O0.
 9. **C1 and per-team road knowledge** are on the stop-and-ask list; the question was sent to you at the start of
    implementation, and the rest of the map proceeds without waiting.
+
+## 10. Addendum B (2026-10-25; combined Step 5 headroom map and capacity budget; committed before any probe result)
+
+A second brief arrived while Addendum A was being implemented. It makes this one combined pass with a **priority
+tier order** and results pushed after each tier. It adds probes (scale audit, time budget, teams offline, work-rate
+and travel ceilings, team mix, a recovery repertoire) and renames two. Nothing has been run at scale: only single-seed
+smoke tests of the hooks (to see that flags parse and the default output is unchanged). Sections 1-9 stay in force
+except where this addendum overrides them.
+
+### 10.1 Tier order, naming, push policy
+
+| Tier | Contents | Notes |
+|---|---|---|
+| 0 | SA scale audit (read-only, own commit), TB time budget, D1 gate delay and miss rate | no code that changes a result |
+| 1 | D2, D3a, D3b, S1, M1, M2, M3, M4, M5, DQ1, DQ2, K1, K2 | DQ2 = old C2; DQ1 = old C1 |
+| 2 | W1, W2, W3, W0, V0, V1, TM1 | work efficiency and travel |
+| 3 | R1, R2, R3 (+ REROUTE/CLEAR_ROAD re-measure) | road information; hooks already built |
+| 4 | RR1-RR5, RR0 and the key question | **design finalised by a dated addendum before any Tier 4 run** (allowed: it depends on earlier results) |
+
+After each tier: results table appended to `docs/HEADROOM_MAP.md` (partial), committed and pushed. If time runs out the
+completed tiers are usable and the rest are listed as not run. The brief's wall-clock estimate is 4-5 days; the tier
+order is the priority.
+
+### 10.2 Facts in the brief to verify (done in SA and TB, reported either way)
+
+Work-rate 1-8 per tick scaled by equipment level and independent of specialization (checked: `team_base_work_rate`,
+`team_effective_work_rate`); stage work 100 units; no-fault time budget (resting 44 percent, en route 34, on scene 18,
+available 5 on seed 1001); `CELL_SIZE_METERS = 10` unused while the causal model uses `cell_size_m = 100`; gates' delay
+and miss rate never measured before D1. I verify each, quote what I find, and correct anything that is wrong. Two
+facts found while building: random arrivals respond to capacity (so incidents resolved can rise from more arrivals;
+guard in Addendum A item 2), and the default consensus link loss is 0.05, not zero.
+
+### 10.3 Deviation to report (hazard-event replay)
+
+Addendum A item 4 said M2-M4 are dropped if the hazard events under different systems differ. On 5 seeds under P, PD
+and F, the event lists were identical for 2 seeds and differed by ONE extra late event in 3 seeds (about 115 events per
+seed; so at most 0.9 percent). The cause is that random arrivals choose building sites and mark them, which can stop a
+later fire from spreading there. I keep M2-M4 because the replay is 99 percent exact, and the probe run counts every
+event it sees that the recording lacks (`event_mismatch`); a run with more than 3 percent mismatch is flagged. This is
+a deliberate, disclosed departure from the literal rule, decided on validity (fidelity), not on any result.
+
+### 10.4 New and changed probe definitions (flags `--probe-*`, causal profile only, hooks only)
+
+* **SA** scale audit: no code. Inventory of every quantity that depends on a physical scale, implied values at 10 m,
+  100 m and an "abstract, calibrate by speed" reading, map crossing time and typical trip minutes, one recommendation,
+  and a list of docs and claims to correct. Own commit.
+* **TB** time budget (`--probe-diag` prints it, output only): per stress and specialization, the share of team-ticks
+  resting / en route to an incident / en route to rest / on scene / available / held in repair. Mutually exclusive,
+  priority order: held in repair, resting, heading to rest, on scene, en route to a task, available.
+* **D1** as in section 4, on fixed-gate (F) runs.
+* **K1** `--probe-rest-mult=X` and `--probe-drain-mult=X`, X in {0.5, 0.75, 1.5, 2} each (1 is the baseline); the
+  fit is the least-squares line of mean incidents on mean teams in service over the baseline and all eight runs, per
+  stress, with a seed-bootstrap CI. Team-equivalents = headroom / slope (slope inflated by demand response, so
+  team-equivalents are understated; stated wherever used).
+* **K2** `--probe-offline=k`, k in {1, 2, 3}: k teams, chosen by a hash of the seed, take no assignments (excluded in
+  `team_can_accept_incident`, the support picker and the planner preemption) and receive no fault injections, so they
+  are idle, not faulted. They still send beacons, so the consensus vote sees them as healthy (the brief asks for
+  exclusion from voting; with no fault and no motion their votes are inert, so I expect no difference, and I assert
+  that offline teams finish zero incidents). No change to `NUM_TEAMS` or any layout.
+* **DQ1** central omniscient allocator: `--probe-central-alloc`. After `cbba_run`, a central pass re-solves the
+  one-to-one assignment of idle accepting teams to open discovered incidents (optimal assignment under the system's own
+  `calculate_score` and true path costs), with a pairwise swap pass for en-route teams that have not started work.
+  An opt-in branch in `allocate_all_incidents`; if on inspection it cannot be done without touching bundle or queue
+  invariants it is reported as not run (the stop-and-ask rule). Reading: gap to CBBA = value of coordination under
+  the system's own utility.
+* **DQ2** = old C2 (no communication faults, vbus loss 0).
+* **W1** `--probe-work-mult=X`, X in {1.25, 1.5, 2, 3, 4}: the work a team does per tick on scene is multiplied by X
+  (single hook in `update_incident_work`; support teams too). Fatigue variants: `--probe-work-fatigue=a` (default):
+  stamina and equipment drain per tick unchanged; `--probe-work-fatigue=b`: drain per on-scene tick multiplied by X
+  (drain tied to work done, so the cost of one unit of work is unchanged).
+* **W2** `--probe-work-spec=S:X`, one specialization S in {search, medical, extraction, perimeter, support} at a time,
+  X in {2, 3}.
+* **W3** `--probe-work-stage=early|late:X`, X in {2, 4}: stage 1 of an incident (debris removal, breaching) vs stage 2
+  and later (extrication, medical), by a per-incident stage counter kept by the probe.
+* **W0** `--probe-instant-work`: a stage completes on the tick the team is on scene.
+* **V0** `--probe-instant-travel=task|all`: with `task`, a team assigned to an incident or system task is at the task
+  the same tick; trips to rest keep their normal speed (reported separately). `all` makes trips to rest instant too.
+* **V1** `--probe-speed=search:X,extraction:X,perimeter:X`: SEARCH and EXTRACTION teams move X cells per tick in a
+  straight line ignoring roads and debris, X in {2, 4}; PERIMETER teams move 0.5 cells per tick and treat partial
+  debris as a +255 path cost (soft impassable: truly impassable would need a per-team pathfinder, a core change).
+  Re-measure `--causal-actions=reroute,clear_road` against the same V1 baseline.
+* **TM1** `--probe-team-mix=a|b|c` replaces `specialization = i % 5` by blocks. Mixes derived by rule from the
+  demand shares in `docs/SPECIALIZATION_LOAD.md`, not tuned: **a** = proportional to organic stages done, at least one
+  SEARCH, no SUPPORT: SEARCH 1, MEDICAL 2, EXTRACTION 4, PERIMETER 3, SUPPORT 0; **b** = a with one SUPPORT:
+  1, 2, 3, 3, 1; **c** = proportional to who actually finishes the stages (including support teams): 1, 1, 3, 3, 2.
+  Default is 2, 2, 2, 2, 2.
+* **R1-R3** as in section 4 (already built; the screen runs them).
+* **RR1-RR5, RR0:** outline only here (finalised before running): RR1 relief/hot swap with reactive, rate-aware and
+  perfect-foresight triggers (handover cost = the replacement's travel); RR2 SUPPORT-delivered mobility repair in place
+  and equipment delivery (the support team's forgone tasks are counted; the equipment-cache mechanic already exists
+  and I report what it does today); RR3 two-stage road clearing; RR4 capability-aware allocation for a faulted team that
+  keeps working; RR5 autonomous mode for comm loss (first report what the sim does today). Sources to cite and mark
+  "to verify": INSARAG guidelines (team structure), 12-hour shift rotation practice, field-robot repair figures,
+  Tohoku "teeth of a comb" lane opening.
+
+### 10.5 Predictions for the new probes (direction, magnitude, confidence, realisable?)
+
+Magnitudes: incidents per seed, pooled, positive is better, versus the matched baseline P. Materiality threshold for
+every probe: **+1.0 incident per seed or -1.0 victim lost per seed** (section 6).
+
+| Probe | Prediction | Conf. | Realisable? |
+|---|---|---|---|
+| TB | Resting 44-55 percent in every world; held in repair under 3 percent at stress 2 and 5-10 percent at stress 7; available under 8 percent | 0.55 | Measurement |
+| K1 | Slope between 2 and 8 incidents per extra team in service; rest x0.5 raises teams in service by 0.3-1.0 | 0.45 | Operations |
+| K2 | Each team offline costs 2-6 incidents; three offline costs 8 or more | 0.5 | Measurement |
+| DQ1 | CBBA is within 1.0 incident of the central allocator at both stresses (the in-process auction is already a converged greedy) | 0.55 | Laptop-only bound |
+| W1 | x2 gives +2 to +6 incidents (on-scene is 18 percent of team time, so x2 frees about 9 percent); x4 less than double of x2; variant b below variant a | 0.5 | Needs tools and machinery (a v2 equipment model) |
+| W2 | Single specialization x2 gives under +1.5 incidents each; EXTRACTION and PERIMETER the largest (+1 to +3) | 0.45 | As W1 |
+| W3 | No stage dominates; late x4 within 1 incident of early x4 | 0.30 | As W1 |
+| W0 | +6 to +15 incidents (work is 18 percent of team time but also frees the rest-cycle) | 0.45 | Ceiling |
+| V0 | Larger than W0: +8 to +20 (en route is 34 percent) | 0.5 | Ceiling |
+| V1 | Search/extraction x2 gives +1 to +3; perimeter x0.5 costs -1 to -4; REROUTE and CLEAR_ROAD move incidents by under 0.5 | 0.45 | Needs aerial or off-road assets |
+| TM1 | All three mixes within +-1.5 incidents of the default | 0.5 | Free (configuration) |
+| RR key question | With all five responses available, the detector-oracle headroom (PD-P) stays under +1.0 incident at stress 2 | 0.55 | Depends on the response |
+
+Overall: capacity and speed levers (K, W, V) dominate information levers (D, S, M) by a factor of at least 3 in
+incidents per team-equivalent. Confidence 0.6. This is the claim the combined map tests.
+
+### 10.6 Statistics, restated
+
+Unchanged: screen at stress 2 and 7 on 1001-1100; survival = paired CI lower bound above 0 and point estimate at least
+the materiality threshold on at least one metric; confirm on 3001-3100 with same sign, CI excluding 0 and Holm over
+the whole screened family (every contrast x stress x metric screened, size printed in the report; unadjusted
+p-values beside it); survivors also at stress 1 and 3.5; every probe in one table; no parameter tuned to a probe.
+Headroom is also expressed in team-equivalents using the K1 slope of the same stress. Secondary outcomes (P1
+incidents and victims, response-time percentiles, per-type outcomes, worst-decile seeds) are reported, not tested.
