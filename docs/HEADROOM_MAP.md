@@ -41,6 +41,73 @@ Because everybody knows everything after `latency` ticks, **the value of road in
 bound** (the real propagation is slower and lossier). The Addendum C sensitivity (latency 0-100, loss 0.05-0.5, radius
 0-4) measures how much the lower bound moves; its result goes in section B when it has run.
 
+## B0. Tier 0 results (read-only; 100 development seeds for the time budget, 30 for D1)
+
+### B0.1 Time budget (TB)
+
+Shares of team-ticks, mean over seeds 1001-1100, planner P and fixed gates F in the v1 world. The categories are
+mutually exclusive in the priority order resting, heading to rest, held in a field repair, faulted (mobility or
+resource fault active), on scene, en route to a task, available. "In service" = on scene + to task + available, in teams
+out of 10. The no-fault reference has no probe diagnostics; the one-seed figures in `docs/SCALE_AUDIT.md` (resting 43.9,
+en route 33.7, on scene 17.7, available 4.8 percent) stand in for it and match the brief.
+
+| Condition | resting | to rest | held in repair | faulted | on scene | to task | available | in service (of 10) |
+|---|---|---|---|---|---|---|---|---|
+| P stress 2 | 49.8% | 10.4% | 0.0% | 3.2% | 9.5% | 24.5% | 2.6% | 3.66 |
+| P stress 7 | 53.6% | 15.4% | 0.0% | 6.2% | 7.0% | 15.9% | 1.9% | 2.48 |
+| F stress 2 | 49.1% | 10.4% | 0.9% | 2.5% | 9.9% | 24.1% | 3.3% | 3.72 |
+| F stress 7 | 53.5% | 15.4% | 1.7% | 4.6% | 6.8% | 15.6% | 2.3% | 2.47 |
+
+Per specialization (P, stress 2 / stress 7), in teams in service of 2: SEARCH 4.32 / 2.81 (per 10), MEDICAL 3.63 / 2.39,
+EXTRACTION 3.90 / 2.70, PERIMETER 3.55 / 2.43, SUPPORT 2.91 / 2.08. The full per-specialization table is produced by
+`headroom_report.py budget`.
+
+Findings (descriptive):
+
+* **About half of all team time is spent resting in every condition** (49-54 percent), and 10-15 percent more is spent
+  travelling to rest: roughly 60 to 69 percent of the fleet's time is rest-related, against 7 to 10 percent on scene doing
+  work. The stress-2 world already has fewer teams in service (3.7) than the no-fault world (about 4.8).
+* The time-on-scene share falls from 17.7 percent (no faults) to 9.5 percent (stress 2) and 7.0 percent (stress 7).
+  Travel to tasks (24.5 percent at stress 2) is two to three times the time spent working. Travel and rest, not work, is
+  where the fleet's time goes, which is why the W (work) and V (travel) probes of Tier 2 matter.
+* Held in a field repair is 0.0 percent under the planner (it almost never starts one, as in Step 3.6) and 0.9 and 1.7
+  percent under the fixed gates at stress 2 and 7. Faulted-but-not-held time is 2-6 percent.
+* SUPPORT teams spend the most time resting (60-62 percent) and the least in service.
+
+### B0.2 Gates' detection delay and miss rate (D1)
+
+Fixed-gate system F, stress 2 and 7, development seeds 1001-1030. An episode is one team's consecutive ticks with a
+class's fault active; detected at the first tick of the episode at which the gates' logged recommendation is at least
+LOCAL_RECOVERY (first row of each pair) or RETURN_TO_SAFE_ZONE (second row). The recommendation can come from another
+evaluator, so the last column shows how often it was already set at the onset tick (0-6 percent, so attribution is
+mostly clean).
+
+| Stress | Class | Episodes | Mean length (ticks) | Level | Missed | Delay median [p10, p90] (ticks) | Detected within 5 / 10 / 40 ticks | Already recommended at onset |
+|---|---|---|---|---|---|---|---|---|
+| 2 | mobility | 1571 | 66 | >= LOCAL | 38% | 2 [1, 23] | 67% / 80% / 97% | 3% |
+| 2 | mobility | 1571 | 66 | >= RETURN | 40% | 6 [3, 26] | 43% / 72% / 96% | 0% |
+| 2 | communication | 3375 | 4 | >= LOCAL | 86% | 3 [0, 12] | 81% / 88% / 100% | 4% |
+| 2 | communication | 3375 | 4 | >= RETURN | 93% | 7 [4, 22] | 36% / 74% / 100% | 0% |
+| 2 | resource | 1255 | 41 | >= LOCAL | 63% | 11 [0, 57] | 32% / 50% / 81% | 6% |
+| 2 | resource | 1255 | 41 | >= RETURN | 71% | 15 [2, 62] | 22% / 38% / 76% | 1% |
+| 7 | mobility | 3385 | 70 | >= LOCAL | 43% | 2 [1, 23] | 66% / 80% / 97% | 1% |
+| 7 | mobility | 3385 | 70 | >= RETURN | 44% | 6 [3, 27] | 45% / 73% / 96% | 0% |
+| 7 | communication | 2292 | 4 | >= LOCAL | 85% | 3 [0, 12] | 73% / 87% / 100% | 2% |
+| 7 | communication | 2292 | 4 | >= RETURN | 91% | 7 [4, 19] | 37% / 75% / 100% | 0% |
+| 7 | resource | 3208 | 43 | >= LOCAL | 67% | 9 [0, 51] | 34% / 53% / 85% | 5% |
+| 7 | resource | 3208 | 43 | >= RETURN | 74% | 13 [3, 55] | 21% / 39% / 83% | 1% |
+
+Findings:
+
+* **When the gates detect a mobility fault they do it fast: median 2 ticks (72 s), 97 percent within 40 ticks.** But
+  **38-43 percent of mobility episodes are never flagged at all** before they end (mean length 66-70 ticks).
+* **Communication faults are short (mean 4 ticks) and the gates miss 85-86 percent of them** (they act on a window of
+  several ticks); the median delay is 3 ticks when they do fire.
+* **Resource faults are the slowest and most often missed:** median 9-11 ticks, 63-67 percent never flagged.
+* The brief's premise that "gates already confirm and act within a few ticks" holds for the faults they catch; the
+  headroom for a better detector is the **missed episodes**, not the delay of the caught ones. Whether catching them
+  matters is what D2/D3 and the detector-oracle contrasts of Tier 1 measure.
+
 ## C. Design note (no implementation): how a real road-knowledge version would propagate
 
 ### C.1 What is in the code today (budgets found, not assumed)

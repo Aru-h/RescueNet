@@ -319,6 +319,8 @@ def main():
                         tot[int(sp)][n] += v.get(n, 0)
             allv = {n: sum(tot[sp][n] for sp in range(5)) for n in names}
             T = sum(allv.values())
+            if T == 0:
+                continue   # no time budget in this run (the no-fault reference has no probe diagnostics)
             label = f"{cfg} stress {st:g}" if cfg != "NOFAULT" else "no faults (fixed gates)"
             lines.append(f"| {label} | all | " + " | ".join(f"{100 * allv[n] / T:.1f}%" for n in names) +
                          f" | {10 * (allv['on_scene'] + allv['to_task'] + allv['available']) / T:.2f} |")
