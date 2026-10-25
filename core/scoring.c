@@ -1,3 +1,4 @@
+#include "headroom_probes.h"
 #include <math.h>
 #include "scoring.h"
 #include "path.h"
@@ -490,6 +491,13 @@ float capability_score(const TeamState_t *team, const IncidentState_t *incident)
 float priority_score(const IncidentState_t *incident)
 {
     float band_floor;
+
+    {
+        float probe_u = probe_urgency_score(incident);   /* Step 5 M1; negative = off */
+
+        if(probe_u >= 0.0f)
+            return probe_u;
+    }
 
     switch(incident->priority)
     {

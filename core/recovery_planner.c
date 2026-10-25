@@ -1,3 +1,4 @@
+#include "headroom_probes.h"
 #include "recovery_planner.h"
 
 #include <stddef.h>
@@ -483,6 +484,8 @@ static uint8_t persist_prevent_choice(const TeamState_t *team, float *benefit_ou
     margin_floor = 1.0f + g_planner.margin_frac;
     cost_rest = (2.0f * persist_leg_ticks(team) + rest_ticks_needed(team)) * s_ctx.q + ((task != NULL) ? u_x * g_planner.reassign_delay : 0.0f);
     cost_field = t_fr * u_x;
+    if(g_probe.prevent_cost > 0.0f)
+        cost_field *= g_probe.prevent_cost;   /* Step 5 S1: priced and executed at the same scale (fault_injector.c) */
     *benefit_out = 0.0f;
     *cost_out = 0.0f;
 
@@ -537,7 +540,7 @@ static void fuse_probabilities(const TeamState_t *team, const PlannerEvidence_t 
 
         if(g_planner.p_source == PLANNER_P_ORACLE || g_planner.p_source == PLANNER_P_BOTH)
         {
-            p[f] = team->fault_state.active[f] ? 1.0f : 0.0f;
+            p[f] = g_probe.any ? probe_oracle_p(team, f) : (team->fault_state.active[f] ? 1.0f : 0.0f);
             p_ai[f] = 0.0f;
             p_oth[f] = p[f];
             continue;

@@ -1,4 +1,5 @@
 #include "fault_injector.h"
+#include "headroom_probes.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -298,6 +299,19 @@ uint8_t fault_injector_causal_road_kind(int x, int y)
     if(x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT)
         return ROAD_NONE;
     return s_road_kind[x][y];
+}
+
+/* Step 5 road-knowledge probe: the pre-damage cost and navigability of a damaged cell. */
+void fault_injector_causal_road_base(int x, int y, uint8_t *cost, uint8_t *navigable)
+{
+#if ENVIRONMENT_HAS_WORLD_STORAGE
+    *cost = g_environment[x][y].env_fault_base_cost;
+    *navigable = s_env_fault_base_navigable[x][y];
+#else
+    (void)x; (void)y;
+    *cost = 1u;
+    *navigable = 1u;
+#endif
 }
 
 static int road_in_grid(int x, int y)
@@ -1189,7 +1203,7 @@ static void causal_aftershock_step(void)
         TeamState_t *team = &g_teams[team_id];
         int hit_x, hit_y;
 
-        if(team->fault_state.active[FAULT_CLASS_ENVIRONMENT] ||
+        if(team->fault_state.active[FAULT_CLASS_ENVIRONMENT] || probe_team_offline(team_id) ||
            causal_active_count(team) >= k->max_concurrent_faults)
             continue;
         if(!causal_route_hit(team, cx, cy, &hit_x, &hit_y))
@@ -1227,6 +1241,7 @@ static void causal_mission_model_step(void)
             s_causal_inc_id[slot] = inc->incident_id;
             s_causal_inc_escalations[slot] = 0;
             s_causal_world.victims_seen += inc->victim_count;
+            if(inc->priority >= 1 && inc->priority <= 4) g_probe_stats.seen_by_prio[inc->priority] += inc->victim_count;
         }
 
         if(g_current_tick <= inc->reported_at_tick)
@@ -1250,6 +1265,7 @@ static void causal_mission_model_step(void)
             {
                 inc->victim_count = (uint8_t)(inc->victim_count - deaths);
                 s_causal_world.victims_lost += deaths;
+                if(inc->priority >= 1 && inc->priority <= 4) g_probe_stats.lost_by_prio[inc->priority] += deaths;
                 deteriorated = 1;
             }
         }
@@ -1284,6 +1300,46 @@ static void causal_mission_model_step(void)
             causal_register_onset(team_id, FAULT_CLASS_MISSION, CAUSAL_ONSET_DETERIORATION);
         }
     }
+}
+
+/* Step 5 probe (M1 level i): victims the entrapment model WILL take from this incident over the next `window`
+ * ticks, replaying the same hash draws causal_mission_model_step() uses, with the current victim count and no
+ * reinforcement. Read-only. */
+float fault_injector_causal_future_victim_loss(uint8_t slot, uint32_t window)
+{
+    const CausalFaultParams_t *k = &g_causal_params;
+    const float tick_h = (float)TICK_TIME_SEC / 3600.0f;
+    const IncidentState_t *inc;
+    uint32_t left;
+    uint32_t lost = 0u;
+
+    if(slot >= NUM_INCIDENTS)
+        return 0.0f;
+    inc = &g_incidents[slot];
+    if(!inc->slot_occupied || inc->status == INC_RESOLVED)
+        return 0.0f;
+    left = inc->victim_count;
+    for(uint32_t j = 1u; j <= window && left > 0u; j++)
+    {
+        uint32_t t = g_current_tick + j;
+        float age_h, hz, p_die, expected;
+        uint32_t deaths;
+
+        if(t <= inc->reported_at_tick)
+            continue;
+        age_h = (float)(t - inc->reported_at_tick) * tick_h;
+        hz = (k->survival_k / k->survival_lambda_h) * powf(age_h / k->survival_lambda_h, k->survival_k - 1.0f);
+        p_die = 1.0f - expf(-hz * tick_h);
+        expected = (float)left * p_die;
+        deaths = (uint32_t)expected;
+        if(causal_unit(t, inc->incident_id, 200u) < expected - (float)deaths)
+            deaths++;
+        if(deaths > left)
+            deaths = left;
+        left -= deaths;
+        lost += deaths;
+    }
+    return (float)lost;
 }
 
 /* Per-tick bookkeeping of a team's hidden state: wear from distance and
@@ -1408,6 +1464,14 @@ int fault_injector_causal_field_start(uint8_t team_id, uint8_t kind)
     s_field_kind[team_id] = kind;
     s_field_end[team_id] = g_current_tick + pp->field_min_ticks +
                            causal_hash(g_current_tick, team_id, CAUSAL_SALT_FIELD_TIME) % span;
+    if(kind == 3u && g_probe.prevent_cost > 0.0f)
+    {
+        /* Step 5 S1: cheaper maintenance is shorter in real time as well as in the planner's price. */
+        uint32_t dur = s_field_end[team_id] - g_current_tick;
+
+        dur = (uint32_t)((float)dur * g_probe.prevent_cost + 0.5f);
+        s_field_end[team_id] = g_current_tick + (dur < 1u ? 1u : dur);
+    }
     s_persist_stats.field_started[kind - 1u]++;
     return 1;
 }
@@ -1576,6 +1640,20 @@ void fault_injector_causal_forecast(uint8_t team_id, uint8_t after, float out[2]
                        cascade * g_fault_stress, 0.0f, k->hazard_cap);
     out[0] = 1.0f - expf(-horizon * h_mob);
     out[1] = 1.0f - expf(-horizon * h_res);
+    if(g_probe.hazard_draw)
+    {
+        /* Step 5 S1 level i: the forecast knows the realised onset draws over the horizon (given this hazard). */
+        float p_mob = 1.0f - expf(-h_mob), p_res = 1.0f - expf(-h_res);
+        uint8_t hit_mob = 0u, hit_res = 0u;
+
+        for(uint32_t j = 0u; j < (uint32_t)horizon; j++)
+        {
+            if(causal_unit(g_current_tick + j, team_id, CAUSAL_SALT_ONSET(FAULT_CLASS_MOBILITY)) < p_mob) hit_mob = 1u;
+            if(causal_unit(g_current_tick + j, team_id, CAUSAL_SALT_ONSET(FAULT_CLASS_RESOURCE)) < p_res) hit_res = 1u;
+        }
+        out[0] = hit_mob ? 1.0f : 0.0f;
+        out[1] = hit_res ? 1.0f : 0.0f;
+    }
 }
 
 static void causal_step(void)
@@ -1610,7 +1688,11 @@ static void causal_step(void)
     {
         TeamState_t *team = &g_teams[team_id];
         CausalTeamTruth_t *truth = &s_causal_truth[team_id];
-        float rough_now = causal_track_team(team_id);
+        float rough_now;
+
+        if(probe_team_offline(team_id))   /* Step 5 K2: out of service, idle, never faulted */
+            continue;
+        rough_now = causal_track_team(team_id);
         s_rough_last[team_id] = rough_now;
 
         /* Hazards, per tick, from state plus a small baseline. */
@@ -1679,7 +1761,7 @@ static void causal_step(void)
             {
                 case FAULT_CLASS_COMMUNICATION:
                     /* Deterministic: no dice, no concurrency cap. */
-                    if(truth->link_margin_db < 0.0f)
+                    if(truth->link_margin_db < 0.0f && !g_probe.no_comm_faults)
                     {
                         inject_communication_fault(team_id);
                         team->fault_state.severity[fault_class] =

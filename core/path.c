@@ -1,3 +1,4 @@
+#include "road_knowledge.h"
 #include "path.h"
 #include <stdlib.h>
 #include <stdint.h>
@@ -142,6 +143,20 @@ static int get_movement_cost(int x, int y, uint8_t equipment_flags)
     if(!path_in_bounds(x, y))
         return -1;
 
+    {
+        /* Step 5 R1-R3: the fleet's belief about causal road damage; inactive (mode 0) by default. */
+        int rk_nav, rk_cost;
+
+        if(road_knowledge_planning_view(x, y, &rk_nav, &rk_cost))
+        {
+            if(!rk_nav)
+                return -1;
+            if(g_path_extra_cost != NULL)
+                return rk_cost + (int)g_path_extra_cost[x * GRID_HEIGHT + y];
+            return rk_cost;
+        }
+    }
+
     if(!environment_cell_is_navigable(x, y))
         return -1;
 
@@ -157,6 +172,13 @@ static uint8_t can_traverse_cell(int x, int y, uint8_t equipment_flags)
 
     if(!path_in_bounds(x, y))
         return 0;
+
+    {
+        int rk_nav, rk_cost;
+
+        if(road_knowledge_planning_view(x, y, &rk_nav, &rk_cost))
+            return rk_nav ? 1 : 0;
+    }
 
     return environment_cell_is_navigable(x, y);
 }

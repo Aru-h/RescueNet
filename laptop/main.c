@@ -24,6 +24,8 @@
 #include "consensus.h"
 #include "fault_predictor.h" /* FAULT_MODEL_LOADED - --model-info */
 #include "recovery_planner.h"
+#include "headroom_probes.h"
+#include "road_knowledge.h"
 
 /* Planner decision log (--planner-log): one row per non-trivial decision. Laptop only; not part of the
  * dataset or the causal sidecar, and no simulation effect. */
@@ -227,6 +229,7 @@ int main(int argc, char **argv)
     int roads_flag_given = 0;
     int causal_fixes_mask = -1;
     int causal_persist_mode = -1;  /* Step 3.6: -1 = not given (default on under causal) */
+    const char *probe_record_path = NULL;   /* Step 5: --probe-record=FILE writes the hazard events this run queued */
     int planner_flag_given = 0;    /* any --planner* flag */   /* -1 = not given (default: all fixes on under causal) */
     int causal_reroute_penalty = -1;
     int live_mode = 0;
@@ -437,6 +440,171 @@ int main(int argc, char **argv)
                 fprintf(stderr, "invalid --recovery '%s' (need fixed or utility)\n", v);
                 exit(2);
             }
+            continue;
+        }
+        if(strncmp(argv[i], "--probe-", 8) == 0)
+        {
+            /* Step 5 headroom probes (docs/HEADROOM_MAP_PREREG.md): opt-in, causal profile only. */
+            const char *a = argv[i] + 8;
+            char *end;
+            double x;
+
+            g_probe.any = 1;
+            if(strcmp(a, "diag") == 0) g_probe.diag = 1;
+            else if(strncmp(a, "oracle-delay=", 13) == 0)
+            {
+                x = strtod(a + 13, &end);
+                if(*end != 0 || !(x >= 0.0 && x < 60.0)) { fprintf(stderr, "invalid --probe-oracle-delay (0-59 ticks)\n"); exit(2); }
+                g_probe.oracle_delay = (uint16_t)x;
+            }
+            else if(strncmp(a, "oracle-fn=", 10) == 0 || strncmp(a, "oracle-fp=", 10) == 0)
+            {
+                x = strtod(a + 10, &end);
+                if(*end != 0 || !(x >= 0.0 && x <= 1.0)) { fprintf(stderr, "invalid --probe-oracle-fn/fp (0-1)\n"); exit(2); }
+                if(a[8] == 'n') g_probe.oracle_fn = (float)x; else g_probe.oracle_fp = (float)x;
+                g_probe.oracle_noise = 1;
+            }
+            else if(strncmp(a, "evidence-dropout=", 17) == 0)
+            {
+                x = strtod(a + 17, &end);
+                if(*end != 0 || !(x >= 0.0 && x < 1.0)) { fprintf(stderr, "invalid --probe-evidence-dropout (0-1)\n"); exit(2); }
+                g_probe.evidence_dropout = (float)x;
+            }
+            else if(strncmp(a, "prevent-cost=", 13) == 0)
+            {
+                x = strtod(a + 13, &end);
+                if(*end != 0 || !(x > 0.0 && x <= 10.0)) { fprintf(stderr, "invalid --probe-prevent-cost (>0)\n"); exit(2); }
+                g_probe.prevent_cost = (float)x;
+            }
+            else if(strcmp(a, "hazard-foresight=draw") == 0) g_probe.hazard_draw = 1;
+            else if(strcmp(a, "urgency=survival") == 0) g_probe.urgency = 1;
+            else if(strcmp(a, "urgency=foresight") == 0) g_probe.urgency = 2;
+            else if(strcmp(a, "reveal-all") == 0) g_probe.reveal_all = 1;
+            else if(strncmp(a, "offline=", 8) == 0)
+            {
+                x = strtod(a + 8, &end);
+                if(*end != 0 || !(x >= 0.0 && x <= 5.0)) { fprintf(stderr, "invalid --probe-offline (0-5)\n"); exit(2); }
+                g_probe.offline_k = (uint8_t)x;
+            }
+            else if(strncmp(a, "work-mult=", 10) == 0)
+            {
+                x = strtod(a + 10, &end);
+                if(*end != 0 || !(x >= 0.1 && x <= 20.0)) { fprintf(stderr, "invalid --probe-work-mult\n"); exit(2); }
+                g_probe.work_mult = (float)x;
+            }
+            else if(strcmp(a, "work-fatigue=a") == 0) g_probe.work_fatigue_b = 0;
+            else if(strcmp(a, "work-fatigue=b") == 0) g_probe.work_fatigue_b = 1;
+            else if(strncmp(a, "work-spec=", 10) == 0)
+            {
+                static const char *names[5] = {"search", "medical", "extraction", "perimeter", "support"};
+                char nm[16]; double xv; int found = 0;
+
+                if(sscanf(a + 10, "%15[a-z]:%lf", nm, &xv) != 2 || xv < 0.1 || xv > 20.0) { fprintf(stderr, "invalid --probe-work-spec (name:mult)\n"); exit(2); }
+                for(int i2 = 0; i2 < 5; i2++) if(strcmp(nm, names[i2]) == 0) { g_probe.work_spec = (uint8_t)(i2 + 1); found = 1; }
+                if(!found) { fprintf(stderr, "invalid --probe-work-spec name\n"); exit(2); }
+                g_probe.work_spec_mult = (float)xv;
+            }
+            else if(strncmp(a, "work-stage=", 11) == 0)
+            {
+                char nm[8]; double xv;
+
+                if(sscanf(a + 11, "%7[a-z]:%lf", nm, &xv) != 2 || xv < 0.1 || xv > 20.0) { fprintf(stderr, "invalid --probe-work-stage (early|late:mult)\n"); exit(2); }
+                if(strcmp(nm, "early") == 0) g_probe.work_stage = 1;
+                else if(strcmp(nm, "late") == 0) g_probe.work_stage = 2;
+                else { fprintf(stderr, "invalid --probe-work-stage name\n"); exit(2); }
+                g_probe.work_stage_mult = (float)xv;
+            }
+            else if(strcmp(a, "instant-work") == 0) g_probe.instant_work = 1;
+            else if(strcmp(a, "instant-travel=task") == 0) g_probe.instant_travel = 1;
+            else if(strcmp(a, "instant-travel=all") == 0) g_probe.instant_travel = 2;
+            else if(strncmp(a, "speed=", 6) == 0)
+            {
+                static const char *names[5] = {"search", "medical", "extraction", "perimeter", "support"};
+                char buf[96], *tok;
+
+                strncpy(buf, a + 6, sizeof(buf) - 1); buf[sizeof(buf) - 1] = 0;
+                for(tok = strtok(buf, ","); tok != NULL; tok = strtok(NULL, ","))
+                {
+                    char *colon = strchr(tok, ':'); int found = 0;
+
+                    if(colon == NULL) { fprintf(stderr, "invalid --probe-speed\n"); exit(2); }
+                    *colon = 0;
+                    x = strtod(colon + 1, &end);
+                    if(*end != 0 || !(x > 0.0 && x <= 8.0)) { fprintf(stderr, "invalid --probe-speed value\n"); exit(2); }
+                    for(int i2 = 0; i2 < 5; i2++) if(strcmp(tok, names[i2]) == 0) { g_probe.speed[i2] = (float)x; found = 1; }
+                    if(!found) { fprintf(stderr, "invalid --probe-speed name\n"); exit(2); }
+                }
+            }
+            else if(strcmp(a, "team-mix=a") == 0) g_probe.team_mix = 1;
+            else if(strcmp(a, "team-mix=b") == 0) g_probe.team_mix = 2;
+            else if(strcmp(a, "team-mix=c") == 0) g_probe.team_mix = 3;
+            else if(strcmp(a, "central-alloc") == 0) g_probe.central_alloc = 1;
+            else if(strncmp(a, "foresight=", 10) == 0)
+            {
+                if(strcmp(a + 10, "fire") == 0) g_probe.foresight = 1;
+                else if(strcmp(a + 10, "collapse") == 0) g_probe.foresight = 2;
+                else if(strcmp(a + 10, "hazard") == 0) g_probe.foresight = 0xFF;
+                else { fprintf(stderr, "invalid --probe-foresight (fire, collapse, hazard)\n"); exit(2); }
+            }
+            else if(strncmp(a, "lead=", 5) == 0)
+            {
+                x = strtod(a + 5, &end);
+                if(*end != 0 || !(x >= 1.0 && x <= 1000.0)) { fprintf(stderr, "invalid --probe-lead (1-1000 ticks)\n"); exit(2); }
+                g_probe.lead = (uint16_t)x;
+            }
+            else if(strncmp(a, "record=", 7) == 0) probe_record_path = a + 7;
+            else if(strncmp(a, "events=", 7) == 0)
+            {
+                FILE *ef = fopen(a + 7, "r");
+                unsigned tk, ty; int ex, ey;
+
+                if(ef == NULL) { fprintf(stderr, "cannot open --probe-events file\n"); exit(2); }
+                g_probe_ev_plan_n = 0;
+                while(g_probe_ev_plan_n < PROBE_MAX_EVENTS && fscanf(ef, "%u %u %d %d", &tk, &ty, &ex, &ey) == 4)
+                {
+                    g_probe_ev_plan[g_probe_ev_plan_n].tick = tk;
+                    g_probe_ev_plan[g_probe_ev_plan_n].type = (uint8_t)ty;
+                    g_probe_ev_plan[g_probe_ev_plan_n].x = (int16_t)ex;
+                    g_probe_ev_plan[g_probe_ev_plan_n].y = (int16_t)ey;
+                    g_probe_ev_plan_n++;
+                }
+                fclose(ef);
+            }
+            else if(strncmp(a, "roadknow=", 9) == 0)
+            {
+                if(strcmp(a + 9, "omni") == 0) g_road_know.mode = 0;
+                else if(strcmp(a + 9, "obs") == 0) g_road_know.mode = 1;
+                else if(strcmp(a + 9, "prior") == 0) g_road_know.mode = 2;
+                else { fprintf(stderr, "invalid --probe-roadknow (omni, obs, prior)\n"); exit(2); }
+            }
+            else if(strncmp(a, "road-radius=", 12) == 0)
+            {
+                x = strtod(a + 12, &end);
+                if(*end != 0 || !(x >= 0.0 && x <= 4.0)) { fprintf(stderr, "invalid --probe-road-radius (0-4)\n"); exit(2); }
+                g_road_know.radius = (uint8_t)x;
+            }
+            else if(strncmp(a, "road-latency=", 13) == 0)
+            {
+                x = strtod(a + 13, &end);
+                if(*end != 0 || !(x >= 0.0 && x <= 200.0)) { fprintf(stderr, "invalid --probe-road-latency\n"); exit(2); }
+                g_road_know.latency = (uint8_t)x;
+            }
+            else if(strncmp(a, "road-loss=", 10) == 0)
+            {
+                x = strtod(a + 10, &end);
+                if(*end != 0 || !(x >= 0.0 && x <= 1.0)) { fprintf(stderr, "invalid --probe-road-loss\n"); exit(2); }
+                g_road_know.loss = (float)x;
+            }
+            else if(strcmp(a, "road-share=instant") == 0) g_road_know.instant = 1;
+            else if(strcmp(a, "no-comm-faults") == 0) g_probe.no_comm_faults = 1;
+            else if(strncmp(a, "rest-mult=", 10) == 0 || strncmp(a, "drain-mult=", 11) == 0)
+            {
+                int rest = (a[0] == 'r');
+                x = strtod(a + (rest ? 10 : 11), &end);
+                if(*end != 0 || !(x > 0.0 && x <= 10.0)) { fprintf(stderr, "invalid --probe-rest-mult/drain-mult (>0)\n"); exit(2); }
+                if(rest) g_probe.rest_mult = (float)x; else g_probe.drain_mult = (float)x;
+            }
+            else { fprintf(stderr, "unknown probe flag '%s'\n", argv[i]); exit(2); }
             continue;
         }
         if(strncmp(argv[i], "--planner", 9) == 0)
@@ -767,6 +935,23 @@ int main(int argc, char **argv)
         fprintf(stderr, "--causal-fixes=...hold-repair needs --causal-persist=on (only that mode has field repair)\n");
         return 2;
     }
+    if(g_probe.any && fault_profile != FAULT_PROFILE_CAUSAL)
+    {
+        fprintf(stderr, "--probe-* flags only apply to --fault-profile=causal\n");
+        return 2;
+    }
+    if((g_probe.oracle_delay != 0u || g_probe.oracle_noise) && g_planner.p_source != PLANNER_P_ORACLE)
+    {
+        fprintf(stderr, "--probe-oracle-delay / -fn / -fp need --planner-p=oracle\n");
+        return 2;
+    }
+    if(g_road_know.mode == 0 && (g_road_know.instant || g_road_know.radius != 1 || g_road_know.latency != 2))
+    {
+        fprintf(stderr, "--probe-road-* options need --probe-roadknow=obs|prior\n");
+        return 2;
+    }
+    if(g_probe.no_comm_faults)
+        consensus_set_link_loss(0.0f);   /* C2: perfect comms also means no vbus loss */
     if(g_planner.prevent != 0 &&
        g_planner.p_source != PLANNER_P_HAZARD && g_planner.p_source != PLANNER_P_BOTH)
     {
@@ -1036,6 +1221,18 @@ int main(int argc, char **argv)
         }
 
         sim_end_seed();
+        if(probe_record_path != NULL)
+        {
+            FILE *rf = fopen(probe_record_path, "w");
+
+            if(rf != NULL)
+            {
+                for(uint32_t ei = 0; ei < g_probe_ev_seen_n; ei++)
+                    fprintf(rf, "%u %u %d %d\n", g_probe_ev_seen[ei].tick, g_probe_ev_seen[ei].type,
+                        g_probe_ev_seen[ei].x, g_probe_ev_seen[ei].y);
+                fclose(rf);
+            }
+        }
     }
 
     sim_runner_shutdown();
@@ -1157,6 +1354,34 @@ int main(int argc, char **argv)
                     ps->field_ticks, ps->prevent_orders, ps->prevent_done, g_diag_exclusions[0], g_diag_exclusions[1], g_diag_exclusions[2]);
             }
         }
+
+        if(g_road_know.mode != 0)
+        {
+            const RoadKnowledgeStats_t *rk = road_knowledge_stats();
+            extern unsigned long g_probe_no_path_hits;
+            fprintf(stderr, "[DIAG ROADUSE] no_path_hits=%lu stall_ticks=%u\n", g_probe_no_path_hits, causal_actions_stall_ticks());
+            fprintf(stderr, "[DIAG ROADKNOW] mode=%u damage_episodes=%u known_episodes=%u known_within_2=%u known_delay_sum=%llu known_delay_max=%u reports=%u lost=%u unknown_partial_enter=%u blocked_stops=%u stale_cell_ticks=%u prior_add_max=%u\n",
+                g_road_know.mode, rk->damage_episodes, rk->known_episodes, rk->known_within_2, (unsigned long long)rk->known_delay_sum,
+                rk->known_delay_max, rk->reports_made, rk->reports_lost, rk->unknown_partial_enter, rk->blocked_stops,
+                rk->stale_cell_ticks, rk->prior_add_max);
+        }
+        if(g_probe.diag)
+        {
+            fprintf(stderr, "[DIAG PRIO] seen=%u,%u,%u,%u lost=%u,%u,%u,%u\n",
+                g_probe_stats.seen_by_prio[1], g_probe_stats.seen_by_prio[2], g_probe_stats.seen_by_prio[3], g_probe_stats.seen_by_prio[4],
+                g_probe_stats.lost_by_prio[1], g_probe_stats.lost_by_prio[2], g_probe_stats.lost_by_prio[3], g_probe_stats.lost_by_prio[4]);
+            for(uint8_t sp = 0; sp < 5u; sp++)
+                fprintf(stderr, "[DIAG TB] spec=%u resting=%u to_rest=%u held=%u faulted=%u on_scene=%u to_task=%u available=%u\n", sp,
+                    g_probe_stats.tb[sp][0], g_probe_stats.tb[sp][1], g_probe_stats.tb[sp][2], g_probe_stats.tb[sp][3],
+                    g_probe_stats.tb[sp][4], g_probe_stats.tb[sp][5], g_probe_stats.tb[sp][6]);
+            for(uint32_t ii = 0; ii < g_probe_inc_log_n; ii++)
+                fprintf(stderr, "[DIAG INC] type=%u prio=%u reported=%u arrived=%u resolved=%u\n", g_probe_inc_log[ii].type,
+                    g_probe_inc_log[ii].prio, g_probe_inc_log[ii].reported, g_probe_inc_log[ii].arrived, g_probe_inc_log[ii].resolved);
+        }
+        if(g_probe.any)
+            fprintf(stderr, "[DIAG PROBE] oracle_misses=%u oracle_false_alarms=%u dropout_team_ticks=%u events_seen=%u events_planned=%u event_mismatch=%u\n",
+                g_probe_stats.oracle_misses, g_probe_stats.oracle_false_alarms, g_probe_stats.dropout_team_ticks,
+                g_probe_ev_seen_n, g_probe_ev_plan_n, g_probe_ev_mismatch);
 
         extern uint32_t g_diag_discovered_by_type[NUM_INCIDENT_TYPES];
         extern uint32_t g_diag_resolved_by_type[NUM_INCIDENT_TYPES];

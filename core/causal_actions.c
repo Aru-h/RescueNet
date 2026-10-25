@@ -1,3 +1,4 @@
+#include "road_knowledge.h"
 #include "causal_actions.h"
 
 #include <stddef.h>
@@ -199,7 +200,10 @@ static void refresh_cell_state(void)
             int i = cell_index(x, y);
             uint8_t faulted = cell->env_fault_ref_count > 0;
 
-            s_damaged[i] = (faulted || cell->road_blocked) ? 1u : 0u;
+            if(g_road_know.mode != 0u)   /* Step 5: the action layer only knows the cells the fleet knows about */
+                faulted = (uint8_t)(faulted && road_knowledge_believed_damaged(x, y));
+
+            s_damaged[i] = (faulted || (cell->road_blocked && g_road_know.mode == 0u)) ? 1u : 0u;
             s_avoid[i] = s_damaged[i] ? (uint8_t)penalty : 0;
             s_blockers[i] = 0;
             if(faulted)
@@ -737,6 +741,15 @@ int causal_actions_crossing_stall(const TeamState_t *team, int next_x, int next_
     /* Consequential roads: only partial debris stalls a team (a fully blocked
      * cell is not navigable, so A* never steps onto it). Otherwise any cell
      * with an active fault does, as in the Step 3 sensitivity override. */
+    if(g_road_know.mode != 0u && road_knowledge_step_blocked(team, next_x, next_y))
+    {
+        /* Step 5 R1-R3: the planned step enters a cell that is truly blocked; the team stops and counts as held. */
+        s_stall_total++;
+        s_hold_ring[t][s_hold_head[t]] = g_current_tick + 1u;
+        s_hold_head[t] = (uint8_t)((s_hold_head[t] + 1u) % HOLD_RING);
+        return 1;
+    }
+
     stalls_here = in_grid(next_x, next_y) &&
                   (fault_profile_causal_roads_on()
                        ? fault_injector_causal_road_kind(next_x, next_y) == 1u

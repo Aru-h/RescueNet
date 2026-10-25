@@ -1,3 +1,4 @@
+#include "headroom_probes.h"
 #include "allocator.h"
 #include "causal_actions.h"
 #include <stdio.h>
@@ -145,6 +146,8 @@ void allocate_all_incidents(void)
     }
 
     cbba_run();
+    if(g_probe.central_alloc)
+        probe_central_assign();   /* Step 5 DQ1 */
 
     /* Generates open UNSEARCHED_SECTOR system tasks for stale districts
      * before the competitive system-task loop below runs, so a
@@ -271,6 +274,9 @@ void allocate_all_incidents(void)
 bool team_can_accept_incident(const TeamState_t *team, const IncidentState_t *incident)
 {
     if(team == NULL || incident == NULL)
+        return false;
+
+    if(probe_team_offline(team->team_id))   /* Step 5 K2: out of service */
         return false;
 
     /* Causal ABORT / REALLOCATION (Step 3.6): the team gave this incident up. */
@@ -474,7 +480,7 @@ static void allocate_support_team(void)
     for(uint8_t i = 0; i < NUM_TEAMS; i++)
     {
         if(g_teams[i].specialization == SPEC_SUPPORT &&
-           g_teams[i].status == STATUS_AVAILABLE)
+           g_teams[i].status == STATUS_AVAILABLE && !probe_team_offline(i))
         {
             support = &g_teams[i];
             break;
@@ -533,7 +539,7 @@ uint8_t allocator_assign_system_task(uint8_t team_id, uint8_t slot)
     TeamState_t *team;
     IncidentState_t *task;
 
-    if(team_id >= NUM_TEAMS || slot >= NUM_SYSTEM_TASKS)
+    if(team_id >= NUM_TEAMS || slot >= NUM_SYSTEM_TASKS || probe_team_offline(team_id))
         return 0;
     team = &g_teams[team_id];
     task = &g_system_tasks[slot];
@@ -554,7 +560,7 @@ uint8_t allocator_assign_support(uint8_t team_id, uint8_t incident_slot)
     TeamState_t *team;
     IncidentState_t *incident;
 
-    if(team_id >= NUM_TEAMS || incident_slot >= NUM_INCIDENTS)
+    if(team_id >= NUM_TEAMS || incident_slot >= NUM_INCIDENTS || probe_team_offline(team_id))
         return 0;
     team = &g_teams[team_id];
     incident = &g_incidents[incident_slot];

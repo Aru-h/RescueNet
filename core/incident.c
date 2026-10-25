@@ -1,3 +1,4 @@
+#include "headroom_probes.h"
 #include "incident.h"
 #include "causal_actions.h"
 #include "fault_injector.h"
@@ -1002,16 +1003,36 @@ static void update_incident_work(IncidentState_t *incident, TaskPool_t pool) //i
 
     uint8_t work_rate = incident_work_rate_for_team(incident->assigned_team);
 
+    if(g_probe.any)   /* Step 5 W1-W3 */
+    {
+        float m = probe_work_mult(&g_teams[incident->assigned_team], incident) * (float)work_rate + 0.5f;
+
+        work_rate = (uint8_t)(m > 250.0f ? 250.0f : m);
+    }
+
     if(is_valid_team_id(incident->support_team) && g_teams[incident->support_team].status==STATUS_ON_SCENE &&
        !fault_injector_causal_team_held(incident->support_team))
     {
-        work_rate += incident_work_rate_for_team(incident->support_team);
+        {
+            uint8_t sup_rate = incident_work_rate_for_team(incident->support_team);
+
+            if(g_probe.any)
+            {
+                float m = probe_work_mult(&g_teams[incident->support_team], incident) * (float)sup_rate + 0.5f;
+
+                sup_rate = (uint8_t)(m > 250.0f ? 250.0f : m);
+            }
+            work_rate = (uint8_t)((unsigned)work_rate + sup_rate > 255u ? 255u : work_rate + sup_rate);
+        }
 
         /* Causal REINFORCE_INCIDENT: a reinforced incident is worked faster
          * while its support team is on scene. */
         if(pool == TASK_POOL_INCIDENT && fault_profile_causal_action_enabled(CAUSAL_ACTION_REINFORCE_INCIDENT))
             work_rate = causal_actions_boost_work(incident, work_rate);
     }
+
+    if(g_probe.instant_work)   /* Step 5 W0: a stage completes the tick the team is on scene */
+        work_rate = 255u;
 
     if(incident->work_remaining<=work_rate)
     {
@@ -1218,6 +1239,7 @@ static void complete_task(TaskPool_t pool, IncidentState_t *task)
     {
         extern uint32_t g_diag_resolved_by_type[NUM_INCIDENT_TYPES];
         g_diag_resolved_by_type[task->incident_type]++;
+        probe_inc_resolved(task);   /* Step 5 X2; no-op unless --probe-diag */
     }
 
     /* Log every resolved task, including system tasks. Uses task's own
@@ -1260,6 +1282,8 @@ void incident_cancel_system_task(IncidentState_t *task)
 
 void complete_incident_stage(IncidentState_t *incident) //incident
 {
+    probe_stage_note(incident);   /* Step 5 W3; no-op unless a stage probe is on */
+
     /* Causal ABORT exclusions last until the stage completes (Step 3.6). */
     allocator_exclusion_stage_complete(incident->incident_id);
 
@@ -2276,7 +2300,7 @@ static int generate_incident_at(IncidentType_t type, int16_t loc_x, int16_t loc_
     incident->reported_at_tick = g_current_tick;
     incident->spawned_by = NO_ASSIGNMENT;
     incident->work_remaining = INCIDENT_BASE_STAGE_WORK; /* floor-scaled below */
-    incident->discovered = 0;  /* fog-of-war: hidden until Search/other teams' radius finds it */
+    incident->discovered = g_probe.reveal_all ? 1 : 0;  /* fog-of-war: hidden until Search/other teams' radius finds it (Step 5 M5 probe reveals) */
     populate_generated_incident_model(incident);
     {
         uint16_t building_id;

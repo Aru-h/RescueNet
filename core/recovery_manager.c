@@ -1,4 +1,5 @@
 #include "recovery_manager.h"
+#include "headroom_probes.h"
 
 #include <limits.h>
 #include <string.h>
@@ -1870,8 +1871,22 @@ void recovery_manager_step(void)
 
         stage = recovery_stage_for_team(team, twin);
 
+        /* Step 5 D3b: the baseline's twin/watchdog evidence is lost for this team-tick (the AI's own input path and
+         * the peer-consensus verdict are untouched). */
+        uint8_t probe_dropped = (uint8_t)(g_probe.any && probe_evidence_dropped(team_id));
+
+        if(probe_dropped)
+            memset(&watchdog, 0, sizeof(watchdog));
+
         for(size_t i = 0; i < RECOVERY_MANAGER_EVALUATOR_COUNT; i++)
             signals[i] = evaluators[i](team, twin, &watchdog);
+
+        if(probe_dropped)
+        {
+            signals[RM_EVAL_IDX_PROGRESS] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
+            signals[RM_EVAL_IDX_MOBILITY] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
+            signals[RM_EVAL_IDX_COMMUNICATION] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
+        }
 
         /* Snapshot each evaluator's own, unfused verdict for this tick
          * BEFORE any consensus cap below can rewrite signals[MOBILITY]/

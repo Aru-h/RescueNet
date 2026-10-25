@@ -1,3 +1,4 @@
+#include "headroom_probes.h"
 #include "environment.h"
 
 #include <limits.h>
@@ -438,6 +439,7 @@ static uint8_t queue_hazard_event(IncidentType_t type, int16_t x, int16_t y)
         g_pending_hazard_events[i].incident_type = (uint8_t)type;
         g_pending_hazard_events[i].loc_x = x;
         g_pending_hazard_events[i].loc_y = y;
+        probe_hazard_note(g_current_tick, (uint8_t)type, x, y);   /* Step 5 record/replay; no-op without --probe-* */
         return 1;
     }
 

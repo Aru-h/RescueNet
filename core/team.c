@@ -1,3 +1,4 @@
+#include "headroom_probes.h"
 #include "team.h"
 #include "mission_state.h"
 #include "random.h"
@@ -41,7 +42,7 @@ void generate_teams(uint32_t seed) //team
     for(int i = 0; i < NUM_TEAMS; i++)
     {
         memset(&g_teams[i], 0, sizeof(g_teams[i]));
-        g_teams[i].specialization = i % 5;
+        g_teams[i].specialization = g_probe.team_mix ? probe_team_spec((uint8_t)i) : i % 5;
         uint8_t zone = random_range_stream(STREAM_TEAMS, 0, g_num_safe_zones - 1);
         g_teams[i].resting_zone_id = zone;
         g_teams[i].loc_x = g_safezones[zone].loc_x;
@@ -156,6 +157,10 @@ void generate_teams(uint32_t seed) //team
 
 static void change_stamina(TeamState_t *team, float delta)
 {
+    if(delta < 0.0f && g_probe.drain_mult > 0.0f)
+        delta *= g_probe.drain_mult;   /* Step 5 K1 */
+    else if(delta > 0.0f && g_probe.rest_mult > 0.0f)
+        delta /= g_probe.rest_mult;
     float new_stamina = team->stamina + delta;
 
     if(new_stamina > MAX_STAMINA)
@@ -315,12 +320,22 @@ void update_team(TeamState_t *team) //team
                     break;
                 }
 
-                change_stamina(team,-STAMINA_OPERATION_COST);
+                if(g_probe.work_fatigue_b && g_probe.any)
+                    change_stamina(team,-STAMINA_OPERATION_COST * probe_work_mult(team, task));   /* Step 5 W1b: drain tied to work done */
+                else
+                    change_stamina(team,-STAMINA_OPERATION_COST);
 
                 if(!(team->specialization == SPEC_SUPPORT &&
                      task->incident_type == INCIDENT_EQUIPMENT_CACHE))
                 {
                     uint8_t equipment_cost = random_range_stream(STREAM_EQUIPMENT,1,5);
+
+                    if(g_probe.work_fatigue_b && g_probe.any)
+                    {
+                        float ec = (float)equipment_cost * probe_work_mult(team, task) + 0.5f;
+
+                        equipment_cost = (uint8_t)(ec > 250.0f ? 250.0f : ec);
+                    }
 
                     if(team->equipment_level <= equipment_cost)
                     {
@@ -376,6 +391,11 @@ void update_team(TeamState_t *team) //team
         case(STATUS_RESTING):
             change_stamina(team,team_recovery_rate(team));
             replenish_rate = random_range_stream(STREAM_EQUIPMENT,5,10);
+            if(g_probe.rest_mult > 0.0f)   /* Step 5 K1: the same rest-time scale on the equipment refill (the draw above is unchanged) */
+            {
+                replenish_rate = (uint8_t)((float)replenish_rate / g_probe.rest_mult + 0.5f);
+                if(replenish_rate < 1) replenish_rate = 1;
+            }
             if(team->equipment_level+replenish_rate<=EQ_MAX_LEVEL)
             team->equipment_level+=replenish_rate;
             else team->equipment_level=EQ_MAX_LEVEL;

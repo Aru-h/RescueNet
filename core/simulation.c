@@ -25,6 +25,8 @@
 #include "consensus.h"
 #include "fault_predictor_features.h"
 #include "feature_pack.h"
+#include "headroom_probes.h"
+#include "road_knowledge.h"
 
 uint8_t g_simulation_trace_enabled = 1;
 static uint8_t g_prev_anomaly_detected[NUM_TEAMS];
@@ -61,6 +63,8 @@ void generate_world(uint32_t seed)   //simulation
     generate_teams(seed);
     initialize_evacuation_teams();
     fault_injector_init(seed);
+    probe_reset();
+    road_knowledge_reset();
     watchdog_init();
     mission_execution_twin_reset();
     cbba_reset_improvement_counters();
@@ -291,7 +295,38 @@ void move_team(TeamState_t *team) //simulation
         int next_x, next_y;
         uint16_t remaining_after_step = 0;
         int overlay_on = fault_profile_is_causal() && causal_actions_overlay_active(team);
+
+        if(g_probe.any)
+        {
+            /* Step 5 V0/V1: instant or direct-line travel, and the slow perimeter profile. */
+            float sp = probe_speed((uint8_t)team->specialization);
+
+            if(g_probe.instant_travel == 2u)
+            {
+                team->loc_x = (uint8_t)safezone->loc_x;
+                team->loc_y = (uint8_t)safezone->loc_y;
+                complete_return_to_rest(team);
+                return;
+            }
+            if(sp > 1.0f)
+            {
+                for(int k = 0; k < (int)sp && !(team->loc_x == safezone->loc_x && team->loc_y == safezone->loc_y); k++)
+                {
+                    int sx = (int)safezone->loc_x - (int)team->loc_x, sy = (int)safezone->loc_y - (int)team->loc_y;
+
+                    team->loc_x = (uint8_t)((int)team->loc_x + (sx > 0) - (sx < 0));
+                    team->loc_y = (uint8_t)((int)team->loc_y + (sy > 0) - (sy < 0));
+                }
+                if(team->loc_x == safezone->loc_x && team->loc_y == safezone->loc_y)
+                    complete_return_to_rest(team);
+                return;
+            }
+            if(sp < 1.0f && (g_current_tick % 2u) != 0u)
+                return;
+        }
         causal_actions_path_begin(team);
+        if(g_probe.any && team->specialization == SPEC_PERIMETER && probe_perimeter_overlay() != NULL)
+            path_set_extra_cost(probe_perimeter_overlay());
         int pre_step_cost = find_next_path_step_remaining(team->loc_x, team->loc_y, safezone->loc_x, safezone->loc_y, &next_x, &next_y, &remaining_after_step);
         causal_actions_path_end();
 
@@ -376,8 +411,41 @@ void move_team(TeamState_t *team) //simulation
     int next_x, next_y;
     uint16_t remaining_after_step = 0;
     int overlay_on = fault_profile_is_causal() && causal_actions_overlay_active(team);
+    int pre_step_cost;
+
+    if(g_probe.any)
+    {
+        /* Step 5 V0/V1: instant or direct-line travel to the task, and the slow perimeter profile. */
+        float sp = probe_speed((uint8_t)team->specialization);
+
+        if(g_probe.instant_travel != 0u)
+        {
+            team->loc_x = (uint8_t)task->loc_x;
+            team->loc_y = (uint8_t)task->loc_y;
+            team->cached_remaining_path_cost = 0;
+            team->cached_remaining_path_cost_tick = g_current_tick;
+            goto probe_arrived;
+        }
+        if(sp > 1.0f)
+        {
+            for(int k = 0; k < (int)sp && !(team->loc_x == task->loc_x && team->loc_y == task->loc_y); k++)
+            {
+                int sx = (int)task->loc_x - (int)team->loc_x, sy = (int)task->loc_y - (int)team->loc_y;
+
+                team->loc_x = (uint8_t)((int)team->loc_x + (sx > 0) - (sx < 0));
+                team->loc_y = (uint8_t)((int)team->loc_y + (sy > 0) - (sy < 0));
+            }
+            team->cached_remaining_path_cost = 0;
+            team->cached_remaining_path_cost_tick = g_current_tick;
+            goto probe_arrived;
+        }
+        if(sp < 1.0f && (g_current_tick % 2u) != 0u)
+            return;
+    }
     causal_actions_path_begin(team);
-    int pre_step_cost = find_next_path_step_remaining(team->loc_x, team->loc_y, task->loc_x, task->loc_y, &next_x, &next_y, &remaining_after_step);
+    if(g_probe.any && team->specialization == SPEC_PERIMETER && probe_perimeter_overlay() != NULL)
+        path_set_extra_cost(probe_perimeter_overlay());
+    pre_step_cost = find_next_path_step_remaining(team->loc_x, team->loc_y, task->loc_x, task->loc_y, &next_x, &next_y, &remaining_after_step);
     causal_actions_path_end();
     if(pre_step_cost > 0)
     {
@@ -438,6 +506,7 @@ void move_team(TeamState_t *team) //simulation
         return;
     }
 
+probe_arrived:
     if(g_simulation_trace_enabled) debug_trace(" | Destination: (%d,%d)\n", task->loc_x, task->loc_y);
 
     if(team->loc_x == task->loc_x && team->loc_y == task->loc_y)
@@ -452,6 +521,7 @@ void move_team(TeamState_t *team) //simulation
             if(task->assigned_team == team->team_id)
             {
                 task->status = INC_IN_PROGRESS;
+                probe_inc_arrived(task);   /* Step 5 X2 */
             }
         }
     }

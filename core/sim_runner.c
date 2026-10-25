@@ -1,3 +1,5 @@
+#include "headroom_probes.h"
+#include "road_knowledge.h"
 #include "sim_runner.h"
 
 #include "scoring.h"
@@ -135,9 +137,14 @@ void sim_tick(void)
     g_sim_step_tick = g_current_tick + 1u;
     if(g_sim_role != SIM_ROLE_BOARD)
         fault_injector_step();  /* faults reach a board as MissionLinkFault_t */
+    probe_step();           /* Step 5 probes; no-op unless a --probe-* flag was given */
+    if(g_sim_role != SIM_ROLE_BOARD)
+        road_knowledge_step();  /* Step 5 R1-R3; no-op unless --probe-roadknow */
     if(g_sim_role != SIM_ROLE_BOARD)
         causal_actions_step();  /* causal profile only; no-op otherwise */
     allocate_all_incidents();
+    if(g_sim_role != SIM_ROLE_BOARD)
+        probe_preposition();   /* Step 5 M2-M4; no-op unless --probe-foresight */
     simulation_step();
 }
 
