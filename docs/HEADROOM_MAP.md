@@ -440,6 +440,126 @@ stress 7, and a perfect detector (PD) is worth 0.1 [-0.1, +0.2] and 0.0 [-0.1, +
 zero, with an upper bound of about 0.2. For scale, one team out of service costs about 0.5 team-equivalents of
 in-service time.
 
+## B2. Tier 2: work efficiency, travel and team mix (screen: 100 development seeds; confirmation follows in B2b)
+
+Per-run data: `docs/data/headroom/tier2_work_travel_mix.csv` (binary B1). Same conventions as B1a. The last column applies the
+pre-registered demand guard: **a row is flagged "demand-driven" when the rise in spawned incidents is at least half of the
+rise in incidents resolved.** Most rows here are flagged, so the incidents column mixes real extra work with extra
+arrivals; the **victims-lost column is the cleaner outcome** and the one to lean on for these probes.
+
+| Probe | Stress | Incidents / seed [95% CI] | Team-equiv. | Victims lost / seed (positive = fewer) [95% CI] | Spawned | Survives screen | Demand-driven? |
+|---|---|---|---|---|---|---|---|
+| W1a work x1.25 (drain per tick unchanged) | 2 | +4.44 [+3.84, +5.05] | +0.9 [+0.8, +1.0] | +2.39 [+1.53, +3.25] | +3.7 | incidents, victims | yes |
+| W1a work x1.25 (drain per tick unchanged) | 7 | +3.90 [+3.20, +4.60] | +0.5 [+0.4, +0.6] | +3.04 [+2.18, +3.89] | +2.5 | incidents, victims | yes |
+| W1b work x1.25 (drain tied to work) | 2 | +1.62 [+1.10, +2.15] | +0.3 [+0.2, +0.4] | +0.02 [-0.93, +0.98] | +1.2 | incidents | yes |
+| W1b work x1.25 (drain tied to work) | 7 | +0.60 [-0.14, +1.35] | +0.1 [-0.0, +0.2] | +0.94 [+0.06, +1.80] | +0.5 | no | yes |
+| W1a work x1.5 (drain per tick unchanged) | 2 | +8.11 [+7.32, +8.91] | +1.6 [+1.4, +1.8] | +3.11 [+2.26, +3.96] | +7.0 | incidents, victims | yes |
+| W1a work x1.5 (drain per tick unchanged) | 7 | +6.22 [+5.43, +7.03] | +0.8 [+0.7, +0.9] | +4.22 [+3.38, +5.07] | +4.5 | incidents, victims | yes |
+| W1b work x1.5 (drain tied to work) | 2 | +2.26 [+1.56, +2.94] | +0.4 [+0.3, +0.6] | +1.08 [+0.29, +1.88] | +2.1 | incidents, victims | yes |
+| W1b work x1.5 (drain tied to work) | 7 | +1.98 [+1.22, +2.75] | +0.2 [+0.2, +0.3] | +1.30 [+0.49, +2.13] | +1.2 | incidents, victims | yes |
+| W1a work x2 (drain per tick unchanged) | 2 | +12.11 [+11.31, +12.89] | +2.4 [+2.3, +2.6] | +3.93 [+3.11, +4.75] | +10.9 | incidents, victims | yes |
+| W1a work x2 (drain per tick unchanged) | 7 | +9.74 [+8.85, +10.63] | +1.2 [+1.1, +1.3] | +4.56 [+3.57, +5.53] | +7.5 | incidents, victims | yes |
+| W1b work x2 (drain tied to work) | 2 | +3.41 [+2.71, +4.11] | +0.7 [+0.5, +0.8] | +1.12 [+0.21, +2.03] | +2.9 | incidents, victims | yes |
+| W1b work x2 (drain tied to work) | 7 | +2.92 [+2.24, +3.64] | +0.4 [+0.3, +0.5] | +1.75 [+0.75, +2.75] | +2.4 | incidents, victims | yes |
+| W1a work x3 (drain per tick unchanged) | 2 | +18.07 [+16.99, +19.10] | +3.6 [+3.4, +3.8] | +5.14 [+4.18, +6.11] | +16.6 | incidents, victims | yes |
+| W1a work x3 (drain per tick unchanged) | 7 | +15.70 [+14.72, +16.68] | +1.9 [+1.8, +2.1] | +6.72 [+5.71, +7.69] | +12.8 | incidents, victims | yes |
+| W1b work x3 (drain tied to work) | 2 | +4.93 [+4.34, +5.52] | +1.0 [+0.9, +1.1] | +1.64 [+0.80, +2.49] | +4.3 | incidents, victims | yes |
+| W1b work x3 (drain tied to work) | 7 | +4.93 [+4.20, +5.66] | +0.6 [+0.5, +0.7] | +2.62 [+1.75, +3.49] | +3.8 | incidents, victims | yes |
+| W1a work x4 (drain per tick unchanged) | 2 | +21.47 [+20.33, +22.61] | +4.3 [+4.0, +4.6] | +6.03 [+5.12, +6.94] | +20.3 | incidents, victims | yes |
+| W1a work x4 (drain per tick unchanged) | 7 | +18.58 [+17.45, +19.73] | +2.3 [+2.1, +2.5] | +6.85 [+5.84, +7.84] | +15.9 | incidents, victims | yes |
+| W1b work x4 (drain tied to work) | 2 | +6.55 [+5.78, +7.33] | +1.3 [+1.1, +1.5] | +1.48 [+0.59, +2.40] | +6.0 | incidents, victims | yes |
+| W1b work x4 (drain tied to work) | 7 | +5.91 [+5.20, +6.60] | +0.7 [+0.6, +0.8] | +2.76 [+1.82, +3.68] | +4.6 | incidents, victims | yes |
+| W2 search work x2 | 2 | +1.04 [+0.49, +1.60] | +0.2 [+0.1, +0.3] | +0.96 [+0.22, +1.70] | +0.5 | incidents |  |
+| W2 search work x2 | 7 | +0.70 [+0.08, +1.30] | +0.1 [+0.0, +0.2] | -0.51 [-1.40, +0.37] | +0.8 | no | yes |
+| W2 search work x3 | 2 | +2.19 [+1.56, +2.81] | +0.4 [+0.3, +0.6] | +0.21 [-0.63, +1.05] | +1.9 | incidents | yes |
+| W2 search work x3 | 7 | +1.16 [+0.53, +1.79] | +0.1 [+0.1, +0.2] | +0.58 [-0.41, +1.56] | +1.0 | incidents | yes |
+| W2 medical work x2 | 2 | +0.41 [-0.15, +0.97] | +0.1 [-0.0, +0.2] | +0.10 [-0.71, +0.90] | +0.2 | no |  |
+| W2 medical work x2 | 7 | +0.53 [-0.16, +1.20] | +0.1 [-0.0, +0.1] | +0.08 [-0.77, +0.92] | +0.1 | no |  |
+| W2 medical work x3 | 2 | +0.99 [+0.41, +1.56] | +0.2 [+0.1, +0.3] | +0.86 [+0.09, +1.64] | +0.6 | no | yes |
+| W2 medical work x3 | 7 | +0.28 [-0.36, +0.93] | +0.0 [-0.0, +0.1] | +0.59 [-0.25, +1.42] | +0.0 | no |  |
+| W2 extraction work x2 | 2 | +4.01 [+3.32, +4.69] | +0.8 [+0.7, +0.9] | +2.13 [+1.30, +2.96] | +3.8 | incidents, victims | yes |
+| W2 extraction work x2 | 7 | +3.24 [+2.56, +3.92] | +0.4 [+0.3, +0.5] | +2.84 [+2.04, +3.66] | +2.6 | incidents, victims | yes |
+| W2 extraction work x3 | 2 | +7.27 [+6.55, +8.01] | +1.4 [+1.3, +1.6] | +2.76 [+1.97, +3.57] | +6.6 | incidents, victims | yes |
+| W2 extraction work x3 | 7 | +5.50 [+4.67, +6.36] | +0.7 [+0.6, +0.8] | +3.29 [+2.31, +4.27] | +4.4 | incidents, victims | yes |
+| W2 perimeter work x2 | 2 | +3.34 [+2.69, +3.97] | +0.7 [+0.5, +0.8] | +1.23 [+0.35, +2.11] | +3.1 | incidents, victims | yes |
+| W2 perimeter work x2 | 7 | +2.01 [+1.35, +2.69] | +0.2 [+0.2, +0.3] | +1.21 [+0.38, +2.05] | +1.7 | incidents, victims | yes |
+| W2 perimeter work x3 | 2 | +5.40 [+4.65, +6.15] | +1.1 [+0.9, +1.2] | +0.98 [+0.21, +1.77] | +5.0 | incidents | yes |
+| W2 perimeter work x3 | 7 | +4.31 [+3.60, +5.01] | +0.5 [+0.4, +0.6] | +1.79 [+0.97, +2.62] | +3.5 | incidents, victims | yes |
+| W2 support work x2 | 2 | +2.81 [+2.22, +3.40] | +0.6 [+0.4, +0.7] | +1.16 [+0.34, +1.99] | +2.3 | incidents, victims | yes |
+| W2 support work x2 | 7 | +1.72 [+1.02, +2.44] | +0.2 [+0.1, +0.3] | +1.48 [+0.57, +2.40] | +1.3 | incidents, victims | yes |
+| W2 support work x3 | 2 | +4.16 [+3.53, +4.79] | +0.8 [+0.7, +0.9] | +1.70 [+0.93, +2.46] | +3.5 | incidents, victims | yes |
+| W2 support work x3 | 7 | +3.77 [+3.15, +4.40] | +0.5 [+0.4, +0.5] | +1.96 [+1.03, +2.87] | +2.6 | incidents, victims | yes |
+| W3 early stages x2 | 2 | +4.78 [+4.08, +5.48] | +0.9 [+0.8, +1.1] | +1.54 [+0.74, +2.37] | +4.1 | incidents, victims | yes |
+| W3 early stages x2 | 7 | +3.68 [+2.96, +4.42] | +0.5 [+0.4, +0.5] | +1.44 [+0.49, +2.41] | +3.3 | incidents, victims | yes |
+| W3 early stages x4 | 2 | +7.89 [+7.18, +8.62] | +1.6 [+1.4, +1.7] | +2.01 [+1.16, +2.86] | +6.8 | incidents, victims | yes |
+| W3 early stages x4 | 7 | +6.52 [+5.88, +7.19] | +0.8 [+0.7, +0.9] | +2.59 [+1.48, +3.72] | +5.3 | incidents, victims | yes |
+| W3 late stages x2 | 2 | +5.30 [+4.68, +5.95] | +1.1 [+0.9, +1.2] | +2.10 [+1.19, +3.06] | +4.4 | incidents, victims | yes |
+| W3 late stages x2 | 7 | +3.52 [+2.86, +4.17] | +0.4 [+0.4, +0.5] | +2.49 [+1.58, +3.39] | +2.5 | incidents, victims | yes |
+| W3 late stages x4 | 2 | +7.06 [+6.32, +7.80] | +1.4 [+1.3, +1.5] | +2.58 [+1.67, +3.50] | +6.3 | incidents, victims | yes |
+| W3 late stages x4 | 7 | +5.64 [+4.95, +6.33] | +0.7 [+0.6, +0.8] | +3.68 [+2.68, +4.69] | +4.3 | incidents, victims | yes |
+| W0 instant work | 2 | +38.77 [+36.60, +40.82] | +7.7 [+7.2, +8.2] | +6.98 [+5.97, +7.98] | +37.5 | incidents, victims | yes |
+| W0 instant work | 7 | +31.75 [+30.15, +33.32] | +3.9 [+3.6, +4.2] | +8.76 [+7.49, +10.02] | +29.1 | incidents, victims | yes |
+| V0 instant travel to tasks | 2 | +5.56 [+4.56, +6.55] | +1.1 [+0.9, +1.3] | +0.30 [-0.75, +1.32] | +7.1 | incidents | yes |
+| V0 instant travel to tasks | 7 | +5.39 [+4.39, +6.37] | +0.7 [+0.5, +0.8] | +2.54 [+1.51, +3.59] | +5.8 | incidents, victims | yes |
+| V0 instant travel to tasks and to rest | 2 | +13.17 [+11.91, +14.43] | +2.6 [+2.3, +2.9] | +1.07 [-0.12, +2.23] | +14.4 | incidents | yes |
+| V0 instant travel to tasks and to rest | 7 | +16.75 [+15.32, +18.16] | +2.1 [+1.9, +2.3] | +4.04 [+2.73, +5.33] | +16.5 | incidents, victims | yes |
+| V1 search/extraction x2 direct, perimeter x0.5 | 2 | -1.74 [-2.78, -0.74] | -0.3 [-0.6, -0.1] | -0.91 [-1.86, +0.04] | -0.6 | no |  |
+| V1 search/extraction x2 direct, perimeter x0.5 | 7 | -0.35 [-1.29, +0.58] | -0.0 [-0.2, +0.1] | +0.24 [-0.91, +1.39] | +0.5 | no |  |
+| V1 x2: planner task actions (clear road, reroute, reinforce, relay) on minus off | 2 | not run |  |  |  |  |  |
+| V1 x2: planner task actions (clear road, reroute, reinforce, relay) on minus off | 7 | not run |  |  |  |  |  |
+| V1 search/extraction x4 direct, perimeter x0.5 | 2 | +0.20 [-0.78, +1.18] | +0.0 [-0.2, +0.2] | -0.26 [-1.28, +0.77] | +1.2 | no | yes |
+| V1 search/extraction x4 direct, perimeter x0.5 | 7 | +2.84 [+1.86, +3.80] | +0.4 [+0.2, +0.5] | +1.98 [+0.84, +3.12] | +2.5 | incidents, victims | yes |
+| V1 x4: planner task actions (clear road, reroute, reinforce, relay) on minus off | 2 | not run |  |  |  |  |  |
+| V1 x4: planner task actions (clear road, reroute, reinforce, relay) on minus off | 7 | not run |  |  |  |  |  |
+| TM1 team mix a | 2 | +2.45 [+1.72, +3.16] | +0.5 [+0.3, +0.6] | +0.41 [-0.58, +1.40] | +2.4 | incidents | yes |
+| TM1 team mix a | 7 | +1.35 [+0.60, +2.10] | +0.2 [+0.1, +0.3] | +0.99 [-0.08, +2.06] | +1.4 | incidents | yes |
+| TM1 team mix b | 2 | +1.24 [+0.56, +1.91] | +0.2 [+0.1, +0.4] | +0.38 [-0.60, +1.36] | +1.4 | incidents | yes |
+| TM1 team mix b | 7 | +0.73 [-0.16, +1.60] | +0.1 [-0.0, +0.2] | +0.04 [-1.18, +1.19] | +0.9 | no | yes |
+| TM1 team mix c | 2 | +2.35 [+1.57, +3.11] | +0.5 [+0.3, +0.6] | -0.19 [-1.14, +0.75] | +2.0 | incidents | yes |
+| TM1 team mix c | 7 | +1.22 [+0.43, +2.01] | +0.2 [+0.1, +0.2] | +0.47 [-0.59, +1.54] | +1.2 | incidents | yes |
+
+**What this shows (descriptive; the confirmation is B2b).**
+
+* **Work speed is the dominant lever, but only if it does not burn the consumables faster.** With stamina and equipment drain per tick
+  unchanged (W1a), 25 percent more work per tick is worth +4.4 incidents at stress 2 (0.9 team-equivalent) and 1.5 times
+  +8.1, 2 times +12.1, 3 times +18.1, 4 times +21.5; victims lost fall by 2.4 to 6.0 per seed. Tie the drain to the work done
+  (W1b, a unit of work then costs the same stamina and equipment) and the same speed-ups give +1.6, +2.3, +3.4, +4.9 and
+  +6.6: **about a quarter to a third of the benefit**, because a team that works faster also runs out of consumables
+  faster. So a faster tool pays only to the extent it also saves stamina and equipment per unit of work.
+* **Instant work (W0, the ceiling) is worth +38.8 incidents at stress 2 and +31.8 at stress 7 (7.7 and 3.9
+  team-equivalents)**, but spawned incidents rise by almost the same amount (+37.5 and +29.1): the world generates new
+  incidents as teams free up, so this is mostly more arrivals. The victims-lost gain, +7.0 and +8.8 per seed (about
+  half of all victims lost), is the real benefit.
+* **Which teams matter (W2, one specialization at a time, x2):** EXTRACTION +4.0 incidents (0.8 team-equivalent),
+  PERIMETER +3.3, SUPPORT +2.8, SEARCH +1.0, MEDICAL +0.4 (not significant). This follows the stage load of
+  `docs/SPECIALIZATION_LOAD.md` (EXTRACTION and PERIMETER finish most stages).
+* **Which stage (W3):** early and late stages are worth the same (x2: +4.8 and +5.3; x4: +7.9 and +7.1). No stage
+  dominates, as predicted.
+* **Travel (V0).** Instant travel to tasks adds +5.6 incidents (1.1 team-equivalent) and instant travel to tasks and to rest
+  +13.2 and +16.8: travel is worth less than work (W0). The victims-lost effect of instant task travel is small at
+  stress 2 (+0.3, not significant) and +2.5 at stress 7.
+* **Speed profiles (V1).** Search and extraction teams moving 2 cells per tick over debris, with perimeter teams at half
+  speed, **lose** 1.7 incidents at stress 2 (the slow perimeter teams cost more than the fast ones gain); at x4 they are
+  neutral at stress 2 (+0.2) and gain +2.8 incidents and 2.0 fewer victims lost at stress 7. The road-action contrast of V1 was
+  vacuous and is redone (Addendum E).
+* **Team mix (TM1).** Mixes a (1 SEARCH, 2 MEDICAL, 4 EXTRACTION, 3 PERIMETER, 0 SUPPORT) and c (1, 1, 3, 3, 2) gain
+  about +2.4 incidents at stress 2 (0.5 team-equivalent) and +1.3 at stress 7; mix b about half. The victims-lost gains are
+  not significant, and the incident gains are flagged demand-driven. A free reconfiguration, but the effect on victims is
+  not established.
+
+**Scorecard for Tier 2 (Addendum B, section 10.5).**
+
+| Prediction | Outcome |
+|---|---|
+| W1: x2 gives +2 to +6 incidents; x4 less than twice x2; variant b below a | Magnitude **not held**: W1a x2 is +12.1, far above +2 to +6 (the on-scene share of 10-18 percent underestimates the benefit, because the time freed also reduces rest cycles). x4 is less than twice x2 (held); b below a (held) |
+| W2: each under +1.5, EXTRACTION and PERIMETER the largest (+1 to +3) | Ordering held (EXTRACTION, PERIMETER largest); magnitudes higher (+4.0 and +3.3) |
+| W3: no stage dominates | Held |
+| W0: +6 to +15 | **Not held**: +38.8 and +31.8 (mostly extra arrivals) |
+| V0: +8 to +20, larger than W0 | **Not held**: V0 (+5.6, +13.2) is smaller than W0 |
+| V1: search/extraction x2 gives +1 to +3; perimeter x0.5 costs 1 to 4 | Net negative at x2 stress 2 (-1.7, consistent with the perimeter penalty); positive only at x4 stress 7 |
+| TM1: all within +-1.5 | Not held for mixes a and c at stress 2 (+2.4); held at stress 7 for b |
+| Overall: capacity and speed levers beat information levers by at least 3 times per team-equivalent | **Held, by a wide margin** (work speed: up to 4 team-equivalents; the best information lever, 0.4) |
+
 ## C. Design note (no implementation): how a real road-knowledge version would propagate
 
 ### C.1 What is in the code today (budgets found, not assumed)
