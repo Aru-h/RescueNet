@@ -29,6 +29,12 @@ V1 = ["--fault-profile=causal", "--causal-persist=on", "--causal-fixes=label,rtb
       "--diag", "--probe-diag"]
 PL = ["--recovery=utility"]
 P_WD = PL + ["--planner-p=watchdog"]
+# Addendum E: under --recovery=utility the planner enables REROUTE, CLEAR_ROAD, REINFORCE and RELAY itself (enabled_mask 15),
+# whatever --causal-actions says (verified: byte-identical results with the flag absent, off and listing the actions).
+# The "actions OFF" arm is therefore the planner with Layer A only (--planner=team: enabled_mask 0). Configurations whose name
+# ends in _act (and ACT) are these OFF arms (legacy names, kept so queued invocations still resolve); the effect of the
+# actions is the baseline (actions on) minus the _act arm.
+L_B_OFF = ["--planner=team"]
 SPEC = {"search": 0, "medical": 1, "extraction": 2, "perimeter": 3, "support": 4}
 
 # name -> (binary, args). Strings starting with '@' are expanded by run_one (per-seed paths).
@@ -83,8 +89,7 @@ CONFIGS["V0_task"] = ("noai", P_WD + ["--probe-instant-travel=task"])
 CONFIGS["V0_all"] = ("noai", P_WD + ["--probe-instant-travel=all"])
 for x in (2, 4):
     CONFIGS[f"V1_{x}"] = ("noai", P_WD + [f"--probe-speed=search:{x},extraction:{x},perimeter:0.5"])
-    CONFIGS[f"V1_{x}_act"] = ("noai", P_WD + [f"--probe-speed=search:{x},extraction:{x},perimeter:0.5",
-                                                "--causal-actions=reroute,clear_road"])
+    CONFIGS[f"V1_{x}_act"] = ("noai", P_WD + [f"--probe-speed=search:{x},extraction:{x},perimeter:0.5"] + L_B_OFF)
 for m in "abc":
     CONFIGS[f"TM1_{m}"] = ("noai", P_WD + [f"--probe-team-mix={m}"])
 # Tier 3
@@ -114,10 +119,10 @@ for v in (2, 4):
     RK[f"RK_rad_{v}"] = [f"--probe-road-radius={v}"]
 for k, a in RK.items():
     CONFIGS[k] = ("noai", P_WD + ["--probe-roadknow=obs"] + a)
-    CONFIGS[k + "_act"] = ("noai", P_WD + ["--probe-roadknow=obs"] + a + ["--causal-actions=reroute,clear_road"])
-CONFIGS["ACT"] = ("noai", P_WD + ["--causal-actions=reroute,clear_road"])
-CONFIGS["R1_act"] = ("noai", P_WD + ["--probe-roadknow=obs", "--causal-actions=reroute,clear_road"])
-CONFIGS["R2_act"] = ("noai", P_WD + ["--probe-roadknow=prior", "--causal-actions=reroute,clear_road"])
+    CONFIGS[k + "_act"] = ("noai", P_WD + ["--probe-roadknow=obs"] + a + L_B_OFF)
+CONFIGS["ACT"] = ("noai", P_WD + L_B_OFF)
+CONFIGS["R1_act"] = ("noai", P_WD + ["--probe-roadknow=obs"] + L_B_OFF)
+CONFIGS["R2_act"] = ("noai", P_WD + ["--probe-roadknow=prior"] + L_B_OFF)
 
 KV = re.compile(r"(\w+)=(-?[\d.]+)")
 LINE = re.compile(r"\[DIAG (\w+)\] ?(.*)")

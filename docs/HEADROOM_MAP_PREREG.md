@@ -545,3 +545,29 @@ RR2a is a null because SUPPORT teams are rarely idle (about 2-4 percent of their
 a handful of times per seed at most (0.5); RR4 and RR5 move incidents by under 1.0 (0.5); RR1 under 1.0 (0.6); RR3 under
 0.5 (0.6). Holm: the new contrasts (7 RR contrasts + 3 key-question contrasts, x 2 stresses x 2 metrics = 40 tests)
 join the family.
+
+## 13. Addendum E (2026-10-26; correction of the "road actions on vs off" contrast; committed before any run of the corrected arm)
+
+**Finding.** The pre-registered way of switching REROUTE and CLEAR_ROAD on and off (`--causal-actions=reroute,clear_road`
+against none) is **vacuous under the planner**. With `--recovery=utility` the planner enables REROUTE, CLEAR_ROAD,
+REINFORCE and RELAY itself (`[DIAG ACTIONS] enabled_mask=15`) whatever `--causal-actions` says. Verified on a seed at
+stress 7: the flag absent, `off`, and listing the two actions give byte-identical results (27 incidents, 15 victims lost,
+identical counters), and the two V1 "actions on vs off" contrasts of Tier 2 came out as exactly +0.00 [+0.00, +0.00] on
+all 200 seed-pairs for the same reason. The baseline P of every contrast in this map therefore **always has the planner's
+task actions on**; my statement in Addendum A that the v1 world has "recovery actions off" was true only of the fixed
+gates, not of the planner arm used as baseline. (Step 3.6 and Step 4 numbers are unaffected: they were runs of the same
+configurations.)
+
+**Corrected design.** The "actions off" arm is the planner with Layer A only (`--planner=team`), for which
+`enabled_mask = 0` and no task action is ever dispatched (verified). The effect of the actions is
+**baseline (actions on) minus the Layer-A-only arm**, for each knowledge setting (omniscient, R1, R2, the eight Addendum C
+settings, and V1 x2 and x4). Limit stated now: the planner's Layer B switches **all four** actions together, so the
+contrast measures REROUTE, CLEAR_ROAD, REINFORCE and RELAY jointly; separating REROUTE and CLEAR_ROAD from the other two
+would need a change to the planner's layer switches (a core change beyond a hook; not done). In the code the OFF arms keep
+the legacy names ending `_act` (and `ACT`) so queued invocations still resolve; the V1 `_act` results already written
+under the vacuous definition were deleted and are re-run. RR3's comparison base is P (CLEAR_ROAD is already on), so
+`RR3_base` is a duplicate of P and is not used.
+
+**Prediction for the corrected contrast** (Layer B on minus off, incidents per seed): within +-1.0 at both stresses under
+every knowledge setting (confidence 0.5); not below -1.0 (0.6). Holm: the corrected contrasts replace the vacuous ones in
+the family (same number of tests).

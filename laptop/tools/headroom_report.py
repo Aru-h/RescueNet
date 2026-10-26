@@ -74,20 +74,20 @@ add("V0_task", "V0 instant travel to tasks", "V0_task", "P", 2, "probe", "ceilin
 add("V0_all", "V0 instant travel to tasks and to rest", "V0_all", "P", 2, "probe", "ceiling")
 for x in (2, 4):
     add(f"V1_{x}", f"V1 search/extraction x{x} direct, perimeter x0.5", f"V1_{x}", "P", 2, "probe", "aerial or off-road assets")
-    add(f"V1_{x}_act", f"V1 x{x}: road actions on vs off", f"V1_{x}_act", f"V1_{x}", 2, "probe", "already implemented")
+    add(f"V1_{x}_act", f"V1 x{x}: planner task actions (clear road, reroute, reinforce, relay) on minus off", f"V1_{x}", f"V1_{x}_act", 2, "probe", "already implemented")
 for m in "abc":
     add(f"TM1_{m}", f"TM1 team mix {m}", f"TM1_{m}", "P", 2, "probe", "free (configuration)")
 add("R_info", "R1: value of road information (omniscient minus R1)", "P", "R1", 3, "probe", "ceiling for any road-information system")
 add("R_info_s", "R1s: omniscient minus strict R1 (radius 0)", "P", "R1s", 3, "probe", "ceiling")
 add("R_pred", "R2 minus R1: value of a damage predictor", "R2", "R1", 3, "probe", "no structure in this sim")
 add("R_share", "R3 minus R1: value of better sharing", "R3", "R1", 3, "probe", "broadcast, mesh")
-add("ACT_omni", "REROUTE+CLEAR_ROAD on vs off, omniscient", "ACT", "P", 3, "probe", "implemented")
-add("ACT_R1", "REROUTE+CLEAR_ROAD on vs off, under R1", "R1_act", "R1", 3, "probe", "implemented")
-add("ACT_R2", "REROUTE+CLEAR_ROAD on vs off, under R2", "R2_act", "R2", 3, "probe", "implemented")
+add("ACT_omni", "planner task actions on minus off, omniscient road knowledge", "P", "ACT", 3, "probe", "implemented")
+add("ACT_R1", "planner task actions on minus off, under R1", "R1", "R1_act", 3, "probe", "implemented")
+add("ACT_R2", "planner task actions on minus off, under R2", "R2", "R2_act", 3, "probe", "implemented")
 add("RR1", "RR1 relief, rate-aware trigger", "RR1", "P", 4, "probe", "operations")
 add("RR1f", "RR1 relief, perfect-foresight trigger", "RR1f", "P", 4, "probe", "not realisable (realised faults)")
 add("RR2a", "RR2a SUPPORT-delivered repair (idle or priced preemption)", "RR2a", "P", 4, "probe", "needs spares and a free support team")
-add("RR3", "RR3 lane first (clear_road on) vs clear_road alone", "RR3", "RR3_base", 4, "probe", "Tohoku-style lane opening")
+add("RR3", "RR3 lane first (CLEAR_ROAD is already on under the planner) vs P", "RR3", "P", 4, "probe", "Tohoku-style lane opening")
 add("RR4", "RR4 degraded mode, capability-aware bids", "RR4", "P", 4, "probe", "yes: scoring rule")
 add("RR5", "RR5 autonomy on communication loss", "RR5", "P", 4, "probe", "yes: operating rule")
 add("RR0", "RR0 all five responses (not jointly priced)", "RR0_P", "P", 4, "probe", "see components")
@@ -96,7 +96,7 @@ add("RR_key_S1", "KEY: hazard-oracle + prevention with RR0 on (minus P+RR0)", "R
 for _k, _lab in [("RK_lat_0", "latency 0"), ("RK_lat_10", "latency 10"), ("RK_lat_30", "latency 30"), ("RK_lat_100", "latency 100"),
                  ("RK_loss_0.2", "loss 0.2"), ("RK_loss_0.5", "loss 0.5"), ("RK_rad_2", "radius 2"), ("RK_rad_4", "radius 4")]:
     add(_k + "_val", f"C: value of road information at {_lab} (omniscient minus setting)", "P", _k, 5, "probe", "ceiling")
-    add(_k + "_act", f"C: REROUTE+CLEAR_ROAD on vs off at {_lab}", _k + "_act", _k, 5, "probe", "implemented")
+    add(_k + "_act", f"C: planner task actions on minus off at {_lab}", _k, _k + "_act", 5, "probe", "implemented")
 add("GAP", "reference: no faults (fixed gates) minus P", "NOFAULT", "P", 0, "ref", "")
 
 
