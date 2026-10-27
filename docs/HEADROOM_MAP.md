@@ -560,6 +560,88 @@ arrivals; the **victims-lost column is the cleaner outcome** and the one to lean
 | TM1: all within +-1.5 | Not held for mixes a and c at stress 2 (+2.4); held at stress 7 for b |
 | Overall: capacity and speed levers beat information levers by at least 3 times per team-equivalent | **Held, by a wide margin** (work speed: up to 4 team-equivalents; the best information lever, 0.4) |
 
+## B3. Tier 3: road information (R1, R2, R3 and the task actions; screen on 100 development seeds)
+
+Per-run data: `docs/data/headroom/tier3_road_information.csv` (binary B1). Value of road information = omniscient (P)
+minus the setting, so a positive number means that knowing less costs that much. The shared-picture simplification
+makes every value here a **lower bound** (section A2). The task-action contrast is the planner's Layer B on minus off
+(Addendum E; it covers REROUTE, CLEAR_ROAD, REINFORCE and RELAY together).
+
+| Contrast | Stress | Incidents / seed [95% CI] | Team-equiv. | Victims lost / seed (positive = fewer) [95% CI] | Spawned | Survives |
+|---|---|---|---|---|---|---|
+| R1: value of road information (omniscient minus R1) | 2 | -0.15 [-0.72, +0.44] | -0.0 [-0.1, +0.1] | -0.68 [-1.44, +0.08] | +0.1 | no |
+| R1: value of road information (omniscient minus R1) | 7 | +0.11 [-0.50, +0.71] | +0.0 [-0.1, +0.1] | -0.38 [-1.33, +0.56] | +0.2 | no |
+| R1s: omniscient minus strict R1 (radius 0) | 2 | +0.31 [-0.40, +1.10] | +0.1 [-0.1, +0.2] | -0.41 [-1.15, +0.31] | +0.2 | no |
+| R1s: omniscient minus strict R1 (radius 0) | 7 | +0.15 [-0.49, +0.78] | +0.0 [-0.1, +0.1] | -0.35 [-1.24, +0.55] | +0.2 | no |
+| R2 minus R1: value of a damage predictor | 2 | +0.07 [-0.29, +0.44] | +0.0 [-0.1, +0.1] | -0.29 [-0.68, +0.11] | +0.0 | no |
+| R2 minus R1: value of a damage predictor | 7 | +0.83 [+0.15, +1.49] | +0.1 [+0.0, +0.2] | +0.36 [-0.54, +1.27] | +0.7 | no |
+| R3 minus R1: value of better sharing | 2 | +0.12 [-0.35, +0.61] | +0.0 [-0.1, +0.1] | -0.69 [-1.49, +0.11] | +0.1 | no |
+| R3 minus R1: value of better sharing | 7 | -0.11 [-0.70, +0.46] | -0.0 [-0.1, +0.1] | -0.50 [-1.50, +0.49] | +0.4 | no |
+| planner task actions on minus off, omniscient road knowledge | 2 | -0.34 [-0.89, +0.22] | -0.1 [-0.2, +0.0] | -1.03 [-1.74, -0.35] | -0.0 | no |
+| planner task actions on minus off, omniscient road knowledge | 7 | -0.29 [-0.98, +0.39] | -0.0 [-0.1, +0.0] | -0.44 [-1.36, +0.48] | -0.0 | no |
+| planner task actions on minus off, under R1 | 2 | +0.11 [-0.37, +0.59] | +0.0 [-0.1, +0.1] | +0.75 [+0.06, +1.47] | +0.1 | no |
+| planner task actions on minus off, under R1 | 7 | +0.04 [-0.61, +0.70] | +0.0 [-0.1, +0.1] | +0.14 [-0.80, +1.06] | -0.2 | no |
+| planner task actions on minus off, under R2 | 2 | +0.41 [-0.11, +0.97] | +0.1 [-0.0, +0.2] | +0.41 [-0.33, +1.15] | +0.2 | no |
+| planner task actions on minus off, under R2 | 7 | -0.40 [-1.06, +0.25] | -0.0 [-0.1, +0.0] | -0.88 [-1.74, -0.04] | -0.2 | no |
+
+**Result: nothing survives; every incidents CI includes 0 except one that is below the materiality threshold.**
+
+* **Value of road information (omniscient minus R1): -0.15 [-0.72, +0.44] incidents at stress 2 and +0.11 [-0.50, +0.71]
+  at stress 7; in team-equivalents indistinguishable from zero (0.0 [-0.1, +0.1]).** The strict variant (radius 0) is
+  +0.31 and +0.15. Knowing every damaged road instantly is worth nothing measurable over learning it by
+  observation, in this world.
+* **Value of a damage predictor (R2 minus R1): +0.07 [-0.29, +0.44] at stress 2 and +0.83 [+0.15, +1.49] at stress 7.** The
+  stress-7 interval excludes 0 but is below the +1.0 threshold, so it does not survive. The prior is flat (damage in
+  this simulator has no spatial structure beyond team routes), adds at most 1 to 2 cost units, and only early in the
+  run; read the stress-7 figure as a small, unexplained effect of a nearly constant cost, not as evidence that a damage
+  map is worth building. The prediction (null, 0.85 confidence) held at stress 2 and was borderline at stress 7.
+* **Value of better sharing (R3 minus R1): +0.12 and -0.11.** The reporting mechanism itself is worth nothing here.
+* **The task actions (planner Layer B on minus off): within +-0.4 incidents** under omniscient, R1 and R2 knowledge. The
+  victims-lost figures point in both directions (omniscient stress 2: 1.0 **more** victims lost with the actions on,
+  [+0.35, +1.74] worse; under R1 stress 2: 0.75 fewer), which looks like noise across 14 tests, and none passes the
+  materiality threshold. REROUTE and CLEAR_ROAD do not matter even once the fleet no longer knows the map (prediction
+  held), and neither do the other two actions in aggregate.
+
+**Mechanism diagnostics (means per seed, development seeds; "known within 2" = damaged cells the fleet learned within 2
+ticks of onset).**
+
+| Setting | Stress | Damaged cells | Known within 2 ticks | Mean onset-to-known (ticks) | Reports made / lost | Blocked stops | Unknown partial-debris entries | Stale cell-ticks | Stall ticks (all causes) |
+|---|---|---|---|---|---|---|---|---|---|
+| R1 (radius 1) | 2 | 10.0 | 6.4 | 6.8 | 55.9 / 37.7 | 18.1 | 7.4 | 812 | 121.8 |
+| R1s (radius 0) | 2 | 10.2 | 6.1 | 10.3 | 287.4 / 273.6 | 180.3 | 9.0 | 5006 | 274.9 |
+| R2 (prior) | 2 | 10.2 | 6.5 | 6.6 | 66.4 / 48.1 | 20.9 | 9.7 | 771 | 137.0 |
+| R3 (instant) | 2 | 10.3 | 8.3 | 1.6 | 18.6 / 0.0 | 0.0 | 0.0 | 878 | 110.6 |
+| omniscient (P) | 2 | | | | | | | | 104.9 |
+| R1 | 7 | 16.9 | 11.4 | 6.4 | 58.0 / 29.4 | 7.5 | 15.2 | 1674 | 239.0 |
+| R1s | 7 | 16.7 | 10.6 | 9.8 | 56.2 / 34.5 | 16.7 | 19.7 | 6930 | 249.0 |
+| R2 | 7 | 16.7 | 11.6 | 5.7 | 106.3 / 77.8 | 22.4 | 12.1 | 1500 | 321.1 |
+| R3 | 7 | 16.9 | 13.7 | 3.0 | 28.5 / 0.0 | 0.0 | 0.0 | 1706 | 239.9 |
+| omniscient (P) | 7 | | | | | | | | 236.6 |
+
+* **The world has few damaged cells (10 per seed at stress 2, 17 at stress 7), and about two thirds of them are learned
+  within 2 ticks of onset**, because the damage lands on a team's own route, so the hit team is at or beside the cell
+  (the mechanism the advisor flagged). That is why observation-only knowledge is almost as good as omniscience.
+* **The hook is working, not broken:** under R1 teams are stopped at truly blocked cells 18 times per seed at stress 2 and
+  step onto unknown partial debris 7 to 15 times, and total stall time is within about 15 percent of omniscient (122
+  against 105 ticks at stress 2); the stall false alarm behaviour (`go_home_near_stall`) is not changed measurably.
+* **Most reports are lost (68 percent at stress 2, 51 percent at stress 7 for R1), far more than the 5 percent loss
+  parameter**: a team beside damaged ground often has an active communication fault (rubble in the link budget), and a
+  report from a communication-faulted team is always lost. The counters do not separate the two causes (I did not
+  change the frozen binary to add one); the Addendum C sensitivity varies the hash loss, and the comm-fault gate
+  remains in every setting except R3. Strict observation (radius 0) makes a team wait at a blocked cell while
+  its repeated reports are lost: 180 blocked stops per seed and 5,000 stale cell-ticks at stress 2, yet still no
+  measurable cost in incidents.
+* Neither stall time nor `no_path` abandons (0.1 to 0.4 per seed) change much.
+
+**Scorecard for Tier 3 (Addendum B, section 10.5).**
+
+| Prediction | Outcome |
+|---|---|
+| R1: omniscience worth 0 to 1 incident at stress 2 (CI includes 0), 0.3 to 1.5 at stress 7; stall-hold ticks at least double; no-path abandons rise | Stress 2 null (held); stress 7 +0.11 (below the range); stall ticks rise 16 percent, not double (**not held**); no-path abandons rise from 0 to 0.1 (weak) |
+| R2: null, CI includes 0, point under 0.3 | Held at stress 2; stress 7 +0.83 with CI excluding 0 (**not held**, but below materiality) |
+| R3: at most 0.3, CI includes 0 | Held |
+| REROUTE / CLEAR_ROAD under R1 and R2 under 0.5 at stress 2 | Held (+0.11 and +0.41, CIs include 0) |
+
 ## C. Design note (no implementation): how a real road-knowledge version would propagate
 
 ### C.1 What is in the code today (budgets found, not assumed)
