@@ -48,7 +48,10 @@ accepted code-audit findings, implementation notes) is in
    better model could add at most about 0.75. The limit is the simulator's
    fault model: a fault clears on a fixed timer that no recovery action can
    shorten, and only resource faults are measurably recoverable by the current
-   recovery actions (`ml/MODEL_REPORT.md` §9).
+   recovery actions (`ml/MODEL_REPORT.md` §9). *Post-contest note:* these
+   figures are for the original fault model. Under the realistic causal fault
+   model the gain does not hold: a perfect detector adds about zero
+   (`docs/HEADROOM_MAP.md`).
 7. **Environment faults are nearly invisible.** An environment fault only
    raises the travel cost of one map cell, which leaves almost no trace in a
    team's own telemetry. The rules and consensus detect about 0% of them.
@@ -120,7 +123,7 @@ accepted code-audit findings, implementation notes) is in
     off); otherwise the dashboard refuses rather than show a diverging run.
 19. **Tested on macOS and Linux.** Windows is not tested. Absolute results
     differ slightly between platforms for the same seed.
-16. **The bundled demo recording does not replay exactly on Linux.** The
+20. **The bundled demo recording does not replay exactly on Linux.** The
     simulator is deterministic on a given platform, but not across platforms.
     `demo_seed1002_combined_600ticks.jsonl.gz` was recorded on macOS (arm64,
     clang) and replays exactly there. On Linux x86_64 the same seed diverges
@@ -129,26 +132,26 @@ accepted code-audit findings, implementation notes) is in
     `make check-dashboard-e2e` is expected to fail on Linux. Everything else
     in that check passes. This is believed to be cross-platform
     floating-point divergence; the cause has not been confirmed.
-17. **The 3D incident pin has no time-pressure ring yet.** The simulator does
+21. **The 3D incident pin has no time-pressure ring yet.** The simulator does
     not send an incident's age, deadline or victims' survival time, so the
     dashboard cannot show how urgent an incident is in time. It is left out
     on purpose (not even a "seen for N ticks" stand-in, which would not be
     the incident's real age). To do: add the ring once the simulator sends
     incident age / survival from the causal mission model.
-18. **The 3D pin's progress arc is an estimate.** The simulator sends the work
+22. **The 3D pin's progress arc is an estimate.** The simulator sends the work
     remaining on an incident but not the starting amount, so the arc is
     measured against the largest value the dashboard has seen for that
     incident. It starts empty when the dashboard connects to an incident
     that is already partly worked, and shows nothing when the remaining work
     is sent as 0.
-19. **Evacuation gateway markers show where an exit is, nothing more.** The
+23. **Evacuation gateway markers show where an exit is, nothing more.** The
     simulator sends each gateway's position only (STATICENV `gateways`), so the
     card has no evacuee counts and nothing says whether a gateway is reachable
     for a given team. In 2D and 3D the marker stays inside its own edge cell
     (3D: outside the map, one cell wide); in 2.5D the glyph stands upright on
     its cell and can cover part of a neighbouring cell on screen. Recordings
     made before the field existed show no gateways.
-20. **Some evacuation gateways cannot be reached by some teams (world
+24. **Some evacuation gateways cannot be reached by some teams (world
     generation, not changed in v1).** An audit of seeds 1001-1100 (300
     gateways) with the simulator's own pathfinder (`find_path_steps`, the A*
     teams use, at world creation) found every gateway reachable from at least

@@ -1,5 +1,11 @@
 # Scale audit (Step 5, tier 0, SA): what physical size is one grid cell?
 
+> **Owner decision (Oct 27, see `DECISIONS.md` D15):** the design scale is **10 m per cell** (about 13 ha), so a team moves
+> 1 km/h, a loaded foot team on rubble. The stamina model agrees: full stamina to the arduous floor at 0.110 per travel
+> tick is 727 ticks, 7.3 h, 7.3 km at 10 m (but 73 km at 100 m). This supersedes the audit's recommendation to keep the scale
+> abstract. The radio model's 100 m per cell and the 4-tick debris stall (derived from 100 m) are the parts that remain
+> inconsistent with it.
+
 Read-only audit. No code or default was changed. Measured figures come from one no-fault run (`--fault-profile=none`,
 seed 1001, 3000 ticks) and one v1-world run (stress 2, seed 1001) using the dataset's per-team rows; computed figures
 are marked "computed". Anything from outside the repository is marked "to verify" (the network proxy blocked the

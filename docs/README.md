@@ -4,6 +4,13 @@ Design docs, board bring-up, evaluation results, and research notes for
 the `tron` / REMCE rescue-coordination system. Start at the repo root
 [`README.md`](../README.md) for the project overview and quick start.
 
+## Status, claims and decisions (start here)
+
+- [`ARCHITECTURE_OVERVIEW.md`](ARCHITECTURE_OVERVIEW.md) — one-page map: modules, tick order, RTOS tasks, invariants.
+- [`CLAIMS.md`](CLAIMS.md) — every claim, how we know it, and its status (on-board, host-verified, simulator-only, withdrawn).
+  Read this before quoting a result.
+- [`DECISIONS.md`](DECISIONS.md) — the decisions made, by whom, with the evidence.
+
 ## Architecture (`docs/architecture/`)
 
 - [`ARCHITECTURE.md`](architecture/ARCHITECTURE.md) — technical reference:
