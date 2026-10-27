@@ -800,8 +800,11 @@ the ceiling of this sensitivity. Figure: `docs/figures/road_value_sensitivity.pn
   unhelpful direction).
 * **At a latency of 100 ticks (one hour) the value rises to +1.28 [+0.63, +1.96] incidents at stress 2 and +1.54 [+0.89, +2.21]
   at stress 7** (0.3 and 0.2 team-equivalents), with no significant effect on victims lost. This is the only
-  setting that passes the screen, and its incident gain is flagged demand-driven (spawned incidents rise +1.1 and +1.4). Its
-  held-out confirmation is queued at the end of the run list.
+  setting that passes the screen, and its incident gain is flagged demand-driven (spawned incidents rise +1.1 and +1.4). Held-out
+  confirmation (seeds 3001-3100): stress 2 **+0.26 [-0.35, +0.84]** (does not replicate); stress 7 **+1.32 [+0.47, +2.17]**
+  (unadjusted p 0.0023, Holm p 0.147 over m = 64, so **not confirmed**). Reading: at a one-hour latency the value is about +1.3
+  incidents at stress 7 on both seed sets, but the Holm-adjusted test does not clear it and it is flagged demand-driven; treat it as
+  suggestive, not established.
 * **Reading.** Road information is worth something only when the news of a blocked road takes about an hour to reach the
   fleet. A real propagation model is therefore **not needed to say that road information is worth little in this world if
   reports take minutes**; it is needed before any statement about a slow channel (hourly reports, or reports that
@@ -928,6 +931,16 @@ same binary (B2). Held-out confirmation of the only survivor is in B5b.
   near-zero prevention result in B1b. Cheaper responses do not unlock more value from information.
 * **Caveat.** RR0 is the five responses together without joint pricing, which is why it can be worse than its parts (it moves
   incidents down while victims improve at stress 7). A jointly priced version was outside the pre-registered list and was not tried.
+
+### B5b. Tier 4 confirmation (held-out seeds 3001-3100, m = 36)
+
+| Probe | Stress | Metric | Screen | Held-out [95% CI] | Holm p | Confirmed |
+|---|---|---|---|---|---|---|
+| RR0 all five responses | 7 | victims lost | +1.00 [+0.11, +1.87] | -0.62 [-1.72, +0.49] | 1.000 | **no** (sign flips) |
+
+The only Tier 4 screen survivor does not replicate. **Tier 4 result: no cheaper-response probe is confirmed; the headroom of a
+perfect detector does not grow with cheaper responses.** The Tier 4 survivor rule also required stress 1 and 3.5 runs
+only for confirmed survivors, so none were run.
 
 ## C. Design note (no implementation): how a real road-knowledge version would propagate
 
