@@ -1981,6 +1981,11 @@ void fault_injector_causal_hold_count(uint8_t counter, uint8_t idx) { (void)coun
 int fault_injector_causal_field_just_repaired(uint8_t team_id) { (void)team_id; return 0; }
 void fault_injector_causal_prevent_order(uint8_t team_id) { (void)team_id; }
 int fault_injector_causal_rest_hold(uint8_t team_id) { (void)team_id; return 0; }
+uint8_t fault_injector_causal_env_label(uint8_t team_id) { (void)team_id; return 0u; }
+uint8_t fault_injector_causal_road_kind(int x, int y) { (void)x; (void)y; return 0u; }
+int fault_injector_causal_onset_within(uint8_t team_id, uint32_t ticks) { (void)team_id; (void)ticks; return 0; }
+uint32_t fault_injector_causal_field_remaining(uint8_t team_id) { (void)team_id; return 0u; }
+float fault_injector_causal_future_victim_loss(uint8_t slot, uint32_t window) { (void)slot; (void)window; return 0.0f; }
 void fault_injector_causal_forecast(uint8_t team_id, uint8_t after, float out[2])
 {
     (void)team_id; (void)after;

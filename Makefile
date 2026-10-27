@@ -815,8 +815,8 @@ check-fault-predictor-features-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)
 	@echo "  CC      $(TOOLS_DIR)/fault_predictor_features_selftest.c"
 	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/fault_predictor_features_selftest \
-		$(TOOLS_DIR)/fault_predictor_features_selftest.c $(CORE_DIR)/fault_predictor_features.c \
-		$(CORE_DIR)/mission_state.c $(LDFLAGS)
+		$(TOOLS_DIR)/fault_predictor_features_selftest.c \
+		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./fault_predictor_features_selftest
 
 # Zone parity (feature-contract Decision D): a board fed only the district-
@@ -916,9 +916,11 @@ check-consensus-selftest:
 	@mkdir -p $(SELFTEST_BIN_DIR)
 	@echo "  CC      $(TOOLS_DIR)/consensus_selftest.c"
 	# The selftest exercises the fast path, which is off by default (decision D7).
+	# consensus.c now reads the causal actions, which pull in the simulation core; the selftest's own
+	# team_radio_emitted() stand-in is linked first, so it wins over team.c's (--allow-multiple-definition).
 	@$(CC) $(SELFTEST_CFLAGS) $(CONSENSUS_TEST_DEFS) -DCONSENSUS_FAST_PATH=1 -o $(SELFTEST_BIN_DIR)/consensus_selftest \
-		$(TOOLS_DIR)/consensus_selftest.c $(CORE_DIR)/consensus.c $(CORE_DIR)/vbus.c \
-		$(CORE_DIR)/mission_state.c $(LDFLAGS)
+		$(TOOLS_DIR)/consensus_selftest.c \
+		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c -Wl,--allow-multiple-definition $(LDFLAGS)
 	@cd $(SELFTEST_BIN_DIR) && ./consensus_selftest
 
 # Whole-simulation scenario tests and the measurement modes (design 7.1-7.5,
