@@ -620,7 +620,7 @@ ticks of onset).**
 
 * **The world has few damaged cells (10 per seed at stress 2, 17 at stress 7), and about two thirds of them are learned
   within 2 ticks of onset**, because the damage lands on a team's own route, so the hit team is at or beside the cell
-  (the mechanism the advisor flagged). That is why observation-only knowledge is almost as good as omniscience.
+  (the mechanism anticipated in Addendum A, item 6). That is why observation-only knowledge is almost as good as omniscience.
 * **The hook is working, not broken:** under R1 teams are stopped at truly blocked cells 18 times per seed at stress 2 and
   step onto unknown partial debris 7 to 15 times, and total stall time is within about 15 percent of omniscient (122
   against 105 ticks at stress 2); the stall false alarm behaviour (`go_home_near_stall`) is not changed measurably.
