@@ -129,6 +129,15 @@ loss and radius.
   the board build. The multi-board `check-board-link` is the known pre-existing failure (vendored BSP folder missing).
   Byte-identity of the default output against `c7408be`: six profiles, C1 md5 `b248bea72ce2ceb81389762dccc0a749`, and
   the causal variants with the planner (oracle and hazard), recovery actions on, and hold-repair: identical.
+* **Final re-check before the report (tree `3e716ae`, 27 October, after all runs).** Full `make check-*` suite: 54 pass, 4 fail,
+  and the four are the same pre-existing failures as at `c7408be` (`check-consensus-selftest`, `check-fault-predictor-features-selftest`,
+  `check-zone-parity`, `check-zone-refresh`); the two that my hooks had broken now pass. ARM single-board compile, link and symbol
+  checks (`check-board-single`) pass. A fresh `-O2` build of the final tree has the same md5 as frozen B2 (`7e33412a46a9...`), so
+  core is unchanged since Tier 4. Output (stdout, stderr, snapshot dataset, causal truth file) is byte-identical to the
+  pre-hook reference build on seeds 1001 and 1002 for the profiles none, mobility, communication, resource, combined and
+  causal, on seed 1001 for random, and on seed 1001 for the causal variants planner with the watchdog, planner with the
+  oracle, actions on with the team planner, and planner with hold-repair. B1 and B2 baselines reproduce each other: P on the 200
+  overlapping (stress, seed) pairs is identical in incidents and victims lost.
 * **Per-run tables** are committed in `docs/data/headroom/` (one CSV per tier: stress, configuration, seed, incidents,
   victims lost and seen, spawned, priority-1 outcomes, teams in service, key counters, wall time, binary hash); the
   analysis scripts run from them. The D1 inputs (datasets of 30 seeds) are large and not committed; `detection_delay.py`
