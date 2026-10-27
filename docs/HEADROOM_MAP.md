@@ -871,6 +871,64 @@ the ceiling of this sensitivity. Figure: `docs/figures/road_value_sensitivity.pn
 | Actions: no setting moves incidents by more than 0.5 | Held except latency 10 at stress 7 (-1.09) |
 | Overall: the simplification does not matter; value under +1.0 at stress 2 | Held for latency up to 30; **not** at latency 100 |
 
+## B5. Tier 4: cheaper responses (RR1-RR5, RR0) and the key question (screen: 100 development seeds, binary B2)
+
+Per-run data: `docs/data/headroom/tier4_responses.csv`. Design: pre-registration Addendum D. Own P and PD baselines were run on the
+same binary (B2). Held-out confirmation of the only survivor is in B5b.
+
+| Probe | Stress | Incidents / seed [95% CI] | Team-equiv. | Victims lost / seed (positive = fewer) [95% CI] | Spawned | Survives |
+|---|---|---|---|---|---|---|
+| RR1 relief, rate-aware trigger | 2 | -0.17 [-0.73, +0.39] |  | +0.60 [-0.09, +1.31] | -0.3 | no |
+| RR1 relief, rate-aware trigger | 7 | +0.24 [-0.20, +0.67] |  | +0.13 [-0.50, +0.73] | +0.1 | no |
+| RR1 relief, perfect-foresight trigger | 2 | -0.17 [-0.73, +0.39] |  | +0.60 [-0.09, +1.31] | -0.3 | no |
+| RR1 relief, perfect-foresight trigger | 7 | +0.24 [-0.20, +0.67] |  | +0.13 [-0.50, +0.73] | +0.1 | no |
+| RR2a SUPPORT-delivered repair (idle or priced preemption) | 2 | -0.05 [-0.16, +0.04] |  | +0.03 [-0.02, +0.11] | -0.0 | no |
+| RR2a SUPPORT-delivered repair (idle or priced preemption) | 7 | -0.11 [-0.28, +0.02] |  | -0.15 [-0.47, +0.13] | -0.0 | no |
+| RR3 lane first (CLEAR_ROAD is already on under the planner) vs P | 2 | +0.17 [-0.22, +0.57] |  | +0.17 [-0.33, +0.69] | +0.0 | no |
+| RR3 lane first (CLEAR_ROAD is already on under the planner) vs P | 7 | -0.05 [-0.54, +0.40] |  | +0.24 [-0.42, +0.87] | +0.0 | no |
+| RR4 degraded mode, capability-aware bids | 2 | -0.45 [-0.99, +0.08] |  | -0.05 [-0.81, +0.71] | -0.4 | no |
+| RR4 degraded mode, capability-aware bids | 7 | -1.11 [-1.76, -0.45] |  | +0.33 [-0.54, +1.19] | -0.7 | no |
+| RR5 autonomy on communication loss | 2 | +0.22 [-0.20, +0.66] |  | -0.48 [-1.11, +0.15] | -0.2 | no |
+| RR5 autonomy on communication loss | 7 | -0.02 [-0.34, +0.30] |  | +0.25 [-0.22, +0.76] | -0.1 | no |
+| RR0 all five responses (not jointly priced) | 2 | -0.59 [-1.18, +0.02] |  | +0.15 [-0.76, +1.05] | -0.5 | no |
+| RR0 all five responses (not jointly priced) | 7 | -0.73 [-1.45, -0.03] |  | +1.00 [+0.11, +1.87] | -0.9 | victims |
+| KEY: detector-oracle headroom with RR0 on (PD+RR0 minus P+RR0) | 2 | +0.19 [-0.52, +0.90] |  | -0.59 [-1.68, +0.50] | +0.5 | no |
+| KEY: detector-oracle headroom with RR0 on (PD+RR0 minus P+RR0) | 7 | -0.27 [-0.98, +0.44] |  | -1.40 [-2.56, -0.24] | +0.4 | no |
+| KEY: hazard-oracle + prevention with RR0 on (minus P+RR0) | 2 | -0.09 [-0.45, +0.26] |  | -0.13 [-0.45, +0.18] | -0.0 | no |
+| KEY: hazard-oracle + prevention with RR0 on (minus P+RR0) | 7 | +0.56 [+0.01, +1.14] |  | -0.29 [-0.85, +0.28] | +0.5 | no |
+
+**How often each response actually fired (mean per seed, development seeds).**
+
+| Response | Stress 2 | Stress 7 |
+|---|---|---|
+| RR1 relief assignments / swaps | 1.95 / 0.36 | 1.07 / 0.22 |
+| RR2a repair commits / preemptions done (considered) | 0.14 / 0.06 (96) | 0.16 / 0.08 (258) |
+| RR2a work forgone by the preempted SUPPORT task (units) | 2.98 | 2.25 |
+| RR3 lanes opened | 1.42 | 1.81 |
+| RR4, RR5 | no counter (they change bids and caps, not discrete events) | same |
+| RR0 all: relief / repair / preempt / lanes | 1.70 / 0.07 / 0.02 / 1.40 | 0.82 / 0.12 / 0.07 / 1.65 |
+
+**Answer in plain words.**
+
+* **None of the five cheaper responses adds value on its own.** Every incident estimate is within -0.6 to +0.3 per seed with the
+  interval including 0, except RR4 (degraded mode) at stress 7, which is **harmful**: -1.11 [-1.76, -0.45] incidents. The
+  one screen survivor is RR0 (all five together) on victims lost at stress 7, +1.00 [+0.11, +1.87], where incidents move the
+  other way (-0.73 [-1.45, -0.03]); it is read as a trade between incidents and victims, not a gain, and is
+  confirmed or not in B5b.
+* **RR1 relief and its perfect-foresight variant give identical results** (same assignments, same outcomes). The
+  foresight trigger never differed from the rate-aware trigger, so the foresight upgrade carries no information here.
+* **RR2a (SUPPORT delivers repair) does fire, rarely:** about 0.15 repairs per seed, with 0.06 to 0.08 priced preemptions of
+  SUPPORT's own task per seed, costing 2 to 3 work units. The effect is zero (-0.05, -0.11). This is the null the plan allowed
+  for: SUPPORT is almost never free, so a repair costs the task it replaces.
+* **RR3 (open a lane at about 30% of the clearing work)** opens 1.4 to 1.8 lanes per seed and changes nothing (+0.17, -0.05).
+* **Key question: does the headroom of a perfect detector or a hazard oracle grow when cheaper responses exist?**
+  **No for the detector.** With RR0 on, detector-oracle minus P is +0.19 [-0.52, +0.90] at stress 2 and -0.27 [-0.98, +0.44]
+  at stress 7 (victims lost -1.40 [-2.56, -0.24], i.e. worse), against about +0.3 and 0.0 without RR0 (B1a). **The hazard oracle with
+  prevention** reaches +0.56 [+0.01, +1.14] at stress 7 (below the 1.0 materiality threshold, not a survivor), against the
+  near-zero prevention result in B1b. Cheaper responses do not unlock more value from information.
+* **Caveat.** RR0 is the five responses together without joint pricing, which is why it can be worse than its parts (it moves
+  incidents down while victims improve at stress 7). A jointly priced version was outside the pre-registered list and was not tried.
+
 ## C. Design note (no implementation): how a real road-knowledge version would propagate
 
 ### C.1 What is in the code today (budgets found, not assumed)
