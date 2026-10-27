@@ -560,6 +560,126 @@ arrivals; the **victims-lost column is the cleaner outcome** and the one to lean
 | TM1: all within +-1.5 | Not held for mixes a and c at stress 2 (+2.4); held at stress 7 for b |
 | Overall: capacity and speed levers beat information levers by at least 3 times per team-equivalent | **Held, by a wide margin** (work speed: up to 4 team-equivalents; the best information lever, 0.4) |
 
+## B2b. Tier 2 confirmation (held-out seeds 3001-3100; Holm over the whole screened family so far, m = 248)
+
+Per-run data (screen and held-out): `docs/data/headroom/tier2_work_travel_mix.csv` (binary B1). Every Tier 2 survivor of the
+screen was re-run on the held-out seeds at the stress where it survived; P on the held-out seeds comes from the earlier
+runs (same binary).
+
+**Result: 51 of 54 incident tests and 23 of 42 victims-lost tests are confirmed** (same sign, CI excludes 0, Holm
+adjusted p below 0.05). All the work-rate and instant-work incident gains, the extraction, perimeter and support
+specialization gains, both stage variants, instant travel, and the team mixes a (and b at stress 2) are confirmed. The
+unconfirmed tests are mostly victims-lost effects of 1 to 2 victims per seed, which have the right sign on the held-out
+seeds but are too small for a correction over this many tests (listed below), plus three incident tests
+(SEARCH work x2 and x3 at stress 2, team mix c at stress 7) whose held-out estimate is positive with a CI above 0 but a
+Holm p of 0.05 to 0.07. The V1 x4 stress-7 victims gain (+1.98 in the screen) **shrinks to -0.18 [-1.41, +1.04] on the
+held-out seeds**: not confirmed.
+
+**Corrected road-action contrast for the speed profiles (planner task actions on minus off, development seeds):** -0.38
+and -0.68 incidents at V1 x2 (stress 2 and 7), -0.33 and -0.68 at V1 x4; one interval excludes 0 (-0.68 [-1.26, -0.10],
+V1 x2 stress 7), none reaches the materiality threshold, and the sign is slightly negative everywhere (as in Tier 3). Even once
+heavy teams cannot cross debris, the planner's road and task actions do not matter. (The two exact zeros reported in
+the first Tier 2 screen were the vacuous contrast of Addendum E.)
+
+| Probe | Stress | Metric | Screen | Held-out [95% CI] | p | Holm p | Confirmed |
+|---|---|---|---|---|---|---|---|
+| W1a work x1.25 (drain per tick unchanged) | 2 | incidents | +4.44 [+3.84, +5.05] | +4.54 [+3.84, +5.25] | 0.0001 | 0.025 | yes |
+| W1a work x1.25 (drain per tick unchanged) | 2 | victims | +2.39 [+1.53, +3.25] | +1.82 [+0.95, +2.68] | 0.0001 | 0.025 | yes |
+| W1a work x1.25 (drain per tick unchanged) | 7 | incidents | +3.90 [+3.20, +4.60] | +4.20 [+3.39, +5.01] | 0.0001 | 0.025 | yes |
+| W1a work x1.25 (drain per tick unchanged) | 7 | victims | +3.04 [+2.18, +3.89] | +1.86 [+0.98, +2.73] | 0.0001 | 0.025 | yes |
+| W1b work x1.25 (drain tied to work) | 2 | incidents | +1.62 [+1.10, +2.15] | +1.79 [+1.21, +2.38] | 0.0001 | 0.025 | yes |
+| W1a work x1.5 (drain per tick unchanged) | 2 | incidents | +8.11 [+7.32, +8.91] | +8.02 [+7.30, +8.75] | 0.0001 | 0.025 | yes |
+| W1a work x1.5 (drain per tick unchanged) | 2 | victims | +3.11 [+2.26, +3.96] | +2.18 [+1.27, +3.11] | 0.0001 | 0.025 | yes |
+| W1a work x1.5 (drain per tick unchanged) | 7 | incidents | +6.22 [+5.43, +7.03] | +7.31 [+6.43, +8.19] | 0.0001 | 0.025 | yes |
+| W1a work x1.5 (drain per tick unchanged) | 7 | victims | +4.22 [+3.38, +5.07] | +3.31 [+2.33, +4.29] | 0.0001 | 0.025 | yes |
+| W1b work x1.5 (drain tied to work) | 2 | incidents | +2.26 [+1.56, +2.94] | +2.24 [+1.61, +2.88] | 0.0001 | 0.025 | yes |
+| W1b work x1.5 (drain tied to work) | 2 | victims | +1.08 [+0.29, +1.88] | +0.96 [+0.08, +1.80] | 0.0356 | 1.000 | no |
+| W1b work x1.5 (drain tied to work) | 7 | incidents | +1.98 [+1.22, +2.75] | +2.23 [+1.45, +3.04] | 0.0001 | 0.025 | yes |
+| W1b work x1.5 (drain tied to work) | 7 | victims | +1.30 [+0.49, +2.13] | +0.83 [-0.08, +1.76] | 0.0745 | 1.000 | no |
+| W1a work x2 (drain per tick unchanged) | 2 | incidents | +12.11 [+11.31, +12.89] | +12.01 [+11.16, +12.86] | 0.0001 | 0.025 | yes |
+| W1a work x2 (drain per tick unchanged) | 2 | victims | +3.93 [+3.11, +4.75] | +3.93 [+2.97, +4.89] | 0.0001 | 0.025 | yes |
+| W1a work x2 (drain per tick unchanged) | 7 | incidents | +9.74 [+8.85, +10.63] | +9.42 [+8.46, +10.39] | 0.0001 | 0.025 | yes |
+| W1a work x2 (drain per tick unchanged) | 7 | victims | +4.56 [+3.57, +5.53] | +3.60 [+2.59, +4.59] | 0.0001 | 0.025 | yes |
+| W1b work x2 (drain tied to work) | 2 | incidents | +3.41 [+2.71, +4.11] | +3.50 [+2.85, +4.15] | 0.0001 | 0.025 | yes |
+| W1b work x2 (drain tied to work) | 2 | victims | +1.12 [+0.21, +2.03] | +1.22 [+0.24, +2.19] | 0.0147 | 1.000 | no |
+| W1b work x2 (drain tied to work) | 7 | incidents | +2.92 [+2.24, +3.64] | +3.25 [+2.47, +4.05] | 0.0001 | 0.025 | yes |
+| W1b work x2 (drain tied to work) | 7 | victims | +1.75 [+0.75, +2.75] | +1.87 [+1.04, +2.73] | 0.0001 | 0.025 | yes |
+| W1a work x3 (drain per tick unchanged) | 2 | incidents | +18.07 [+16.99, +19.10] | +18.61 [+17.50, +19.73] | 0.0001 | 0.025 | yes |
+| W1a work x3 (drain per tick unchanged) | 2 | victims | +5.14 [+4.18, +6.11] | +4.90 [+3.94, +5.85] | 0.0001 | 0.025 | yes |
+| W1a work x3 (drain per tick unchanged) | 7 | incidents | +15.70 [+14.72, +16.68] | +15.32 [+14.15, +16.47] | 0.0001 | 0.025 | yes |
+| W1a work x3 (drain per tick unchanged) | 7 | victims | +6.72 [+5.71, +7.69] | +4.92 [+3.70, +6.10] | 0.0001 | 0.025 | yes |
+| W1b work x3 (drain tied to work) | 2 | incidents | +4.93 [+4.34, +5.52] | +4.71 [+3.91, +5.45] | 0.0001 | 0.025 | yes |
+| W1b work x3 (drain tied to work) | 2 | victims | +1.64 [+0.80, +2.49] | +0.78 [-0.19, +1.71] | 0.1144 | 1.000 | no |
+| W1b work x3 (drain tied to work) | 7 | incidents | +4.93 [+4.20, +5.66] | +5.36 [+4.57, +6.16] | 0.0001 | 0.025 | yes |
+| W1b work x3 (drain tied to work) | 7 | victims | +2.62 [+1.75, +3.49] | +1.59 [+0.66, +2.54] | 0.0004 | 0.068 | no |
+| W1a work x4 (drain per tick unchanged) | 2 | incidents | +21.47 [+20.33, +22.61] | +22.67 [+21.47, +23.86] | 0.0001 | 0.025 | yes |
+| W1a work x4 (drain per tick unchanged) | 2 | victims | +6.03 [+5.12, +6.94] | +5.80 [+4.94, +6.69] | 0.0001 | 0.025 | yes |
+| W1a work x4 (drain per tick unchanged) | 7 | incidents | +18.58 [+17.45, +19.73] | +18.40 [+17.09, +19.72] | 0.0001 | 0.025 | yes |
+| W1a work x4 (drain per tick unchanged) | 7 | victims | +6.85 [+5.84, +7.84] | +5.88 [+4.72, +7.01] | 0.0001 | 0.025 | yes |
+| W1b work x4 (drain tied to work) | 2 | incidents | +6.55 [+5.78, +7.33] | +7.28 [+6.45, +8.10] | 0.0001 | 0.025 | yes |
+| W1b work x4 (drain tied to work) | 2 | victims | +1.48 [+0.59, +2.40] | +0.85 [-0.20, +1.90] | 0.1147 | 1.000 | no |
+| W1b work x4 (drain tied to work) | 7 | incidents | +5.91 [+5.20, +6.60] | +6.81 [+5.97, +7.67] | 0.0001 | 0.025 | yes |
+| W1b work x4 (drain tied to work) | 7 | victims | +2.76 [+1.82, +3.68] | +2.26 [+1.19, +3.36] | 0.0001 | 0.025 | yes |
+| W2 search work x2 | 2 | incidents | +1.04 [+0.49, +1.60] | +1.10 [+0.52, +1.67] | 0.0003 | 0.052 | no |
+| W2 search work x3 | 2 | incidents | +2.19 [+1.56, +2.81] | +1.27 [+0.61, +1.93] | 0.0004 | 0.068 | no |
+| W2 search work x3 | 7 | incidents | +1.16 [+0.53, +1.79] | +1.58 [+0.95, +2.22] | 0.0001 | 0.025 | yes |
+| W2 extraction work x2 | 2 | incidents | +4.01 [+3.32, +4.69] | +4.66 [+4.00, +5.35] | 0.0001 | 0.025 | yes |
+| W2 extraction work x2 | 2 | victims | +2.13 [+1.30, +2.96] | +2.26 [+1.45, +3.08] | 0.0001 | 0.025 | yes |
+| W2 extraction work x2 | 7 | incidents | +3.24 [+2.56, +3.92] | +4.14 [+3.38, +4.89] | 0.0001 | 0.025 | yes |
+| W2 extraction work x2 | 7 | victims | +2.84 [+2.04, +3.66] | +1.81 [+0.94, +2.68] | 0.0001 | 0.025 | yes |
+| W2 extraction work x3 | 2 | incidents | +7.27 [+6.55, +8.01] | +6.69 [+5.85, +7.48] | 0.0001 | 0.025 | yes |
+| W2 extraction work x3 | 2 | victims | +2.76 [+1.97, +3.57] | +2.32 [+1.38, +3.25] | 0.0001 | 0.025 | yes |
+| W2 extraction work x3 | 7 | incidents | +5.50 [+4.67, +6.36] | +6.27 [+5.41, +7.11] | 0.0001 | 0.025 | yes |
+| W2 extraction work x3 | 7 | victims | +3.29 [+2.31, +4.27] | +2.79 [+1.77, +3.80] | 0.0001 | 0.025 | yes |
+| W2 perimeter work x2 | 2 | incidents | +3.34 [+2.69, +3.97] | +3.41 [+2.72, +4.10] | 0.0001 | 0.025 | yes |
+| W2 perimeter work x2 | 2 | victims | +1.23 [+0.35, +2.11] | +0.84 [+0.00, +1.68] | 0.0513 | 1.000 | no |
+| W2 perimeter work x2 | 7 | incidents | +2.01 [+1.35, +2.69] | +2.99 [+2.16, +3.82] | 0.0001 | 0.025 | yes |
+| W2 perimeter work x2 | 7 | victims | +1.21 [+0.38, +2.05] | +1.33 [+0.33, +2.33] | 0.0098 | 1.000 | no |
+| W2 perimeter work x3 | 2 | incidents | +5.40 [+4.65, +6.15] | +5.36 [+4.56, +6.16] | 0.0001 | 0.025 | yes |
+| W2 perimeter work x3 | 7 | incidents | +4.31 [+3.60, +5.01] | +4.94 [+4.10, +5.81] | 0.0001 | 0.025 | yes |
+| W2 perimeter work x3 | 7 | victims | +1.79 [+0.97, +2.62] | +1.20 [+0.27, +2.13] | 0.0106 | 1.000 | no |
+| W2 support work x2 | 2 | incidents | +2.81 [+2.22, +3.40] | +2.49 [+1.89, +3.11] | 0.0001 | 0.025 | yes |
+| W2 support work x2 | 2 | victims | +1.16 [+0.34, +1.99] | +1.03 [+0.18, +1.88] | 0.0155 | 1.000 | no |
+| W2 support work x2 | 7 | incidents | +1.72 [+1.02, +2.44] | +2.71 [+1.96, +3.47] | 0.0001 | 0.025 | yes |
+| W2 support work x2 | 7 | victims | +1.48 [+0.57, +2.40] | +0.90 [+0.12, +1.67] | 0.0243 | 1.000 | no |
+| W2 support work x3 | 2 | incidents | +4.16 [+3.53, +4.79] | +4.73 [+4.04, +5.43] | 0.0001 | 0.025 | yes |
+| W2 support work x3 | 2 | victims | +1.70 [+0.93, +2.46] | +1.66 [+0.79, +2.52] | 0.0004 | 0.068 | no |
+| W2 support work x3 | 7 | incidents | +3.77 [+3.15, +4.40] | +3.94 [+3.24, +4.64] | 0.0001 | 0.025 | yes |
+| W2 support work x3 | 7 | victims | +1.96 [+1.03, +2.87] | +2.26 [+1.30, +3.21] | 0.0001 | 0.025 | yes |
+| W3 early stages x2 | 2 | incidents | +4.78 [+4.08, +5.48] | +4.95 [+4.35, +5.57] | 0.0001 | 0.025 | yes |
+| W3 early stages x2 | 2 | victims | +1.54 [+0.74, +2.37] | +1.44 [+0.44, +2.45] | 0.0045 | 0.733 | no |
+| W3 early stages x2 | 7 | incidents | +3.68 [+2.96, +4.42] | +3.83 [+3.02, +4.64] | 0.0001 | 0.025 | yes |
+| W3 early stages x2 | 7 | victims | +1.44 [+0.49, +2.41] | +2.30 [+1.28, +3.33] | 0.0001 | 0.025 | yes |
+| W3 early stages x4 | 2 | incidents | +7.89 [+7.18, +8.62] | +7.74 [+6.99, +8.48] | 0.0001 | 0.025 | yes |
+| W3 early stages x4 | 2 | victims | +2.01 [+1.16, +2.86] | +1.08 [+0.17, +2.00] | 0.0218 | 1.000 | no |
+| W3 early stages x4 | 7 | incidents | +6.52 [+5.88, +7.19] | +6.83 [+5.94, +7.72] | 0.0001 | 0.025 | yes |
+| W3 early stages x4 | 7 | victims | +2.59 [+1.48, +3.72] | +2.43 [+1.49, +3.38] | 0.0001 | 0.025 | yes |
+| W3 late stages x2 | 2 | incidents | +5.30 [+4.68, +5.95] | +4.32 [+3.65, +5.00] | 0.0001 | 0.025 | yes |
+| W3 late stages x2 | 2 | victims | +2.10 [+1.19, +3.06] | +1.83 [+0.90, +2.74] | 0.0005 | 0.083 | no |
+| W3 late stages x2 | 7 | incidents | +3.52 [+2.86, +4.17] | +4.09 [+3.36, +4.81] | 0.0001 | 0.025 | yes |
+| W3 late stages x2 | 7 | victims | +2.49 [+1.58, +3.39] | +1.75 [+0.74, +2.76] | 0.0007 | 0.115 | no |
+| W3 late stages x4 | 2 | incidents | +7.06 [+6.32, +7.80] | +6.43 [+5.67, +7.18] | 0.0001 | 0.025 | yes |
+| W3 late stages x4 | 2 | victims | +2.58 [+1.67, +3.50] | +2.14 [+1.04, +3.20] | 0.0003 | 0.052 | no |
+| W3 late stages x4 | 7 | incidents | +5.64 [+4.95, +6.33] | +6.04 [+5.33, +6.75] | 0.0001 | 0.025 | yes |
+| W3 late stages x4 | 7 | victims | +3.68 [+2.68, +4.69] | +2.57 [+1.57, +3.55] | 0.0001 | 0.025 | yes |
+| W0 instant work | 2 | incidents | +38.77 [+36.60, +40.82] | +39.11 [+37.08, +41.14] | 0.0001 | 0.025 | yes |
+| W0 instant work | 2 | victims | +6.98 [+5.97, +7.98] | +5.85 [+4.68, +7.01] | 0.0001 | 0.025 | yes |
+| W0 instant work | 7 | incidents | +31.75 [+30.15, +33.32] | +32.20 [+30.14, +34.20] | 0.0001 | 0.025 | yes |
+| W0 instant work | 7 | victims | +8.76 [+7.49, +10.02] | +7.28 [+6.01, +8.53] | 0.0001 | 0.025 | yes |
+| V0 instant travel to tasks | 2 | incidents | +5.56 [+4.56, +6.55] | +5.16 [+4.24, +6.07] | 0.0001 | 0.025 | yes |
+| V0 instant travel to tasks | 7 | incidents | +5.39 [+4.39, +6.37] | +5.24 [+4.27, +6.22] | 0.0001 | 0.025 | yes |
+| V0 instant travel to tasks | 7 | victims | +2.54 [+1.51, +3.59] | +1.27 [+0.17, +2.36] | 0.0236 | 1.000 | no |
+| V0 instant travel to tasks and to rest | 2 | incidents | +13.17 [+11.91, +14.43] | +11.09 [+9.97, +12.17] | 0.0001 | 0.025 | yes |
+| V0 instant travel to tasks and to rest | 7 | incidents | +16.75 [+15.32, +18.16] | +16.75 [+15.47, +18.01] | 0.0001 | 0.025 | yes |
+| V0 instant travel to tasks and to rest | 7 | victims | +4.04 [+2.73, +5.33] | +2.62 [+1.49, +3.78] | 0.0001 | 0.025 | yes |
+| V1 search/extraction x4 direct, perimeter x0.5 | 7 | incidents | +2.84 [+1.86, +3.80] | +2.78 [+1.73, +3.80] | 0.0001 | 0.025 | yes |
+| V1 search/extraction x4 direct, perimeter x0.5 | 7 | victims | +1.98 [+0.84, +3.12] | -0.18 [-1.41, +1.04] | 0.7759 | 1.000 | no |
+| TM1 team mix a | 2 | incidents | +2.45 [+1.72, +3.16] | +2.55 [+1.84, +3.26] | 0.0001 | 0.025 | yes |
+| TM1 team mix a | 7 | incidents | +1.35 [+0.60, +2.10] | +1.82 [+0.96, +2.71] | 0.0001 | 0.025 | yes |
+| TM1 team mix b | 2 | incidents | +1.24 [+0.56, +1.91] | +1.99 [+1.17, +2.86] | 0.0001 | 0.025 | yes |
+| TM1 team mix c | 2 | incidents | +2.35 [+1.57, +3.11] | +2.43 [+1.75, +3.13] | 0.0001 | 0.025 | yes |
+| TM1 team mix c | 7 | incidents | +1.22 [+0.43, +2.01] | +1.49 [+0.63, +2.41] | 0.0004 | 0.068 | no |
+
 ## B3. Tier 3: road information (R1, R2, R3 and the task actions; screen on 100 development seeds)
 
 Per-run data: `docs/data/headroom/tier3_road_information.csv` (binary B1). Value of road information = omniscient (P)
