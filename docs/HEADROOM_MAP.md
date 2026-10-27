@@ -762,6 +762,115 @@ ticks of onset).**
 | R3: at most 0.3, CI includes 0 | Held |
 | REROUTE / CLEAR_ROAD under R1 and R2 under 0.5 at stress 2 | Held (+0.11 and +0.41, CIs include 0) |
 
+## B4. Addendum C: how much does the shared-picture simplification matter? (propagation sensitivity, 100 development seeds)
+
+Per-run data: `docs/data/headroom/addendumC_road_propagation.csv` (binary B1). One setting changed at a time around the R1
+default (radius 1, latency 2, loss 0.05). Value of road information = omniscient (P) minus the setting; R3 (instant, no loss) is
+the ceiling of this sensitivity. Figure: `docs/figures/road_value_sensitivity.png`.
+
+![value of road information vs latency, loss and radius](figures/road_value_sensitivity.png)
+
+| Setting | Stress | Incidents / seed [95% CI] | Team-equiv. | Victims lost (positive = fewer) [95% CI] | Spawned | Survives screen |
+|---|---|---|---|---|---|---|
+| latency 0 | 2 | -0.14 [-0.63, +0.33] | -0.0 [-0.1, +0.1] | +0.18 [-0.50, +0.88] | -0.1 | no |
+| latency 0 | 7 | +0.24 [-0.40, +0.87] | +0.0 [-0.0, +0.1] | +0.22 [-0.69, +1.15] | -0.1 | no |
+| latency 10 | 2 | +0.26 [-0.40, +0.93] | +0.1 [-0.1, +0.2] | +0.02 [-0.84, +0.85] | +0.3 | no |
+| latency 10 | 7 | +0.61 [-0.14, +1.42] | +0.1 [-0.0, +0.2] | -0.43 [-1.34, +0.50] | +0.1 | no |
+| latency 30 | 2 | +0.11 [-0.46, +0.69] | +0.0 [-0.1, +0.1] | +0.24 [-0.69, +1.16] | +0.2 | no |
+| latency 30 | 7 | +0.11 [-0.52, +0.74] | +0.0 [-0.1, +0.1] | -0.89 [-1.72, -0.04] | +0.2 | no |
+| latency 100 | 2 | +1.28 [+0.63, +1.96] | +0.3 [+0.1, +0.4] | +0.31 [-0.64, +1.25] | +1.1 | incidents |
+| latency 100 | 7 | +1.54 [+0.89, +2.21] | +0.2 [+0.1, +0.3] | +0.31 [-0.65, +1.27] | +1.4 | incidents |
+| loss 0.2 | 2 | +0.01 [-0.54, +0.58] | +0.0 [-0.1, +0.1] | -0.47 [-1.25, +0.29] | +0.2 | no |
+| loss 0.2 | 7 | +0.19 [-0.43, +0.81] | +0.0 [-0.0, +0.1] | -0.40 [-1.37, +0.57] | +0.2 | no |
+| loss 0.5 | 2 | -0.42 [-0.95, +0.12] | -0.1 [-0.2, +0.0] | -0.03 [-0.83, +0.76] | -0.1 | no |
+| loss 0.5 | 7 | +0.16 [-0.44, +0.77] | +0.0 [-0.1, +0.1] | -0.39 [-1.31, +0.52] | +0.3 | no |
+| radius 2 | 2 | +0.11 [-0.46, +0.69] | +0.0 [-0.1, +0.1] | -0.06 [-0.86, +0.74] | +0.2 | no |
+| radius 2 | 7 | +0.20 [-0.49, +0.89] | +0.0 [-0.1, +0.1] | -0.49 [-1.47, +0.52] | -0.2 | no |
+| radius 4 | 2 | -0.10 [-0.60, +0.41] | -0.0 [-0.1, +0.1] | -0.06 [-0.87, +0.79] | +0.0 | no |
+| radius 4 | 7 | +0.31 [-0.34, +0.95] | +0.0 [-0.0, +0.1] | -0.39 [-1.34, +0.58] | +0.2 | no |
+
+**Answer (decision rule of Addendum C, section 11.3).**
+
+* **Over latency 0 to 30 ticks (0 to 18 minutes), report loss 0.05 to 0.5 and radius 0 to 4 cells, the value is flat and
+  indistinguishable from zero:** every estimate is between -0.4 and +0.6 incidents per seed, every CI includes 0, and the
+  largest spread between settings is 0.75 incidents (stress 7, latency), under the 1.0 materiality threshold. **For
+  reports that reach the fleet within about half an hour, the shared-picture simplification does not matter at this
+  world's damage rate (10 to 17 damaged road cells per seed).** The same holds for the task actions: planner Layer B on
+  minus off stays within +-0.5 incidents at every setting (one interval, latency 10 at stress 7, is -1.09 [-1.91, -0.34], in the
+  unhelpful direction).
+* **At a latency of 100 ticks (one hour) the value rises to +1.28 [+0.63, +1.96] incidents at stress 2 and +1.54 [+0.89, +2.21]
+  at stress 7** (0.3 and 0.2 team-equivalents), with no significant effect on victims lost. This is the only
+  setting that passes the screen, and its incident gain is flagged demand-driven (spawned incidents rise +1.1 and +1.4). Its
+  held-out confirmation is queued at the end of the run list.
+* **Reading.** Road information is worth something only when the news of a blocked road takes about an hour to reach the
+  fleet. A real propagation model is therefore **not needed to say that road information is worth little in this world if
+  reports take minutes**; it is needed before any statement about a slow channel (hourly reports, or reports that
+  must be relayed hop by hop with long gaps). A beacon or a message on the existing bus would be minutes at most
+  (a beacon is sent every tick, 36 s).
+* **Two caveats.** (1) The comm-fault gate drops most reports whatever the hash loss is (for example 175 of 194 attempts at
+  latency 0), because the team that sees the damage is often communication-faulted, so "loss" in the table is a lower
+  bound on the real loss; this gate stays in every setting except R3. (2) The world has few damaged cells, so a
+  slow channel costs little; the value would grow with the damage rate.
+
+**Mechanism diagnostics (means per seed).**
+
+| Setting | Stress | Mean onset-to-known (ticks) | Reports made / lost | Blocked stops | Unknown partial-debris entries | Stale cell-ticks | Stall ticks |
+|---|---|---|---|---|---|---|---|
+| R1 default (lat 2, loss .05, r 1) | 2 | 6.8 | 56 / 38 | 18.1 | 7.4 | 812 | 122 |
+| R1 default (lat 2, loss .05, r 1) | 7 | 6.4 | 58 / 29 | 7.5 | 15.2 | 1674 | 239 |
+| latency 0 | 2 | 2.9 | 194 / 175 | 68.7 | 1.2 | 906 | 182 |
+| latency 0 | 7 | 3.8 | 71 / 43 | 18.8 | 0.7 | 1767 | 258 |
+| latency 10 | 2 | 15.1 | 257 / 238 | 80.4 | 25.8 | 946 | 198 |
+| latency 10 | 7 | 14.3 | 56 / 28 | 25.1 | 39.5 | 1992 | 263 |
+| latency 30 | 2 | 33.7 | 74 / 57 | 78.1 | 51.9 | 1110 | 213 |
+| latency 30 | 7 | 35.6 | 76 / 49 | 97.9 | 76.7 | 2040 | 365 |
+| latency 100 | 2 | 105.6 | 280 / 263 | 417.6 | 104.6 | 1749 | 585 |
+| latency 100 | 7 | 104.2 | 44 / 19 | 366.3 | 180.8 | 2832 | 696 |
+| loss 0.2 | 2 | 7.3 | 61 / 43 | 18.8 | 8.0 | 894 | 123 |
+| loss 0.2 | 7 | 7.4 | 58 / 31 | 5.4 | 14.8 | 1836 | 239 |
+| loss 0.5 | 2 | 15.5 | 98 / 80 | 23.7 | 12.0 | 1024 | 135 |
+| loss 0.5 | 7 | 8.5 | 86 / 59 | 4.3 | 22.8 | 1994 | 246 |
+| radius 0 | 2 | 10.2 | 287 / 274 | 180.3 | 9.0 | 5006 | 275 |
+| radius 0 | 7 | 9.8 | 56 / 35 | 16.7 | 19.7 | 6930 | 249 |
+| radius 2 | 2 | 3.1 | 58 / 40 | 19.1 | 3.7 | 446 | 121 |
+| radius 2 | 7 | 5.9 | 71 / 43 | 17.4 | 6.6 | 1165 | 233 |
+| radius 4 | 2 | 2.6 | 22 / 3 | 1.0 | 2.5 | 254 | 104 |
+| radius 4 | 7 | 2.4 | 35 / 5 | 1.6 | 4.0 | 603 | 220 |
+| R3 instant | 2 | 1.6 | 19 / 0 | 0.0 | 0.0 | 877 | 111 |
+| R3 instant | 7 | 3.0 | 29 / 0 | 0.0 | 0.0 | 1706 | 240 |
+
+**Task actions (planner Layer B on minus off) at each setting, development seeds.**
+
+| Setting | Stress | Task actions on minus off, incidents [95% CI] | Victims lost [95% CI] |
+|---|---|---|---|
+| latency 0 | 2 | +0.02 [-0.60, +0.62] | -0.65 [-1.50, +0.16] |
+| latency 0 | 7 | -0.35 [-0.94, +0.24] | +0.02 [-0.86, +0.88] |
+| latency 10 | 2 | -0.38 [-0.96, +0.18] | -0.25 [-0.94, +0.43] |
+| latency 10 | 7 | -1.09 [-1.91, -0.34] | -0.18 [-1.17, +0.79] |
+| latency 30 | 2 | -0.05 [-0.59, +0.51] | -0.60 [-1.44, +0.20] |
+| latency 30 | 7 | +0.35 [-0.25, +0.94] | +0.24 [-0.54, +1.00] |
+| latency 100 | 2 | -0.33 [-0.85, +0.19] | +0.01 [-0.78, +0.78] |
+| latency 100 | 7 | -0.48 [-1.05, +0.08] | -0.05 [-0.89, +0.78] |
+| loss 0.2 | 2 | +0.24 [-0.23, +0.70] | +0.60 [-0.13, +1.37] |
+| loss 0.2 | 7 | +0.17 [-0.47, +0.80] | -0.02 [-1.03, +0.99] |
+| loss 0.5 | 2 | +0.14 [-0.36, +0.65] | +0.16 [-0.59, +0.93] |
+| loss 0.5 | 7 | -0.11 [-0.70, +0.47] | +0.36 [-0.52, +1.24] |
+| radius 2 | 2 | -0.07 [-0.58, +0.46] | +0.16 [-0.56, +0.86] |
+| radius 2 | 7 | -0.32 [-0.99, +0.34] | +0.06 [-0.87, +1.00] |
+| radius 4 | 2 | -0.03 [-0.54, +0.49] | +0.03 [-0.72, +0.76] |
+| radius 4 | 7 | -0.28 [-0.95, +0.39] | +0.02 [-0.93, +0.95] |
+
+**Scorecard (Addendum C, section 11.3).**
+
+| Prediction | Outcome |
+|---|---|
+| Latency 0 to 30: flat, under 0.5 spread | Held in substance (spread 0.4 at stress 2, 0.75 at stress 7, CIs overlap) |
+| Latency 100: larger than at 0 to 30 by at least 0.5 at stress 7 | **Held** (+1.54 against +0.1 to +0.6) |
+| Loss 0.05 to 0.5: flat at stress 2, a rise of 0.3 to 1.0 at stress 7 | Flat at both stresses (**rise not held**) |
+| Radius 0 to 4: value falls with radius at stress 7 | **Not held**: flat |
+| Actions: no setting moves incidents by more than 0.5 | Held except latency 10 at stress 7 (-1.09) |
+| Overall: the simplification does not matter; value under +1.0 at stress 2 | Held for latency up to 30; **not** at latency 100 |
+
 ## C. Design note (no implementation): how a real road-knowledge version would propagate
 
 ### C.1 What is in the code today (budgets found, not assumed)
