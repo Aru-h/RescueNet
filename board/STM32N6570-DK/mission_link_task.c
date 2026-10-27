@@ -792,13 +792,50 @@ consume:
     return 1;
 }
 
+/* ---------------------------------------------------------------
+ * Tick-boundary stream order (board firmware; off by default)
+ * ---------------------------------------------------------------
+ * The laptop sends each tick's changes (tasks, faults, map rows, zone trust)
+ * and then, LAST, the clock frame that lets the board run that tick (see
+ * laptop/mission_feed.c: "Last, so a board has this tick's incidents, faults
+ * and map before it is allowed to run the tick"). So the byte stream itself
+ * defines which input belongs to which tick: everything before clock(T) is
+ * input to tick T, everything after it is input to tick T+1.
+ *
+ * With this mode on, the receive loops honour that: they stop consuming as
+ * soon as a clock frame has authorised a tick the simulation has not run yet
+ * (authorised tick > g_current_tick), and do not start again until the sim
+ * has run it. Bytes after the clock frame simply stay in g_rx_buf (or the
+ * comms inbox) until then, in order. Which input a tick sees is therefore a
+ * property of the stream, not of how fast this board's tasks happen to run.
+ *
+ * Only valid where g_current_tick is stable while this runs: the firmware
+ * calls mission_link_task_step() only between ticks. Off by default so the
+ * host harnesses, which never advance g_current_tick, behave as before; the
+ * board turns it on at boot.
+ */
+static uint8_t g_tick_boundary_mode;
+
+void mission_link_task_set_tick_boundary_mode(uint8_t on)
+{
+    g_tick_boundary_mode = on;
+}
+
+static int mission_link_rx_hold(void)
+{
+    return g_tick_boundary_mode != 0u && mission_link_authorized_tick() > g_current_tick;
+}
+
 /*
- * Moves waiting USART1 bytes into g_rx_buf without parsing them. Also
- * called from long waits outside this task's step (main_board.c's
- * cbba_wait_poll(), during CBBA's reply wait): the UART holds only a few
- * bytes, and a laptop frame arriving while the board sits in that wait
- * was otherwise overrun and lost. Parsing stays in
- * mission_link_task_step(), so nothing is applied mid-CBBA.
+ * Moves waiting USART1 bytes from the ISR's ring into g_rx_buf without parsing
+ * them. LOCK-FREE and the only place that reads the ring: the ring is a
+ * single-producer (USART1 ISR) / single-consumer (the link task, here) queue
+ * and g_rx_buf is touched only by the link task (this pump and the parser in
+ * mission_link_task_step() both run in it), so the link task calls this on
+ * every wake-up WITHOUT the comms mutex - including while the sim is inside a
+ * tick. Parsing and applying (mission_link_task_step()) stays between ticks,
+ * so nothing is applied mid-tick. If g_rx_buf is full the pump stops and the
+ * ring fills; the ISR then counts drops (board_usart1_rx_drop_count()).
  */
 void mission_link_task_usart1_pump(void)
 {
@@ -859,7 +896,7 @@ static void mission_link_usart1_rx_step(void)
        available right now; stop once a partial frame is all that's
        left, same "wait for more bytes" contract mission_link_parse_*()
        already documents via its 0 return. */
-    while (mission_link_rx_try_consume_one())
+    while (!mission_link_rx_hold() && mission_link_rx_try_consume_one())
     {
     }
 }
@@ -874,6 +911,14 @@ static void mission_link_comms_transport_rx_step(void)
     for (;;)
     {
         uint8_t sender_team_id;
+
+        /* Same stream-order rule as the USART1 loop: frames behind a clock
+           frame that authorised a not-yet-run tick stay in the inbox. */
+        if (mission_link_rx_hold())
+        {
+            return;
+        }
+
         uint8_t frame_type;
         uint8_t payload[LORA_FRAME_MAX_PAYLOAD];
         uint8_t payload_len;

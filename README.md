@@ -99,11 +99,13 @@ The full checklist, including the exact CubeIDE settings, is
    to bundle it):
    ```
    cd board/STM32N6570-DK/vendor
-   git clone --recurse-submodules --branch v1.00.03 https://github.com/tron-forum/mtk3_bsp2.git
+   git clone --recurse-submodules --branch v1.00.04 https://github.com/tron-forum/mtk3_bsp2.git
    ```
-   Use **v1.00.03**, the version the board build was tested with. The newer
-   v1.00.04 does not compile for the STM32N6570-DK (`'sN_INTVEC' undeclared`
-   in `sysdepend/stm32_cube/cpu/core/armv8m/interrupt.c`).
+   Use **v1.00.04**. That release does not define `sN_INTVEC`, which its
+   `sysdepend/stm32_cube/cpu/core/armv8m/interrupt.c` uses to size the
+   interrupt-handler table, so `tron_board/Appli` defines
+   `sN_INTVEC=N_INTVEC` (196 on the STM32N6) in every build configuration.
+   Without that define the BSP fails with `'sN_INTVEC' undeclared`.
 2. **Open `tron_board/` in STM32CubeIDE** (File → Import → Existing Projects),
    select the **`DevRam`** build configuration of the `Appli` project, and
    build. `DevRam` includes the AI (`FAULT_MODEL_LOADED=1`) and the

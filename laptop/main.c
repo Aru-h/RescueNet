@@ -22,6 +22,7 @@
 #include "mission_state.h" /* TICK_TIME_SEC */
 #include "consensus.h"
 #include "fault_predictor.h" /* FAULT_MODEL_LOADED - --model-info */
+#include "state_hash.h"
 
 static uint64_t monotonic_ms(void)
 {
@@ -183,6 +184,10 @@ int main(int argc, char **argv)
     int mission_feed_mode = 0; /* --mission-feed, see laptop/mission_feed.h */
     int diag_mode = 0;  /* off by default - see --diag below */
     uint32_t tick_delay_ms = 0;
+    /* --state-hash=N: print a determinism fingerprint of the simulation
+     * state (core/state_hash.h) to stderr every N ticks. Read-only, off by
+     * default, so it can never change a result or the stdout protocol. */
+    uint32_t state_hash_every = 0;
     /* --fast-forward=T (with --live): silently run ticks 0..T-1, then
      * emit frame T and carry on normally - the dashboard's "take over
      * from replay" rebuilds state by deterministic re-simulation. */
@@ -239,6 +244,12 @@ int main(int argc, char **argv)
         if(strcmp(argv[i], "--trace") == 0)
         {
             g_simulation_trace_enabled = 1;
+            continue;
+        }
+
+        if(strncmp(argv[i], "--state-hash=", 13) == 0)
+        {
+            state_hash_every = (uint32_t)strtoul(argv[i] + 13, NULL, 10);
             continue;
         }
 
@@ -395,6 +406,19 @@ int main(int argc, char **argv)
             }
 
             sim_tick();
+
+            if(state_hash_every > 0u && ((tick + 1u) % state_hash_every) == 0u)
+            {
+                StateHash_t sh;
+
+                state_hash_compute(&sh);
+                fprintf(stderr,
+                        "STATEHASH tick=%u all=%016llx teams=%016llx inc=%016llx flt=%016llx rec=%016llx\n",
+                        (unsigned)g_current_tick,
+                        (unsigned long long)sh.all, (unsigned long long)sh.teams,
+                        (unsigned long long)sh.incidents, (unsigned long long)sh.faults,
+                        (unsigned long long)sh.recovery);
+            }
 
             if(tick < fast_forward_ticks)
             {

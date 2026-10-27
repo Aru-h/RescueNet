@@ -76,40 +76,70 @@
  * A #define, not a static const, specifically so it stays easy to grep
  * for and swap in one place.
  *
- * On real hardware this must be enforced against a genuine
- * wall-clock timer - a µT-Kernel timer (tk_get_tim() or equivalent),
- * NOT a sim-tick counter (BOARD_TICK_DELAY_MS is 0 by default - flat
- * out, unpaced - see board/STM32N6570-DK/main_board.c - so sim ticks don't
- * correspond to real elapsed time on hardware). See cbba_now_ms()
- * below for where that hardware wiring plugs in.
+ * This is the NOMINAL real-time bound. It is enforced as a count of wait
+ * steps (CBBA_REPLY_WAIT_STEPS below), not against a clock: sim ticks
+ * don't correspond to real elapsed time on hardware (BOARD_TICK_DELAY_MS
+ * is 0 by default - flat out, unpaced - see board/STM32N6570-DK/
+ * main_board.c), and a wall-clock read inside the simulation would make
+ * results depend on timing.
  */
 #define CBBA_ROUND_TIMEOUT_MS 1250u
 
 /*
- * Elapsed-time source backing CBBA_ROUND_TIMEOUT_MS. core/ is
- * freestanding (no <time.h>, no OS calls - verified by this
- * project's `make check-board`), so this can't call tk_get_tim()
- * directly here. cbba.c provides a weak default (same pattern as
- * comms_transport.c's lora_spi_transmit weak stub) with no real
- * clock behind it, suitable only for the laptop/desktop harness and
- * standalone selftests. Whoever wires board/STM32N6570-DK/main_board.c's
- * usermain() should provide a strong (non-weak) override backed by a
- * µT-Kernel timer so CBBA_ROUND_TIMEOUT_MS is enforced in genuine
- * wall-clock ms on real hardware - do that BEFORE cbba_run() is first
- * called, same "set it before init" pattern as
- * g_comms_transport_this_board_id (see comms_transport.h).
+ * The reply wait is bounded by a COUNT of wait steps, not by reading a
+ * clock: core/ makes no wall-clock read anywhere on the simulation path,
+ * so the same inputs always run the same number of wait iterations
+ * regardless of CPU speed, kernel tick resolution (10 ms, +1 tick on
+ * every timeout) or task preemption.
+ *
+ * CBBA_REPLY_WAIT_STEP_MS is the NOMINAL platform time of one step. Each
+ * call of cbba_wait_poll() below that finds nothing to ingest is one step,
+ * and the platform decides what a step physically is: the board's hook
+ * services the radio and then yields for about one step; the two-board
+ * harness pumps its socket and sleeps one step; the weak default does
+ * nothing, so the wait ends after CBBA_REPLY_WAIT_STEPS calls with no
+ * delay at all. CBBA_REPLY_WAIT_STEPS * CBBA_REPLY_WAIT_STEP_MS equals
+ * CBBA_ROUND_TIMEOUT_MS, so on a platform that honours the nominal step
+ * the real-time bound is unchanged.
+ */
+#define CBBA_REPLY_WAIT_STEP_MS 10u
+#define CBBA_REPLY_WAIT_STEPS   (CBBA_ROUND_TIMEOUT_MS / CBBA_REPLY_WAIT_STEP_MS)
+_Static_assert((CBBA_ROUND_TIMEOUT_MS % CBBA_REPLY_WAIT_STEP_MS) == 0u,
+               "CBBA_ROUND_TIMEOUT_MS must be a whole number of wait steps");
+
+/*
+ * Overrides the wait-step budget (default CBBA_REPLY_WAIT_STEPS) for a
+ * platform whose real step takes longer than CBBA_REPLY_WAIT_STEP_MS. Call
+ * once at boot, before cbba_run(); 0 is treated as 1. Never called on the
+ * laptop build, so PC results do not depend on it.
+ */
+void cbba_set_reply_wait_steps(uint32_t steps);
+
+/*
+ * Elapsed-time source for link-side pacing (the status heartbeat interval,
+ * handshake retry/timeout) - NOT used by core/ for CBBA's reply wait any
+ * more (see CBBA_REPLY_WAIT_STEPS above), and never to be read inside
+ * simulation code. core/ is freestanding (no <time.h>, no OS calls -
+ * verified by this project's `make check-board`), so this can't call
+ * tk_get_otm() directly. cbba.c provides a weak default (same pattern as
+ * comms_transport.c's lora_spi_transmit weak stub) that advances a
+ * simulated millisecond counter per call, suitable only for the laptop
+ * build and standalone selftests; the board overrides it with a kernel
+ * timer (board/STM32N6570-DK/main_board.c).
  */
 uint32_t cbba_now_ms(void);
 
 /*
- * Called on every pass of cbba_ingest_remote_mesh_replies()'s reply wait.
- * The weak default does nothing (laptop build, selftests; the two-board
- * CBBA harness pumps its socket from its cbba_now_ms() instead). Board
- * firmware overrides it to poll the radio and dispatch queued TX: that
- * wait runs inside sim_tick(), where nothing else services the radio, so
- * without it this board's own bids stayed queued until the wait ended and
- * no reply could be received during it - two boards each waited out the
- * full CBBA_ROUND_TIMEOUT_MS for bids the other had not sent yet.
+ * One wait step of cbba_ingest_remote_mesh_replies()'s reply wait, called
+ * whenever the inbox held no CBBA frame; the call counts as one step of
+ * CBBA_REPLY_WAIT_STEPS (see above). The weak default does nothing
+ * (laptop build, selftests). The two-board CBBA harness pumps its socket
+ * and sleeps one step. Board firmware overrides it to poll the radio,
+ * dispatch queued TX and yield for about one step: that wait runs inside
+ * sim_tick(), where nothing else services the radio, so without it this
+ * board's own bids stayed queued until the wait ended and no reply could
+ * be received during it - two boards each waited out the full
+ * CBBA_ROUND_TIMEOUT_MS for bids the other had not sent yet.
  */
 void cbba_wait_poll(void);
 

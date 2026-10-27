@@ -30,8 +30,12 @@
 
 #include <tk/tkernel.h>
 #include <tm/tmonitor.h>
+#include "board_log.h"       /* console output through the logger task */
+#include "board_rtos.h"      /* kernel objects, helper tasks, priorities */
 #include "mtkernel/lib/libtm/libtm.h"   /* tm_com_init() */
 #include "sim_runner.h"
+#include "state_hash.h"      /* per-tick determinism fingerprint */
+#include "cbba.h"            /* CBBA_REPLY_WAIT_STEP_MS - cbba_wait_poll() */
 #include "fault_config.h"
 #include "mission_state.h"       /* g_current_tick - clock-driven tick loop */
 #include "mission_link_codec.h" /* mission_link_roster_reject_count() -
@@ -124,6 +128,16 @@ _Static_assert(BOARD_SEED_COUNT == 1u,
  * demo and a faster rehearsal are the same firmware. Between allowed
  * ticks the board keeps the link serviced and sleeps this long per
  * pass, which bounds how late it notices a new clock frame. */
+/* Determinism fingerprint (core/state_hash.h): every this-many ticks the
+   board prints a STATEHASH line, same fields and format as the PC build's
+   `--state-hash=N`, so the lines can be diffed between runs and between
+   firmware versions. 0 turns it off. Printing one line holds interrupts
+   masked for ~10 ms (tm_putstring, see KNOWN_LIMITATIONS), which is why it
+   is periodic and not per tick. */
+#ifndef BOARD_STATE_HASH_INTERVAL
+#define BOARD_STATE_HASH_INTERVAL 50u
+#endif
+
 #ifndef BOARD_CLOCK_IDLE_POLL_MS
 #define BOARD_CLOCK_IDLE_POLL_MS 5u
 #endif
@@ -178,6 +192,7 @@ extern uint32_t board_snapshot_ring_drain(void);
  */
 extern void mission_link_task_init(void);
 extern void mission_link_task_step(void);
+extern void mission_link_task_set_tick_boundary_mode(uint8_t on);
 
 /*
  * sim_tick()-vs-roster-arrival gap (flagged, not designed - see the
@@ -206,6 +221,7 @@ extern void sx1262_hal_init(void);
    interrupt and NVIC line; see that file's own top comment for why
    this has to be interrupt-driven rather than polled. */
 extern void board_usart1_rx_init(void);
+extern void board_usart1_set_rx_notify(ID flgid, UINT bit);
 
 /*
  * RX counterpart to sx1262_hal_init() above (board/STM32N6570-DK/
@@ -325,7 +341,7 @@ extern uint32_t mission_link_task_peer_reboot_count(void);
 extern int sx1262_hal_get_random_u32(uint32_t *out);
 
 /* USART1 receive errors: hardware ORE/FE/NE plus RX-ring-full drops,
-   both counted in usart1_driver.c's USART1_IRQHandler(). */
+   both counted in usart1_driver.c's board_usart1_isr(). */
 extern uint32_t board_usart1_rx_error_count(void);
 extern uint32_t board_usart1_rx_drop_count(void);
 static uint32_t g_reported_usart1_rx_errors;
@@ -341,7 +357,7 @@ static void board_report_link_diagnostics(void)
 
     if(auth_fails != g_reported_auth_fails)
     {
-        tm_printf((UB*)"tron: LoRa AUTH FAIL (%lu so far) - frames arriving but failing authentication (RF corruption, a peer built with a different key, or a replay)\n",
+        BOARD_LOG((UB*)"tron: LoRa AUTH FAIL (%lu so far) - frames arriving but failing authentication (RF corruption, a peer built with a different key, or a replay)\n",
                   (unsigned long)auth_fails);
         g_reported_auth_fails = auth_fails;
     }
@@ -351,7 +367,7 @@ static void board_report_link_diagnostics(void)
 
         if(holds != g_reported_session_holds)
         {
-            tm_printf((UB*)"tron: LoRa session HOLD (%lu so far) - a peer started a new session (reboot?); its frames wait until it answers this board's challenge\n",
+            BOARD_LOG((UB*)"tron: LoRa session HOLD (%lu so far) - a peer started a new session (reboot?); its frames wait until it answers this board's challenge\n",
                       (unsigned long)holds);
             g_reported_session_holds = holds;
         }
@@ -362,7 +378,7 @@ static void board_report_link_diagnostics(void)
 
         if(reboots != g_reported_peer_reboots)
         {
-            tm_printf((UB*)"tron: peer reboot detected (%lu so far) - re-running that board's handshake\n",
+            BOARD_LOG((UB*)"tron: peer reboot detected (%lu so far) - re-running that board's handshake\n",
                       (unsigned long)reboots);
             g_reported_peer_reboots = reboots;
         }
@@ -373,7 +389,7 @@ static void board_report_link_diagnostics(void)
 
         if(rx_errors != g_reported_usart1_rx_errors)
         {
-            tm_printf((UB*)"tron: USART1 RX errors (%lu so far, %lu of them RX ring full) - laptop bytes lost or damaged (overrun/framing/noise, or the sim task not reading fast enough)\n",
+            BOARD_LOG((UB*)"tron: USART1 RX errors (%lu so far, %lu of them RX ring full) - laptop bytes lost or damaged (overrun/framing/noise, or the sim task not reading fast enough)\n",
                       (unsigned long)rx_errors,
                       (unsigned long)board_usart1_rx_drop_count());
             g_reported_usart1_rx_errors = rx_errors;
@@ -382,7 +398,7 @@ static void board_report_link_diagnostics(void)
 
     if(!g_reported_first_frame && lora_frame_accept_count() > 0u)
     {
-        tm_putstring((UB*)"tron: LoRa link alive - first authenticated frame received\n");
+        board_log_puts((const char*)"tron: LoRa link alive - first authenticated frame received\n");
         g_reported_first_frame = 1u;
     }
 
@@ -402,7 +418,7 @@ static void board_report_link_diagnostics(void)
                !mission_link_handshake_relay_reply_seen(peer) &&
                mission_link_handshake_relay_timed_out_seen(peer))
             {
-                tm_printf((UB*)"tron: peer board %lu never answered the handshake (timed out) - the laptop will not send mission data until it does; check that board is powered, flashed with this build, and on the same radio params\n",
+                BOARD_LOG((UB*)"tron: peer board %lu never answered the handshake (timed out) - the laptop will not send mission data until it does; check that board is powered, flashed with this build, and on the same radio params\n",
                           (unsigned long)peer);
                 g_reported_peer_timed_out[peer] = 1u;
             }
@@ -470,7 +486,7 @@ static void board_seed_lora_session_epoch(void)
 
     if(!rng_ok || epoch == 0u)
     {
-        tm_putstring((UB*)"tron: WARNING - SX1262 RNG unavailable; LoRa session epoch is weak, reboot recovery may fail\n");
+        board_log_puts((const char*)"tron: WARNING - SX1262 RNG unavailable; LoRa session epoch is weak, reboot recovery may fail\n");
         if(epoch == 0u)
         {
             epoch = 0x5EED0001u ^ (uint32_t)THIS_BOARD_ID;
@@ -478,7 +494,7 @@ static void board_seed_lora_session_epoch(void)
     }
 
     lora_crypto_set_tx_epoch(epoch);
-    tm_printf((UB*)"tron: LoRa session epoch %08lx\n", (unsigned long)epoch);
+    BOARD_LOG((UB*)"tron: LoRa session epoch %08lx\n", (unsigned long)epoch);
 }
 
 /* ---------------------------------------------------------------
@@ -500,12 +516,16 @@ void board_usart1_write(const uint8_t *bytes, uint32_t len)
     uint32_t i;
     UINT imask;
 
+    /* A whole frame under the UART lock: the logger task's text and other
+       tasks' frames cannot land in the middle of it. */
+    board_uart_tx_lock();
     for (i = 0u; i < len; i++)
     {
         DI(imask);
         tm_snd_dat((const UB *)&bytes[i], 1);
         EI(imask);
     }
+    board_uart_tx_unlock();
 }
 
 /* Real board_usart1_read_byte() lives in usart1_driver.c (interrupt-
@@ -521,20 +541,33 @@ void board_usart1_write(const uint8_t *bytes, uint32_t len)
    16-byte hardware FIFO holds a whole laptop frame; it can only be
    switched on while the peripheral is disabled, so wait for any
    transmission in progress to finish first. */
-static void board_usart1_enable_rx_fifo(void)
+/* USART1_S, never the plain USART1 macro: stm32n657xx.h maps USART1 to the
+   SECURE alias (0x52001000) only when CPU_IN_SECURE_STATE is defined, and
+   that comes from -mcmse (both the CubeIDE .cproject and the Makefile pass
+   it today). Without it the macro is the NON-secure alias (0x42001000), a
+   different view of the same UART that does not see the secure side's
+   state, and these writes would land on the wrong register file with no
+   fault. tm_com.c and usart1_driver.c address the secure alias explicitly;
+   this does the same so FIFO enable cannot depend on a compiler flag.
+   Returns the CR1 value read back, so boot can print whether FIFOEN stuck. */
+static uint32_t board_usart1_enable_rx_fifo(void)
 {
     UINT imask;
     uint32_t spins = 1000000u;
+    uint32_t cr1;
 
     DI(imask);
-    while ((USART1->ISR & USART_ISR_TC) == 0u && spins > 0u)
+    while ((USART1_S->ISR & USART_ISR_TC) == 0u && spins > 0u)
     {
         spins--;
     }
-    USART1->CR1 &= ~USART_CR1_UE;
-    USART1->CR1 |= USART_CR1_FIFOEN;
-    USART1->CR1 |= USART_CR1_UE;
+    USART1_S->CR1 &= ~USART_CR1_UE;
+    USART1_S->CR1 |= USART_CR1_FIFOEN;
+    USART1_S->CR1 |= USART_CR1_UE;
+    cr1 = USART1_S->CR1;
     EI(imask);
+
+    return cr1;
 }
 
 /*
@@ -590,11 +623,13 @@ static uint32_t board_dwt_cycles(void)
 static uint32_t g_tick_cycles_last;
 static uint32_t g_tick_cycles_max;
 
-/* Real milliseconds for CBBA's reply timeout and the status heartbeat
-   (cbba.h requires this on hardware). Neither board used to define it, so
-   both ran on cbba.c's simulated clock - 10 ms per call - and a "530 ms"
-   CBBA wait took microseconds (found by review). If the kernel call ever
-   fails, time still advances so no wait can spin forever. */
+/* Real milliseconds for the status heartbeat and handshake pacing (link
+   side only - CBBA's reply wait is bounded by a step count, see
+   cbba_wait_poll() below, and the simulation reads no clock). Without this
+   override the link would run on cbba.c's simulated clock - 10 ms per call
+   - and a heartbeat "interval" would pass in microseconds (found by
+   review). If the kernel call ever fails, time still advances so no wait
+   can spin forever. */
 uint32_t cbba_now_ms(void)
 {
     SYSTIM now;
@@ -609,46 +644,215 @@ uint32_t cbba_now_ms(void)
     return s_fallback_ms;
 }
 
-/* Services the radio and USART1 through CBBA's reply wait (see cbba.h):
-   this board's queued bids go out and the peer's replies come in. Laptop
-   bytes are only buffered here - mission_link_task_step() parses them
-   after sim_tick() returns. */
+/* One idle wait step of CBBA's reply wait (see cbba.h). Runs inside
+   sim_tick(), i.e. in the sim compute task WHILE IT HOLDS the comms mutex
+   (the radio, comms_transport and the mission-link state belong to whoever
+   holds it). Releasing it for the length of the step lets the link task, which
+   has the higher priority, run its in-tick service pass - poll the radio,
+   dispatch queued TX, drain USART1 - so this board's queued bids go out and the
+   peer's replies come in, exactly what the old inline calls did, but now by the
+   task that owns the radio. The link task applies nothing to simulation state
+   in that pass (g_sim_in_tick is set), so nothing changes under CBBA's feet.
+
+   The wait is bounded in core by a COUNT of these calls, so the sleep is
+   what maps the budget onto real time. The kernel adds one TIMER_PERIOD to
+   every timeout (timer.c: event time = now + tmout + TIMER_PERIOD), so a
+   call made right after a wake-up sleeps about two ticks:
+   BOARD_CBBA_WAIT_STEP_MS = 2 * CNF_TIMER_PERIOD = 20 ms. sim_compute_task
+   sizes the budget from that (CBBA_ROUND_TIMEOUT_MS / BOARD_CBBA_WAIT_STEP_MS
+   = 62 steps, ~1.24 s), so a dead-peer round stays ~1.25 s. A live peer's
+   replies end the wait early either way. NOT yet measured on a board. */
+#define BOARD_CBBA_WAIT_STEP_MS (2u * (uint32_t)CNF_TIMER_PERIOD)
+
 void cbba_wait_poll(void)
 {
-    sx1262_poll_rx();
-    comms_transport_dispatch_pending();
-    mission_link_task_usart1_pump();
+    /* Unlock BEFORE waking the link task: it has the higher priority and runs
+       the moment the flag is set, so the mutex must already be free for its
+       service pass to take. */
+    (void)tk_unl_mtx(g_mtx_comms);
+    (void)tk_set_flg(g_flg_link, FLG_LINK_POLL);
+    (void)tk_dly_tsk(CNF_TIMER_PERIOD);
+    (void)tk_loc_mtx(g_mtx_comms, TMO_FEVR);
 }
 
-LOCAL void sim_task(INT stacd, void *exinf);
-LOCAL ID sim_tskid;
-LOCAL T_CTSK sim_ctsk = {
-    .itskpri = 10,
-    .stksz   = 24576,          /* core/ uses static globals, not stack,
-                                * for all sim state (grid, teams,
-                                * incidents) -- this only needs to
-                                * cover call-depth locals (A* search
-                                * frames, CBBA bundle evaluation),
-                                * not sim data. 8KB(now added to 24kb after a stack overflow) is a starting
-                                * point; check high-water mark once
-                                * you can actually run this and tune
-                                * from there rather than guessing
-                                * further. */
-    .task    = sim_task,
-    .tskatr  = TA_HLNG | TA_RNG3,   /* TA_FPU not set explicitly:
-                                      * ALWAYS_FPU_ATR=1 is the BSP2
-                                      * default (config/config.h),
-                                      * which forces FPU context on
-                                      * every task regardless of this
-                                      * flag. Left unset rather than
-                                      * OR'd in so this doesn't
-                                      * silently break if someone
-                                      * later flips ALWAYS_FPU_ATR
-                                      * off without noticing this
-                                      * file depends on it. */
-};
+/*
+ * Two tasks run the board application (priorities in board_rtos_cfg.h):
+ *
+ *   link_task         (4)  owns the radio and the laptop link. Between ticks
+ *                          it runs the whole mission-link step (parse and
+ *                          apply the laptop's frames, relay, heartbeat); during
+ *                          a tick only the service pass (radio, TX dispatch,
+ *                          USART1 drain). Tells the sim when the laptop has
+ *                          authorised the next tick.
+ *   sim_compute_task  (10) runs sim_tick() unchanged and is the ONLY writer
+ *                          of simulation state.
+ *
+ * The comms mutex (g_mtx_comms) is held by the sim for a whole tick (it is
+ * released only inside cbba_wait_poll), and by the link task for each pass, so
+ * the link never applies a laptop frame in the middle of a tick: laptop input
+ * reaches the simulation only between ticks, as it did when one task did both.
+ * g_sim_in_tick (written under the mutex) tells the link which kind of pass
+ * it may run.
+ */
+static ID sim_tskid;
+static ID link_tskid;
+static volatile uint8_t g_sim_in_tick;
+static uint8_t g_world_ready; /* link task only */
+static uint8_t g_link_handshake_reported; /* link task only */
+static uint32_t g_link_reported_rejects; /* link task only */
 
-LOCAL void sim_task(INT stacd, void *exinf)
+static uint8_t g_sim_stack[BOARD_SIM_STACK_BYTES] __attribute__((aligned(8)));
+static uint8_t g_link_stack[BOARD_LINK_STACK_BYTES] __attribute__((aligned(8)));
+
+/* Watchdog for one sim_tick(): it covers compute plus CBBA's bounded reply
+   waits, not the wait for the laptop's next tick. Fires FLG_MON_WDOG. */
+#ifndef BOARD_SIM_WDOG_MS
+#define BOARD_SIM_WDOG_MS 10000u
+#endif
+
+LOCAL void sim_compute_task(INT stacd, void *exinf);
+LOCAL void link_task(INT stacd, void *exinf);
+
+/* Handshake and world-data waits, run by the link task before the seed loop
+   (these used to be spin loops in the single task). */
+static void board_link_pass_prerun(void)
+{
+    sx1262_poll_rx();
+    mission_link_task_step();
+    comms_transport_dispatch_pending();
+    board_report_link_diagnostics();
+    board_boot_wait_discard_stale_frames();
+
+    if(!g_link_handshake_reported)
+    {
+        if(!mission_link_handshake_round_trip_complete())
+        {
+            return;
+        }
+        g_link_handshake_reported = 1u;
+        board_log_puts((const char*)"tron: handshake ready\n");
+        board_log_puts((const char*)"tron: waiting on mission roster, map and sites\n");
+    }
+
+    {
+        /* mission_link_apply_roster() rejects a bad team_id or an
+           out-of-grid location silently, so without this the wait below
+           looks exactly like "no roster ever arrived" - two very different
+           faults (bad DATA vs a dead LINK) with no way to tell them apart.
+           Reported once per new reject. Keeps waiting deliberately: a later
+           valid roster still resolves it. */
+        uint32_t rejects = mission_link_roster_reject_count();
+
+        if(rejects != g_link_reported_rejects)
+        {
+            BOARD_LOG((UB*)"tron: roster REJECTED (%lu so far) - arriving but failing validation\n",
+                      (unsigned long)rejects);
+            g_link_reported_rejects = rejects;
+        }
+    }
+
+    /* Also waits for the whole route map and the safe zone/gateway sites
+       (core/mission_link.h sections 5c/5d): the laptop sends them right
+       after the rosters, and a tick run without them routes teams through
+       blocked cells and leaves nowhere to rest. */
+    if(mission_link_task_any_roster_applied() != 0u &&
+       mission_link_map_rows_received() >= MISSION_LINK_MAP_HEIGHT &&
+       mission_link_sites_received())
+    {
+        g_world_ready = 1u;
+        (void)tk_set_flg(g_flg_sim, FLG_SIM_WORLD_READY);
+    }
+}
+
+/* One pass of the link task with the comms mutex held. */
+static void board_link_pass(void)
+{
+    uint32_t start_tick;
+
+    if(g_sim_in_tick)
+    {
+        /* The sim is inside a tick (and is in cbba_wait_poll()): service the
+           radio and the UART only. Applying laptop frames here would change
+           simulation state mid-tick. */
+        sx1262_poll_rx();
+        comms_transport_dispatch_pending();
+        return;
+    }
+
+    /* Between ticks: the full step. */
+    sx1262_poll_rx();
+    mission_link_task_step();
+    comms_transport_dispatch_pending();
+
+    if(mission_link_clock_step_plan(g_current_tick, mission_link_authorized_tick(), &start_tick))
+    {
+        (void)tk_set_flg(g_flg_sim, FLG_SIM_TICK_AUTH);
+    }
+}
+
+LOCAL void link_task(INT stacd, void *exinf)
+{
+    UINT ptn;
+
+    (void)stacd;
+    (void)exinf;
+
+    /* Nothing to do until the sim task has finished the boot init (radio,
+       comms_transport, handshake state) that this task's work depends on. */
+    (void)tk_wai_flg(g_flg_link, FLG_LINK_GO, TWF_ORW | TWF_BITCLR, &ptn, TMO_FEVR);
+    board_log_puts((const char*)"tron: link task running\n");
+
+    for(;;)
+    {
+        /* Wakes on a USART1 byte (ISR), the 10 ms poll handler (radio, heartbeat
+           check), or the sim finishing a tick; the timeout is only a safety net. */
+        ER er = tk_wai_flg(g_flg_link, FLG_LINK_RX | FLG_LINK_POLL | FLG_LINK_POST_TICK,
+                           TWF_ORW | TWF_BITCLR, &ptn, 100);
+
+        if(er != E_OK)
+        {
+            ptn = 0u; /* timeout: still run a pass */
+        }
+
+        /* 1. Lock-free: empty the USART1 ring into the link's own buffer. The
+              ring is single-producer (ISR) / single-consumer (this task), so
+              this needs no lock and runs at priority 4 even while the sim is
+              in the middle of a tick. */
+        mission_link_task_usart1_pump();
+
+        /* 2. Everything else touches state the sim also uses (comms inbox,
+              radio, mission-link and simulation state) and needs the comms
+              mutex. The pass the sim is waiting for (right after a tick, and
+              the boot waits) takes it, blocking; every other wake-up only
+              tries: if the sim is computing a tick, the pass is skipped, and the
+              post-tick pass (or the sim's own cbba_wait_poll() release) does it. */
+        if((ptn & FLG_LINK_POST_TICK) != 0u || !g_world_ready)
+        {
+            (void)tk_loc_mtx(g_mtx_comms, TMO_FEVR);
+        }
+        else if(tk_loc_mtx(g_mtx_comms, TMO_POL) != E_OK)
+        {
+            continue;
+        }
+
+        if(g_world_ready)
+        {
+            board_link_pass();
+        }
+        else
+        {
+            board_link_pass_prerun();
+        }
+        (void)tk_unl_mtx(g_mtx_comms);
+
+        if(ptn & FLG_LINK_POST_TICK)
+        {
+            (void)tk_set_flg(g_flg_sim, FLG_SIM_LINK_STEPPED);
+        }
+    }
+}
+
+LOCAL void sim_compute_task(INT stacd, void *exinf)
 {
     (void)stacd;
     (void)exinf;
@@ -658,8 +862,12 @@ LOCAL void sim_task(INT stacd, void *exinf)
        doesn't depend on sim_runner_init()/mission_link state, so it
        goes first. See sx1262_hal.c's own top-of-file comment for the
        wiring this assumes. */
-    tm_putstring((UB*)"tron: sim_task entered\n");
+    board_log_puts((const char*)"tron: sim compute task entered\n");
     sx1262_hal_init();
+
+    /* Size CBBA's reply-wait budget from the kernel tick (see
+       cbba_wait_poll()). */
+    cbba_set_reply_wait_steps(CBBA_ROUND_TIMEOUT_MS / BOARD_CBBA_WAIT_STEP_MS);
 
     /* Real (interrupt-driven) USART1 RX - see usart1_driver.c's own
        top-of-file note for why this has to be a real NVIC interrupt
@@ -670,13 +878,14 @@ LOCAL void sim_task(INT stacd, void *exinf)
        SX1262 module is actually attached. Must run before the wait
        loop below, same as sx1262_hal_init() above - both are one-time
        hardware bring-up, not per-tick work. */
+    board_usart1_set_rx_notify(g_flg_link, FLG_LINK_RX);
     board_usart1_rx_init();
 
-    tm_putstring((UB*)"tron: sim_runner_init\n");
+    board_log_puts((const char*)"tron: sim_runner_init\n");
 
     if(sim_runner_init() != 0)
     {
-        tm_putstring((UB*)"tron: equipment requirement matrix validation FAILED\n");
+        board_log_puts((const char*)"tron: equipment requirement matrix validation FAILED\n");
         tk_slp_tsk(TMO_FEVR);
         return;
     }
@@ -691,7 +900,21 @@ LOCAL void sim_task(INT stacd, void *exinf)
     g_comms_transport_this_board_id = THIS_BOARD_ID;
     comms_transport_init();
     board_seed_lora_session_epoch();
-    board_usart1_enable_rx_fifo();
+    {
+        uint32_t cr1 = board_usart1_enable_rx_fifo();
+
+        /* Proof, on the console, that the FIFO enable reached the real
+           (secure) USART1: expect usart1=0x52001000 fifoen=1 ue=1 re=1
+           rxneie=1. fifoen=0 would mean the write missed the peripheral
+           the BSP's console runs on. */
+        BOARD_LOG((UB*)"tron: USART1 addr=0x%08lx fifoen=%u ue=%u re=%u rxneie=%u cr1=0x%08lx\n",
+                  (unsigned long)(uintptr_t)USART1_S,
+                  (unsigned)((cr1 & USART_CR1_FIFOEN) != 0u),
+                  (unsigned)((cr1 & USART_CR1_UE) != 0u),
+                  (unsigned)((cr1 & USART_CR1_RE) != 0u),
+                  (unsigned)((cr1 & USART_CR1_RXNEIE_RXFNEIE) != 0u),
+                  (unsigned long)cr1);
+    }
 
 #ifdef LORA_RAW_RX_CHECK
     /*
@@ -726,7 +949,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
         uint32_t i;
         uint32_t rx_count = 0u;
 
-        tm_putstring((UB*)"tron: LORA_RAW_RX_CHECK - listening for authenticated frames (~15s)\n");
+        board_log_puts((const char*)"tron: LORA_RAW_RX_CHECK - listening for authenticated frames (~15s)\n");
 
         for (i = 0u; i < LORA_RAW_RX_CHECK_TICKS; i++)
         {
@@ -764,7 +987,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
                 line[safe_len] = '\0';
 
                 rx_count++;
-                tm_printf((UB*)"tron: AUTHENTICATED RX #%lu from team %u, type %u, %u bytes: %s\n",
+                BOARD_LOG((UB*)"tron: AUTHENTICATED RX #%lu from team %u, type %u, %u bytes: %s\n",
                           (unsigned long)rx_count, (unsigned)sender_team_id,
                           (unsigned)frame_type, (unsigned)payload_len, line);
             }
@@ -774,7 +997,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
                                   window length. */
         }
 
-        tm_printf((UB*)"tron: LORA_RAW_RX_CHECK done - %lu authenticated frame(s) received\n",
+        BOARD_LOG((UB*)"tron: LORA_RAW_RX_CHECK done - %lu authenticated frame(s) received\n",
                    (unsigned long)rx_count);
     }
 #endif /* LORA_RAW_RX_CHECK */
@@ -788,6 +1011,11 @@ LOCAL void sim_task(INT stacd, void *exinf)
        (mission_link_task.c's g_last_sent_status[]) and doesn't touch
        comms_transport state itself. */
     mission_link_task_init();
+
+    /* Laptop input reaches the simulation in stream order: everything before
+       a tick's clock frame is applied before that tick, nothing behind it (see
+       mission_link_task.c, "Tick-boundary stream order"). */
+    mission_link_task_set_tick_boundary_mode(1u);
 
     /*
      * Boot-side half of the handshake readiness gate — see the extern
@@ -815,111 +1043,65 @@ LOCAL void sim_task(INT stacd, void *exinf)
      */
     mission_link_handshake_mark_local_ready();
 
-    tm_putstring((UB*)"tron: waiting on mission-link handshake\n");
+    board_log_puts((const char*)"tron: waiting on mission-link handshake\n");
 
-    while (!mission_link_handshake_round_trip_complete())
-    {
-        /* Pumps RX on whichever transport this board has, the same
-           function the per-tick loop below also calls — needed here
-           too, since the request that completes this board's own
-           readiness has to actually be received to unblock this
-           wait. Not gated behind the readiness check itself (that
-           would deadlock — this call is what MAKES the check
-           eventually true). */
-        sx1262_poll_rx();
-        mission_link_task_step();
-        comms_transport_dispatch_pending();
-        board_report_link_diagnostics();
-        board_boot_wait_discard_stale_frames();
-    }
-
-    tm_putstring((UB*)"tron: handshake ready\n");
-
-    /*
-     * Roster-arrival gate - see the mission_link_task_any_roster_
-     * applied() extern's own doc above for why this is a distinct
-     * condition from the handshake completing. Same shape as the
-     * handshake wait loop just above: block, pumping
-     * mission_link_task_step() so RX (and therefore the apply that
-     * flips this counter) actually gets a chance to run, until at
-     * least one team's real roster data has landed on this board. On
-     * real hardware today this blocks forever, for the same reason
-     * the handshake gate's own comment already documents (no wire
-     * type wired to a real TX/RX path yet) - once that lands, roster
-     * frames follow the handshake frames through the same pipe.
-     */
-    /* Also waits for the whole route map and the safe zone/gateway sites
-       (core/mission_link.h sections 5c/5d): the laptop sends them right
-       after the rosters, and a tick run without them routes teams through
-       blocked cells and leaves nowhere to rest. */
-    tm_putstring((UB*)"tron: waiting on mission roster, map and sites\n");
+    /* Boot init is done: hand the radio and the laptop link to the link task,
+       which runs the handshake and the roster/map/sites waits (it used to be
+       the two spin loops here) and sets FLG_SIM_WORLD_READY when they are
+       satisfied. */
+    (void)tk_set_flg(g_flg_link, FLG_LINK_GO);
 
     {
-    uint32_t reported_rejects = 0u;
+        UINT ptn;
 
-    while (mission_link_task_any_roster_applied() == 0u ||
-           mission_link_map_rows_received() < MISSION_LINK_MAP_HEIGHT ||
-           !mission_link_sites_received())
-    {
-        uint32_t rejects;
-
-        sx1262_poll_rx();
-        mission_link_task_step();
-        comms_transport_dispatch_pending();
-        board_report_link_diagnostics();
-        board_boot_wait_discard_stale_frames();
-
-        /* mission_link_apply_roster() rejects a bad team_id or an
-           out-of-grid location silently, so without this the loop below
-           blocks forever looking exactly like "no roster ever arrived" -
-           two very different faults (bad DATA vs a dead LINK) with no way
-           to tell them apart. Reported once per new reject rather than
-           every iteration, since this loop spins unthrottled. Keeps
-           waiting deliberately: a later valid roster still resolves it. */
-        rejects = mission_link_roster_reject_count();
-        if(rejects != reported_rejects)
-        {
-            tm_printf((UB*)"tron: roster REJECTED (%lu so far) - arriving but failing validation\n",
-                      (unsigned long)rejects);
-            reported_rejects = rejects;
-        }
-    }
+        (void)tk_wai_flg(g_flg_sim, FLG_SIM_WORLD_READY, TWF_ORW | TWF_BITCLR, &ptn, TMO_FEVR);
     }
 
-    tm_putstring((UB*)"tron: roster, map and sites received, starting seed loop\n");
+    board_log_puts((const char*)"tron: roster, map and sites received, starting seed loop\n");
 
     board_dwt_init();
 
     for(uint32_t seed = BOARD_SEED; seed < BOARD_SEED + BOARD_SEED_COUNT; ++seed)
     {
-        tm_printf((UB*)"tron: seed %lu start\n", (unsigned long)seed);
+        BOARD_LOG((UB*)"tron: seed %lu start\n", (unsigned long)seed);
 
         /* sim_start_seed_board(), NOT sim_start_seed() — the board
          * variant, which does not self-generate a world. See
          * core/sim_runner.h's doc on both functions if this ever
          * looks like a typo; it is not one. */
+        (void)tk_loc_mtx(g_mtx_comms, TMO_FEVR); /* it writes simulation state */
         sim_start_seed_board(seed, BOARD_FAULT_PROFILE);
+        (void)tk_unl_mtx(g_mtx_comms);
 
         while(g_current_tick < BOARD_TICKS_PER_SEED)
         {
             uint32_t start_tick;
             uint32_t tick;
+            UINT ptn;
+#if BOARD_STATE_HASH_INTERVAL > 0u
+            StateHash_t sh;
+            uint8_t have_hash = 0u;
+#endif
+
+            /* Blocks until the link task has seen the laptop authorise a tick
+               (it keeps receiving, relaying and heartbeating meanwhile). */
+            (void)tk_wai_flg(g_flg_sim, FLG_SIM_TICK_AUTH, TWF_ORW | TWF_BITCLR, &ptn, TMO_FEVR);
+
+            /* The whole tick, hash included, runs with the comms mutex held
+               (cbba_wait_poll() releases it only for the length of a wait
+               step), so the link task cannot apply a laptop frame mid-tick. */
+            (void)tk_loc_mtx(g_mtx_comms, TMO_FEVR);
 
             if(!mission_link_clock_step_plan(g_current_tick, mission_link_authorized_tick(),
                                              &start_tick))
             {
-                /* Waiting for the laptop's next tick: keep receiving,
-                   relaying and heartbeating meanwhile. */
-                sx1262_poll_rx();
-                mission_link_task_step();
-                comms_transport_dispatch_pending();
-                tk_dly_tsk(BOARD_CLOCK_IDLE_POLL_MS);
+                (void)tk_unl_mtx(g_mtx_comms);
                 continue;
             }
 
             if(start_tick != g_current_tick)
             {
-                tm_printf((UB*)"tron: tick %lu is too far behind the laptop's %lu, joining at %lu\n",
+                BOARD_LOG((UB*)"tron: tick %lu is too far behind the laptop's %lu, joining at %lu\n",
                           (unsigned long)g_current_tick,
                           (unsigned long)mission_link_authorized_tick(),
                           (unsigned long)(start_tick + 1u));
@@ -929,7 +1111,11 @@ LOCAL void sim_task(INT stacd, void *exinf)
             {
                 uint32_t cycles_before = board_dwt_cycles();
 
+                g_sim_in_tick = 1u;
+                board_wdog_arm(BOARD_SIM_WDOG_MS);
                 sim_tick();
+                board_wdog_disarm();
+                g_sim_in_tick = 0u;
 
                 /* Wraps cleanly even if CYCCNT itself wraps (32-bit
                    unsigned subtraction), same as every other free-
@@ -943,25 +1129,51 @@ LOCAL void sim_task(INT stacd, void *exinf)
             }
             tick = g_current_tick;
 
-            /* Heartbeat trigger hook (this prompt's addition - see the
-               extern declarations above for scope). Every tick, not
-               gated behind an interval like the snapshot-ring drain
-               below: mission_link_status_tx_step() does its own
-               cbba_now_ms()-based rate limiting internally, so calling
-               this more often than the heartbeat interval just means
-               the wall-clock check runs (and finds nothing due yet)
-               a few extra times for free - cheap, non-blocking, no
-               reason to add a second interval here to throttle it. */
-            sx1262_poll_rx();
-            mission_link_task_step();
-            comms_transport_dispatch_pending();
+#if BOARD_STATE_HASH_INTERVAL > 0u
+            if((tick % BOARD_STATE_HASH_INTERVAL) == 0u)
+            {
+                state_hash_compute(&sh); /* under the lock: a consistent state */
+                have_hash = 1u;
+            }
+#endif
+
+            (void)tk_unl_mtx(g_mtx_comms);
+
+#if BOARD_STATE_HASH_INTERVAL > 0u
+            if(have_hash)
+            {
+                /* After the unlock, and through the reliable path: a STATEHASH
+                   line is the evidence the board run is checked against, so it
+                   waits for room in the log buffer instead of being dropped
+                   (and it must not wait while holding the comms mutex).
+                   tm_printf has no 64-bit conversions: each hash goes out as
+                   two zero-padded 32-bit halves, which concatenate to the same
+                   16 hex digits the PC prints. */
+                BOARD_LOG_RELIABLE((UB*)"STATEHASH tick=%lu all=%08lx%08lx teams=%08lx%08lx inc=%08lx%08lx flt=%08lx%08lx rec=%08lx%08lx\n",
+                                   (unsigned long)tick,
+                                   (unsigned long)(sh.all >> 32), (unsigned long)(uint32_t)sh.all,
+                                   (unsigned long)(sh.teams >> 32), (unsigned long)(uint32_t)sh.teams,
+                                   (unsigned long)(sh.incidents >> 32), (unsigned long)(uint32_t)sh.incidents,
+                                   (unsigned long)(sh.faults >> 32), (unsigned long)(uint32_t)sh.faults,
+                                   (unsigned long)(sh.recovery >> 32), (unsigned long)(uint32_t)sh.recovery);
+            }
+#endif
+
+            /* The between-ticks pass (radio, step, heartbeat) now belongs to
+               the link task: ask for it and wait until it is done, which keeps
+               the old order - tick, one step, next tick - so laptop frames that
+               arrived during this tick are applied before the next one starts. */
+            (void)tk_set_flg(g_flg_link, FLG_LINK_POST_TICK);
+            (void)tk_wai_flg(g_flg_sim, FLG_SIM_LINK_STEPPED, TWF_ORW | TWF_BITCLR, &ptn, TMO_FEVR);
 
             if((tick % BOARD_SNAPSHOT_DRAIN_TICK_INTERVAL) == 0u)
             {
                 (void)board_snapshot_ring_drain();
                 /* Throttled to the drain interval: during a post-reboot
                    lockout the auth-fail count can climb every tick. */
+                (void)tk_loc_mtx(g_mtx_comms, TMO_FEVR);
                 board_report_link_diagnostics();
+                (void)tk_unl_mtx(g_mtx_comms);
 
                 /* Task 7: per-tick CPU cost, on hardware. Same cadence
                    as the diagnostics just above rather than every tick -
@@ -971,7 +1183,7 @@ LOCAL void sim_task(INT stacd, void *exinf)
                    Status_t schema stays untouched), so there is no
                    reason to print it more often than a human watching
                    the console would want a fresh number. */
-                tm_printf((UB*)"tron: tick cost last=%lu cyc (%lu.%02lu us) max=%lu cyc (%lu.%02lu us) @%lu MHz\n",
+                BOARD_LOG((UB*)"tron: tick cost last=%lu cyc (%lu.%02lu us) max=%lu cyc (%lu.%02lu us) @%lu MHz\n",
                           (unsigned long)g_tick_cycles_last,
                           (unsigned long)(g_tick_cycles_last / (BOARD_CPU_CLOCK_HZ / 1000000u)),
                           (unsigned long)(((uint64_t)g_tick_cycles_last * 100u / (BOARD_CPU_CLOCK_HZ / 1000000u)) % 100u),
@@ -1003,11 +1215,11 @@ LOCAL void sim_task(INT stacd, void *exinf)
         }
 
         sim_end_seed();
-        tm_printf((UB*)"tron: seed %lu done\n", (unsigned long)seed);
+        BOARD_LOG((UB*)"tron: seed %lu done\n", (unsigned long)seed);
     }
 
     sim_runner_shutdown();
-    tm_putstring((UB*)"tron: run complete\n");
+    board_log_puts((const char*)"tron: run complete\n");
 
     /* Mirrors the laptop's process exit: nothing left to do. Sleep
      * forever rather than returning, per BSP2 manual section 4.3.2 --
@@ -1020,7 +1232,19 @@ LOCAL void sim_task(INT stacd, void *exinf)
 
 EXPORT INT usermain(void)
 {
-    tm_com_init(); /* initializes USART1 - must run before any tm_putstring/tm_printf */
+    tm_com_init(); /* initializes USART1 - must run before any console output */
+
+    /* The logger task and the UART lock exist before anything prints, so all
+       later console output goes through the message buffer. If it cannot be
+       created, output stays direct (board_log_emit falls back). */
+    {
+        int log_rc = board_log_start();
+
+        if (log_rc != 0)
+        {
+            BOARD_LOG_N(96, (UB*)"tron: board_log_start FAILED rc=%d (console stays direct)\n", log_rc);
+        }
+    }
 
     /* One line, once, before anything else runs: makes the actually-
        running build config visible on the wire instead of assumed.
@@ -1036,7 +1260,10 @@ EXPORT INT usermain(void)
        that macro's default lives in comms_transport.c, private to
        that file (see its own comment), not something this file should
        reach into. */
-    tm_printf((UB*)"tron: CONFIG teams_per_board=%u vbus=%u consensus_enforce=%u radio=%u model_loaded=%u cpu_hz=%lu icache=%u dcache=%u\n",
+    /* Static buffer, not the stack: this task has only 1 KB. */
+    {
+        static UB cfg_line[BOARD_LOG_LINE_MAX];
+        INT cfg_len = tm_sprintf(cfg_line, (const UB*)"tron: CONFIG teams_per_board=%u vbus=%u consensus_enforce=%u radio=%u model_loaded=%u cpu_hz=%lu icache=%u dcache=%u\n",
                (unsigned)(NUM_TEAMS / comms_transport_board_count()),
                (unsigned)VIRTUAL_BUS_ENABLED,
                (unsigned)CONSENSUS_ENFORCE,
@@ -1045,32 +1272,52 @@ EXPORT INT usermain(void)
                (unsigned long)SystemCoreClock,
                (unsigned)((SCB->CCR & SCB_CCR_IC_Msk) != 0u),
                (unsigned)((SCB->CCR & SCB_CCR_DC_Msk) != 0u));
+        board_log_emit(cfg_line, cfg_len);
+    }
 
-    tm_putstring((UB*)"tron: starting simulation task\n");
+    {
+        int rtos_rc = board_rtos_create();
 
-    sim_tskid = tk_cre_tsk(&sim_ctsk);
+        if (rtos_rc != 0)
+        {
+            BOARD_LOG_N(96, (UB*)"tron: board_rtos_create FAILED rc=%d\n", rtos_rc);
+            return 1;
+        }
+    }
+
+    board_log_puts((const char*)"tron: starting simulation task\n");
+
+    /* Link task first (it parks on FLG_LINK_GO), then the sim compute task,
+       which does the boot init and releases it. Both on static stacks. */
+    link_tskid = board_rtos_spawn((FP)link_task, BOARD_PRI_LINK, g_link_stack,
+                                  sizeof(g_link_stack), 0);
+    if(link_tskid <= 0)
+    {
+        BOARD_LOG_N(96, (UB*)"tron: link task start FAILED (%d)\n", (int)link_tskid);
+        return 1;
+    }
+    BOARD_LOG_N(96, (UB*)"tron: link task created (pri %d)\n", BOARD_PRI_LINK);
+
+    /* Bug fix (kept from the single-task version): a failed start used to go
+       unnoticed and leave the board silently parked below. */
+    sim_tskid = board_rtos_spawn((FP)sim_compute_task, BOARD_PRI_SIM, g_sim_stack,
+                                 sizeof(g_sim_stack), 0);
     if(sim_tskid <= 0)
     {
-        tm_putstring((UB*)"tron: tk_cre_tsk FAILED\n");
+        BOARD_LOG_N(96, (UB*)"tron: sim compute task start FAILED (%d)\n", (int)sim_tskid);
         return 1;
     }
+    BOARD_LOG_N(96, (UB*)"tron: sim compute task created (pri %d)\n", BOARD_PRI_SIM);
 
-    /* Bug fix: this return value used to be discarded, unlike
-       tk_cre_tsk()'s just above. Since this starts the only task in
-       the whole system, a failed tk_sta_tsk() with no check would have
-       left the board silently parked forever at tk_slp_tsk() below,
-       indistinguishable from a normally-running-but-quiet system - no
-       diagnostic, no simulation activity, ever. */
-    ER sta_ercd = tk_sta_tsk(sim_tskid, 0);
-    if(sta_ercd < E_OK)
+    if(board_rtos_start_cyclics() != 0)
     {
-        tm_putstring((UB*)"tron: tk_sta_tsk FAILED\n");
+        board_log_puts((const char*)"tron: cyclic handler start FAILED\n");
         return 1;
     }
 
-    /* usermain's own task stays parked forever; sim_task does the
-     * actual work. Per BSP2 manual: if usermain returns, µT-Kernel
-     * shuts down, which would tear down sim_task along with it. */
+    /* usermain's own task stays parked forever; the link and sim compute
+     * tasks do the actual work. Per BSP2 manual: if usermain returns,
+     * µT-Kernel shuts down, which would tear down every task with it. */
     tk_slp_tsk(TMO_FEVR);
 
     return 0;

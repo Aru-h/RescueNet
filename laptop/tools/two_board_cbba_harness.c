@@ -155,7 +155,7 @@
  * OUTSIDE, once per loop iteration it itself controls (harness_rx_
  * pump() called, then mission_link_task_step()). CBBA's real mesh
  * wait is different: cbba_ingest_remote_mesh_replies() (core/cbba.c)
- * owns its own tight while loop, bounded by cbba_now_ms(), and NEVER
+ * owns its own wait loop, bounded by a step count (CBBA_REPLY_WAIT_STEPS), and NEVER
  * yields control back to a caller until it returns - there is no
  * per-iteration hook this harness could call between iterations the
  * way it could with mission_link_task_step(). On real hardware this
@@ -163,23 +163,13 @@
  * loop spins. A single-threaded desktop harness has no ISR, so it
  * needs a different hook into the SAME loop.
  *
- * cbba_now_ms() itself is that hook: cbba.h documents it as weak,
- * specifically so real hardware can override it with a genuine
- * wall-clock source BEFORE cbba_run() is first called (same "set it
- * before init" contract g_comms_transport_this_board_id already
- * follows) - and cbba_ingest_remote_mesh_replies() calls it on EVERY
- * iteration of its wait loop (both for round_start and for the
- * timeout check each pass). Overriding it here, strong, to (1) pump
- * this process's own socket into its own inbox via harness_rx_pump()
- * every time it's called, then (2) return a genuine wall-clock
- * millisecond value (clock_gettime(CLOCK_MONOTONIC, ...)) instead of
- * cbba.c's own weak simulated-ms-per-call default, turns that tight
- * wait loop into exactly the asynchronous-arrival behavior real
- * hardware gets from an ISR, without touching cbba.c at all - the
- * same "override the documented weak hook" mechanism two_board_
- * harness.c already uses for lora_spi_transmit(), applied to the one
- * hook CBBA's own wait loop actually calls repeatedly during the
- * window that matters.
+ * cbba_wait_poll() is that hook: cbba.h documents it as weak, so a
+ * platform can override it with whatever it needs to service during the
+ * wait, and cbba_ingest_remote_mesh_replies() calls it once per idle wait
+ * step. Overriding it here, strong, to (1) pump this process's own socket
+ * into its own inbox via harness_rx_pump(), then (2) sleep one nominal step
+ * (CBBA_REPLY_WAIT_STEP_MS) so the step count maps onto the same real-time
+ * bound a hardware backend has.
  *
  * ---------------------------------------------------------------
  * Build (see also: laptop/tools/check-two-board-cbba-harness.sh)
@@ -264,7 +254,7 @@ static int g_harness_socket_fd = -1;
    retry mid-tick; a missed send just gets picked up next tick). This
    socket is not real hardware: it's a non-blocking fd, and under this
    harness's own CPU contention (two single-threaded processes spin-
-   polling for up to 530ms each, see cbba_now_ms()'s override below,
+   polling for up to 530ms each, see cbba_wait_poll()'s override below,
    frequently on a single-core sandbox) write() can transiently return
    EAGAIN for reasons that have nothing to do with LoRa airtime -
    comms_transport.c's channel-busy accounting already models real
@@ -390,92 +380,36 @@ static void harness_rx_pump(void)
     }
 }
 
-/* Strong override of cbba.c's weak cbba_now_ms(): pumps this
-   process's own socket on every call (see this file's top comment on
-   why THIS hook, not an outer loop, is what needs to drive rx during
-   cbba_ingest_remote_mesh_replies()'s own wait), then returns a real
-   wall-clock millisecond value so CBBA_ROUND_TIMEOUT_MS is enforced
-   against genuine elapsed time - the same real-clock contract cbba.h
-   documents for a hardware backend, just backed by clock_gettime()
-   instead of a µT-Kernel timer. */
-uint32_t cbba_now_ms(void)
+/* Strong override of cbba.c's weak cbba_wait_poll(): one wait step of
+   cbba_ingest_remote_mesh_replies()'s reply wait. Pumps this process's own
+   socket into its inbox (see this file's top comment on why THIS hook, not
+   an outer loop, is what has to drive rx during that wait), then sleeps one
+   nominal step (CBBA_REPLY_WAIT_STEP_MS, cbba.h) - so the wait is bounded by
+   a step COUNT in core/cbba.c while still taking about
+   CBBA_ROUND_TIMEOUT_MS of real time here, the same real-time contract a
+   hardware backend has.
+
+   The sleep also matters on its own: this machine can have exactly ONE CPU
+   core (found empirically by running this harness dozens of times, confirmed
+   via nproc). The wait loop in core/cbba.c has no sleep of its own - it is
+   written assuming a real ISR fills the inbox asynchronously on separate
+   hardware, not a second process sharing one core - so two such spinning
+   processes can starve each other for a large part of the budget, which is
+   indistinguishable from the peer being slow (the starved side's
+   cbba_broadcast_local_teams() never gets scheduled in time). Sleeping a
+   step here cedes the core to the peer on every poll. (This used to be a
+   200 us sleep inside a cbba_now_ms() override that core/cbba.c called in a
+   tight loop; a step is now 10 ms and the budget is 125 steps, so the same
+   real-time bound is reached in far fewer polls.) */
+void cbba_wait_poll(void)
 {
-    struct timespec ts;
-    static struct timespec s_start;
-    static int s_started = 0;
-    uint64_t ms;
+    struct timespec sleep_ts;
 
     harness_rx_pump();
 
-    /* Found empirically (not assumed up front) by actually running
-       this harness dozens of times on this machine: it has exactly
-       ONE CPU core (confirmed via nproc). cbba_ingest_remote_mesh_
-       replies()'s own wait loop calls cbba_now_ms() in a tight,
-       genuinely CPU-bound spin (no sleep anywhere in that real,
-       unmodified core/cbba.c loop - it's written assuming a real ISR
-       fills the inbox asynchronously on separate hardware, not a
-       second process sharing one core). With two such spins running
-       simultaneously - this process's own AND the peer's - on a
-       single core, the OS scheduler can starve one side for a
-       significant fraction of its own supposedly-real-time 530ms
-       budget, which is indistinguishable from the peer being slow:
-       the starved side's cbba_broadcast_local_teams() call (needed
-       to actually put a message on the wire) simply never gets
-       scheduled in time. A short sleep here - inside this file's own
-       weak-hook override, not a change to core/cbba.c's real
-       busy-wait contract - cedes the core back to the peer on every
-       poll, turning two mutually-starving spinners into two
-       processes that actually alternate. 200us costs at most ~2650
-       extra polls' worth of latency across the full 530ms budget
-       (still thousands of polls per round) - negligible against the
-       problem it fixes, confirmed by this file's own repeated-run
-       history below, not picked from theory alone. */
-    {
-        struct timespec sleep_ts;
-        sleep_ts.tv_sec = 0;
-        sleep_ts.tv_nsec = 200000L; /* 200us */
-        nanosleep(&sleep_ts, NULL);
-    }
-
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-
-    if (!s_started)
-    {
-        s_start = ts;
-        s_started = 1;
-    }
-
-    /* NOTE: this used to be a single unsigned expression -
-       (uint64_t)(ts.tv_sec - s_start.tv_sec) * 1000u +
-       (uint64_t)(ts.tv_nsec - s_start.tv_nsec) / 1000000u -
-       which is wrong whenever ts.tv_nsec < s_start.tv_nsec (i.e. on
-       whatever fraction of every second falls before s_start's own
-       ns offset - not a rare edge case, it recurs every second).
-       tv_nsec is signed, so that subtraction goes negative, but the
-       (uint64_t) cast wraps it to a huge unsigned value BEFORE the
-       divide, instead of borrowing a second from the tv_sec term.
-       The result was cbba_now_ms() occasionally returning a garbage
-       multi-billion-ms value - confirmed via CBBA_DEBUG_TIMING's
-       "waited=" log, which caught it directly - and that garbage
-       return, fed into cbba_ingest_remote_mesh_replies()'s
-       `(cbba_now_ms() - round_start) < CBBA_ROUND_TIMEOUT_MS` check,
-       makes the 530ms wait bail out almost instantly, mimicking a
-       real timeout when barely any wall-clock time had actually
-       passed. Do the subtraction with an explicit borrow instead. */
-    {
-        int64_t sec_diff = (int64_t)ts.tv_sec - (int64_t)s_start.tv_sec;
-        int64_t nsec_diff = (int64_t)ts.tv_nsec - (int64_t)s_start.tv_nsec;
-
-        if (nsec_diff < 0)
-        {
-            sec_diff -= 1;
-            nsec_diff += 1000000000L;
-        }
-
-        ms = (uint64_t)sec_diff * 1000u + (uint64_t)nsec_diff / 1000000u;
-    }
-
-    return (uint32_t)ms;
+    sleep_ts.tv_sec = 0;
+    sleep_ts.tv_nsec = (long)CBBA_REPLY_WAIT_STEP_MS * 1000000L;
+    nanosleep(&sleep_ts, NULL);
 }
 
 static void make_socket_nonblocking(int fd)

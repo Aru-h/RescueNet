@@ -178,7 +178,7 @@ ifneq ($(wildcard $(BSP_DIR)/include),)
   # implementing sx126x_hal_write/_read/_reset/_wakeup) now fold into
   # the real per-board build, so check-board-link genuinely link-checks
   # the HAL instead of leaving those four symbols undefined.
-  BOARD_SOURCES = $(CORE_SOURCES) $(BOARD_DIR)/dk_debug.c $(BOARD_DIR)/snapshot.c $(BOARD_DIR)/main_board.c $(BOARD_DIR)/mission_link_task.c $(SX126X_DIR)/sx126x.c $(BOARD_DIR)/sx1262_hal.c $(BOARD_DIR)/usart1_driver.c
+  BOARD_SOURCES = $(CORE_SOURCES) $(BOARD_DIR)/dk_debug.c $(BOARD_DIR)/snapshot.c $(BOARD_DIR)/main_board.c $(BOARD_DIR)/mission_link_task.c $(SX126X_DIR)/sx126x.c $(BOARD_DIR)/sx1262_hal.c $(BOARD_DIR)/usart1_driver.c $(BOARD_DIR)/board_log.c $(BOARD_DIR)/board_rtos.c
   BSP_MODE = real BSP2 headers ($(BSP_DIR))
 else
   ARM_CFLAGS = $(ARM_CFLAGS_BASE)
@@ -1156,6 +1156,22 @@ check-single-board-dk-harness:
 	@echo "check-single-board-dk-harness: 10 local teams + vbus + consensus + mission link passed, zero relay sends"
 
 
+# Stream order of the board's receive path (tick-boundary mode of the real
+# mission_link_task.c): frames before a tick's clock frame are applied before
+# the tick, frames behind it are not, however often the link step runs.
+# See laptop/tools/mission_link_stream_order_test.c.
+MISSION_LINK_STREAM_ORDER_BIN = build/mission_link_stream_order_test
+.PHONY: check-mission-link-stream-order
+check-mission-link-stream-order:
+	@mkdir -p build
+	@$(CC) -std=gnu11 -Wall -Wextra -Wpedantic $(DK_SINGLE_BOARD_FLAGS) -DTHIS_BOARD_ID=0 \
+		-I$(CORE_DIR) -I$(BOARD_DIR) -I$(LAPTOP_DIR) -I$(TOOLS_DIR)/harness_stubs \
+		-o $(MISSION_LINK_STREAM_ORDER_BIN) $(TOOLS_DIR)/mission_link_stream_order_test.c \
+		$(BOARD_DIR)/mission_link_task.c $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c \
+		$(CORE_SOURCES) -lm
+	@./$(MISSION_LINK_STREAM_ORDER_BIN)
+	@echo "check-mission-link-stream-order: laptop frames apply in stream order, held at each tick authorisation"
+
 # =============================================================================
 # Agent C review-fix tests (board code, dashboard and tooling)
 # =============================================================================
@@ -1256,3 +1272,31 @@ check-eval-metrics-unittest:
 # laptop/tools/check-evaluate-determinism.sh.
 check-evaluate-determinism:
 	@PYTHON=$(PYTHON) $(TOOLS_DIR)/check-evaluate-determinism.sh
+
+# Determinism fingerprint (core/state_hash.h, `tron --state-hash=N`):
+# (1) the flag is read-only - the C1 md5 of docs/evaluation/AI_EVALUATION_BRIEF.md
+# (`./tron 1 3 1500 --fault-profile=combined` -> tron_snapshot_dataset.csv) is the
+# same with it on as the committed value; (2) two runs of the same seed print
+# identical hashes on every line; (3) a different seed does not (the hash
+# actually sees the state). Compare board logs with
+# laptop/tools/statehash_compare.py.
+STATE_HASH_C1_MD5 = b248bea72ce2ceb81389762dccc0a749
+.PHONY: check-state-hash
+check-state-hash: $(TARGET)
+	@rm -rf build/state-hash && mkdir -p build/state-hash/a build/state-hash/b build/state-hash/c
+	@cd build/state-hash/a && ../../../$(TARGET) 1 3 1500 --fault-profile=combined --state-hash=100 >out.txt 2>err.txt
+	@cd build/state-hash/b && ../../../$(TARGET) 1 3 1500 --fault-profile=combined --state-hash=100 >out.txt 2>err.txt
+	@cd build/state-hash/c && ../../../$(TARGET) 2 1 1500 --fault-profile=combined --state-hash=100 >out.txt 2>err.txt
+	@md5=$$(md5sum build/state-hash/a/tron_snapshot_dataset.csv | cut -d' ' -f1); \
+	 if [ "$$md5" != "$(STATE_HASH_C1_MD5)" ]; then echo "check-state-hash: C1 md5 is $$md5, expected $(STATE_HASH_C1_MD5)"; exit 1; fi
+	@grep STATEHASH build/state-hash/a/err.txt > build/state-hash/a.hash; grep STATEHASH build/state-hash/b/err.txt > build/state-hash/b.hash; grep STATEHASH build/state-hash/c/err.txt > build/state-hash/c.hash
+	@test -s build/state-hash/a.hash || { echo "check-state-hash: no STATEHASH lines printed"; exit 1; }
+	@cmp build/state-hash/a.hash build/state-hash/b.hash || { echo "check-state-hash: same seed gave different hashes"; exit 1; }
+	@if cmp -s build/state-hash/a.hash build/state-hash/c.hash; then echo "check-state-hash: different seeds gave identical hashes"; exit 1; fi
+	@$(PYTHON) $(TOOLS_DIR)/statehash_compare.py build/state-hash/a.hash build/state-hash/b.hash
+	@$(PYTHON) $(TOOLS_DIR)/statehash_compare_selftest.py
+	@mkdir -p build
+	@$(CC) $(CFLAGS) -I$(CORE_DIR) -I$(LAPTOP_DIR) -o build/state_hash_selftest $(TOOLS_DIR)/state_hash_selftest.c \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LAPTOP_DIR)/mission_feed.c $(LAPTOP_DIR)/mission_mirror.c $(CORE_SOURCES) $(LDFLAGS)
+	@./build/state_hash_selftest
+	@echo "check-state-hash: C1 md5 unchanged with --state-hash on; same seed -> identical hashes; different seed -> different hashes; incident hash slot-order independent"

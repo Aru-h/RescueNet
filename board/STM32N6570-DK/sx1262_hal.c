@@ -102,6 +102,7 @@
 #include <stddef.h>
 
 #include <tk/tkernel.h>
+#include "board_log.h"
 #include <tm/tmonitor.h>   /* tm_printf() - temporary DBG instrumentation below */
 
 /*
@@ -642,7 +643,7 @@ void sx1262_hal_init(void)
     spi5_init();
 
 #ifdef SX1262_SOFT_SPI
-    tm_printf((UB*)"sx1262: bit-banged SPI active (SX1262_SOFT_SPI), SPI5 peripheral not used\n");
+    BOARD_LOG((UB*)"sx1262: bit-banged SPI active (SX1262_SOFT_SPI), SPI5 peripheral not used\n");
 #else
     /* TEMPORARY diagnostic: dump the SPI5 registers as the CPU itself
        sees them (not via an external debug-probe memory read, which
@@ -650,7 +651,7 @@ void sx1262_hal_init(void)
        peripheral's address range - the CPU's own view, from code
        actually executing on it, is the only trustworthy source here).
        DELETE once Goal 2's hardware/config fault is found. */
-    tm_printf((UB*)"DBG spi5 regs: CR1=0x%08lX CFG1=0x%08lX CFG2=0x%08lX SR=0x%08lX\n",
+    BOARD_LOG((UB*)"DBG spi5 regs: CR1=0x%08lX CFG1=0x%08lX CFG2=0x%08lX SR=0x%08lX\n",
                (unsigned long)SX1262_SPI->CR1, (unsigned long)SX1262_SPI->CFG1,
                (unsigned long)SX1262_SPI->CFG2, (unsigned long)SX1262_SPI->SR);
 
@@ -676,7 +677,7 @@ void sx1262_hal_init(void)
         uint32_t priv = (RIFSC_S->RISC_PRIVCFGRx[0] >> 4u) & 1u;
         uint32_t illegal = (IAC_S->ISR[0] >> 4u) & 1u;
         IAC_S->ICR[0] = (1u << 4u);
-        tm_printf((UB*)"DBG RIF spi5: SECCFGR.SEC4=%lu PRIVCFGR.PRIV4=%lu IAC.ISR4(illegal access, now cleared)=%lu\n",
+        BOARD_LOG((UB*)"DBG RIF spi5: SECCFGR.SEC4=%lu PRIVCFGR.PRIV4=%lu IAC.ISR4(illegal access, now cleared)=%lu\n",
                    (unsigned long)sec, (unsigned long)priv, (unsigned long)illegal);
     }
 #endif /* SX1262_SOFT_SPI */
@@ -1021,7 +1022,7 @@ static int ensure_radio_configured(void)
         return 0;
     }
 
-    if (sx126x_hal_reset(NULL) != SX126X_HAL_STATUS_OK) { tm_printf((UB*)"DBG erc: hal_reset FAILED\n"); return 1; }
+    if (sx126x_hal_reset(NULL) != SX126X_HAL_STATUS_OK) { BOARD_LOG((UB*)"DBG erc: hal_reset FAILED\n"); return 1; }
     {
         /* Was a bare set_standby(RC). Now also probes/starts the module's TCXO
            (only if its oscillator won't start without), calibrates the 863-870
@@ -1030,26 +1031,26 @@ static int ensure_radio_configured(void)
         sx1262_setup_report_t setup;
         if (sx1262_setup_clock_and_calibration(&setup) != 0)
         {
-            tm_printf((UB*)"DBG erc: clock/cal setup FAILED at [%s], device_errors=0x%04lX\n",
+            BOARD_LOG((UB*)"DBG erc: clock/cal setup FAILED at [%s], device_errors=0x%04lX\n",
                       (UB*)sx1262_setup_result_name(setup.result), (unsigned long)setup.device_errors);
             return 1;
         }
-        tm_printf((UB*)"DBG erc: radio clock OK, tcxo_switched_on=%d, device_errors=0x%04lX\n",
+        BOARD_LOG((UB*)"DBG erc: radio clock OK, tcxo_switched_on=%d, device_errors=0x%04lX\n",
                   setup.tcxo_enabled, (unsigned long)setup.device_errors);
     }
-    if (sx126x_set_pkt_type(NULL, SX126X_PKT_TYPE_LORA) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_pkt_type FAILED\n"); return 1; }
-    if (sx126x_set_rf_freq(NULL, LORA_RF_FREQ_HZ) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_rf_freq FAILED\n"); return 1; }
-    if (sx1262_setup_pa_config() != 0) { tm_printf((UB*)"DBG erc: set_pa_config FAILED\n"); return 1; }
-    if (sx126x_set_buffer_base_address(NULL, 0u, 0u) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_buffer_base_address FAILED\n"); return 1; }
+    if (sx126x_set_pkt_type(NULL, SX126X_PKT_TYPE_LORA) != SX126X_STATUS_OK) { BOARD_LOG((UB*)"DBG erc: set_pkt_type FAILED\n"); return 1; }
+    if (sx126x_set_rf_freq(NULL, LORA_RF_FREQ_HZ) != SX126X_STATUS_OK) { BOARD_LOG((UB*)"DBG erc: set_rf_freq FAILED\n"); return 1; }
+    if (sx1262_setup_pa_config() != 0) { BOARD_LOG((UB*)"DBG erc: set_pa_config FAILED\n"); return 1; }
+    if (sx126x_set_buffer_base_address(NULL, 0u, 0u) != SX126X_STATUS_OK) { BOARD_LOG((UB*)"DBG erc: set_buffer_base_address FAILED\n"); return 1; }
     if (sx126x_set_dio_irq_params(NULL, 0x0203u /* TxDone|RxDone|Timeout */,
-                                   0x0203u /* -> DIO1 */, 0x0000u, 0x0000u) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_dio_irq_params FAILED\n"); return 1; }
+                                   0x0203u /* -> DIO1 */, 0x0000u, 0x0000u) != SX126X_STATUS_OK) { BOARD_LOG((UB*)"DBG erc: set_dio_irq_params FAILED\n"); return 1; }
 
     /* LOCKED - see comment above. Values from core/lora_radio_params.h. */
     mod_params.sf = LORA_SPREADING_FACTOR;
     mod_params.bw = LORA_BANDWIDTH;
     mod_params.cr = LORA_CODING_RATE;
     mod_params.ldro = LORA_LDRO;
-    if (sx126x_set_lora_mod_params(NULL, &mod_params) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_lora_mod_params FAILED\n"); return 1; }
+    if (sx126x_set_lora_mod_params(NULL, &mod_params) != SX126X_STATUS_OK) { BOARD_LOG((UB*)"DBG erc: set_lora_mod_params FAILED\n"); return 1; }
 
     /* LOCKED - see comment above. pld_len_in_bytes gets overwritten
        per-send in lora_spi_transmit() below (explicit header mode
@@ -1060,14 +1061,14 @@ static int ensure_radio_configured(void)
     pkt_params.pld_len_in_bytes = 0u;
     pkt_params.crc_is_on = LORA_CRC_IS_ON;
     pkt_params.invert_iq_is_on = LORA_INVERT_IQ_IS_ON;
-    if (sx126x_set_lora_pkt_params(NULL, &pkt_params) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_lora_pkt_params FAILED\n"); return 1; }
+    if (sx126x_set_lora_pkt_params(NULL, &pkt_params) != SX126X_STATUS_OK) { BOARD_LOG((UB*)"DBG erc: set_lora_pkt_params FAILED\n"); return 1; }
 
     /* Sync word and TX power/ramp - both LOCKED in core/lora_radio_params.h
        and, like mod/pkt params above, not previously called anywhere, so
        TX power was whatever the chip's reset default happened to be. Must
        run before g_radio_configured is set, same as mod/pkt params above. */
-    if (sx126x_set_lora_sync_word(NULL, LORA_SYNC_WORD) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_lora_sync_word FAILED\n"); return 1; }
-    if (sx126x_set_tx_params(NULL, LORA_TX_POWER_DBM, LORA_RAMP_TIME) != SX126X_STATUS_OK) { tm_printf((UB*)"DBG erc: set_tx_params FAILED\n"); return 1; }
+    if (sx126x_set_lora_sync_word(NULL, LORA_SYNC_WORD) != SX126X_STATUS_OK) { BOARD_LOG((UB*)"DBG erc: set_lora_sync_word FAILED\n"); return 1; }
+    if (sx126x_set_tx_params(NULL, LORA_TX_POWER_DBM, LORA_RAMP_TIME) != SX126X_STATUS_OK) { BOARD_LOG((UB*)"DBG erc: set_tx_params FAILED\n"); return 1; }
 
     g_radio_configured = 1;
 
@@ -1093,11 +1094,11 @@ static int ensure_radio_configured(void)
     if (sx1262_enter_rx() != 0)
     {
         g_radio_configured = 0;
-        tm_printf((UB*)"DBG ensure_radio_configured: enter_rx FAILED\n");
+        BOARD_LOG((UB*)"DBG ensure_radio_configured: enter_rx FAILED\n");
         return 1;
     }
 
-    tm_printf((UB*)"DBG ensure_radio_configured: SUCCESS\n");
+    BOARD_LOG((UB*)"DBG ensure_radio_configured: SUCCESS\n");
 
     return 0;
 }
