@@ -145,11 +145,23 @@ void debug_emit_static_environment(void)
                b->building_type, b->floors, b->damage_state, b->risk_level, b->hazard_flags);
         first_b = 0;
     }
-    printf("],\"epicenter\":{\"active\":%u,\"x\":%d,\"y\":%d,\"intensity\":%u}}\n",
+    printf("],\"epicenter\":{\"active\":%u,\"x\":%d,\"y\":%d,\"intensity\":%u},\"gateways\":[",
            g_environment_summary.earthquake_applied,
            g_environment_summary.earthquake_epicenter_x,
            g_environment_summary.earthquake_epicenter_y,
            g_environment_summary.earthquake_intensity);
+    /* Evacuation gateways (the map-edge exits where teams take evacuees off
+     * the map): fixed for the run, so they ride along with the static layout.
+     * Dashboard-only output; nothing here feeds back into the simulator. */
+    for(uint8_t i = 0; i < NUM_EVACUATION_GATEWAYS; i++)
+    {
+        printf("%s{\"id\":%u,\"x\":%d,\"y\":%d}",
+               i == 0 ? "" : ",",
+               g_evacuation_gateways[i].gateway_id,
+               g_evacuation_gateways[i].loc_x,
+               g_evacuation_gateways[i].loc_y);
+    }
+    printf("]}\n");
     fflush(stdout);
 }
 

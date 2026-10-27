@@ -34,6 +34,7 @@ or `make check-dashboard-e2e`.
 """
 
 import contextlib
+import json
 import os
 import shutil
 import socket
@@ -1237,6 +1238,144 @@ def _view3d_pin_depth_check(page, console_errors):
     check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the pin depth check (got {real_errors[:5]})")
 
 
+GATEWAY_SEED = 1072      # a real world whose gateway 0 (35, 23) is a river-bank cell: water on the cells beside it (found by the placement audit)
+
+
+def _gateway_check(page, console_errors, recordings_dir):
+    """Evacuation gateways. Everything here is REAL simulator output: a short
+    live run of seed 1072 (STATICENV's "gateways" from laptop/debug.c, one of
+    them on a river bank) and the recording that run leaves behind; the
+    bundled demo recording predates the field and is the "old recording".
+    The one synthetic fixture (a team moved onto a gateway cell) is labelled
+    where it is used."""
+    page.evaluate("() => { map3d && map3d.cancelCamera(); hideMapCard(); selectedMarker = null; }")
+    page.select_option("#modeSelect", "live")
+    page.select_option("#faultProfile", "none")
+    page.fill("#seed", str(GATEWAY_SEED)); page.fill("#ticks", "12"); page.fill("#tickDelay", "30")
+    page.click("#liveBtn")
+    page.wait_for_function("() => window._lastFrame && window._lastFrame.tick >= 6 && staticEnvironment && staticEnvironment.gateways && terrainMap", timeout=30000)
+    live_gw = page.evaluate("() => staticEnvironment.gateways")
+    check(len(live_gw) == 3 and all(g["x"] in (0, 35) or g["y"] in (0, 35) for g in live_gw),
+          f"the simulator's STATICENV carries 3 gateways on the map edge ({[(g['x'], g['y']) for g in live_gw]})")
+    want = sorted((g["x"], g["y"]) for g in live_gw)
+
+    def finish_run():
+        page.wait_for_function("() => document.getElementById('runStateLabel').textContent === 'finished'", timeout=30000)
+
+    def gateway_hits():
+        return page.evaluate("() => mapHitTargets.filter((h) => h.type === 'gateway').map((h) => ({ id: h.id, x: h.data.x, y: h.data.y, low: !!h.low }))")
+
+    def check_views(label):
+        for mode in ("2d", "iso", "3d"):
+            if mode == "3d" and not page.evaluate("() => map3dAvailable"):
+                continue
+            _cycle_view_to(page, mode); page.wait_for_timeout(800)
+            hits = gateway_hits()
+            got = sorted((h["x"], h["y"]) for h in hits)
+            check(got == want and all(h["low"] for h in hits), f"[{mode}] {label}: the three gateways are drawn at the simulator's cells (low-priority click targets) ({got})")
+        if page.evaluate("() => map3dAvailable"):
+            st = page.evaluate("() => map3d.surroundState()")
+            # each portal faces out through a map edge its gateway cell touches (a corner cell touches two; one is chosen)
+            facing_ok = all((g["facing"]["x"] != 0 and g["x"] == (0 if g["facing"]["x"] < 0 else 35)) or (g["facing"]["z"] != 0 and g["y"] == (0 if g["facing"]["z"] < 0 else 35)) for g in st["gateways"])
+            check(st["portals"] == 3 and facing_ok, f"[3d] {label}: three tunnel portals, each facing out through its own map edge")
+
+    # 1. the live run
+    finish_run()
+    check_views("live run")
+    # 2. the river-bank gateway: nothing of the marker overhangs a water cell
+    bank = page.evaluate("""() => { const t = MapRender.parseTerrain(terrainMap); const out = [];
+      for (const g of staticEnvironment.gateways) { let water = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const x = g.x + dx, y = g.y + dy;
+        if ((dx || dy) && x >= 0 && y >= 0 && x < t.width && y < t.height && t.cells[y * t.width + x].flood) water++; }
+        out.push({ id: g.id, x: g.x, y: g.y, water, ownFlood: t.cells[g.y * t.width + g.x].flood }); } return out; }""")
+    banks = [g for g in bank if g["water"] > 0]
+    check(len(banks) >= 1 and all(not g["ownFlood"] for g in bank), f"seed {GATEWAY_SEED} has a river-bank gateway (water beside it, none under it): {banks}")
+    _cycle_view_to(page, "2d"); page.wait_for_timeout(500)
+    over2d = page.evaluate("""() => { const t = MapRender.parseTerrain(terrainMap), out = [];
+      for (const g of MapRender.gatewayList(currentEnvironment())) { const b = MapRender.gatewayGlyphBox(mapCamera, g);
+        const a = mapCamera.screenToWorld(b.x0, b.y0), c = mapCamera.screenToWorld(b.x1, b.y1), wx0 = Math.min(a.x, c.x), wx1 = Math.max(a.x, c.x), wy0 = Math.min(a.y, c.y), wy1 = Math.max(a.y, c.y);
+        let overlap = 0; for (const cell of t.cells.map((cc, i) => ({ cc, x: i % t.width, y: Math.floor(i / t.width) }))) { if (!cell.cc.flood) continue;
+          const ox = Math.min(wx1, cell.x + 0.5) - Math.max(wx0, cell.x - 0.5), oy = Math.min(wy1, cell.y + 0.5) - Math.max(wy0, cell.y - 0.5); if (ox > 0.01 && oy > 0.01) overlap += ox * oy; }
+        out.push({ id: g.id, inCell: wx0 >= g.x - 0.51 && wx1 <= g.x + 0.51 && wy0 >= g.y - 0.51 && wy1 <= g.y + 0.51, overlap }); } return out; }""")
+    check(len(over2d) == 3 and all(o["inCell"] and o["overlap"] == 0 for o in over2d), f"[2d] the glyph stays inside its own edge cell and covers no water cell, on the river bank too ({over2d})")
+    if page.evaluate("() => map3dAvailable"):
+        _cycle_view_to(page, "3d"); page.wait_for_timeout(800)
+        over3d = page.evaluate("""() => { const t = MapRender.parseTerrain(terrainMap), W = t.width, H = t.height, out = [];
+          for (const g of map3d.surroundState().gateways) { const f = g.footprint; let overlap = 0;
+            t.cells.forEach((cc, i) => { if (!cc.flood) return; const x = i % W, y = Math.floor(i / W); const ox = Math.min(f.x1, x + 0.5) - Math.max(f.x0, x - 0.5), oy = Math.min(f.y1, y + 0.5) - Math.max(f.y0, y - 0.5); if (ox > 0.01 && oy > 0.01) overlap += ox * oy; });
+            const outside = f.x1 <= -0.5 + 1e-6 || f.x0 >= W - 0.5 - 1e-6 || f.y1 <= -0.5 + 1e-6 || f.y0 >= H - 0.5 - 1e-6;
+            const wide = Math.min(f.x1 - f.x0, f.y1 - f.y0);
+            out.push({ id: g.id, outside, wide, overlap }); } return out; }""")
+        check(len(over3d) == 3 and all(o["outside"] and o["wide"] <= 1.001 and o["overlap"] == 0 for o in over3d),
+              f"[3d] each portal is one cell wide and stands outside the map edge, so it overhangs no water cell, on the river bank too ({over3d})")
+    # 3. the recording that run left behind (replay): same gateways, in all three views
+    page.select_option("#modeSelect", "replay")
+    page.click("#replayRefreshBtn"); page.wait_for_timeout(500)
+    name = page.evaluate("(s) => { const o = Array.from(document.querySelectorAll('#replaySelect option')).find((x) => x.textContent.includes('seed ' + s)); return o ? o.value : null; }", GATEWAY_SEED)
+    check(name is not None, f"the live run's recording is listed in Replay mode ({name})")
+    if name:
+        page.select_option("#replaySelect", name); page.click("#replayLoadBtn")
+        page.wait_for_function("() => Replay.frameCount > 0 && Replay.currentIndex === 0", timeout=10000)
+        page.evaluate("() => Replay.seekToIndex(Math.min(8, Replay.frameCount - 1))"); page.wait_for_timeout(300)
+        check(page.evaluate("() => Replay.envAt(0).gateways.length") == 3, "the recording keeps the gateways on its STATICENV")
+        check_views("replay")
+    # 4. an old recording (the bundled demo predates the field): no gateways, nothing breaks
+    page.select_option("#replaySelect", DEMO_RECORDING); page.click("#replayLoadBtn")
+    page.wait_for_function("() => Replay.frameCount > 0 && Replay.currentIndex === 0", timeout=10000)
+    page.evaluate("() => Replay.seekToIndex(150)"); page.wait_for_timeout(300)
+    old = {}
+    for mode in ("2d", "iso", "3d"):
+        if mode == "3d" and not page.evaluate("() => map3dAvailable"):
+            continue
+        _cycle_view_to(page, mode); page.wait_for_timeout(500)
+        old[mode] = len(gateway_hits())
+    check(page.evaluate("() => MapRender.gatewayList(currentEnvironment()).length") == 0 and all(n == 0 for n in old.values()),
+          f"an old recording (STATICENV without the gateways field) draws no gateways and does not break any view ({old})")
+    # 5. the card and the 3D label level of detail, on the live run's gateways
+    page.select_option("#replaySelect", name) if name else None
+    page.click("#replayLoadBtn"); page.wait_for_function("() => Replay.frameCount > 0 && Replay.currentIndex === 0", timeout=10000)
+    page.evaluate("() => Replay.seekToIndex(Math.min(8, Replay.frameCount - 1))"); page.wait_for_timeout(300)
+    for mode in ("2d", "3d"):
+        if mode == "3d" and not page.evaluate("() => map3dAvailable"):
+            continue
+        _cycle_view_to(page, mode); page.wait_for_timeout(600)
+        card = page.evaluate("""() => { hideMapCard(); const h = mapHitTargets.find((x) => x.type === 'gateway'); showMapCard(h); const t = document.getElementById('mapTooltip').textContent; hideMapCard(); return t; }""")
+        text = " ".join(card.split())
+        check("Evacuation gateway #" in text and "Position" in text and "leave the map" in text and "delivered" not in text.lower() and "evacuees:" not in text.lower(),
+              f"[{mode}] the gateway card names it, gives its position and what it is for, with no data we do not have ({text!r})")
+    if page.evaluate("() => map3dAvailable"):
+        page.evaluate("() => { mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }"); page.wait_for_timeout(500)
+        far = page.evaluate("() => map3d.surroundState().labelsShown")
+        page.evaluate("""() => { const g = staticEnvironment.gateways[0], st = map3d.state; const f = map3d.surroundState().gateways[0].facing; st.az = Math.atan2(f.x, f.z) + Math.PI + 0.4; st.el = 0.5; st.tx = g.x; st.tz = g.y; mapCamera.orbit(0, 0); mapCamera.zoomAt(mapCamera.state.viewW / 2, mapCamera.state.viewH / 2, 3.5); drawFrame(window._lastFrame, true); }""")
+        page.wait_for_timeout(500)
+        near = page.evaluate("() => map3d.surroundState().labelsShown")
+        check(far == 0 and near >= 1, f"[3d] the EXIT labels are hidden when zoomed out ({far} shown) and shown close up ({near})")
+        page.evaluate("() => { mapCamera.reset(mapCamera.state.viewW, mapCamera.state.viewH); drawFrame(window._lastFrame, true); }")
+    # 6. a gateway never steals a click from a team standing on it.
+    for mode in ("2d", "iso", "3d"):
+        if mode == "3d" and not page.evaluate("() => map3dAvailable"):
+            continue
+        _cycle_view_to(page, mode); page.wait_for_timeout(500)
+        # SYNTHETIC fixture: a copy of the real frame with team 0 moved onto a real gateway cell (no real frame has a team there this early).
+        res = page.evaluate("""() => {
+          const gw = staticEnvironment.gateways[0], f = JSON.parse(JSON.stringify(window._lastFrame)); f.tick += 1; f.teams[0].x = gw.x; f.teams[0].y = gw.y; drawFrame(f, true);
+          const t = mapHitTargets.find((h) => h.type === 'team' && h.data.id === f.teams[0].id), g = mapHitTargets.find((h) => h.type === 'gateway');
+          const p = mapCamera.worldToScreen(t.wx, t.wy, t.wz || 0), r = document.getElementById('mapCanvas').getBoundingClientRect();
+          const hit = MapRender.hitTestWorld(mapCamera, mapHitTargets, p.x, p.y);
+          return { hit: hit && hit.type, gateway: !!g, x: r.left + p.x, y: r.top + p.y }; }""")
+        check(res["gateway"] and res["hit"] == "team", f"[{mode}] a team standing on a gateway is what a click on it hits, not the gateway ({res['hit']})")
+        page.mouse.move(res["x"] - 40, res["y"] - 40); page.mouse.click(res["x"], res["y"]); page.wait_for_timeout(150)
+        check(page.evaluate("() => selectedMarker && selectedMarker.type") == "team", f"[{mode}] clicking it selects the team")
+        page.evaluate("() => { hideMapCard(); DashboardSelection.set(null); selectedMarker = null; }")
+    legend = page.evaluate("() => { openMapLegend(); const t = document.querySelector('#mapLegendModal .legend-modal-body').textContent; closeMapLegend(); return t; }")
+    check("Evacuation gateway" in legend and "EXIT n" in legend, "the legend explains the evacuation gateway marker")
+    _cycle_view_to(page, "2d")
+    real_errors = real_console_errors(console_errors)
+    check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the gateway checks (got {real_errors[:5]})")
+    # leave the demo recording loaded for the checks that follow
+    page.select_option("#replaySelect", DEMO_RECORDING); page.click("#replayLoadBtn")
+    page.wait_for_function("() => Replay.frameCount > 0 && Replay.currentIndex === 0", timeout=10000)
+
+
 def _route_accuracy_check(page):
     """The dashboard reconstructs routes (route.js ports core/path.c's A*);
     check it against what the simulator ACTUALLY did in the bundled
@@ -1408,6 +1547,11 @@ def _run_control_state_check(page, console_errors):
     page.fill("#tickDelay", "150")
     page.click("#liveBtn")
     page.wait_for_function("() => document.getElementById('runStateLabel').textContent === 'running' && window._lastFrame && window._lastFrame.tick >= 3", timeout=15000)
+    # The simulator's STATICENV carries the evacuation gateways (laptop/debug.c): 3 of them, on the map edge.
+    page.wait_for_function("() => typeof staticEnvironment !== 'undefined' && staticEnvironment && staticEnvironment.buildings", timeout=10000)
+    live_gw = page.evaluate("() => staticEnvironment.gateways || null")
+    check(bool(live_gw) and len(live_gw) == 3 and all(g["x"] in (0, 35) or g["y"] in (0, 35) for g in live_gw) and sorted(g["id"] for g in live_gw) == [0, 1, 2],
+          f"a live run's STATICENV carries the 3 evacuation gateways, all on the map edge ({live_gw})")
 
     # (a) An override for a nonexistent incident_id (999999) must only
     # show its own error, never touch the run: frames keep arriving for
@@ -2414,6 +2558,7 @@ def main():
             _replay_timeline_check(page, console_errors, recordings_tmpdir)
             _route_accuracy_check(page)
             _replay_env_history_check(page, console_errors)
+            _gateway_check(page, console_errors, recordings_tmpdir)
             _replay_takeover_check(page, console_errors)
 
             page.close()

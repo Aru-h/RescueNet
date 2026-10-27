@@ -89,6 +89,12 @@
   try { BLDMOD = await import("/static/dashboard/map-view3d-buildings.js"); }
   catch (e) { console.warn("map-view3d: buildings module failed to load; plain boxes used", e); }
 
+  // The terrain ring around the city and the evacuation-gateway portals; the
+  // view works without it (no ring, no gateways) if it can't load.
+  let SURMOD = null;
+  try { SURMOD = await import("/static/dashboard/map-view3d-surround.js"); }
+  catch (e) { console.warn("map-view3d: surround module failed to load; no terrain ring or gateways", e); }
+
   const MR = window.MapRender;
   const GLYPH_PX = 128;          // marker glyph canvas size
   const GLYPH_TEAM_R = 26;       // team glyph radius on that canvas (px)
@@ -147,6 +153,8 @@
       if (fx) fx.setNight(L.night);
     }
     const bld = BLDMOD ? BLDMOD.createBuildings(THREE, { scene, MR, maxAniso }) : null;
+    const surround = SURMOD ? SURMOD.createSurround(THREE, { scene }) : null;
+    let surroundHmax = 1.5;
     let autoReduced = null;     // effects level the auto-quality fallback dropped to, if it did
     const _v2 = new THREE.Vector2();
 
@@ -904,6 +912,7 @@
     // ---------- hit targets ----------
     function buildHits() {
       const hits = safezoneHits.slice();
+      if (surround) surround.hits().forEach((h) => hits.push(Object.assign({}, h, { rpx: Math.max(h.wr * pxPerWorldAt(h.wx, h.wy, h.wz), 14) + 2 })));   // low priority: teams / incidents win
       incidentHits.forEach((h) => {
         hits.push(Object.assign({}, h, { rpx: Math.max(h.wr * MARKER_BOOST * pxPerWorldAt(h.wx, h.wy, h.wz), 9) + 2 }));
       });
@@ -1074,6 +1083,7 @@
       applyShake(now);
       pulseU.uTime.value = now / 1000;
       updatePinLabels();
+      if (surround) surround.update(pxPerWorldAt);
       if (fx) {
         renderer.getDrawingBufferSize(_v2);
         fx.update(now / 1000, _v2.y / (2 * Math.tan(FOV * Math.PI / 360)));
@@ -1161,7 +1171,10 @@
         envSource = model.prep.source;
         if (bld) bld.build(model.prep.list); else buildBuildings(model.prep);
         detectCollapses(model.prep, o.frame ? o.frame.tick : null);
+        surroundHmax = model.prep.list.reduce((m, e) => Math.max(m, e.h), 1.5);   // the terrain ring is scaled to the tallest building
       }
+      // Terrain ring + evacuation gateways (rebuilt only when the terrain, seed or gateway list changes).
+      if (surround && terrainParsed) surround.sync({ terrain: terrainParsed, gateways: MR.gatewayList(o.env), seed: o.seed, maxHeight: surroundHmax, env: o.env });
       // Markers stand on the building as 3D draws it (collapsed ones are lower than in 2.5D).
       if (bld) {
         model.teams.forEach((mt) => { mt.foot = bld.footing(model.prep, mt.t.x, mt.t.y); mt.headZ = mt.foot + MR.ISO_TEAM_Z; });
@@ -1273,6 +1286,8 @@
       follow: followTeam, flyTo, cancelCamera,
       get fx() { return fx; },
       buildingStats() { return bld ? bld.stats : null; },
+      // Read-only: the terrain ring / gateway portals as drawn (for tests and tooling).
+      surroundState() { return surround ? surround.state() : null; },
       // What each incident pin looks like (ring kind, badges, height), for tests/tooling.
       setHoverIncident(id) { const v = id === undefined ? null : id; if (v !== hoverIncident) { hoverIncident = v; updatePinLabels(); kick(); } },
       escalationState() { const n = performance.now() / 1000; return { active: escList.filter((e) => n - e.start < ESC_SECS).length, total: escList.length, tethers: tetherCount }; },
