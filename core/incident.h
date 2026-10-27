@@ -92,7 +92,14 @@ int create_equipment_cache_incident(TeamState_t *team);
 int create_evacuee_offboard_incident(uint8_t safezone_id);
 void generate_evacuee_offboard_incidents(void);
 int begin_return_to_safe_zone(TeamState_t *team);
+/* Causal profile only (core/causal_actions.c). */
+int create_clear_road_task(int16_t x, int16_t y, uint16_t work);
+void incident_cancel_system_task(IncidentState_t *task);
 uint8_t find_nearest_safe_zone(const TeamState_t *team);
 void abandon_task_for_recovery(TeamState_t *team);
+/* Step 3.5 planner preemption: release the team's current task back to INC_OPEN (or clear its
+ * support slot) WITHOUT sending it home. Work already done on the task is kept (work_remaining
+ * is written only at creation and on a stage transition). Returns 1 if the team ends up free. */
+int planner_release_team_for_preempt(TeamState_t *team);
 
 #endif

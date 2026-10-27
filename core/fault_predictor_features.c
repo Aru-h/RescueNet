@@ -1,4 +1,6 @@
 #include "fault_predictor_features.h"
+#include "causal_actions.h"
+#include "fault_config.h"
 
 #include <string.h>
 
@@ -63,6 +65,10 @@ static uint8_t compute_moved_this_tick(
     remaining_path_cost = g_mission_execution_twin[team_id].remaining_path_cost;
 
     if(no_incident_assigned && remaining_path_cost == 0)
+        raw_moved = 1;
+
+    /* Causal stall-aware fix: a step held at a known partial-debris cell is not a movement stall. */
+    if(!raw_moved && fault_profile_causal_fix(CAUSAL_FIX_STALL) && causal_actions_debris_held_at(team_id, g_current_tick))
         raw_moved = 1;
 
     return raw_moved;

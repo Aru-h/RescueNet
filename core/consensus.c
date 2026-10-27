@@ -1,4 +1,6 @@
 #include "consensus.h"
+#include "causal_actions.h"
+#include "fault_config.h"
 
 #if VIRTUAL_BUS_ENABLED
 
@@ -559,12 +561,19 @@ static void mobility_observe(PeerObserver_t *o, const ConsensusBeacon_t *b)
         {
             uint8_t stalled = (uint8_t)(b->loc_x == o->last_x && b->loc_y == o->last_y);
             uint8_t mask = (uint8_t)((1u << WATCHDOG_STALL_WINDOW_TICKS) - 1u);
+            /* Causal stall-aware fix: peers share the road map, so a stall at a partial-debris cell is
+             * known to be a road delay. The beacon's own tick is g_current_tick minus its lateness. */
+            uint8_t excused = (uint8_t)(stalled && fault_profile_causal_fix(CAUSAL_FIX_STALL) &&
+                causal_actions_debris_held_at(b->team_id, g_current_tick - (uint16_t)(g_current_tick - b->seq)));
 
-            o->stall_history = (uint8_t)(((o->stall_history << 1) | stalled) & mask);
-            if(o->stall_samples < WATCHDOG_STALL_WINDOW_TICKS)
-                o->stall_samples++;
-            o->mob_sampled = 1u;
-            o->mob_stalled = stalled;
+            if(!excused)
+            {
+                o->stall_history = (uint8_t)(((o->stall_history << 1) | stalled) & mask);
+                if(o->stall_samples < WATCHDOG_STALL_WINDOW_TICKS)
+                    o->stall_samples++;
+                o->mob_sampled = 1u;
+                o->mob_stalled = stalled;
+            }
         }
         else if(b->status != STATUS_EN_ROUTE || leg_changed)
         {

@@ -1,0 +1,474 @@
+{
+ "model_label": "shipped model (trained on the old fault model - context only)",
+ "stress": {
+  "1": {
+   "levels": {
+    "F": {
+     "incidents": 44.3,
+     "victims_lost": 11.775
+    },
+    "P": {
+     "incidents": 44.45,
+     "victims_lost": 12.075
+    },
+    "PD": {
+     "incidents": 45.6,
+     "victims_lost": 12.05
+    },
+    "FA": {
+     "incidents": 44.475,
+     "victims_lost": 12.15
+    },
+    "PA": {
+     "incidents": 44.075,
+     "victims_lost": 11.525
+    }
+   },
+   "service": {
+    "F": {
+     "working": 0.38371999999999995,
+     "available": 0.0350825,
+     "faulted": 0.02638916666666667,
+     "returning": 0.07552083333333334,
+     "resting": 0.47928750000000003,
+     "in_service": 0.41880249999999997,
+     "teams_in_service": 4.188025
+    },
+    "P": {
+     "working": 0.38280083333333337,
+     "available": 0.03357,
+     "faulted": 0.022410833333333328,
+     "returning": 0.07593583333333333,
+     "resting": 0.4852825000000001,
+     "in_service": 0.41637083333333336,
+     "teams_in_service": 4.163708333333334
+    },
+    "PD": {
+     "working": 0.3863608333333334,
+     "available": 0.03826583333333334,
+     "faulted": 0.020365000000000008,
+     "returning": 0.07400249999999998,
+     "resting": 0.4810058333333333,
+     "in_service": 0.4246266666666667,
+     "teams_in_service": 4.246266666666667
+    },
+    "FA": {
+     "working": 0.38325000000000004,
+     "available": 0.037850000000000016,
+     "faulted": 0.012192499999999998,
+     "returning": 0.08697916666666668,
+     "resting": 0.47972833333333337,
+     "in_service": 0.42110000000000003,
+     "teams_in_service": 4.211
+    },
+    "PA": {
+     "working": 0.38188666666666676,
+     "available": 0.03415333333333333,
+     "faulted": 0.0223425,
+     "returning": 0.07583166666666664,
+     "resting": 0.48578583333333336,
+     "in_service": 0.4160400000000001,
+     "teams_in_service": 4.160400000000001
+    }
+   },
+   "diffs": {
+    "Detector headroom: PD minus P": {
+     "mean": 1.15,
+     "lo": 0.15,
+     "hi": 2.175,
+     "dev": 1.6,
+     "held": 0.7
+    },
+    "Planner minus fixed gates: P minus F": {
+     "mean": 0.15,
+     "lo": -0.975,
+     "hi": 1.25,
+     "dev": 0.0,
+     "held": 0.3
+    },
+    "Shipped-AI gain on fixed gates: FA minus F *": {
+     "mean": 0.175,
+     "lo": -0.9,
+     "hi": 1.25,
+     "dev": 0.45,
+     "held": -0.1
+    },
+    "Shipped-AI gain on planner: PA minus P *": {
+     "mean": -0.375,
+     "lo": -1.1,
+     "hi": 0.375,
+     "dev": 0.2,
+     "held": -0.95
+    }
+   }
+  },
+  "2": {
+   "levels": {
+    "F": {
+     "incidents": 42.525,
+     "victims_lost": 12.075
+    },
+    "P": {
+     "incidents": 42.325,
+     "victims_lost": 12.3
+    },
+    "PD": {
+     "incidents": 42.675,
+     "victims_lost": 12.375
+    },
+    "FA": {
+     "incidents": 42.075,
+     "victims_lost": 12.85
+    },
+    "PA": {
+     "incidents": 42.475,
+     "victims_lost": 12.45
+    }
+   },
+   "service": {
+    "F": {
+     "working": 0.34312083333333326,
+     "available": 0.032730833333333334,
+     "faulted": 0.041477499999999994,
+     "returning": 0.09157166666666668,
+     "resting": 0.4910991666666667,
+     "in_service": 0.3758516666666666,
+     "teams_in_service": 3.758516666666666
+    },
+    "P": {
+     "working": 0.3465975,
+     "available": 0.030081666666666663,
+     "faulted": 0.036255,
+     "returning": 0.08991083333333331,
+     "resting": 0.4971549999999999,
+     "in_service": 0.3766791666666667,
+     "teams_in_service": 3.7667916666666668
+    },
+    "PD": {
+     "working": 0.35081749999999995,
+     "available": 0.035472500000000004,
+     "faulted": 0.0348725,
+     "returning": 0.0884325,
+     "resting": 0.4904050000000001,
+     "in_service": 0.38628999999999997,
+     "teams_in_service": 3.8629
+    },
+    "FA": {
+     "working": 0.3566225,
+     "available": 0.0357375,
+     "faulted": 0.021540833333333335,
+     "returning": 0.10021833333333334,
+     "resting": 0.4858808333333332,
+     "in_service": 0.39236,
+     "teams_in_service": 3.9236
+    },
+    "PA": {
+     "working": 0.3508041666666667,
+     "available": 0.030484166666666656,
+     "faulted": 0.03531666666666668,
+     "returning": 0.08777416666666668,
+     "resting": 0.49562083333333345,
+     "in_service": 0.38128833333333334,
+     "teams_in_service": 3.8128833333333336
+    }
+   },
+   "diffs": {
+    "Detector headroom: PD minus P": {
+     "mean": 0.35,
+     "lo": -0.525,
+     "hi": 1.25,
+     "dev": 0.85,
+     "held": -0.15
+    },
+    "Planner minus fixed gates: P minus F": {
+     "mean": -0.2,
+     "lo": -1.225,
+     "hi": 0.8,
+     "dev": 0.3,
+     "held": -0.7
+    },
+    "Shipped-AI gain on fixed gates: FA minus F *": {
+     "mean": -0.45,
+     "lo": -1.65,
+     "hi": 0.7,
+     "dev": 0.45,
+     "held": -1.35
+    },
+    "Shipped-AI gain on planner: PA minus P *": {
+     "mean": 0.15,
+     "lo": -0.725,
+     "hi": 0.975,
+     "dev": -0.7,
+     "held": 1.0
+    }
+   }
+  },
+  "3.5": {
+   "levels": {
+    "F": {
+     "incidents": 39.825,
+     "victims_lost": 13.425
+    },
+    "P": {
+     "incidents": 40.225,
+     "victims_lost": 13.325
+    },
+    "PD": {
+     "incidents": 40.125,
+     "victims_lost": 13.025
+    },
+    "FA": {
+     "incidents": 40.275,
+     "victims_lost": 13.85
+    },
+    "PA": {
+     "incidents": 40.275,
+     "victims_lost": 14.25
+    }
+   },
+   "service": {
+    "F": {
+     "working": 0.2995608333333333,
+     "available": 0.028761666666666665,
+     "faulted": 0.05695916666666667,
+     "returning": 0.11087833333333333,
+     "resting": 0.5038400000000001,
+     "in_service": 0.32832249999999996,
+     "teams_in_service": 3.283225
+    },
+    "P": {
+     "working": 0.3048633333333333,
+     "available": 0.027456666666666664,
+     "faulted": 0.049650000000000014,
+     "returning": 0.10785666666666667,
+     "resting": 0.5101733333333333,
+     "in_service": 0.33232,
+     "teams_in_service": 3.3232
+    },
+    "PD": {
+     "working": 0.31067416666666675,
+     "available": 0.0331275,
+     "faulted": 0.04568083333333333,
+     "returning": 0.10580833333333335,
+     "resting": 0.5047091666666665,
+     "in_service": 0.3438016666666667,
+     "teams_in_service": 3.4380166666666674
+    },
+    "FA": {
+     "working": 0.31868166666666664,
+     "available": 0.03345666666666667,
+     "faulted": 0.028924166666666667,
+     "returning": 0.11847749999999997,
+     "resting": 0.50046,
+     "in_service": 0.35213833333333333,
+     "teams_in_service": 3.5213833333333335
+    },
+    "PA": {
+     "working": 0.30599583333333336,
+     "available": 0.02841999999999999,
+     "faulted": 0.050129999999999994,
+     "returning": 0.10600000000000002,
+     "resting": 0.5094541666666668,
+     "in_service": 0.33441583333333336,
+     "teams_in_service": 3.3441583333333336
+    }
+   },
+   "diffs": {
+    "Detector headroom: PD minus P": {
+     "mean": -0.1,
+     "lo": -1.225,
+     "hi": 1.025,
+     "dev": 0.5,
+     "held": -0.7
+    },
+    "Planner minus fixed gates: P minus F": {
+     "mean": 0.4,
+     "lo": -0.525,
+     "hi": 1.3,
+     "dev": -0.6,
+     "held": 1.4
+    },
+    "Shipped-AI gain on fixed gates: FA minus F *": {
+     "mean": 0.45,
+     "lo": -0.625,
+     "hi": 1.575,
+     "dev": -0.3,
+     "held": 1.2
+    },
+    "Shipped-AI gain on planner: PA minus P *": {
+     "mean": 0.05,
+     "lo": -0.925,
+     "hi": 1.05,
+     "dev": 0.85,
+     "held": -0.75
+    }
+   }
+  },
+  "7": {
+   "levels": {
+    "F": {
+     "incidents": 34.225,
+     "victims_lost": 14.95
+    },
+    "P": {
+     "incidents": 33.25,
+     "victims_lost": 15.4
+    },
+    "PD": {
+     "incidents": 35.0,
+     "victims_lost": 16.475
+    },
+    "FA": {
+     "incidents": 35.9,
+     "victims_lost": 16.125
+    },
+    "PA": {
+     "incidents": 34.475,
+     "victims_lost": 15.05
+    }
+   },
+   "service": {
+    "F": {
+     "working": 0.22980666666666666,
+     "available": 0.024477499999999992,
+     "faulted": 0.07357416666666665,
+     "returning": 0.14228083333333336,
+     "resting": 0.5298608333333333,
+     "in_service": 0.25428416666666664,
+     "teams_in_service": 2.5428416666666664
+    },
+    "P": {
+     "working": 0.23451000000000005,
+     "available": 0.0231225,
+     "faulted": 0.07076083333333333,
+     "returning": 0.1397133333333333,
+     "resting": 0.5318933333333334,
+     "in_service": 0.25763250000000004,
+     "teams_in_service": 2.5763250000000006
+    },
+    "PD": {
+     "working": 0.23664916666666666,
+     "available": 0.026312500000000006,
+     "faulted": 0.06719999999999998,
+     "returning": 0.1407183333333334,
+     "resting": 0.52912,
+     "in_service": 0.26296166666666665,
+     "teams_in_service": 2.6296166666666663
+    },
+    "FA": {
+     "working": 0.2519258333333334,
+     "available": 0.031098333333333332,
+     "faulted": 0.04285916666666667,
+     "returning": 0.14643833333333336,
+     "resting": 0.5276783333333334,
+     "in_service": 0.28302416666666674,
+     "teams_in_service": 2.8302416666666677
+    },
+    "PA": {
+     "working": 0.23894333333333337,
+     "available": 0.024062499999999994,
+     "faulted": 0.07090083333333334,
+     "returning": 0.13716583333333338,
+     "resting": 0.5289274999999998,
+     "in_service": 0.2630058333333334,
+     "teams_in_service": 2.630058333333334
+    }
+   },
+   "diffs": {
+    "Detector headroom: PD minus P": {
+     "mean": 1.75,
+     "lo": 0.475,
+     "hi": 2.975,
+     "dev": 1.55,
+     "held": 1.95
+    },
+    "Planner minus fixed gates: P minus F": {
+     "mean": -0.975,
+     "lo": -2.3,
+     "hi": 0.375,
+     "dev": -0.7,
+     "held": -1.25
+    },
+    "Shipped-AI gain on fixed gates: FA minus F *": {
+     "mean": 1.675,
+     "lo": 0.05,
+     "hi": 3.125,
+     "dev": 1.8,
+     "held": 1.55
+    },
+    "Shipped-AI gain on planner: PA minus P *": {
+     "mean": 1.225,
+     "lo": 0.2,
+     "hi": 2.25,
+     "dev": 1.75,
+     "held": 0.7
+    }
+   }
+  }
+ },
+ "reference_none": {
+  "incidents": 47.4,
+  "victims_lost": null,
+  "service": {
+   "working": 0.4350008333333332,
+   "available": 0.046463333333333336,
+   "faulted": 0.0,
+   "returning": 0.05294250000000002,
+   "resting": 0.46559333333333336,
+   "in_service": 0.4814641666666666,
+   "teams_in_service": 4.814641666666666
+  }
+ },
+ "headroom_vs_service": {
+  "stress": [
+   "1",
+   "2",
+   "3.5",
+   "7"
+  ],
+  "teams_in_service": [
+   4.163708333333334,
+   3.7667916666666668,
+   3.3232,
+   2.5763250000000006
+  ],
+  "headroom": [
+   1.15,
+   0.35,
+   -0.1,
+   1.75
+  ],
+  "rho_stress": 0.2,
+  "rho_service": -0.2
+ },
+ "exposure": {
+  "1": [
+   0.06892666666666666,
+   0.01253,
+   0.03516416666666666,
+   0.019453333333333333,
+   0.00044666666666666666
+  ],
+  "2": [
+   0.11839083333333333,
+   0.0122475,
+   0.0597175,
+   0.03594916666666667,
+   0.0005508333333333333
+  ],
+  "3.5": [
+   0.17327,
+   0.0124925,
+   0.09393583333333333,
+   0.05599916666666667,
+   0.00045666666666666664
+  ],
+  "7": [
+   0.2620225,
+   0.00983,
+   0.1479666666666667,
+   0.08692833333333333,
+   0.0003966666666666667
+  ]
+ }
+}

@@ -1,0 +1,26 @@
+--- a/core/simulation.c
++++ b/core/simulation.c
+@@ -1,3 +1,5 @@
++#include <stdio.h>
++#include <stdlib.h>
+ #include <stdint.h>
+ #include "debug.h"
+ #include "scoring.h"
+@@ -196,7 +198,16 @@
+     for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+     {
+         if(runs_teams)
+-            recovery_dispatch(team_id, action_now[team_id]);
++        {
++            static FILE *trf; static int tr_init;
++            if(!tr_init){ tr_init=1; const char *e=getenv("TRACE_CSV"); if(e) trf=fopen(e,"w"); if(trf) fprintf(trf,"tick,team,spec,pre_status,post_status,env,mob,com,res,mis,rec,reason,assigned,eq,stamina,rtb\n"); }
++            uint8_t pre=g_teams[team_id].status;
++            if(runs_teams) recovery_dispatch(team_id, action_now[team_id]);
++            if(trf){ const TeamState_t *tm=&g_teams[team_id]; RecoveryStatus_t rs=recovery_manager_get_status(team_id);
++              fprintf(trf,"%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%d,%d,%d,%u\n",(unsigned)g_current_tick,team_id,(unsigned)tm->specialization,pre,(unsigned)tm->status,
++                (unsigned)tm->fault_state.active[3],(unsigned)tm->fault_state.active[0],(unsigned)tm->fault_state.active[1],(unsigned)tm->fault_state.active[2],(unsigned)tm->fault_state.active[4],
++                (unsigned)action_now[team_id],(unsigned)rs.reason,(int)tm->assigned_task_slot,(int)tm->equipment_level,(int)tm->stamina,(unsigned)tm->heading_to_rest); }
++        }
+ 
+         /* Rest-cycle and status-transition tracing for the dashboard's
+          * Recovery/Rest tab (app.py's DIAG_STATUS_RE / DIAG_RESTED_RE).

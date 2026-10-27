@@ -1,4 +1,6 @@
+#include "headroom_probes.h"
 #include "allocator.h"
+#include "causal_actions.h"
 #include <stdio.h>
 #include <stdint.h>
 #include "simulation.h"
@@ -27,6 +29,43 @@ static void allocate_support_team(void);
  * that every team on the other side of the river could reach. That is
  * a property of the (team, task) pair, so it is checked here, where the
  * pair is chosen. */
+/* Step 3.6 exclusions: one (incident id, until tick) per team. */
+static uint32_t s_excl_id[NUM_TEAMS];
+static uint32_t s_excl_until[NUM_TEAMS];
+uint32_t g_diag_exclusions[3];
+
+void allocator_exclusion_reset(void)
+{
+    for(uint8_t t = 0; t < NUM_TEAMS; t++)
+    {
+        s_excl_id[t] = 0;
+        s_excl_until[t] = 0;
+    }
+    g_diag_exclusions[0] = g_diag_exclusions[1] = g_diag_exclusions[2] = 0;
+}
+
+void allocator_exclude_team(uint8_t team_id, uint32_t incident_id, uint32_t until_tick)
+{
+    if(team_id >= NUM_TEAMS)
+        return;
+    s_excl_id[team_id] = incident_id;
+    s_excl_until[team_id] = until_tick;
+}
+
+void allocator_exclusion_stage_complete(uint32_t incident_id)
+{
+    for(uint8_t t = 0; t < NUM_TEAMS; t++)
+        if(s_excl_until[t] == ALLOCATOR_EXCLUDE_UNTIL_STAGE && s_excl_id[t] == incident_id)
+            s_excl_until[t] = 0;
+}
+
+static uint8_t team_excluded_from(const TeamState_t *team, const IncidentState_t *incident)
+{
+    return (uint8_t)(s_excl_until[team->team_id] != 0u && s_excl_id[team->team_id] == incident->incident_id &&
+                     (s_excl_until[team->team_id] == ALLOCATOR_EXCLUDE_UNTIL_STAGE ||
+                      g_current_tick < s_excl_until[team->team_id]));
+}
+
 static uint8_t team_has_route_to_task(const TeamState_t *team, const IncidentState_t *task)
 {
     return find_path_cost(team->loc_x, team->loc_y, task->loc_x, task->loc_y) != UINT16_MAX;
@@ -107,6 +146,8 @@ void allocate_all_incidents(void)
     }
 
     cbba_run();
+    if(g_probe.central_alloc)
+        probe_central_assign();   /* Step 5 DQ1 */
 
     /* Generates open UNSEARCHED_SECTOR system tasks for stale districts
      * before the competitive system-task loop below runs, so a
@@ -234,6 +275,16 @@ bool team_can_accept_incident(const TeamState_t *team, const IncidentState_t *in
 {
     if(team == NULL || incident == NULL)
         return false;
+
+    if(probe_team_offline(team->team_id) || probe_team_busy(team->team_id))   /* Step 5 K2 out of service, RR2a committed */
+        return false;
+
+    /* Causal ABORT / REALLOCATION (Step 3.6): the team gave this incident up. */
+    if(team_excluded_from(team, incident))
+    {
+        g_diag_exclusions[2]++;
+        return false;
+    }
 
     /* Fog-of-war: an incident nobody's found yet is invisible to CBBA
      * entirely, not just deprioritized. System tasks (RETURN_TO_SAFE_ZONE,
@@ -429,7 +480,7 @@ static void allocate_support_team(void)
     for(uint8_t i = 0; i < NUM_TEAMS; i++)
     {
         if(g_teams[i].specialization == SPEC_SUPPORT &&
-           g_teams[i].status == STATUS_AVAILABLE)
+           g_teams[i].status == STATUS_AVAILABLE && !probe_team_offline(i) && !probe_team_busy(i))
         {
             support = &g_teams[i];
             break;
@@ -452,7 +503,8 @@ static void allocate_support_team(void)
             continue;
         if(incident->support_team != NO_ASSIGNMENT)
             continue;
-        if(!incident_needs_support(incident))
+        if(!incident_needs_support(incident) &&
+           !(fault_profile_causal_action_enabled(CAUSAL_ACTION_REINFORCE_INCIDENT) && causal_actions_reinforce_wanted(i)))
             continue;
         /* L8: same pair check as select_best_team(). Without it the
          * support team was re-sent every tick to an incident on the far
@@ -480,4 +532,44 @@ static void allocate_support_team(void)
 
     /* Keep the execution twin consistent with the new assignment */
     cbba_sync_mission_execution_twin();
+}
+
+uint8_t allocator_assign_system_task(uint8_t team_id, uint8_t slot)
+{
+    TeamState_t *team;
+    IncidentState_t *task;
+
+    if(team_id >= NUM_TEAMS || slot >= NUM_SYSTEM_TASKS || probe_team_offline(team_id))
+        return 0;
+    team = &g_teams[team_id];
+    task = &g_system_tasks[slot];
+    if(!task->slot_occupied || task->status != INC_OPEN || team->assigned_task_pool != TASK_POOL_NONE)
+        return 0;
+    team->status = STATUS_EN_ROUTE;
+    team->assigned_task_pool = TASK_POOL_SYSTEM;
+    team->assigned_task_slot = slot;
+    task->status = INC_ASSIGNED;
+    task->assigned_team = team_id;
+    cbba_sync_mission_execution_twin();
+    snapshot_record(g_sim_step_tick, EVENT_TEAM_ASSIGNED, team_id);
+    return 1;
+}
+
+uint8_t allocator_assign_support(uint8_t team_id, uint8_t incident_slot)
+{
+    TeamState_t *team;
+    IncidentState_t *incident;
+
+    if(team_id >= NUM_TEAMS || incident_slot >= NUM_INCIDENTS || probe_team_offline(team_id))
+        return 0;
+    team = &g_teams[team_id];
+    incident = &g_incidents[incident_slot];
+    if(!incident->slot_occupied || incident->support_team != NO_ASSIGNMENT || team->assigned_task_pool != TASK_POOL_NONE)
+        return 0;
+    incident->support_team = team_id;
+    team->assigned_task_pool = TASK_POOL_INCIDENT;
+    team->assigned_task_slot = incident_slot;
+    team->status = STATUS_EN_ROUTE;
+    cbba_sync_mission_execution_twin();
+    return 1;
 }

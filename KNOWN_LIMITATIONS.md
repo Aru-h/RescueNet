@@ -74,16 +74,51 @@ accepted code-audit findings, implementation notes) is in
     another team usually finishes it later. This applies to every assignment,
     including manual overrides.
 
+13. **ABORT_MISSION and RETURN_TO_SAFE_ZONE do the same thing.** For a team that
+    is working, both release its task and send it to a safe zone
+    (`recovery_dispatch()`, `core/recovery_manager.c`, both call
+    `abandon_task_for_recovery()`). ABORT adds no quarantine of the task and no
+    different team state, so the recovery ladder has two rungs that act
+    identically. Present in every fault profile and in the submitted build
+    (`submission/single-board-dk`). Under the causal profile with the
+    `semantics` fix (`--causal-fixes`, on by default there) ABORT instead
+    releases the task, excludes the team from that incident until its stage
+    completes and leaves the team where it is; the default profiles and the
+    submitted build keep the old behaviour.
+14. **REQUEST_TASK_REALLOCATION never releases the team's task.** It only re-runs
+    the allocator, which already runs every tick and only assigns open work to
+    teams with nothing to do, so the faulted team keeps its task and the action
+    does nothing on a laptop (on a board it adds one redundant allocation
+    round). Present in every fault profile and in the submitted build. Under the
+    causal profile with the `semantics` fix it releases the task (progress kept)
+    and excludes the team from it for 30 ticks so another team takes it.
+    Details, with file and line: `docs/RECOVERY_ACTION_SEMANTICS.md`.
+
+15. **Field repair is implemented but almost never completes.** Under the causal profile
+    (`--causal-persist=on`, the default) LOCAL_RECOVERY on a working team starts a field repair of 34-102 ticks, but the
+    rule gates escalate to RETURN_TO_SAFE_ZONE within a few ticks and cancel it (at stress 7: 134.7 repairs started per
+    seed, 0.2 completed). Step 3.7 tested a gate change that holds a repair in progress (opt-in token
+    `--causal-fixes=...,hold-repair`): mobility repairs then complete (25.6 per seed at stress 7) but the fixed gates resolve
+    3.12 fewer incidents and lose 5.05 more victims per seed at stress 7, so it is not part of the default world.
+    Resource repairs still almost never complete because equipment runs out during the hold, and a hold does not stop the
+    working costs (`docs/HOLD_REPAIR.md`, `docs/PERSISTENT_FAULTS_RESULTS.md`).
+16. **The persistent-fault parameters are derived or assumed, not measured.** The 10.8 h natural-recovery tail and the
+    0.68 h field-repair time come from my derivation from a secondary source's availability figures; the 2/3
+    field-repair success rate and the 6-20 h MTBF come from search summaries of Carlson and Murphy (2005). None were
+    checked against the papers. The base-repair dwell, escalation rate, exclusion windows and forecast horizon are
+    assumptions (`docs/PERSISTENT_FAULTS_PROPOSAL.md` sections 3 and 9.1). The evaluation stress of 7 was never derived
+    from data; stress 2 matches the literature MTBF.
+
 ## D. Dashboard
 
-13. **Manual overrides work only in simulation mode.** Dragging a team onto an
+17. **Manual overrides work only in simulation mode.** Dragging a team onto an
     incident is not available in replay mode or when the dashboard is
     connected to the board. After an override is committed, normal rules
     (such as item 12) still apply.
-14. **Replay take-over needs a matching simulator.** A recording can be taken
+18. **Replay take-over needs a matching simulator.** A recording can be taken
     over only by the same simulator build that made it (same code, AI on or
     off); otherwise the dashboard refuses rather than show a diverging run.
-15. **Tested on macOS and Linux.** Windows is not tested. Absolute results
+19. **Tested on macOS and Linux.** Windows is not tested. Absolute results
     differ slightly between platforms for the same seed.
 16. **The bundled demo recording does not replay exactly on Linux.** The
     simulator is deterministic on a given platform, but not across platforms.

@@ -569,7 +569,7 @@ RECOVERY_PREDICTOR_STRESS_TEST_BIN = build/recovery_predictor_stress_test
 check-recovery-predictor-stress:
 	@mkdir -p build
 	@echo "  CC      $(TOOLS_DIR)/recovery_predictor_stress_test.c"
-	@$(CC) $(CFLAGS) -I$(CORE_DIR) \
+	@$(CC) $(CFLAGS) -I$(CORE_DIR) -I$(TOOLS_DIR) \
 		-o $(RECOVERY_PREDICTOR_STRESS_TEST_BIN) \
 		$(TOOLS_DIR)/recovery_predictor_stress_test.c \
 		$(TOOLS_DIR)/recovery_predictor_stress_test_stubs.c \
@@ -587,7 +587,7 @@ REALLOC_GATE_TEST_BIN = build/realloc_gate_test
 check-realloc-gate:
 	@mkdir -p build
 	@echo "  CC      $(TOOLS_DIR)/realloc_gate_test.c"
-	@$(CC) $(CFLAGS) -I$(CORE_DIR) \
+	@$(CC) $(CFLAGS) -I$(CORE_DIR) -I$(TOOLS_DIR) \
 		-o $(REALLOC_GATE_TEST_BIN) \
 		$(TOOLS_DIR)/realloc_gate_test.c \
 		$(TOOLS_DIR)/realloc_gate_test_stubs.c \
@@ -1300,3 +1300,145 @@ check-state-hash: $(TARGET)
 		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LAPTOP_DIR)/mission_feed.c $(LAPTOP_DIR)/mission_mirror.c $(CORE_SOURCES) $(LDFLAGS)
 	@./build/state_hash_selftest
 	@echo "check-state-hash: C1 md5 unchanged with --state-hash on; same seed -> identical hashes; different seed -> different hashes; incident hash slot-order independent"
+
+# Evaluation stress multiplier for the causal profile (--fault-stress). 1 is
+# realistic field rate; 7 is the value recommended for evaluation runs (see
+# docs/CAUSAL_FAULT_MODEL.md). Always recorded in the tool's output.
+CAUSAL_STRESS ?= 7
+
+# Run-level sanity bound on --fault-profile=causal: per-class and per-team
+# fault exposure, episode chattering and the maximum-duration backstops must
+# stay within laptop/tools/fault_exposure.py's bounds over 8 seeds x 3000
+# ticks (AI off) at CAUSAL_STRESS with the recovery actions ON (the worst case for chattering). Catches a fault -> drain -> fault loop
+# pinning teams in a faulted state. Bounds are assumed guard rails, not
+# calibrated values.
+check-causal-fault-exposure: $(TARGET)
+	@$(PYTHON) $(TOOLS_DIR)/fault_exposure.py --tron ./$(TARGET) --profile causal --stress $(CAUSAL_STRESS) --extra-arg=--causal-actions=on --extra-arg=--causal-persist=off --seeds 1001-1008 --ticks 3000 --check
+	@$(PYTHON) $(TOOLS_DIR)/fault_exposure.py --tron ./$(TARGET) --profile causal --stress 2 --seeds 1001-1008 --ticks 3000 --check
+	@$(PYTHON) $(TOOLS_DIR)/fault_exposure.py --tron ./$(TARGET) --profile causal --stress $(CAUSAL_STRESS) --seeds 1001-1008 --ticks 3000 --check
+
+# Causal profile plumbing: an unknown --fault-profile is an error, --fault-stress
+# is rejected for other profiles, and a causal run is reproducible - the main
+# dataset and the causal-only ground-truth sidecar are byte-identical across two runs.
+CAUSAL_DET_DIR = build/causal-determinism
+check-causal-profile: $(TARGET)
+	@rm -rf $(CAUSAL_DET_DIR) && mkdir -p $(CAUSAL_DET_DIR)/a $(CAUSAL_DET_DIR)/b
+	@if ./$(TARGET) 1 1 10 --fault-profile=bogus >/dev/null 2>&1; then echo "FAIL: unknown --fault-profile accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --fault-stress=2 >/dev/null 2>&1; then echo "FAIL: --fault-stress accepted without causal"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-actions=off >/dev/null 2>&1; then echo "FAIL: --causal-actions accepted without causal"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-actions=bogus >/dev/null 2>&1; then echo "FAIL: unknown --causal-actions value accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-roads=bogus >/dev/null 2>&1; then echo "FAIL: unknown --causal-roads value accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-roads=off >/dev/null 2>&1; then echo "FAIL: --causal-roads accepted without causal"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-env-duration=60-150 >/dev/null 2>&1; then echo "FAIL: Step 3 env override accepted with consequential roads on"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-fixes=bogus >/dev/null 2>&1; then echo "FAIL: unknown --causal-fixes value accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-fixes=off >/dev/null 2>&1; then echo "FAIL: --causal-fixes accepted without causal"; exit 1; fi
+	@cd $(CAUSAL_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-actions=on >/dev/null 2>&1
+	@cd $(CAUSAL_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-actions=on >/dev/null 2>&1
+	@cmp $(CAUSAL_DET_DIR)/a/tron_snapshot_dataset.csv $(CAUSAL_DET_DIR)/b/tron_snapshot_dataset.csv
+	@cmp $(CAUSAL_DET_DIR)/a/tron_causal_truth.csv $(CAUSAL_DET_DIR)/b/tron_causal_truth.csv
+	@echo "check-causal-profile: unknown profile rejected, causal-only flags gated, causal dataset + truth sidecar reproducible (recovery actions on)"
+
+.PHONY: check-causal-fault-exposure check-causal-profile check-causal-roads-connectivity check-causal-fixes check-causal-env-no-rtb check-recovery-planner check-causal-persistence
+
+# Consequential roads (Step 3.1): over full causal runs, no passable cell may
+# be cut off from every safe zone by a full road blockage (the connectivity
+# audit in core/fault_injector.c runs every tick and counts violations), and
+# the runs must actually exercise the guard (some blockage was created or
+# refused), so a green result cannot mean "never blocked anything".
+check-causal-roads-connectivity: $(TARGET)
+	@v=0; ex=0; for s in 1001 1002 1003 1004 1005 1006 1007 1008; do \
+		out=$$(./$(TARGET) $$s 1 3000 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --diag 2>&1 >/dev/null | grep '^\[DIAG ROADS\]'); \
+		viol=$$(echo "$$out" | sed -n 's/.*audit_violations=\([0-9]*\).*/\1/p'); \
+		blk=$$(echo "$$out" | sed -n 's/.* blocked=\([0-9]*\) .*/\1/p'); \
+		dg=$$(echo "$$out" | sed -n 's/.*block_downgraded=\([0-9]*\).*/\1/p'); \
+		ticks=$$(echo "$$out" | sed -n 's/.*audit_ticks=\([0-9]*\).*/\1/p'); \
+		echo "seed $$s: blocked=$$blk downgraded=$$dg audit_ticks=$$ticks audit_violations=$$viol"; \
+		[ "$$ticks" -gt 0 ] || { echo "FAIL: audit never ran"; exit 1; }; \
+		v=$$((v + viol)); ex=$$((ex + blk + dg)); \
+	done; \
+	[ $$v -eq 0 ] || { echo "FAIL: $$v cells cut off from every safe zone"; exit 1; }; \
+	[ $$ex -gt 0 ] || { echo "FAIL: no blockage was created or refused, the guard was never exercised"; exit 1; }; \
+	echo "check-causal-roads-connectivity: 0 cells cut off over 8 full causal runs ($$ex blockages created or refused)"
+
+# Step 3.2 plumbing fixes (causal profile only). (1) The dataset's environment
+# label is exactly the sidecar's route_touch (and, with --causal-fixes=off, the
+# old per-team flag env_hold); the two differ, so the check is not vacuous.
+check-causal-fixes: $(TARGET)
+	@rm -rf build/causal-fixes && mkdir -p build/causal-fixes/new build/causal-fixes/old
+	@cd build/causal-fixes/new && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-actions=on >/dev/null 2>&1
+	@cd build/causal-fixes/old && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-actions=on --causal-fixes=off >/dev/null 2>&1
+	@python3 laptop/tools/check_causal_label.py build/causal-fixes/new/tron_snapshot_dataset.csv build/causal-fixes/new/tron_causal_truth.csv label
+	@python3 laptop/tools/check_causal_label.py build/causal-fixes/old/tron_snapshot_dataset.csv build/causal-fixes/old/tron_causal_truth.csv hold
+	@echo "check-causal-fixes: environment label == route_touch with the fixes on, == the old per-team flag with --causal-fixes=off"
+
+# Step 3.2 fix 2: a perfect environment detector changes nothing (actions off).
+check-causal-env-no-rtb: $(TARGET)
+	@bash laptop/tools/check_env_no_rtb.sh
+
+# Step 3.5 cost-based recovery planner (--recovery=utility, causal only). Flags are gated, an explicit
+# --recovery=fixed is the default behaviour byte for byte, a utility run is reproducible (dataset, sidecar and
+# decision log), and the planner's invariants hold on its own decision log: the Simplex floor is never undercut,
+# approvals are deny-by-default, a preempted team is not preempted again within the cooldown.
+PLANNER_DET_DIR = build/planner-determinism
+check-recovery-planner: $(TARGET)
+	@rm -rf $(PLANNER_DET_DIR) && mkdir -p $(PLANNER_DET_DIR)/a $(PLANNER_DET_DIR)/b $(PLANNER_DET_DIR)/f $(PLANNER_DET_DIR)/d $(PLANNER_DET_DIR)/u
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --recovery=bogus >/dev/null 2>&1; then echo "FAIL: unknown --recovery accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --recovery=utility >/dev/null 2>&1; then echo "FAIL: --recovery=utility accepted without causal"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --planner-log >/dev/null 2>&1; then echo "FAIL: --planner* accepted without --recovery=utility"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --recovery=utility --planner-approval=bogus >/dev/null 2>&1; then echo "FAIL: unknown --planner-approval accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --recovery=utility --planner=bogus >/dev/null 2>&1; then echo "FAIL: unknown --planner layer accepted"; exit 1; fi
+	@cd $(PLANNER_DET_DIR)/f && ../../../$(TARGET) 1003 1 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) >/dev/null 2>&1
+	@cd $(PLANNER_DET_DIR)/d && ../../../$(TARGET) 1003 1 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --recovery=fixed >/dev/null 2>&1
+	@cmp $(PLANNER_DET_DIR)/f/tron_snapshot_dataset.csv $(PLANNER_DET_DIR)/d/tron_snapshot_dataset.csv
+	@cmp $(PLANNER_DET_DIR)/f/tron_causal_truth.csv $(PLANNER_DET_DIR)/d/tron_causal_truth.csv
+	@cd $(PLANNER_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --recovery=utility --planner-log >/dev/null 2>&1
+	@cd $(PLANNER_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --recovery=utility --planner-log >/dev/null 2>&1
+	@cmp $(PLANNER_DET_DIR)/a/tron_snapshot_dataset.csv $(PLANNER_DET_DIR)/b/tron_snapshot_dataset.csv
+	@cmp $(PLANNER_DET_DIR)/a/tron_causal_truth.csv $(PLANNER_DET_DIR)/b/tron_causal_truth.csv
+	@cmp $(PLANNER_DET_DIR)/a/tron_planner_log.csv $(PLANNER_DET_DIR)/b/tron_planner_log.csv
+	@python3 laptop/tools/check_planner_log.py $(PLANNER_DET_DIR)/a/tron_planner_log.csv deny
+	@cd $(PLANNER_DET_DIR)/u && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --recovery=utility --planner-approval=auto --planner-p=oracle --planner-log >/dev/null 2>&1
+	@python3 laptop/tools/check_planner_log.py $(PLANNER_DET_DIR)/u/tron_planner_log.csv auto
+	@python3 laptop/tools/check_planner_log.py --selftest
+	@echo "check-recovery-planner: flags gated, --recovery=fixed == default, utility run reproducible, floor / approval / cooldown invariants hold"
+
+# Step 3.7: the rule gates hold a field repair (docs/HOLD_REPAIR.md).
+HOLD_DET_DIR = build/hold-repair
+HOLD_FIXES = label,rtb,cost,stall,semantics
+check-hold-repair: $(TARGET)
+	@rm -rf $(HOLD_DET_DIR) && mkdir -p $(HOLD_DET_DIR)/a $(HOLD_DET_DIR)/b $(HOLD_DET_DIR)/off $(HOLD_DET_DIR)/def
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-persist=timer --causal-fixes=$(HOLD_FIXES),hold-repair >/dev/null 2>&1; then echo "FAIL: hold-repair accepted without --causal-persist=on"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-fixes=$(HOLD_FIXES),hold-repair >/dev/null 2>&1; then echo "FAIL: hold-repair accepted without the causal profile"; exit 1; fi
+	@cd $(HOLD_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-fixes=$(HOLD_FIXES),hold-repair --diag >/dev/null 2>diag.log
+	@cd $(HOLD_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-fixes=$(HOLD_FIXES),hold-repair >/dev/null 2>&1
+	@cmp $(HOLD_DET_DIR)/a/tron_snapshot_dataset.csv $(HOLD_DET_DIR)/b/tron_snapshot_dataset.csv
+	@cmp $(HOLD_DET_DIR)/a/tron_causal_truth.csv $(HOLD_DET_DIR)/b/tron_causal_truth.csv
+	@cd $(HOLD_DET_DIR)/off && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-fixes=$(HOLD_FIXES) >/dev/null 2>&1
+	@cd $(HOLD_DET_DIR)/def && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) >/dev/null 2>&1
+	@cmp $(HOLD_DET_DIR)/off/tron_snapshot_dataset.csv $(HOLD_DET_DIR)/def/tron_snapshot_dataset.csv
+	@cmp $(HOLD_DET_DIR)/off/tron_causal_truth.csv $(HOLD_DET_DIR)/def/tron_causal_truth.csv
+	@python3 laptop/tools/check_hold_repair.py $(HOLD_DET_DIR)/a/diag.log
+	@echo "check-hold-repair: token gated, runs reproducible, the default world is unchanged without the token, repair accounting consistent"
+
+# Step 3.6: persistent faults, field repair, action semantics, hazard-oracle forecast.
+PERSIST_DET_DIR = build/causal-persistence
+check-causal-persistence: $(TARGET)
+	@rm -rf $(PERSIST_DET_DIR) && mkdir -p $(PERSIST_DET_DIR)/a $(PERSIST_DET_DIR)/b $(PERSIST_DET_DIR)/off $(SELFTEST_BIN_DIR)
+	@if ./$(TARGET) 1 1 10 --fault-profile=combined --causal-persist=on >/dev/null 2>&1; then echo "FAIL: --causal-persist accepted without causal"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --causal-persist=bogus >/dev/null 2>&1; then echo "FAIL: unknown --causal-persist accepted"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --recovery=utility --planner-prevent=both >/dev/null 2>&1; then echo "FAIL: --planner-prevent accepted without a forecast source"; exit 1; fi
+	@if ./$(TARGET) 1 1 10 --fault-profile=causal --recovery=utility --planner-p=hazard --causal-persist=off >/dev/null 2>&1; then echo "FAIL: hazard oracle accepted without persistence"; exit 1; fi
+	@cd $(PERSIST_DET_DIR)/a && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --recovery=utility --planner-p=both --planner-prevent=both --planner-log >/dev/null 2>&1
+	@cd $(PERSIST_DET_DIR)/b && ../../../$(TARGET) 1003 2 1500 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --recovery=utility --planner-p=both --planner-prevent=both --planner-log >/dev/null 2>&1
+	@cmp $(PERSIST_DET_DIR)/a/tron_snapshot_dataset.csv $(PERSIST_DET_DIR)/b/tron_snapshot_dataset.csv
+	@cmp $(PERSIST_DET_DIR)/a/tron_causal_truth.csv $(PERSIST_DET_DIR)/b/tron_causal_truth.csv
+	@cmp $(PERSIST_DET_DIR)/a/tron_planner_log.csv $(PERSIST_DET_DIR)/b/tron_planner_log.csv
+	@head -1 $(PERSIST_DET_DIR)/a/tron_causal_truth.csv | grep -q "field_state,escalated_mobility,escalated_resource,risk_mobility_h,risk_resource_h" || { echo "FAIL: persistence sidecar columns missing"; exit 1; }
+	@cd $(PERSIST_DET_DIR)/off && ../../../$(TARGET) 1003 1 600 --fault-profile=causal --fault-stress=$(CAUSAL_STRESS) --causal-persist=off >/dev/null 2>&1
+	@if head -1 $(PERSIST_DET_DIR)/off/tron_causal_truth.csv | grep -q field_state; then echo "FAIL: --causal-persist=off wrote persistence columns"; exit 1; fi
+	@python3 laptop/tools/check_causal_persist.py $(PERSIST_DET_DIR)/a/tron_causal_truth.csv $(PERSIST_DET_DIR)/a/tron_snapshot_dataset.csv
+	@$(CC) $(SELFTEST_CFLAGS) -DCOMMS_TRANSPORT_TEAMS_PER_BOARD=NUM_TEAMS -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=1 \
+		-o $(SELFTEST_BIN_DIR)/causal_persist_selftest $(TOOLS_DIR)/causal_persist_selftest.c $(CORE_SOURCES) \
+		$(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LAPTOP_DIR)/mission_feed.c $(LAPTOP_DIR)/mission_mirror.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./causal_persist_selftest
+	@echo "check-causal-persistence: flags gated, runs reproducible, sidecar columns only with persistence, action semantics and field-repair hold verified"

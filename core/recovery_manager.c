@@ -1,4 +1,5 @@
 #include "recovery_manager.h"
+#include "headroom_probes.h"
 
 #include <limits.h>
 #include <string.h>
@@ -9,11 +10,15 @@
 #include "environment.h"
 #include "fault_buffer.h"
 #include "fault_predictor.h"
+#include "causal_actions.h"
+#include "fault_injector.h"
+#include "mission_state_utils.h"
 #include "feature_pack.h"
 #include "incident.h"
 #include "mission_execution_twin.h"
 #include "mission_link.h"
 #include "recovery_manager_config.h"
+#include "recovery_planner.h"
 #include "watchdog.h"
 #include "consensus.h"
 
@@ -67,6 +72,14 @@ typedef RecoverySignal_t (*RecoveryEvaluatorFn)(
 
 static RecoveryManagerTeamState_t g_recovery_state[NUM_TEAMS];
 static RecoveryDispatchState_t g_recovery_dispatch_state[NUM_TEAMS];
+
+/* Step 3.5 (--recovery=utility): the rule-based evaluators' own verdict, with their own hysteresis, kept
+ * apart from the planner-owned g_recovery_state. It is the Simplex floor the planner may not go below. */
+static RecoveryManagerTeamState_t g_rule_state[NUM_TEAMS];
+/* Last AI class scores (mobility, communication, resource) and streak flag, written by
+ * evaluate_fault_predictor() for the planner; read-only side channel, no effect in any other mode. */
+static float g_planner_ai[NUM_TEAMS][3];
+static uint8_t g_planner_streak_ok[NUM_TEAMS];
 static RecoveryMetricsTeamState_t g_recovery_metrics_state[NUM_TEAMS];
 /* Per-evaluator verdicts for the tick just computed by recovery_manager_
  * step() - see recovery_manager.h's recovery_manager_get_evaluator_verdict()
@@ -1328,6 +1341,32 @@ static RecoverySignal_t evaluate_fault_predictor(
 
         for(uint8_t fault_class = 0u; fault_class < NUM_OPERATIONAL_FAULT_CLASSES; fault_class++)
         {
+            /* Causal profile, Step 3.2: going home does not fix a road, so a
+             * flagged environment class never drives a team-level reaction
+             * (RETURN_TO_SAFE_ZONE, LOCAL_RECOVERY, reallocation). It maps to
+             * routing responses only - REROUTE and a CLEAR_ROAD request when
+             * those actions are enabled (causal_actions_detector_flag), and
+             * otherwise to "wait" (CONTINUE_MONITORING): the team crosses or
+             * stalls at the debris under the movement rules. */
+            if(fault_class == FAULT_CLASS_ENVIRONMENT && fault_profile_causal_fix(CAUSAL_FIX_ENV_NO_RTB))
+            {
+                if(scores.score[fault_class] >= class_threshold[fault_class] && fault_profile_causal_actions_on())
+                    causal_actions_detector_flag(team->team_id, (OperationalFaultClass_t)fault_class);
+                continue;
+            }
+
+            /* Causal profile: a flagged environment/mission class drives its
+             * own map/incident action (reroute, clear road, reinforce)
+             * instead of a team-level action, which is what made these
+             * classes harmful to enable (AI_EVALUATION_BRIEF C13). */
+            if(fault_profile_causal_actions_on() &&
+               (fault_class == FAULT_CLASS_ENVIRONMENT || fault_class == FAULT_CLASS_MISSION))
+            {
+                if(scores.score[fault_class] >= class_threshold[fault_class])
+                    causal_actions_detector_flag(team->team_id, (OperationalFaultClass_t)fault_class);
+                continue;
+            }
+
             if(scores.score[fault_class] >= class_threshold[fault_class] &&
                scores.score[fault_class] > best_score)
             {
@@ -1344,6 +1383,9 @@ static RecoverySignal_t evaluate_fault_predictor(
        corroboration check further down. */
     sustained = predictor_persistence_streak_update(team->team_id, confidence)
                     >= FAULT_PERSISTENCE_TRIP_TICKS;
+    for(uint8_t f = 0; f < 3u; f++)
+        g_planner_ai[team->team_id][f] = scores.score[f];
+    g_planner_streak_ok[team->team_id] = sustained;
 
     /* With FAULT_MODEL_LOADED=0 (the default build), fault_predictor_run()
      * returns all-zero scores, so confidence is always <= 0 here and this
@@ -1609,6 +1651,9 @@ void recovery_manager_init(void)
         g_recovery_state[team_id].last_assigned_task_slot = g_teams[team_id].assigned_task_slot;
         g_recovery_state[team_id].last_status = g_teams[team_id].status;
         g_recovery_dispatch_state[team_id] = (RecoveryDispatchState_t){0};
+        g_rule_state[team_id] = g_recovery_state[team_id];
+        g_planner_ai[team_id][0] = g_planner_ai[team_id][1] = g_planner_ai[team_id][2] = 0.0f;
+        g_planner_streak_ok[team_id] = 0u;
 
         for(uint8_t slot = 0; slot < RECOVERY_MANAGER_EVAL_SLOT_COUNT; slot++)
         {
@@ -1653,6 +1698,78 @@ static RecoverySignal_t recovery_consensus_cap(RecoverySignal_t signal,
 }
 #endif
 
+/* Step 3.7 hold-repair (docs/HOLD_REPAIR.md, causal profile with field repair only). While a mobility or resource
+ * field repair runs on a team, the rule-based recommendation is capped at LOCAL_RECOVERY unless something is
+ * observably worse. Worse = the stamina evaluator asks for RETURN_TO_SAFE_ZONE or stronger, or the other repairable
+ * class's evaluator does (equipment for a mobility repair, mobility for a resource repair). Observable signals only:
+ * no injector ground truth is read here. Returns the trigger (0 none, 1 stamina, 2 other class). */
+static uint8_t recovery_hold_trigger(uint8_t kind, const RecoverySignal_t *signals)
+{
+    if(signals[RM_EVAL_IDX_STAMINA].action >= RECOVERY_ACTION_RETURN_TO_SAFE_ZONE)
+        return 1u;
+    if(kind == 1u && signals[RM_EVAL_IDX_EQUIPMENT].action >= RECOVERY_ACTION_RETURN_TO_SAFE_ZONE)
+        return 2u;
+    if(kind == 2u && signals[RM_EVAL_IDX_MOBILITY].action >= RECOVERY_ACTION_RETURN_TO_SAFE_ZONE)
+        return 2u;
+    return 0u;
+}
+
+/* Applies the cap to st (g_recovery_state in fixed-gate mode, g_rule_state in planner mode). count_stats is 0 for
+ * the second application on the same team and tick. Returns the trigger that lifted the cap (0 when not lifted). */
+static uint8_t recovery_hold_cap(uint8_t team_id, RecoveryManagerTeamState_t *st,
+                                 const RecoverySignal_t *signals, uint8_t count_stats)
+{
+    uint8_t kind;
+    uint8_t trig;
+
+    if(!fault_profile_causal_fix(CAUSAL_FIX_HOLD_REPAIR))
+        return 0u;
+    kind = fault_injector_causal_field_state(team_id);
+    if(kind != 1u && kind != 2u)
+        return 0u;
+    trig = recovery_hold_trigger(kind, signals);
+    if(count_stats)
+        fault_injector_causal_hold_note(team_id, trig);
+    if(st->status.recommendation <= RECOVERY_ACTION_LOCAL_RECOVERY)
+        return trig;
+    if(trig != 0u)
+    {
+        if(count_stats)
+            fault_injector_causal_hold_count(1u, (uint8_t)(trig - 1u));
+        return trig;
+    }
+    if(count_stats)
+    {
+        switch(st->status.recommendation)
+        {
+            case RECOVERY_ACTION_RETURN_TO_SAFE_ZONE:
+                fault_injector_causal_hold_count(0u, 0u);
+                break;
+            case RECOVERY_ACTION_REQUEST_TASK_REALLOCATION:
+                fault_injector_causal_hold_count(0u, 1u);
+                break;
+            default:
+                fault_injector_causal_hold_count(0u, 2u);
+                break;
+        }
+    }
+    st->status.recommendation = RECOVERY_ACTION_LOCAL_RECOVERY;
+    st->status.escalation_level = (uint8_t)RECOVERY_ACTION_LOCAL_RECOVERY;
+    return 0u;
+}
+
+static void recovery_state_reset(RecoveryManagerTeamState_t *st)
+{
+    st->status.recommendation = RECOVERY_ACTION_CONTINUE_MONITORING;
+    st->status.reason = RECOVERY_REASON_NONE;
+    st->status.confidence = 0.0f;
+    st->status.escalation_level = RECOVERY_ACTION_CONTINUE_MONITORING;
+    st->pending_action = RECOVERY_ACTION_CONTINUE_MONITORING;
+    st->pending_reason = RECOVERY_REASON_NONE;
+    st->pending_streak = 0u;
+    st->cooldown_ticks = 0u;
+}
+
 void recovery_manager_step(void)
 {
     static const RecoveryEvaluatorFn evaluators[RECOVERY_MANAGER_EVALUATOR_COUNT] =
@@ -1676,6 +1793,7 @@ void recovery_manager_step(void)
         RecoverySignal_t signals[RECOVERY_MANAGER_EVALUATOR_COUNT];
         MissionStage_t stage;
         RecoveryManagerTeamState_t *state = &g_recovery_state[team_id];
+        uint8_t hold_trig = 0u;
 
         /* A team's assignment can legitimately change out from under a
          * still-active recovery recommendation - most notably,
@@ -1726,6 +1844,14 @@ void recovery_manager_step(void)
          * re-enters RESTING the same tick, gets promoted back to AVAILABLE
          * the moment it's eligible again, and repeats every couple of
          * ticks - observed directly via this exact seed/team. */
+        /* hold-repair H3: a repair that just succeeded leaves no stale escalation behind. */
+        if(fault_profile_causal_fix(CAUSAL_FIX_HOLD_REPAIR) && fault_injector_causal_field_just_repaired(team_id))
+        {
+            recovery_state_reset(state);
+            recovery_state_reset(&g_rule_state[team_id]);
+            fault_injector_causal_hold_count(2u, 0u);
+        }
+
         if(team->assigned_task_pool != state->last_assigned_task_pool ||
            team->assigned_task_slot != state->last_assigned_task_slot ||
            (state->last_status == STATUS_RESTING && team->status != STATUS_RESTING))
@@ -1745,8 +1871,33 @@ void recovery_manager_step(void)
 
         stage = recovery_stage_for_team(team, twin);
 
+        /* Step 5 D3b: the baseline's twin/watchdog evidence is lost for this team-tick (the AI's own input path and
+         * the peer-consensus verdict are untouched). */
+        uint8_t probe_dropped = (uint8_t)(g_probe.any && probe_evidence_dropped(team_id));
+
+        if(probe_dropped)
+            memset(&watchdog, 0, sizeof(watchdog));
+
         for(size_t i = 0; i < RECOVERY_MANAGER_EVALUATOR_COUNT; i++)
             signals[i] = evaluators[i](team, twin, &watchdog);
+
+        if(g_probe.rr_autonomy && signals[RM_EVAL_IDX_COMMUNICATION].reason == RECOVERY_REASON_COMMUNICATION_FAILURE)
+            signals[RM_EVAL_IDX_COMMUNICATION] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);   /* Step 5 RR5 */
+        if(g_probe.rr_degraded && (team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE) && !team->heading_to_rest)
+        {
+            /* Step 5 RR4: a faulted team keeps working at its reduced rate; the stamina and progress evaluators still act. */
+            if(signals[RM_EVAL_IDX_MOBILITY].reason == RECOVERY_REASON_MOBILITY_FAILURE)
+                signals[RM_EVAL_IDX_MOBILITY] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
+            if(signals[RM_EVAL_IDX_EQUIPMENT].reason == RECOVERY_REASON_EQUIPMENT_FAULT && team->equipment_level > 0u)
+                signals[RM_EVAL_IDX_EQUIPMENT] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
+        }
+
+        if(probe_dropped)
+        {
+            signals[RM_EVAL_IDX_PROGRESS] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
+            signals[RM_EVAL_IDX_MOBILITY] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
+            signals[RM_EVAL_IDX_COMMUNICATION] = recovery_make_signal(RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
+        }
 
         /* Snapshot each evaluator's own, unfused verdict for this tick
          * BEFORE any consensus cap below can rewrite signals[MOBILITY]/
@@ -1777,8 +1928,101 @@ void recovery_manager_step(void)
             consensus_get_result(team_id, CONSENSUS_CLASS_COMMUNICATION).tier, team_id);
 #endif
 
-        (void)recovery_build_status(&g_recovery_state[team_id], signals,
-            RECOVERY_MANAGER_EVALUATOR_COUNT, stage);
+        if(fault_profile_planner_layer(PLANNER_LAYER_TEAM) || (fault_profile_planner_on() && g_planner.calib_dump))
+        {
+            /* Cost-based planner owns the verdict. The rule-based evaluators (everything but the AI) still run
+             * through their own hysteresis: that stable action is the Simplex floor (D2). */
+            RecoverySignal_t rule_signals[RECOVERY_MANAGER_EVALUATOR_COUNT];
+            RecoveryManagerTeamState_t *rs = &g_rule_state[team_id];
+            PlannerEvidence_t ev;
+            RecoveryStatus_t planned;
+
+            if(team->assigned_task_pool != rs->last_assigned_task_pool ||
+               team->assigned_task_slot != rs->last_assigned_task_slot ||
+               (rs->last_status == STATUS_RESTING && team->status != STATUS_RESTING))
+            {
+                rs->status.recommendation = RECOVERY_ACTION_CONTINUE_MONITORING;
+                rs->status.reason = RECOVERY_REASON_NONE;
+                rs->status.confidence = 0.0f;
+                rs->status.escalation_level = RECOVERY_ACTION_CONTINUE_MONITORING;
+                rs->pending_action = RECOVERY_ACTION_CONTINUE_MONITORING;
+                rs->pending_reason = RECOVERY_REASON_NONE;
+                rs->pending_streak = 0u;
+                rs->cooldown_ticks = 0u;
+            }
+            rs->last_assigned_task_pool = team->assigned_task_pool;
+            rs->last_assigned_task_slot = team->assigned_task_slot;
+            rs->last_status = team->status;
+
+            for(size_t i = 0; i < RECOVERY_MANAGER_EVALUATOR_COUNT; i++)
+                rule_signals[i] = signals[i];
+            rule_signals[RM_EVAL_IDX_FAULT_PREDICTOR] = recovery_make_signal(
+                RECOVERY_ACTION_CONTINUE_MONITORING, RECOVERY_REASON_NONE, 0.0f);
+            (void)recovery_build_status(rs, rule_signals, RECOVERY_MANAGER_EVALUATOR_COUNT, stage);
+            hold_trig = recovery_hold_cap(team_id, rs, rule_signals, 1u);
+
+            for(uint8_t f = 0; f < 3u; f++)
+                ev.ai_score[f] = g_planner_ai[team_id][f];
+            ev.cons_y[0] = ev.cons_y[1] = 0.0f;
+            ev.cons_elevated = 0u;
+#if CONSENSUS_ENFORCE
+            {
+                ConsensusResult_t mob = consensus_get_result(team_id, CONSENSUS_CLASS_MOBILITY);
+                ConsensusResult_t comm = consensus_get_result(team_id, CONSENSUS_CLASS_COMMUNICATION);
+
+                ev.cons_y[0] = mob.y;
+                ev.cons_y[1] = comm.y;
+                ev.cons_elevated = (uint8_t)(mob.tier == CONSENSUS_TIER_ELEVATED || comm.tier == CONSENSUS_TIER_ELEVATED);
+            }
+#endif
+            ev.wd_conf = watchdog.anomaly_confidence;
+            ev.wd_flag = watchdog.anomaly_detected;
+            /* The watchdog's dominant failure mode, mapped to the fault classes the planner prices:
+             * mobility (mobility degradation, task-execution delay), communication, resource
+             * (fatigue exhaustion, equipment degradation). UNKNOWN / NONE carry no class. */
+            switch(watchdog.dominant_failure_mode)
+            {
+                case WATCHDOG_FAILURE_MOBILITY_DEGRADATION:
+                case WATCHDOG_FAILURE_TASK_EXECUTION_DELAY:
+                    ev.wd_class = 0u;
+                    break;
+                case WATCHDOG_FAILURE_COMMUNICATION_FAILURE:
+                    ev.wd_class = 1u;
+                    break;
+                case WATCHDOG_FAILURE_FATIGUE_EXHAUSTION:
+                case WATCHDOG_FAILURE_EQUIPMENT_DEGRADATION:
+                    ev.wd_class = 2u;
+                    break;
+                default:
+                    ev.wd_class = 255u;
+                    break;
+            }
+            ev.streak_ok = g_planner_streak_ok[team_id];
+            ev.rule_floor = (uint8_t)rs->status.recommendation;
+            ev.rule_reason = (uint8_t)rs->status.reason;
+
+            if(planner_team_decide(team, &ev, &planned))
+            {
+                state->status = planned;
+                /* hold-repair: the planner's own choice above the floor stands; it is only attributed. */
+                if(fault_profile_causal_fix(CAUSAL_FIX_HOLD_REPAIR) && hold_trig == 0u &&
+                   planned.recommendation >= RECOVERY_ACTION_RETURN_TO_SAFE_ZONE)
+                    fault_injector_causal_hold_note(team_id, 3u);
+            }
+            else
+            {
+                (void)recovery_build_status(&g_recovery_state[team_id], signals,
+                    RECOVERY_MANAGER_EVALUATOR_COUNT, stage);
+                (void)recovery_hold_cap(team_id, &g_recovery_state[team_id], signals, 0u);
+            }
+        }
+        else
+        {
+            (void)recovery_build_status(&g_recovery_state[team_id], signals,
+                RECOVERY_MANAGER_EVALUATOR_COUNT, stage);
+            (void)recovery_hold_cap(team_id, &g_recovery_state[team_id], signals, 1u);
+            planner_note_recommendation(team_id, (uint8_t)g_recovery_state[team_id].status.recommendation);
+        }
         recovery_metrics_note_recommendation(
             team_id,
             g_recovery_state[team_id].status.recommendation);
@@ -1788,6 +2032,25 @@ void recovery_manager_step(void)
     }
 
     g_recovery_metrics.evaluation_ticks++;
+}
+
+/* Causal action semantics (Step 3.6, CAUSAL_FIX_SEMANTICS): release the team's task (progress kept) and exclude
+ * the team from that incident so another team takes it; the team stays where it is, AVAILABLE. */
+static void causal_release_in_place(TeamState_t *team, uint32_t until_tick, uint8_t kind)
+{
+    uint32_t incident_id = 0;
+
+    if(team->assigned_task_pool == TASK_POOL_INCIDENT && team->assigned_task_slot < NUM_INCIDENTS)
+        incident_id = g_incidents[team->assigned_task_slot].incident_id;
+    else if(team->assigned_task_pool == TASK_POOL_SYSTEM && team->assigned_task_slot < NUM_SYSTEM_TASKS)
+        incident_id = g_system_tasks[team->assigned_task_slot].incident_id;
+
+    if(!planner_release_team_for_preempt(team))
+        return;
+    if(incident_id != 0u)
+        allocator_exclude_team(team->team_id, incident_id, until_tick);
+    team_set_available(team);
+    g_diag_exclusions[kind]++;
 }
 
 void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
@@ -1872,6 +2135,16 @@ void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
             {
                 abandon_task_for_recovery(team);
             }
+            else if(fault_profile_causal_field_repair() &&
+                    (team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE))
+            {
+                /* Causal field repair (Step 3.6): a working team with an active mobility or resource fault
+                 * stops and repairs itself in the field (it keeps its task, makes no progress meanwhile). */
+                if(team->fault_state.active[FAULT_CLASS_MOBILITY])
+                    (void)fault_injector_causal_field_start(team_id, 1u);
+                else if(team->fault_state.active[FAULT_CLASS_RESOURCE])
+                    (void)fault_injector_causal_field_start(team_id, 2u);
+            }
             break;
 
         case RECOVERY_ACTION_RETURN_TO_SAFE_ZONE:
@@ -1892,6 +2165,9 @@ void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
             break;
 
         case RECOVERY_ACTION_REQUEST_TASK_REALLOCATION:
+            if(fault_profile_causal_fix(CAUSAL_FIX_SEMANTICS) &&
+               (team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE) && !team->heading_to_rest)
+                causal_release_in_place(team, g_current_tick + g_causal_persist_params.realloc_exclusion_ticks, 1u);
             if(g_realloc_done_tick != g_current_tick)
             {
                 allocate_all_incidents();
@@ -1908,7 +2184,10 @@ void recovery_dispatch(uint8_t team_id, RecoveryAction_t action)
              * instantly, regardless of stamina/equipment recovery progress). */
             if(team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE)
             {
-                abandon_task_for_recovery(team);
+                if(fault_profile_causal_fix(CAUSAL_FIX_SEMANTICS))
+                    causal_release_in_place(team, ALLOCATOR_EXCLUDE_UNTIL_STAGE, 0u);   /* distinct from RETURN */
+                else
+                    abandon_task_for_recovery(team);
             }
             break;
     }

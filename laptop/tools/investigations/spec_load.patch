@@ -1,0 +1,135 @@
+--- a/core/simulation.c
++++ b/core/simulation.c
+@@ -82,9 +82,83 @@
+ }
+ 
+ 
++
++#include <stdio.h>
++#include <stdlib.h>
++#define SD_NS 5
++#define SD_HB 64
++unsigned long sd_res_arch[SD_NS], sd_stage_org[SD_NS], sd_stage_sys[SD_NS], sd_deaths_stage[SD_NS], sd_deaths_arch[SD_NS], sd_seen_arch[SD_NS], sd_vicend_arch[SD_NS];
++unsigned long sd_stage_by[SD_NS][SD_NS];   /* [required spec at stage][spec of the team that finished it] */
++static unsigned long sd_qhist[2][SD_NS][SD_HB];
++static unsigned long sd_util[SD_NS][4];
++static unsigned long sd_teamticks[SD_NS];
++static uint32_t sd_id[NUM_INCIDENTS], sd_open_since[NUM_INCIDENTS], sd_lastreq[NUM_INCIDENTS], sd_laststat[NUM_INCIDENTS], sd_rep[NUM_INCIDENTS], sd_have[NUM_INCIDENTS], sd_disc[NUM_INCIDENTS];
++#define SD_MAXW 6000
++static unsigned sd_wait[SD_NS][SD_MAXW], sd_nwait[SD_NS];
++static unsigned sd_disclag[SD_MAXW], sd_ndl;
++static unsigned sd_cens[SD_NS][SD_MAXW], sd_ncens[SD_NS];
++static int sd_reg;
++static void sd_close(int s, uint32_t now)
++{
++    if(!sd_have[s]) return;
++    if(sd_open_since[s] && sd_ncens[sd_lastreq[s]]<SD_MAXW) sd_cens[sd_lastreq[s]][sd_ncens[sd_lastreq[s]]++] = now - sd_open_since[s];
++    sd_have[s]=0;
++}
++static void sd_dump(void)
++{
++    for(int s=0;s<NUM_INCIDENTS;s++){ if(sd_have[s] && g_incidents[s].slot_occupied && g_incidents[s].status!=INC_RESOLVED) sd_vicend_arch[g_incident_archetypes[g_incidents[s].incident_type].required_specialization]+=g_incidents[s].victim_count; sd_close(s,g_current_tick);}
++    #define P1(tag,arr) fprintf(stderr,tag); for(int a=0;a<SD_NS;a++) fprintf(stderr," %lu",arr[a]); fprintf(stderr,"\n");
++    P1("SD_RESARCH",sd_res_arch) P1("SD_STAGEORG",sd_stage_org) P1("SD_STAGESYS",sd_stage_sys) P1("SD_DEATHS_STAGE",sd_deaths_stage) P1("SD_DEATHS_ARCH",sd_deaths_arch) P1("SD_SEEN_ARCH",sd_seen_arch) P1("SD_VICEND_ARCH",sd_vicend_arch)
++    for(int a=0;a<SD_NS;a++){ fprintf(stderr,"SD_STAGEBY %d",a); for(int b=0;b<SD_NS;b++) fprintf(stderr," %lu",sd_stage_by[a][b]); fprintf(stderr,"\n"); }
++    for(int k=0;k<2;k++) for(int a=0;a<SD_NS;a++){ fprintf(stderr,"SD_Q%d %d",k,a); for(int b=0;b<SD_HB;b++) fprintf(stderr," %lu",sd_qhist[k][a][b]); fprintf(stderr,"\n"); }
++    for(int a=0;a<SD_NS;a++) fprintf(stderr,"SD_UTIL %d %lu %lu %lu %lu %lu\n",a,sd_teamticks[a],sd_util[a][0],sd_util[a][1],sd_util[a][2],sd_util[a][3]);
++    for(int a=0;a<SD_NS;a++){ fprintf(stderr,"SD_WAIT %d",a); for(unsigned i=0;i<sd_nwait[a];i++) fprintf(stderr," %u",sd_wait[a][i]); fprintf(stderr,"\n"); }
++    for(int a=0;a<SD_NS;a++){ fprintf(stderr,"SD_CENS %d",a); for(unsigned i=0;i<sd_ncens[a];i++) fprintf(stderr," %u",sd_cens[a][i]); fprintf(stderr,"\n"); }
++    fprintf(stderr,"SD_DLAG"); for(unsigned i=0;i<sd_ndl;i++) fprintf(stderr," %u",sd_disclag[i]); fprintf(stderr,"\n");
++}
++static void sd_observe(void)
++{
++    uint32_t now = g_current_tick;
++    if(!sd_reg){ sd_reg=1; atexit(sd_dump); }
++    unsigned q[2][SD_NS]; for(int k=0;k<2;k++) for(int a=0;a<SD_NS;a++) q[k][a]=0;
++    for(int s=0;s<NUM_INCIDENTS;s++)
++    {
++        IncidentState_t *in=&g_incidents[s];
++        if(sd_have[s] && (!in->slot_occupied || in->incident_id!=sd_id[s])) sd_close(s, now);
++        if(!in->slot_occupied) continue;
++        if(!sd_have[s]){ sd_have[s]=1; sd_id[s]=in->incident_id; sd_open_since[s]=0; sd_lastreq[s]=(uint32_t)in->req_capability; sd_laststat[s]=in->status; sd_rep[s]=in->reported_at_tick; sd_disc[s]=0; }
++        if(in->req_capability<SD_NS && in->discovered)
++        {
++            /* a new wait episode starts when a discovered incident is (re)opened or its stage (required spec) changes */
++            if(!sd_disc[s]){ sd_disc[s]=1; if(sd_ndl<SD_MAXW) sd_disclag[sd_ndl++]=(now-1>sd_rep[s])?(now-1-sd_rep[s]):0; sd_open_since[s]=now-1; sd_lastreq[s]=in->req_capability; }
++            else if(in->status==INC_OPEN && (sd_laststat[s]!=INC_OPEN || sd_lastreq[s]!=(uint32_t)in->req_capability) && !sd_open_since[s]) { sd_open_since[s]=now-1; sd_lastreq[s]=in->req_capability; }
++            if(in->status!=INC_OPEN && sd_open_since[s]) { if(sd_nwait[sd_lastreq[s]]<SD_MAXW) sd_wait[sd_lastreq[s]][sd_nwait[sd_lastreq[s]]++]=now-sd_open_since[s]; sd_open_since[s]=0; }
++            if(in->status!=INC_OPEN) sd_lastreq[s]=in->req_capability;
++        }
++        sd_laststat[s]=in->status;
++        if(in->discovered && in->status==INC_OPEN && in->req_capability<SD_NS) q[0][in->req_capability]++;
++    }
++    for(int s=0;s<NUM_SYSTEM_TASKS;s++)
++    {
++        IncidentState_t *in=&g_system_tasks[s];
++        if(in->slot_occupied && in->status==INC_OPEN && in->incident_type!=INCIDENT_RETURN_TO_SAFE_ZONE && in->req_capability<SD_NS) q[1][in->req_capability]++;
++    }
++    for(int k=0;k<2;k++) for(int a=0;a<SD_NS;a++){ unsigned v=q[k][a]; if(v>=SD_HB) v=SD_HB-1; sd_qhist[k][a][v]++; }
++    for(int i=0;i<NUM_TEAMS;i++)
++    {
++        const TeamState_t *tm=&g_teams[i]; int a=tm->specialization; if(a>=SD_NS) continue;
++        sd_teamticks[a]++;
++        if(tm->status==STATUS_RESTING) sd_util[a][2]++;
++        else if(tm->status==STATUS_AVAILABLE) sd_util[a][3]++;
++        else if(tm->heading_to_rest) sd_util[a][1]++;
++        else sd_util[a][0]++;
++    }
++}
++
+ void simulation_step(void) //simulation
+ {
+     g_current_tick++;
++    sd_observe();
+     g_sim_step_tick = g_current_tick;   /* keep in sync now that the step's tick is live */
+     /* See SimRole_t (simulation.h): world events run everywhere except
+      * on a board; team execution runs everywhere except on the laptop
+--- a/core/incident.c
++++ b/core/incident.c
+@@ -1219,6 +1219,11 @@
+      * state directly rather than snapshot_record()'s live team lookup -
+      * see snapshot_record_resolved() for why that distinction matters
+      * here specifically. */
++    if(pool == TASK_POOL_INCIDENT)
++    {
++        extern unsigned long sd_res_arch[5];
++        sd_res_arch[g_incident_archetypes[task->incident_type].required_specialization]++;
++    }
+     snapshot_record_resolved(g_current_tick, pool, task);
+ 
+     if(pool == TASK_POOL_SYSTEM)
+@@ -1255,6 +1260,16 @@
+ 
+ void complete_incident_stage(IncidentState_t *incident) //incident
+ {
++    {
++        extern unsigned long sd_stage_org[5], sd_stage_sys[5], sd_stage_by[5][5];
++        if(incident->req_capability < 5 && incident->incident_type != INCIDENT_CLEAR_ROAD)
++        {
++            int is_sys = (incident >= &g_system_tasks[0] && incident < &g_system_tasks[NUM_SYSTEM_TASKS]);
++            if(is_sys) sd_stage_sys[incident->req_capability]++; else sd_stage_org[incident->req_capability]++;
++            if(!is_sys && incident->assigned_team < NUM_TEAMS && g_teams[incident->assigned_team].specialization < 5)
++                sd_stage_by[incident->req_capability][g_teams[incident->assigned_team].specialization]++;
++        }
++    }
+     /* Causal profile only: the road is cleared, the faults on that cell end,
+      * the task resolves and its team is released. */
+     if(incident->incident_type == INCIDENT_CLEAR_ROAD)
+--- a/core/fault_injector.c
++++ b/core/fault_injector.c
+@@ -1174,6 +1174,7 @@
+             s_causal_inc_id[slot] = inc->incident_id;
+             s_causal_inc_escalations[slot] = 0;
+             s_causal_world.victims_seen += inc->victim_count;
++            { extern unsigned long sd_seen_arch[5]; sd_seen_arch[g_incident_archetypes[inc->incident_type].required_specialization]+=inc->victim_count; }
+         }
+ 
+         if(g_current_tick <= inc->reported_at_tick)
+@@ -1197,6 +1198,7 @@
+             {
+                 inc->victim_count = (uint8_t)(inc->victim_count - deaths);
+                 s_causal_world.victims_lost += deaths;
++                { extern unsigned long sd_deaths_stage[5], sd_deaths_arch[5]; if(inc->req_capability<5) sd_deaths_stage[inc->req_capability]+=deaths; sd_deaths_arch[g_incident_archetypes[inc->incident_type].required_specialization]+=deaths; }
+                 deteriorated = 1;
+             }
+         }
