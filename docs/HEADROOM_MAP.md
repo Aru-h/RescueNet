@@ -1,10 +1,46 @@
 # Headroom map (Step 5)
 
-**Status: in progress.** Pre-registration: `docs/HEADROOM_MAP_PREREG.md` (commits `1a3a3d3`, `6a08143`, `b94ded0`,
-`c577ce7`). Scale audit: `docs/SCALE_AUDIT.md`. Results tables are appended tier by tier as each tier finishes; the
-plain-language summary goes at the top when the map is complete. This version holds the parts that need no results: the
-description of the road-knowledge propagation model and its design note (Addendum C), written while the runs are
-queued.
+**Status: complete (v1 world, frozen).** Pre-registration: `docs/HEADROOM_MAP_PREREG.md` (commits `1a3a3d3`, `6a08143`,
+`b94ded0`, `c577ce7`, Addendum D, Addendum E). Scale audit: `docs/SCALE_AUDIT.md`. Per-run data: `docs/data/headroom/`.
+
+## Summary in plain language
+
+We asked where an AI, better information, better decisions, or more capacity could make the rescue fleet resolve more
+incidents or lose fewer victims. We measured it by giving the simulator a perfect version of each thing, one at a time, on
+100 seeds, then repeating on 100 fresh seeds for the ones that looked real.
+
+* **A perfect fault detector is worth about nothing:** +0.28 incidents per run at stress 2 and +0.01 at stress 7 (out of about 42
+  and 35), with an upper bound of +0.9. The Step 4 stress-7 figure (+1.75) was a small-sample result and does not replicate. The
+  gates miss many short communication and resource faults, but catching them does not change the outcome. Delay, false
+  alarms and removing evidence from the baseline make no difference either.
+* **Forecasting hazards, better urgency, cheaper prevention, road information, perfect communications and the five cheaper
+  responses (relief, support repair, a lane through blocked roads, degraded mode, autonomy) are all at or near zero.** The
+  best central assignment is worth about one incident and does not survive the multiple-testing correction.
+* **The one information channel with real headroom is discovery:** finding incidents the moment they appear is worth
+  +1.7 incidents (stress 2) and +3.1 (stress 7) per run. The incident gain is confirmed on fresh seeds at stress 1, 2, 3.5
+  and 7 (+1.7 to +3.1); fewer victims lost (+1.1 to +1.8) has the same sign everywhere and an interval above 0 in seven of
+  eight seed sets (held-out stress 7 ends at -0.09), but did not pass the multiple-testing correction. That is about **0.4 team-equivalent**. It is a search, reporting and sensing problem, not a
+  fault-forecasting one.
+* **The large headroom is in capacity:** work speed (25 percent faster work is +4.4 incidents, 0.9 team-equivalent, if it costs no
+  extra stamina; a quarter to a third of that if effort per unit of work is unchanged), travel (instant travel to tasks
+  +5.6, 1.1 team-equivalents), rest and stamina (25 percent shorter rests +1.7, 0.3 team-equivalent), and team mix (+2.4 incidents,
+  victims not established). One team out of service costs about 2.5 incidents.
+* **Time budget:** 60 to 69 percent of fleet time is rest-related, 16 to 25 percent is travel to tasks, 7 to 10 percent is working on
+  scene. Detection and forecasting do not touch those shares.
+* **Road knowledge:** the shared-picture simplification does not matter if news of damage reaches the fleet within about
+  half an hour; at an hour it is worth about +1.3 incidents at stress 7 on both seed sets, but that is not confirmed after
+  the multiple-testing correction and is partly extra arrivals.
+
+**Recommendation.** Do not invest in more detection or forecasting for throughput in this world. Test the discovery channel
+(first against a no-learning coverage rule, G.1), and treat equipment tiers (G.2) and rest and stamina logistics as the
+levers. Read the caveats in H first: large capacity ceilings are partly extra arrivals.
+
+![headroom in team-equivalents](figures/headroom_team_equivalents.png)
+
+**Contents.** A, A2 road-knowledge model; P provenance and integrity; B0 time budget and detector delay; B1a-B1d information,
+supply, demand, decisions, capacity yardstick and M5 at all stresses; B2, B2b work, travel and mix; B3 road information;
+B4 propagation sensitivity; B5, B5b cheaper responses; C road-propagation design note; D complete table; E capacity budget;
+F realisable ceilings; G design notes; H scorecard and caveats.
 
 ## A. Road-knowledge propagation: the model as implemented (R1-R3 and Addendum C)
 
@@ -335,8 +371,7 @@ Same conventions as B1a. Per-run data: `docs/data/headroom/tier1b_supply_demand_
 | DQ1: CBBA within 1.0 incident of central | Borderline: +1.23 and +0.82 in the screen (above 1.0 at stress 2), not confirmed after Holm |
 | DQ2: +0.5 to 2 at stress 7, about 0 at stress 2 | Magnitude held at stress 7 (+0.54, CI touches 0); at stress 2 it is +0.70, not about 0 |
 
-M5 is also run at stress 1 and 3.5 on both seed sets (the pre-registered rule for confirmed survivors); that result follows
-in B1c.
+M5 is also run at stress 1 and 3.5 on both seed sets (the pre-registered rule for confirmed survivors); that result is in B1d.
 
 ## B1c. Tier 1, capacity yardstick (K1, K2) and every Tier 1 probe in team-equivalents
 
@@ -439,6 +474,28 @@ quarter (rest x0.75 is +0.3 team-equivalents). The best coordination upper bound
 stress 7, and a perfect detector (PD) is worth 0.1 [-0.1, +0.2] and 0.0 [-0.1, +0.1] team-equivalents: indistinguishable from
 zero, with an upper bound of about 0.2. For scale, one team out of service costs about 0.5 team-equivalents of
 in-service time.
+
+## B1d. M5 (discovery oracle) at stress 1 and 3.5, development and held-out seeds
+
+The pre-registered extra check for the confirmed survivor. M5 minus P, incidents and victims lost per seed (positive is better),
+paired by seed, 100 seeds each.
+
+| Stress | Seeds | Incidents / seed [95% CI] | Victims lost / seed [95% CI] |
+|---|---|---|---|
+| 1 | development | +1.76 [+0.97, +2.55] | +1.40 [+0.52, +2.29] |
+| 1 | held-out | +2.21 [+1.57, +2.86] | +1.18 [+0.28, +2.07] |
+| 2 | development | +1.89 [+1.15, +2.63] | +1.82 [+0.93, +2.71] |
+| 2 | held-out | +1.71 [+1.05, +2.40] | +1.37 [+0.42, +2.34] |
+| 3.5 | development | +2.64 [+1.97, +3.30] | +1.19 [+0.25, +2.13] |
+| 3.5 | held-out | +1.69 [+0.95, +2.44] | +1.75 [+0.69, +2.81] |
+| 7 | development | +3.23 [+2.41, +4.08] | +1.79 [+0.83, +2.73] |
+| 7 | held-out | +3.10 [+2.28, +3.95] | +1.06 [-0.09, +2.23] |
+
+**M5 helps at all four stress levels on both seed sets** (incidents +1.7 to +3.2, all intervals above 0; victims lost +1.1 to
++1.8, all above 0 except the held-out stress-7 interval, which ends at -0.09). The gain is larger on incidents at higher
+stress and roughly constant on victims. This satisfies the pre-registered requirement that a survivor also hold at
+stress 1 and 3.5. Absolute means (P versus M5, 200 seeds): stress 1, 44.6 versus 46.6 incidents, 11.2 versus 10.0 victims lost;
+stress 3.5, 39.9 versus 42.1 and 13.1 versus 11.6.
 
 ## B2. Tier 2: work efficiency, travel and team mix (screen: 100 development seeds; confirmation follows in B2b)
 
@@ -1029,3 +1086,553 @@ in the **current** world; if the confirmed value at stress 2 (the realistic sett
 a real propagation model is not justified by this world, and the justification would have to come from a world with
 more road damage than the v1 world produces (11-18 damaged cells per 3000 ticks at stress 7). The results of
 section B decide this; they are not yet in.
+
+## D. Complete table of probes (all tiers, screen on 100 development seeds)
+
+Regenerate with `python3 laptop/tools/headroom_report.py screen --res x --csv docs/data/headroom/*.csv --tiers 1,2,3,4,5`
+(comma-separated list of the committed CSVs). Headroom = probe minus matched baseline, paired by seed, bootstrap 95% CI
+(20000 resamples, seed 0). "Team-equiv." divides the incident headroom by the K1 slope of the same stress (5.0 incidents per
+team in service at stress 2, 8.1 at stress 7); because arrivals respond to capacity, the slope is inflated and **team-equivalents
+are understated**. Victims lost is baseline minus probe (positive = fewer lost). "Spawned" is the change in incidents that
+appeared, the demand-response guard: when it is at least half the incident gain, the incident gain is mostly more arrivals
+(for example W0 instant work: +38.8 resolved against +37.5 spawned). Rows marked "(not a probe)" are context or sensitivity
+runs, not screened.
+
+Development seeds 1001-1100, every probe of every tier (Tier 0 reads are in B0).
+
+| Probe | Stress | Incidents / seed [95% CI] | Team-equiv. | Victims lost / seed (positive = fewer) [95% CI] | Spawned | Survives |
+|---|---|---|---|---|---|---|
+| context: shipped AI on the planner (PA minus P) | 2 | -0.05 [-0.60, +0.50] | -0.0 [-0.1, +0.1] | -0.09 [-0.82, +0.67] | -0.2 | (not a probe) |
+| context: shipped AI on the planner (PA minus P) | 7 | +0.14 [-0.47, +0.73] | +0.0 [-0.1, +0.1] | +0.07 [-0.81, +0.93] | -0.1 | (not a probe) |
+| context: fixed gates minus planner (F minus P) | 2 | -0.26 [-0.92, +0.41] | -0.1 [-0.2, +0.1] | -0.13 [-1.11, +0.85] | -0.2 | (not a probe) |
+| context: fixed gates minus planner (F minus P) | 7 | -0.28 [-1.02, +0.48] | -0.0 [-0.1, +0.1] | +0.07 [-1.13, +1.30] | -0.1 | (not a probe) |
+| D2 detector oracle, no delay (PD) | 2 | +0.28 [-0.33, +0.89] | +0.1 [-0.1, +0.2] | -0.30 [-1.28, +0.70] | +0.3 | no |
+| D2 detector oracle, no delay (PD) | 7 | +0.01 [-0.84, +0.85] | +0.0 [-0.1, +0.1] | -0.57 [-1.69, +0.58] | +0.4 | no |
+| D2 detector oracle delayed 5 ticks | 2 | +0.21 [-0.44, +0.86] | +0.0 [-0.1, +0.2] | -0.52 [-1.52, +0.50] | +0.2 | no |
+| D2 detector oracle delayed 5 ticks | 7 | -0.07 [-0.88, +0.74] | -0.0 [-0.1, +0.1] | -0.36 [-1.49, +0.77] | -0.0 | no |
+| D2 detector oracle delayed 10 ticks | 2 | +0.25 [-0.41, +0.91] | +0.0 [-0.1, +0.2] | -0.66 [-1.62, +0.32] | +0.2 | no |
+| D2 detector oracle delayed 10 ticks | 7 | +0.32 [-0.50, +1.14] | +0.0 [-0.1, +0.1] | +0.13 [-0.92, +1.20] | +0.6 | no |
+| D2 detector oracle delayed 20 ticks | 2 | +0.05 [-0.69, +0.79] | +0.0 [-0.1, +0.2] | -0.62 [-1.54, +0.31] | +0.2 | no |
+| D2 detector oracle delayed 20 ticks | 7 | -0.27 [-1.09, +0.55] | -0.0 [-0.1, +0.1] | -0.38 [-1.62, +0.86] | +0.2 | no |
+| D2 detector oracle delayed 40 ticks | 2 | +0.06 [-0.67, +0.78] | +0.0 [-0.1, +0.2] | -0.56 [-1.50, +0.39] | +0.0 | no |
+| D2 detector oracle delayed 40 ticks | 7 | -0.53 [-1.36, +0.28] | -0.1 [-0.2, +0.0] | -0.01 [-1.18, +1.16] | +0.0 | no |
+| D3a oracle, 30% misses / 1% false alarms | 2 | +0.26 [-0.43, +0.95] | +0.1 [-0.1, +0.2] | -0.46 [-1.48, +0.57] | +0.1 | no |
+| D3a oracle, 30% misses / 1% false alarms | 7 | +0.01 [-0.72, +0.73] | +0.0 [-0.1, +0.1] | -0.70 [-1.77, +0.38] | +0.3 | no |
+| D3b baseline evidence dropout 25% (effect on P) | 2 | +0.33 [-0.42, +1.05] | +0.1 [-0.1, +0.2] | +0.59 [-0.16, +1.38] | -0.1 | (not a probe) |
+| D3b baseline evidence dropout 25% (effect on P) | 7 | -0.08 [-0.79, +0.64] | -0.0 [-0.1, +0.1] | +0.16 [-0.79, +1.11] | +0.2 | (not a probe) |
+| D3b oracle headroom at dropout 25% | 2 | -0.25 [-1.03, +0.53] | -0.0 [-0.2, +0.1] | -1.46 [-2.37, -0.56] | +0.4 | no |
+| D3b oracle headroom at dropout 25% | 7 | +0.05 [-0.81, +0.91] | +0.0 [-0.1, +0.1] | +0.42 [-0.74, +1.60] | -0.2 | no |
+| D3b shipped-AI gain at dropout 25% | 2 | -0.02 [-0.60, +0.57] | -0.0 [-0.1, +0.1] | -0.15 [-0.74, +0.43] | -0.0 | no |
+| D3b shipped-AI gain at dropout 25% | 7 | -0.02 [-0.62, +0.57] | -0.0 [-0.1, +0.1] | +0.47 [-0.44, +1.38] | -0.4 | no |
+| D3b baseline evidence dropout 50% (effect on P) | 2 | +0.10 [-0.52, +0.72] | +0.0 [-0.1, +0.1] | +0.01 [-0.92, +0.96] | -0.1 | (not a probe) |
+| D3b baseline evidence dropout 50% (effect on P) | 7 | -0.03 [-0.73, +0.67] | -0.0 [-0.1, +0.1] | +0.17 [-0.81, +1.15] | -0.3 | (not a probe) |
+| D3b oracle headroom at dropout 50% | 2 | +0.25 [-0.52, +1.02] | +0.0 [-0.1, +0.2] | -0.50 [-1.48, +0.49] | +0.2 | no |
+| D3b oracle headroom at dropout 50% | 7 | -0.48 [-1.19, +0.24] | -0.1 [-0.1, +0.0] | -0.21 [-1.44, +1.07] | -0.0 | no |
+| D3b shipped-AI gain at dropout 50% | 2 | +0.16 [-0.39, +0.69] | +0.0 [-0.1, +0.1] | +0.47 [-0.29, +1.23] | -0.1 | no |
+| D3b shipped-AI gain at dropout 50% | 7 | -0.11 [-0.76, +0.53] | -0.0 [-0.1, +0.1] | +0.80 [-0.15, +1.75] | +0.1 | no |
+| D3b baseline evidence dropout 75% (effect on P) | 2 | +0.27 [-0.44, +0.97] | +0.1 [-0.1, +0.2] | -0.09 [-0.96, +0.78] | -0.0 | (not a probe) |
+| D3b baseline evidence dropout 75% (effect on P) | 7 | +0.24 [-0.42, +0.91] | +0.0 [-0.1, +0.1] | +0.14 [-0.84, +1.13] | +0.2 | (not a probe) |
+| D3b oracle headroom at dropout 75% | 2 | -0.33 [-1.10, +0.44] | -0.1 [-0.2, +0.1] | -0.38 [-1.20, +0.45] | -0.0 | no |
+| D3b oracle headroom at dropout 75% | 7 | -0.15 [-0.96, +0.65] | -0.0 [-0.1, +0.1] | -0.20 [-1.29, +0.82] | -0.1 | no |
+| D3b shipped-AI gain at dropout 75% | 2 | -0.26 [-0.83, +0.30] | -0.1 [-0.2, +0.1] | -0.19 [-0.98, +0.59] | -0.0 | no |
+| D3b shipped-AI gain at dropout 75% | 7 | -0.14 [-0.73, +0.44] | -0.0 [-0.1, +0.1] | +0.85 [-0.06, +1.74] | -0.4 | no |
+| S1 hazard forecast + prevention x1 (level ii) | 2 | +0.02 [-0.31, +0.35] | +0.0 [-0.1, +0.1] | -0.12 [-0.42, +0.19] | -0.1 | no |
+| S1 hazard forecast + prevention x1 (level ii) | 7 | -0.19 [-0.68, +0.30] | -0.0 [-0.1, +0.0] | +0.21 [-0.47, +0.88] | -0.1 | no |
+| S1 draw-aware forecast + prevention x1 (level i) | 2 | -0.17 [-0.73, +0.40] | -0.0 [-0.1, +0.1] | +0.35 [-0.42, +1.16] | -0.2 | no |
+| S1 draw-aware forecast + prevention x1 (level i) | 7 | -0.38 [-1.10, +0.33] | -0.0 [-0.1, +0.0] | +0.18 [-0.70, +1.04] | +0.0 | no |
+| S1 hazard forecast + prevention x0.5 (level ii) | 2 | +0.02 [-0.31, +0.35] | +0.0 [-0.1, +0.1] | -0.12 [-0.42, +0.19] | -0.1 | no |
+| S1 hazard forecast + prevention x0.5 (level ii) | 7 | -0.19 [-0.68, +0.30] | -0.0 [-0.1, +0.0] | +0.21 [-0.47, +0.88] | -0.1 | no |
+| S1 draw-aware forecast + prevention x0.5 (level i) | 2 | +0.37 [-0.28, +1.02] | +0.1 [-0.1, +0.2] | -0.04 [-0.86, +0.79] | +0.0 | no |
+| S1 draw-aware forecast + prevention x0.5 (level i) | 7 | -0.54 [-1.23, +0.16] | -0.1 [-0.2, +0.0] | +0.09 [-0.88, +1.04] | -0.1 | no |
+| S1 hazard forecast + prevention x0.25 (level ii) | 2 | +0.02 [-0.31, +0.35] | +0.0 [-0.1, +0.1] | -0.12 [-0.42, +0.19] | -0.1 | no |
+| S1 hazard forecast + prevention x0.25 (level ii) | 7 | -0.19 [-0.68, +0.30] | -0.0 [-0.1, +0.0] | +0.21 [-0.47, +0.88] | -0.1 | no |
+| S1 draw-aware forecast + prevention x0.25 (level i) | 2 | +0.20 [-0.41, +0.82] | +0.0 [-0.1, +0.2] | +0.04 [-0.80, +0.90] | -0.0 | no |
+| S1 draw-aware forecast + prevention x0.25 (level i) | 7 | -0.63 [-1.36, +0.09] | -0.1 [-0.2, +0.0] | -0.12 [-1.09, +0.81] | -0.1 | no |
+| M1 survival-rate urgency (level ii) | 2 | -0.19 [-0.80, +0.41] | -0.0 [-0.2, +0.1] | +0.27 [-0.55, +1.07] | -0.1 | no |
+| M1 survival-rate urgency (level ii) | 7 | -0.35 [-0.92, +0.23] | -0.0 [-0.1, +0.0] | +0.41 [-0.45, +1.30] | -0.4 | no |
+| M1 realised-death urgency (level i) | 2 | -0.32 [-0.86, +0.22] | -0.1 [-0.2, +0.0] | -0.21 [-1.01, +0.59] | -0.3 | no |
+| M1 realised-death urgency (level i) | 7 | -0.47 [-1.11, +0.16] | -0.1 [-0.1, +0.0] | -0.05 [-1.03, +0.90] | -0.6 | no |
+| M2 fire-spread foresight, 50 ticks | 2 | +0.04 [-0.65, +0.73] | +0.0 [-0.1, +0.2] | -0.53 [-1.38, +0.32] | +0.1 | no |
+| M2 fire-spread foresight, 50 ticks | 7 | -0.11 [-0.81, +0.58] | -0.0 [-0.1, +0.1] | -0.11 [-1.19, +0.97] | -0.1 | no |
+| M3 aftershock-collapse foresight, 50 ticks | 2 | -0.01 [-0.71, +0.68] | -0.0 [-0.1, +0.1] | -0.06 [-0.93, +0.79] | +0.1 | no |
+| M3 aftershock-collapse foresight, 50 ticks | 7 | -0.49 [-1.27, +0.28] | -0.1 [-0.2, +0.0] | +0.55 [-0.46, +1.57] | -0.4 | no |
+| M4 hazard-arrival foresight, 10 ticks | 2 | +0.52 [-0.04, +1.10] | +0.1 [-0.0, +0.2] | +0.66 [-0.17, +1.51] | +0.1 | no |
+| M4 hazard-arrival foresight, 10 ticks | 7 | -0.15 [-0.73, +0.43] | -0.0 [-0.1, +0.0] | +0.22 [-0.64, +1.07] | +0.2 | no |
+| M4 hazard-arrival foresight, 50 ticks | 2 | -0.15 [-0.76, +0.46] | -0.0 [-0.2, +0.1] | -0.33 [-1.20, +0.54] | -0.0 | no |
+| M4 hazard-arrival foresight, 50 ticks | 7 | +0.15 [-0.57, +0.88] | +0.0 [-0.1, +0.1] | +0.65 [-0.48, +1.79] | +0.1 | no |
+| M4 hazard-arrival foresight, 200 ticks | 2 | -0.18 [-0.79, +0.43] | -0.0 [-0.2, +0.1] | -0.26 [-1.12, +0.60] | -0.1 | no |
+| M4 hazard-arrival foresight, 200 ticks | 7 | +0.16 [-0.56, +0.89] | +0.0 [-0.1, +0.1] | +0.70 [-0.43, +1.83] | +0.1 | no |
+| M5 discovery oracle (no fog of war) | 2 | +1.89 [+1.15, +2.63] | +0.4 [+0.2, +0.5] | +1.82 [+0.93, +2.71] | +0.1 | incidents, victims |
+| M5 discovery oracle (no fog of war) | 7 | +3.23 [+2.41, +4.08] | +0.4 [+0.3, +0.5] | +1.79 [+0.83, +2.73] | +0.3 | incidents, victims |
+| DQ1 central optimal assignment | 2 | +1.23 [+0.65, +1.82] | +0.2 [+0.1, +0.4] | +0.96 [+0.10, +1.82] | +0.8 | incidents |
+| DQ1 central optimal assignment | 7 | +0.82 [+0.17, +1.47] | +0.1 [+0.0, +0.2] | +1.51 [+0.51, +2.52] | +0.5 | victims |
+| DQ2 perfect comms (no comm faults, no bus loss) | 2 | +0.70 [+0.10, +1.38] | +0.1 [+0.0, +0.3] | +0.39 [-0.31, +1.10] | +0.1 | no |
+| DQ2 perfect comms (no comm faults, no bus loss) | 7 | +0.54 [-0.01, +1.10] | +0.1 [+0.0, +0.1] | +0.51 [-0.28, +1.31] | +0.2 | no |
+| K1 rest duration x0.5 | 2 | +3.25 [+2.64, +3.87] | +0.6 [+0.5, +0.7] | +3.07 [+2.26, +3.89] | +2.4 | (not a probe) |
+| K1 rest duration x0.5 | 7 | +3.62 [+2.93, +4.32] | +0.4 [+0.4, +0.5] | +3.18 [+2.31, +4.06] | +2.1 | (not a probe) |
+| K1 stamina drain x0.5 | 2 | +3.93 [+3.19, +4.64] | +0.8 [+0.6, +0.9] | +2.38 [+1.63, +3.12] | +3.2 | (not a probe) |
+| K1 stamina drain x0.5 | 7 | +2.77 [+2.15, +3.40] | +0.3 [+0.3, +0.4] | +2.03 [+1.13, +2.94] | +1.9 | (not a probe) |
+| K1 rest duration x0.75 | 2 | +1.71 [+1.16, +2.27] | +0.3 [+0.2, +0.4] | +1.52 [+0.61, +2.45] | +1.1 | (not a probe) |
+| K1 rest duration x0.75 | 7 | +2.32 [+1.67, +2.97] | +0.3 [+0.2, +0.4] | +1.44 [+0.65, +2.23] | +1.0 | (not a probe) |
+| K1 stamina drain x0.75 | 2 | +2.19 [+1.68, +2.70] | +0.4 [+0.3, +0.5] | +1.53 [+0.81, +2.26] | +1.7 | (not a probe) |
+| K1 stamina drain x0.75 | 7 | +1.50 [+0.88, +2.11] | +0.2 [+0.1, +0.3] | +1.27 [+0.43, +2.11] | +1.0 | (not a probe) |
+| K1 rest duration x1.5 | 2 | -3.84 [-4.55, -3.15] | -0.8 [-0.9, -0.6] | -2.09 [-2.99, -1.14] | -2.5 | (not a probe) |
+| K1 rest duration x1.5 | 7 | -3.98 [-4.70, -3.25] | -0.5 [-0.6, -0.4] | -2.07 [-3.12, -1.01] | -2.1 | (not a probe) |
+| K1 stamina drain x1.5 | 2 | -4.42 [-5.00, -3.85] | -0.9 [-1.0, -0.8] | -2.49 [-3.30, -1.68] | -3.4 | (not a probe) |
+| K1 stamina drain x1.5 | 7 | -3.75 [-4.37, -3.13] | -0.5 [-0.5, -0.4] | -2.09 [-3.08, -1.09] | -2.0 | (not a probe) |
+| K1 rest duration x2 | 2 | -6.55 [-7.26, -5.83] | -1.3 [-1.4, -1.2] | -3.97 [-4.92, -2.96] | -4.1 | (not a probe) |
+| K1 rest duration x2 | 7 | -7.20 [-8.01, -6.39] | -0.9 [-1.0, -0.8] | -4.13 [-5.07, -3.22] | -3.6 | (not a probe) |
+| K1 stamina drain x2 | 2 | -8.35 [-9.01, -7.68] | -1.7 [-1.8, -1.6] | -5.00 [-5.92, -4.06] | -6.0 | (not a probe) |
+| K1 stamina drain x2 | 7 | -6.50 [-7.09, -5.93] | -0.8 [-0.9, -0.7] | -3.40 [-4.37, -2.43] | -4.1 | (not a probe) |
+| K2 1 team(s) offline | 2 | -2.73 [-3.49, -1.98] | -0.5 [-0.7, -0.4] | -1.55 [-2.53, -0.57] | -1.7 | (not a probe) |
+| K2 1 team(s) offline | 7 | -2.52 [-3.33, -1.71] | -0.3 [-0.4, -0.2] | -1.69 [-2.62, -0.77] | -1.1 | (not a probe) |
+| K2 2 team(s) offline | 2 | -5.73 [-6.45, -5.02] | -1.1 [-1.3, -1.0] | -3.24 [-4.24, -2.22] | -3.5 | (not a probe) |
+| K2 2 team(s) offline | 7 | -5.43 [-6.22, -4.65] | -0.7 [-0.8, -0.6] | -2.79 [-3.78, -1.81] | -2.5 | (not a probe) |
+| K2 3 team(s) offline | 2 | -9.71 [-10.67, -8.79] | -1.9 [-2.1, -1.8] | -5.09 [-6.15, -4.03] | -5.3 | (not a probe) |
+| K2 3 team(s) offline | 7 | -7.64 [-8.56, -6.70] | -0.9 [-1.1, -0.8] | -3.79 [-4.99, -2.61] | -3.6 | (not a probe) |
+| W1a work x1.25 (drain per tick unchanged) | 2 | +4.44 [+3.84, +5.05] | +0.9 [+0.8, +1.0] | +2.39 [+1.53, +3.25] | +3.7 | incidents, victims |
+| W1a work x1.25 (drain per tick unchanged) | 7 | +3.90 [+3.20, +4.60] | +0.5 [+0.4, +0.6] | +3.04 [+2.18, +3.89] | +2.5 | incidents, victims |
+| W1b work x1.25 (drain tied to work) | 2 | +1.62 [+1.10, +2.15] | +0.3 [+0.2, +0.4] | +0.02 [-0.93, +0.98] | +1.2 | incidents |
+| W1b work x1.25 (drain tied to work) | 7 | +0.60 [-0.14, +1.35] | +0.1 [-0.0, +0.2] | +0.94 [+0.06, +1.80] | +0.5 | no |
+| W1a work x1.5 (drain per tick unchanged) | 2 | +8.11 [+7.32, +8.91] | +1.6 [+1.4, +1.8] | +3.11 [+2.26, +3.96] | +7.0 | incidents, victims |
+| W1a work x1.5 (drain per tick unchanged) | 7 | +6.22 [+5.43, +7.03] | +0.8 [+0.7, +0.9] | +4.22 [+3.38, +5.07] | +4.5 | incidents, victims |
+| W1b work x1.5 (drain tied to work) | 2 | +2.26 [+1.56, +2.94] | +0.4 [+0.3, +0.6] | +1.08 [+0.29, +1.88] | +2.1 | incidents, victims |
+| W1b work x1.5 (drain tied to work) | 7 | +1.98 [+1.22, +2.75] | +0.2 [+0.2, +0.3] | +1.30 [+0.49, +2.13] | +1.2 | incidents, victims |
+| W1a work x2 (drain per tick unchanged) | 2 | +12.11 [+11.31, +12.89] | +2.4 [+2.3, +2.6] | +3.93 [+3.11, +4.75] | +10.9 | incidents, victims |
+| W1a work x2 (drain per tick unchanged) | 7 | +9.74 [+8.85, +10.63] | +1.2 [+1.1, +1.3] | +4.56 [+3.57, +5.53] | +7.5 | incidents, victims |
+| W1b work x2 (drain tied to work) | 2 | +3.41 [+2.71, +4.11] | +0.7 [+0.5, +0.8] | +1.12 [+0.21, +2.03] | +2.9 | incidents, victims |
+| W1b work x2 (drain tied to work) | 7 | +2.92 [+2.24, +3.64] | +0.4 [+0.3, +0.5] | +1.75 [+0.75, +2.75] | +2.4 | incidents, victims |
+| W1a work x3 (drain per tick unchanged) | 2 | +18.07 [+16.99, +19.10] | +3.6 [+3.4, +3.8] | +5.14 [+4.18, +6.11] | +16.6 | incidents, victims |
+| W1a work x3 (drain per tick unchanged) | 7 | +15.70 [+14.72, +16.68] | +1.9 [+1.8, +2.1] | +6.72 [+5.71, +7.69] | +12.8 | incidents, victims |
+| W1b work x3 (drain tied to work) | 2 | +4.93 [+4.34, +5.52] | +1.0 [+0.9, +1.1] | +1.64 [+0.80, +2.49] | +4.3 | incidents, victims |
+| W1b work x3 (drain tied to work) | 7 | +4.93 [+4.20, +5.66] | +0.6 [+0.5, +0.7] | +2.62 [+1.75, +3.49] | +3.8 | incidents, victims |
+| W1a work x4 (drain per tick unchanged) | 2 | +21.47 [+20.33, +22.61] | +4.3 [+4.0, +4.6] | +6.03 [+5.12, +6.94] | +20.3 | incidents, victims |
+| W1a work x4 (drain per tick unchanged) | 7 | +18.58 [+17.45, +19.73] | +2.3 [+2.1, +2.5] | +6.85 [+5.84, +7.84] | +15.9 | incidents, victims |
+| W1b work x4 (drain tied to work) | 2 | +6.55 [+5.78, +7.33] | +1.3 [+1.1, +1.5] | +1.48 [+0.59, +2.40] | +6.0 | incidents, victims |
+| W1b work x4 (drain tied to work) | 7 | +5.91 [+5.20, +6.60] | +0.7 [+0.6, +0.8] | +2.76 [+1.82, +3.68] | +4.6 | incidents, victims |
+| W2 search work x2 | 2 | +1.04 [+0.49, +1.60] | +0.2 [+0.1, +0.3] | +0.96 [+0.22, +1.70] | +0.5 | incidents |
+| W2 search work x2 | 7 | +0.70 [+0.08, +1.30] | +0.1 [+0.0, +0.2] | -0.51 [-1.40, +0.37] | +0.8 | no |
+| W2 search work x3 | 2 | +2.19 [+1.56, +2.81] | +0.4 [+0.3, +0.6] | +0.21 [-0.63, +1.05] | +1.9 | incidents |
+| W2 search work x3 | 7 | +1.16 [+0.53, +1.79] | +0.1 [+0.1, +0.2] | +0.58 [-0.41, +1.56] | +1.0 | incidents |
+| W2 medical work x2 | 2 | +0.41 [-0.15, +0.97] | +0.1 [-0.0, +0.2] | +0.10 [-0.71, +0.90] | +0.2 | no |
+| W2 medical work x2 | 7 | +0.53 [-0.16, +1.20] | +0.1 [-0.0, +0.1] | +0.08 [-0.77, +0.92] | +0.1 | no |
+| W2 medical work x3 | 2 | +0.99 [+0.41, +1.56] | +0.2 [+0.1, +0.3] | +0.86 [+0.09, +1.64] | +0.6 | no |
+| W2 medical work x3 | 7 | +0.28 [-0.36, +0.93] | +0.0 [-0.0, +0.1] | +0.59 [-0.25, +1.42] | +0.0 | no |
+| W2 extraction work x2 | 2 | +4.01 [+3.32, +4.69] | +0.8 [+0.7, +0.9] | +2.13 [+1.30, +2.96] | +3.8 | incidents, victims |
+| W2 extraction work x2 | 7 | +3.24 [+2.56, +3.92] | +0.4 [+0.3, +0.5] | +2.84 [+2.04, +3.66] | +2.6 | incidents, victims |
+| W2 extraction work x3 | 2 | +7.27 [+6.55, +8.01] | +1.4 [+1.3, +1.6] | +2.76 [+1.97, +3.57] | +6.6 | incidents, victims |
+| W2 extraction work x3 | 7 | +5.50 [+4.67, +6.36] | +0.7 [+0.6, +0.8] | +3.29 [+2.31, +4.27] | +4.4 | incidents, victims |
+| W2 perimeter work x2 | 2 | +3.34 [+2.69, +3.97] | +0.7 [+0.5, +0.8] | +1.23 [+0.35, +2.11] | +3.1 | incidents, victims |
+| W2 perimeter work x2 | 7 | +2.01 [+1.35, +2.69] | +0.2 [+0.2, +0.3] | +1.21 [+0.38, +2.05] | +1.7 | incidents, victims |
+| W2 perimeter work x3 | 2 | +5.40 [+4.65, +6.15] | +1.1 [+0.9, +1.2] | +0.98 [+0.21, +1.77] | +5.0 | incidents |
+| W2 perimeter work x3 | 7 | +4.31 [+3.60, +5.01] | +0.5 [+0.4, +0.6] | +1.79 [+0.97, +2.62] | +3.5 | incidents, victims |
+| W2 support work x2 | 2 | +2.81 [+2.22, +3.40] | +0.6 [+0.4, +0.7] | +1.16 [+0.34, +1.99] | +2.3 | incidents, victims |
+| W2 support work x2 | 7 | +1.72 [+1.02, +2.44] | +0.2 [+0.1, +0.3] | +1.48 [+0.57, +2.40] | +1.3 | incidents, victims |
+| W2 support work x3 | 2 | +4.16 [+3.53, +4.79] | +0.8 [+0.7, +0.9] | +1.70 [+0.93, +2.46] | +3.5 | incidents, victims |
+| W2 support work x3 | 7 | +3.77 [+3.15, +4.40] | +0.5 [+0.4, +0.5] | +1.96 [+1.03, +2.87] | +2.6 | incidents, victims |
+| W3 early stages x2 | 2 | +4.78 [+4.08, +5.48] | +0.9 [+0.8, +1.1] | +1.54 [+0.74, +2.37] | +4.1 | incidents, victims |
+| W3 early stages x2 | 7 | +3.68 [+2.96, +4.42] | +0.5 [+0.4, +0.5] | +1.44 [+0.49, +2.41] | +3.3 | incidents, victims |
+| W3 early stages x4 | 2 | +7.89 [+7.18, +8.62] | +1.6 [+1.4, +1.7] | +2.01 [+1.16, +2.86] | +6.8 | incidents, victims |
+| W3 early stages x4 | 7 | +6.52 [+5.88, +7.19] | +0.8 [+0.7, +0.9] | +2.59 [+1.48, +3.72] | +5.3 | incidents, victims |
+| W3 late stages x2 | 2 | +5.30 [+4.68, +5.95] | +1.1 [+0.9, +1.2] | +2.10 [+1.19, +3.06] | +4.4 | incidents, victims |
+| W3 late stages x2 | 7 | +3.52 [+2.86, +4.17] | +0.4 [+0.4, +0.5] | +2.49 [+1.58, +3.39] | +2.5 | incidents, victims |
+| W3 late stages x4 | 2 | +7.06 [+6.32, +7.80] | +1.4 [+1.3, +1.5] | +2.58 [+1.67, +3.50] | +6.3 | incidents, victims |
+| W3 late stages x4 | 7 | +5.64 [+4.95, +6.33] | +0.7 [+0.6, +0.8] | +3.68 [+2.68, +4.69] | +4.3 | incidents, victims |
+| W0 instant work | 2 | +38.77 [+36.60, +40.82] | +7.7 [+7.2, +8.2] | +6.98 [+5.97, +7.98] | +37.5 | incidents, victims |
+| W0 instant work | 7 | +31.75 [+30.15, +33.32] | +3.9 [+3.6, +4.2] | +8.76 [+7.49, +10.02] | +29.1 | incidents, victims |
+| V0 instant travel to tasks | 2 | +5.56 [+4.56, +6.55] | +1.1 [+0.9, +1.3] | +0.30 [-0.75, +1.32] | +7.1 | incidents |
+| V0 instant travel to tasks | 7 | +5.39 [+4.39, +6.37] | +0.7 [+0.5, +0.8] | +2.54 [+1.51, +3.59] | +5.8 | incidents, victims |
+| V0 instant travel to tasks and to rest | 2 | +13.17 [+11.91, +14.43] | +2.6 [+2.3, +2.9] | +1.07 [-0.12, +2.23] | +14.4 | incidents |
+| V0 instant travel to tasks and to rest | 7 | +16.75 [+15.32, +18.16] | +2.1 [+1.9, +2.3] | +4.04 [+2.73, +5.33] | +16.5 | incidents, victims |
+| V1 search/extraction x2 direct, perimeter x0.5 | 2 | -1.74 [-2.78, -0.74] | -0.3 [-0.6, -0.1] | -0.91 [-1.86, +0.04] | -0.6 | no |
+| V1 search/extraction x2 direct, perimeter x0.5 | 7 | -0.35 [-1.29, +0.58] | -0.0 [-0.2, +0.1] | +0.24 [-0.91, +1.39] | +0.5 | no |
+| V1 x2: planner task actions (clear road, reroute, reinforce, relay) on minus off | 2 | -0.38 [-1.03, +0.25] | -0.1 [-0.2, +0.0] | +0.63 [-0.15, +1.41] | -0.2 | no |
+| V1 x2: planner task actions (clear road, reroute, reinforce, relay) on minus off | 7 | -0.68 [-1.26, -0.10] | -0.1 [-0.2, -0.0] | +0.41 [-0.55, +1.38] | -0.2 | no |
+| V1 search/extraction x4 direct, perimeter x0.5 | 2 | +0.20 [-0.78, +1.18] | +0.0 [-0.2, +0.2] | -0.26 [-1.28, +0.77] | +1.2 | no |
+| V1 search/extraction x4 direct, perimeter x0.5 | 7 | +2.84 [+1.86, +3.80] | +0.4 [+0.2, +0.5] | +1.98 [+0.84, +3.12] | +2.5 | incidents, victims |
+| V1 x4: planner task actions (clear road, reroute, reinforce, relay) on minus off | 2 | -0.33 [-0.93, +0.28] | -0.1 [-0.2, +0.1] | +0.07 [-0.70, +0.82] | -0.3 | no |
+| V1 x4: planner task actions (clear road, reroute, reinforce, relay) on minus off | 7 | -0.68 [-1.46, +0.11] | -0.1 [-0.2, +0.0] | +0.36 [-0.58, +1.28] | -0.3 | no |
+| TM1 team mix a | 2 | +2.45 [+1.72, +3.16] | +0.5 [+0.3, +0.6] | +0.41 [-0.58, +1.40] | +2.4 | incidents |
+| TM1 team mix a | 7 | +1.35 [+0.60, +2.10] | +0.2 [+0.1, +0.3] | +0.99 [-0.08, +2.06] | +1.4 | incidents |
+| TM1 team mix b | 2 | +1.24 [+0.56, +1.91] | +0.2 [+0.1, +0.4] | +0.38 [-0.60, +1.36] | +1.4 | incidents |
+| TM1 team mix b | 7 | +0.73 [-0.16, +1.60] | +0.1 [-0.0, +0.2] | +0.04 [-1.18, +1.19] | +0.9 | no |
+| TM1 team mix c | 2 | +2.35 [+1.57, +3.11] | +0.5 [+0.3, +0.6] | -0.19 [-1.14, +0.75] | +2.0 | incidents |
+| TM1 team mix c | 7 | +1.22 [+0.43, +2.01] | +0.2 [+0.1, +0.2] | +0.47 [-0.59, +1.54] | +1.2 | incidents |
+| R1: value of road information (omniscient minus R1) | 2 | -0.15 [-0.72, +0.44] | -0.0 [-0.1, +0.1] | -0.68 [-1.44, +0.08] | +0.1 | no |
+| R1: value of road information (omniscient minus R1) | 7 | +0.11 [-0.50, +0.71] | +0.0 [-0.1, +0.1] | -0.38 [-1.33, +0.56] | +0.2 | no |
+| R1s: omniscient minus strict R1 (radius 0) | 2 | +0.31 [-0.40, +1.10] | +0.1 [-0.1, +0.2] | -0.41 [-1.15, +0.31] | +0.2 | no |
+| R1s: omniscient minus strict R1 (radius 0) | 7 | +0.15 [-0.49, +0.78] | +0.0 [-0.1, +0.1] | -0.35 [-1.24, +0.55] | +0.2 | no |
+| R2 minus R1: value of a damage predictor | 2 | +0.07 [-0.29, +0.44] | +0.0 [-0.1, +0.1] | -0.29 [-0.68, +0.11] | +0.0 | no |
+| R2 minus R1: value of a damage predictor | 7 | +0.83 [+0.15, +1.49] | +0.1 [+0.0, +0.2] | +0.36 [-0.54, +1.27] | +0.7 | no |
+| R3 minus R1: value of better sharing | 2 | +0.12 [-0.35, +0.61] | +0.0 [-0.1, +0.1] | -0.69 [-1.49, +0.11] | +0.1 | no |
+| R3 minus R1: value of better sharing | 7 | -0.11 [-0.70, +0.46] | -0.0 [-0.1, +0.1] | -0.50 [-1.50, +0.49] | +0.4 | no |
+| planner task actions on minus off, omniscient road knowledge | 2 | -0.34 [-0.89, +0.22] | -0.1 [-0.2, +0.0] | -1.03 [-1.74, -0.35] | -0.0 | no |
+| planner task actions on minus off, omniscient road knowledge | 7 | -0.29 [-0.98, +0.39] | -0.0 [-0.1, +0.0] | -0.44 [-1.36, +0.48] | -0.0 | no |
+| planner task actions on minus off, under R1 | 2 | +0.11 [-0.37, +0.59] | +0.0 [-0.1, +0.1] | +0.75 [+0.06, +1.47] | +0.1 | no |
+| planner task actions on minus off, under R1 | 7 | +0.04 [-0.61, +0.70] | +0.0 [-0.1, +0.1] | +0.14 [-0.80, +1.06] | -0.2 | no |
+| planner task actions on minus off, under R2 | 2 | +0.41 [-0.11, +0.97] | +0.1 [-0.0, +0.2] | +0.41 [-0.33, +1.15] | +0.2 | no |
+| planner task actions on minus off, under R2 | 7 | -0.40 [-1.06, +0.25] | -0.0 [-0.1, +0.0] | -0.88 [-1.74, -0.04] | -0.2 | no |
+| RR1 relief, rate-aware trigger | 2 | -0.17 [-0.73, +0.39] | -0.0 [-0.1, +0.1] | +0.60 [-0.09, +1.31] | -0.3 | no |
+| RR1 relief, rate-aware trigger | 7 | +0.24 [-0.20, +0.67] | +0.0 [-0.0, +0.1] | +0.13 [-0.50, +0.73] | +0.1 | no |
+| RR1 relief, perfect-foresight trigger | 2 | -0.17 [-0.73, +0.39] | -0.0 [-0.1, +0.1] | +0.60 [-0.09, +1.31] | -0.3 | no |
+| RR1 relief, perfect-foresight trigger | 7 | +0.24 [-0.20, +0.67] | +0.0 [-0.0, +0.1] | +0.13 [-0.50, +0.73] | +0.1 | no |
+| RR2a SUPPORT-delivered repair (idle or priced preemption) | 2 | -0.05 [-0.16, +0.04] | -0.0 [-0.0, +0.0] | +0.03 [-0.02, +0.11] | -0.0 | no |
+| RR2a SUPPORT-delivered repair (idle or priced preemption) | 7 | -0.11 [-0.28, +0.02] | -0.0 [-0.0, +0.0] | -0.15 [-0.47, +0.13] | -0.0 | no |
+| RR3 lane first (CLEAR_ROAD is already on under the planner) vs P | 2 | +0.17 [-0.22, +0.57] | +0.0 [-0.0, +0.1] | +0.17 [-0.33, +0.69] | +0.0 | no |
+| RR3 lane first (CLEAR_ROAD is already on under the planner) vs P | 7 | -0.05 [-0.54, +0.40] | -0.0 [-0.1, +0.0] | +0.24 [-0.42, +0.87] | +0.0 | no |
+| RR4 degraded mode, capability-aware bids | 2 | -0.45 [-0.99, +0.08] | -0.1 [-0.2, +0.0] | -0.05 [-0.81, +0.71] | -0.4 | no |
+| RR4 degraded mode, capability-aware bids | 7 | -1.11 [-1.76, -0.45] | -0.1 [-0.2, -0.1] | +0.33 [-0.54, +1.19] | -0.7 | no |
+| RR5 autonomy on communication loss | 2 | +0.22 [-0.20, +0.66] | +0.0 [-0.0, +0.1] | -0.48 [-1.11, +0.15] | -0.2 | no |
+| RR5 autonomy on communication loss | 7 | -0.02 [-0.34, +0.30] | -0.0 [-0.0, +0.0] | +0.25 [-0.22, +0.76] | -0.1 | no |
+| RR0 all five responses (not jointly priced) | 2 | -0.59 [-1.18, +0.02] | -0.1 [-0.2, +0.0] | +0.15 [-0.76, +1.05] | -0.5 | no |
+| RR0 all five responses (not jointly priced) | 7 | -0.73 [-1.45, -0.03] | -0.1 [-0.2, -0.0] | +1.00 [+0.11, +1.87] | -0.9 | victims |
+| KEY: detector-oracle headroom with RR0 on (PD+RR0 minus P+RR0) | 2 | +0.19 [-0.52, +0.90] | +0.0 [-0.1, +0.2] | -0.59 [-1.68, +0.50] | +0.5 | no |
+| KEY: detector-oracle headroom with RR0 on (PD+RR0 minus P+RR0) | 7 | -0.27 [-0.98, +0.44] | -0.0 [-0.1, +0.1] | -1.40 [-2.56, -0.24] | +0.4 | no |
+| KEY: hazard-oracle + prevention with RR0 on (minus P+RR0) | 2 | -0.09 [-0.45, +0.26] | -0.0 [-0.1, +0.0] | -0.13 [-0.45, +0.18] | -0.0 | no |
+| KEY: hazard-oracle + prevention with RR0 on (minus P+RR0) | 7 | +0.56 [+0.01, +1.14] | +0.1 [+0.0, +0.1] | -0.29 [-0.85, +0.28] | +0.5 | no |
+| C: value of road information at latency 0 (omniscient minus setting) | 2 | -0.14 [-0.63, +0.33] | -0.0 [-0.1, +0.1] | +0.18 [-0.50, +0.88] | -0.1 | no |
+| C: value of road information at latency 0 (omniscient minus setting) | 7 | +0.24 [-0.40, +0.87] | +0.0 [-0.0, +0.1] | +0.22 [-0.69, +1.15] | -0.1 | no |
+| C: planner task actions on minus off at latency 0 | 2 | +0.02 [-0.60, +0.62] | +0.0 [-0.1, +0.1] | -0.65 [-1.50, +0.16] | +0.1 | no |
+| C: planner task actions on minus off at latency 0 | 7 | -0.35 [-0.94, +0.24] | -0.0 [-0.1, +0.0] | +0.02 [-0.86, +0.88] | -0.0 | no |
+| C: value of road information at latency 10 (omniscient minus setting) | 2 | +0.26 [-0.40, +0.93] | +0.1 [-0.1, +0.2] | +0.02 [-0.84, +0.85] | +0.3 | no |
+| C: value of road information at latency 10 (omniscient minus setting) | 7 | +0.61 [-0.14, +1.42] | +0.1 [-0.0, +0.2] | -0.43 [-1.34, +0.50] | +0.1 | no |
+| C: planner task actions on minus off at latency 10 | 2 | -0.38 [-0.96, +0.18] | -0.1 [-0.2, +0.0] | -0.25 [-0.94, +0.43] | -0.3 | no |
+| C: planner task actions on minus off at latency 10 | 7 | -1.09 [-1.91, -0.34] | -0.1 [-0.2, -0.0] | -0.18 [-1.17, +0.79] | -0.1 | no |
+| C: value of road information at latency 30 (omniscient minus setting) | 2 | +0.11 [-0.46, +0.69] | +0.0 [-0.1, +0.1] | +0.24 [-0.69, +1.16] | +0.2 | no |
+| C: value of road information at latency 30 (omniscient minus setting) | 7 | +0.11 [-0.52, +0.74] | +0.0 [-0.1, +0.1] | -0.89 [-1.72, -0.04] | +0.2 | no |
+| C: planner task actions on minus off at latency 30 | 2 | -0.05 [-0.59, +0.51] | -0.0 [-0.1, +0.1] | -0.60 [-1.44, +0.20] | +0.1 | no |
+| C: planner task actions on minus off at latency 30 | 7 | +0.35 [-0.25, +0.94] | +0.0 [-0.0, +0.1] | +0.24 [-0.54, +1.00] | +0.1 | no |
+| C: value of road information at latency 100 (omniscient minus setting) | 2 | +1.28 [+0.63, +1.96] | +0.3 [+0.1, +0.4] | +0.31 [-0.64, +1.25] | +1.1 | incidents |
+| C: value of road information at latency 100 (omniscient minus setting) | 7 | +1.54 [+0.89, +2.21] | +0.2 [+0.1, +0.3] | +0.31 [-0.65, +1.27] | +1.4 | incidents |
+| C: planner task actions on minus off at latency 100 | 2 | -0.33 [-0.85, +0.19] | -0.1 [-0.2, +0.0] | +0.01 [-0.78, +0.78] | -0.1 | no |
+| C: planner task actions on minus off at latency 100 | 7 | -0.48 [-1.05, +0.08] | -0.1 [-0.1, +0.0] | -0.05 [-0.89, +0.78] | -0.7 | no |
+| C: value of road information at loss 0.2 (omniscient minus setting) | 2 | +0.01 [-0.54, +0.58] | +0.0 [-0.1, +0.1] | -0.47 [-1.25, +0.29] | +0.2 | no |
+| C: value of road information at loss 0.2 (omniscient minus setting) | 7 | +0.19 [-0.43, +0.81] | +0.0 [-0.0, +0.1] | -0.40 [-1.37, +0.57] | +0.2 | no |
+| C: planner task actions on minus off at loss 0.2 | 2 | +0.24 [-0.23, +0.70] | +0.0 [-0.0, +0.1] | +0.60 [-0.13, +1.37] | -0.1 | no |
+| C: planner task actions on minus off at loss 0.2 | 7 | +0.17 [-0.47, +0.80] | +0.0 [-0.1, +0.1] | -0.02 [-1.03, +0.99] | -0.3 | no |
+| C: value of road information at loss 0.5 (omniscient minus setting) | 2 | -0.42 [-0.95, +0.12] | -0.1 [-0.2, +0.0] | -0.03 [-0.83, +0.76] | -0.1 | no |
+| C: value of road information at loss 0.5 (omniscient minus setting) | 7 | +0.16 [-0.44, +0.77] | +0.0 [-0.1, +0.1] | -0.39 [-1.31, +0.52] | +0.3 | no |
+| C: planner task actions on minus off at loss 0.5 | 2 | +0.14 [-0.36, +0.65] | +0.0 [-0.1, +0.1] | +0.16 [-0.59, +0.93] | +0.1 | no |
+| C: planner task actions on minus off at loss 0.5 | 7 | -0.11 [-0.70, +0.47] | -0.0 [-0.1, +0.1] | +0.36 [-0.52, +1.24] | -0.2 | no |
+| C: value of road information at radius 2 (omniscient minus setting) | 2 | +0.11 [-0.46, +0.69] | +0.0 [-0.1, +0.1] | -0.06 [-0.86, +0.74] | +0.2 | no |
+| C: value of road information at radius 2 (omniscient minus setting) | 7 | +0.20 [-0.49, +0.89] | +0.0 [-0.1, +0.1] | -0.49 [-1.47, +0.52] | -0.2 | no |
+| C: planner task actions on minus off at radius 2 | 2 | -0.07 [-0.58, +0.46] | -0.0 [-0.1, +0.1] | +0.16 [-0.56, +0.86] | -0.1 | no |
+| C: planner task actions on minus off at radius 2 | 7 | -0.32 [-0.99, +0.34] | -0.0 [-0.1, +0.0] | +0.06 [-0.87, +1.00] | +0.2 | no |
+| C: value of road information at radius 4 (omniscient minus setting) | 2 | -0.10 [-0.60, +0.41] | -0.0 [-0.1, +0.1] | -0.06 [-0.87, +0.79] | +0.0 | no |
+| C: value of road information at radius 4 (omniscient minus setting) | 7 | +0.31 [-0.34, +0.95] | +0.0 [-0.0, +0.1] | -0.39 [-1.34, +0.58] | +0.2 | no |
+| C: planner task actions on minus off at radius 4 | 2 | -0.03 [-0.54, +0.49] | -0.0 [-0.1, +0.1] | +0.03 [-0.72, +0.76] | -0.1 | no |
+| C: planner task actions on minus off at radius 4 | 7 | -0.28 [-0.95, +0.39] | -0.0 [-0.1, +0.0] | +0.02 [-0.93, +0.95] | -0.3 | no |
+
+Family size screened so far (probe contrasts with data x stress x metric): 376
+
+### D2. Confirmation of every screen survivor (final Holm over the whole family, m = 376)
+
+The family grew as tiers were added (m = 112, 248, now 376), so adjusted p values here are larger than the ones printed in
+the tier sections (M5 incidents: 0.011 in B1b, 0.038 here; DQ1 stress 2 incidents: 0.187 in B1b, 0.496 here). Every earlier
+"confirmed" call still holds at m = 376 except as shown in the last column.
+
+Held-out seeds 3001-3100, survivors of the screen.
+
+Family size m = 376 (probe contrasts x stress x metric). Holm over the whole family; unadjusted p beside it.
+
+| Probe | Stress | Metric | Screen | Held-out [95% CI] | p | Holm p | Confirmed |
+|---|---|---|---|---|---|---|---|
+| M5 discovery oracle (no fog of war) | 2 | incidents | +1.89 [+1.15, +2.63] | +1.71 [+1.05, +2.40] | 0.0001 | 0.038 | yes |
+| M5 discovery oracle (no fog of war) | 2 | victims | +1.82 [+0.93, +2.71] | +1.37 [+0.42, +2.34] | 0.0058 | 1.000 | no |
+| M5 discovery oracle (no fog of war) | 7 | incidents | +3.23 [+2.41, +4.08] | +3.10 [+2.28, +3.95] | 0.0001 | 0.038 | yes |
+| M5 discovery oracle (no fog of war) | 7 | victims | +1.79 [+0.83, +2.73] | +1.06 [-0.09, +2.23] | 0.0702 | 1.000 | no |
+| DQ1 central optimal assignment | 2 | incidents | +1.23 [+0.65, +1.82] | +1.05 [+0.41, +1.70] | 0.0017 | 0.496 | no |
+| DQ1 central optimal assignment | 7 | victims | +1.51 [+0.51, +2.52] | +1.30 [+0.35, +2.31] | 0.0087 | 1.000 | no |
+| W1a work x1.25 (drain per tick unchanged) | 2 | incidents | +4.44 [+3.84, +5.05] | +4.54 [+3.84, +5.25] | 0.0001 | 0.038 | yes |
+| W1a work x1.25 (drain per tick unchanged) | 2 | victims | +2.39 [+1.53, +3.25] | +1.82 [+0.95, +2.68] | 0.0001 | 0.038 | yes |
+| W1a work x1.25 (drain per tick unchanged) | 7 | incidents | +3.90 [+3.20, +4.60] | +4.20 [+3.39, +5.01] | 0.0001 | 0.038 | yes |
+| W1a work x1.25 (drain per tick unchanged) | 7 | victims | +3.04 [+2.18, +3.89] | +1.86 [+0.98, +2.73] | 0.0001 | 0.038 | yes |
+| W1b work x1.25 (drain tied to work) | 2 | incidents | +1.62 [+1.10, +2.15] | +1.79 [+1.21, +2.38] | 0.0001 | 0.038 | yes |
+| W1a work x1.5 (drain per tick unchanged) | 2 | incidents | +8.11 [+7.32, +8.91] | +8.02 [+7.30, +8.75] | 0.0001 | 0.038 | yes |
+| W1a work x1.5 (drain per tick unchanged) | 2 | victims | +3.11 [+2.26, +3.96] | +2.18 [+1.27, +3.11] | 0.0001 | 0.038 | yes |
+| W1a work x1.5 (drain per tick unchanged) | 7 | incidents | +6.22 [+5.43, +7.03] | +7.31 [+6.43, +8.19] | 0.0001 | 0.038 | yes |
+| W1a work x1.5 (drain per tick unchanged) | 7 | victims | +4.22 [+3.38, +5.07] | +3.31 [+2.33, +4.29] | 0.0001 | 0.038 | yes |
+| W1b work x1.5 (drain tied to work) | 2 | incidents | +2.26 [+1.56, +2.94] | +2.24 [+1.61, +2.88] | 0.0001 | 0.038 | yes |
+| W1b work x1.5 (drain tied to work) | 2 | victims | +1.08 [+0.29, +1.88] | +0.96 [+0.08, +1.80] | 0.0356 | 1.000 | no |
+| W1b work x1.5 (drain tied to work) | 7 | incidents | +1.98 [+1.22, +2.75] | +2.23 [+1.45, +3.04] | 0.0001 | 0.038 | yes |
+| W1b work x1.5 (drain tied to work) | 7 | victims | +1.30 [+0.49, +2.13] | +0.83 [-0.08, +1.76] | 0.0745 | 1.000 | no |
+| W1a work x2 (drain per tick unchanged) | 2 | incidents | +12.11 [+11.31, +12.89] | +12.01 [+11.16, +12.86] | 0.0001 | 0.038 | yes |
+| W1a work x2 (drain per tick unchanged) | 2 | victims | +3.93 [+3.11, +4.75] | +3.93 [+2.97, +4.89] | 0.0001 | 0.038 | yes |
+| W1a work x2 (drain per tick unchanged) | 7 | incidents | +9.74 [+8.85, +10.63] | +9.42 [+8.46, +10.39] | 0.0001 | 0.038 | yes |
+| W1a work x2 (drain per tick unchanged) | 7 | victims | +4.56 [+3.57, +5.53] | +3.60 [+2.59, +4.59] | 0.0001 | 0.038 | yes |
+| W1b work x2 (drain tied to work) | 2 | incidents | +3.41 [+2.71, +4.11] | +3.50 [+2.85, +4.15] | 0.0001 | 0.038 | yes |
+| W1b work x2 (drain tied to work) | 2 | victims | +1.12 [+0.21, +2.03] | +1.22 [+0.24, +2.19] | 0.0147 | 1.000 | no |
+| W1b work x2 (drain tied to work) | 7 | incidents | +2.92 [+2.24, +3.64] | +3.25 [+2.47, +4.05] | 0.0001 | 0.038 | yes |
+| W1b work x2 (drain tied to work) | 7 | victims | +1.75 [+0.75, +2.75] | +1.87 [+1.04, +2.73] | 0.0001 | 0.038 | yes |
+| W1a work x3 (drain per tick unchanged) | 2 | incidents | +18.07 [+16.99, +19.10] | +18.61 [+17.50, +19.73] | 0.0001 | 0.038 | yes |
+| W1a work x3 (drain per tick unchanged) | 2 | victims | +5.14 [+4.18, +6.11] | +4.90 [+3.94, +5.85] | 0.0001 | 0.038 | yes |
+| W1a work x3 (drain per tick unchanged) | 7 | incidents | +15.70 [+14.72, +16.68] | +15.32 [+14.15, +16.47] | 0.0001 | 0.038 | yes |
+| W1a work x3 (drain per tick unchanged) | 7 | victims | +6.72 [+5.71, +7.69] | +4.92 [+3.70, +6.10] | 0.0001 | 0.038 | yes |
+| W1b work x3 (drain tied to work) | 2 | incidents | +4.93 [+4.34, +5.52] | +4.71 [+3.91, +5.45] | 0.0001 | 0.038 | yes |
+| W1b work x3 (drain tied to work) | 2 | victims | +1.64 [+0.80, +2.49] | +0.78 [-0.19, +1.71] | 0.1144 | 1.000 | no |
+| W1b work x3 (drain tied to work) | 7 | incidents | +4.93 [+4.20, +5.66] | +5.36 [+4.57, +6.16] | 0.0001 | 0.038 | yes |
+| W1b work x3 (drain tied to work) | 7 | victims | +2.62 [+1.75, +3.49] | +1.59 [+0.66, +2.54] | 0.0004 | 0.119 | no |
+| W1a work x4 (drain per tick unchanged) | 2 | incidents | +21.47 [+20.33, +22.61] | +22.67 [+21.47, +23.86] | 0.0001 | 0.038 | yes |
+| W1a work x4 (drain per tick unchanged) | 2 | victims | +6.03 [+5.12, +6.94] | +5.80 [+4.94, +6.69] | 0.0001 | 0.038 | yes |
+| W1a work x4 (drain per tick unchanged) | 7 | incidents | +18.58 [+17.45, +19.73] | +18.40 [+17.09, +19.72] | 0.0001 | 0.038 | yes |
+| W1a work x4 (drain per tick unchanged) | 7 | victims | +6.85 [+5.84, +7.84] | +5.88 [+4.72, +7.01] | 0.0001 | 0.038 | yes |
+| W1b work x4 (drain tied to work) | 2 | incidents | +6.55 [+5.78, +7.33] | +7.28 [+6.45, +8.10] | 0.0001 | 0.038 | yes |
+| W1b work x4 (drain tied to work) | 2 | victims | +1.48 [+0.59, +2.40] | +0.85 [-0.20, +1.90] | 0.1147 | 1.000 | no |
+| W1b work x4 (drain tied to work) | 7 | incidents | +5.91 [+5.20, +6.60] | +6.81 [+5.97, +7.67] | 0.0001 | 0.038 | yes |
+| W1b work x4 (drain tied to work) | 7 | victims | +2.76 [+1.82, +3.68] | +2.26 [+1.19, +3.36] | 0.0001 | 0.038 | yes |
+| W2 search work x2 | 2 | incidents | +1.04 [+0.49, +1.60] | +1.10 [+0.52, +1.67] | 0.0003 | 0.090 | no |
+| W2 search work x3 | 2 | incidents | +2.19 [+1.56, +2.81] | +1.27 [+0.61, +1.93] | 0.0004 | 0.119 | no |
+| W2 search work x3 | 7 | incidents | +1.16 [+0.53, +1.79] | +1.58 [+0.95, +2.22] | 0.0001 | 0.038 | yes |
+| W2 extraction work x2 | 2 | incidents | +4.01 [+3.32, +4.69] | +4.66 [+4.00, +5.35] | 0.0001 | 0.038 | yes |
+| W2 extraction work x2 | 2 | victims | +2.13 [+1.30, +2.96] | +2.26 [+1.45, +3.08] | 0.0001 | 0.038 | yes |
+| W2 extraction work x2 | 7 | incidents | +3.24 [+2.56, +3.92] | +4.14 [+3.38, +4.89] | 0.0001 | 0.038 | yes |
+| W2 extraction work x2 | 7 | victims | +2.84 [+2.04, +3.66] | +1.81 [+0.94, +2.68] | 0.0001 | 0.038 | yes |
+| W2 extraction work x3 | 2 | incidents | +7.27 [+6.55, +8.01] | +6.69 [+5.85, +7.48] | 0.0001 | 0.038 | yes |
+| W2 extraction work x3 | 2 | victims | +2.76 [+1.97, +3.57] | +2.32 [+1.38, +3.25] | 0.0001 | 0.038 | yes |
+| W2 extraction work x3 | 7 | incidents | +5.50 [+4.67, +6.36] | +6.27 [+5.41, +7.11] | 0.0001 | 0.038 | yes |
+| W2 extraction work x3 | 7 | victims | +3.29 [+2.31, +4.27] | +2.79 [+1.77, +3.80] | 0.0001 | 0.038 | yes |
+| W2 perimeter work x2 | 2 | incidents | +3.34 [+2.69, +3.97] | +3.41 [+2.72, +4.10] | 0.0001 | 0.038 | yes |
+| W2 perimeter work x2 | 2 | victims | +1.23 [+0.35, +2.11] | +0.84 [+0.00, +1.68] | 0.0513 | 1.000 | no |
+| W2 perimeter work x2 | 7 | incidents | +2.01 [+1.35, +2.69] | +2.99 [+2.16, +3.82] | 0.0001 | 0.038 | yes |
+| W2 perimeter work x2 | 7 | victims | +1.21 [+0.38, +2.05] | +1.33 [+0.33, +2.33] | 0.0098 | 1.000 | no |
+| W2 perimeter work x3 | 2 | incidents | +5.40 [+4.65, +6.15] | +5.36 [+4.56, +6.16] | 0.0001 | 0.038 | yes |
+| W2 perimeter work x3 | 7 | incidents | +4.31 [+3.60, +5.01] | +4.94 [+4.10, +5.81] | 0.0001 | 0.038 | yes |
+| W2 perimeter work x3 | 7 | victims | +1.79 [+0.97, +2.62] | +1.20 [+0.27, +2.13] | 0.0106 | 1.000 | no |
+| W2 support work x2 | 2 | incidents | +2.81 [+2.22, +3.40] | +2.49 [+1.89, +3.11] | 0.0001 | 0.038 | yes |
+| W2 support work x2 | 2 | victims | +1.16 [+0.34, +1.99] | +1.03 [+0.18, +1.88] | 0.0155 | 1.000 | no |
+| W2 support work x2 | 7 | incidents | +1.72 [+1.02, +2.44] | +2.71 [+1.96, +3.47] | 0.0001 | 0.038 | yes |
+| W2 support work x2 | 7 | victims | +1.48 [+0.57, +2.40] | +0.90 [+0.12, +1.67] | 0.0243 | 1.000 | no |
+| W2 support work x3 | 2 | incidents | +4.16 [+3.53, +4.79] | +4.73 [+4.04, +5.43] | 0.0001 | 0.038 | yes |
+| W2 support work x3 | 2 | victims | +1.70 [+0.93, +2.46] | +1.66 [+0.79, +2.52] | 0.0004 | 0.119 | no |
+| W2 support work x3 | 7 | incidents | +3.77 [+3.15, +4.40] | +3.94 [+3.24, +4.64] | 0.0001 | 0.038 | yes |
+| W2 support work x3 | 7 | victims | +1.96 [+1.03, +2.87] | +2.26 [+1.30, +3.21] | 0.0001 | 0.038 | yes |
+| W3 early stages x2 | 2 | incidents | +4.78 [+4.08, +5.48] | +4.95 [+4.35, +5.57] | 0.0001 | 0.038 | yes |
+| W3 early stages x2 | 2 | victims | +1.54 [+0.74, +2.37] | +1.44 [+0.44, +2.45] | 0.0045 | 1.000 | no |
+| W3 early stages x2 | 7 | incidents | +3.68 [+2.96, +4.42] | +3.83 [+3.02, +4.64] | 0.0001 | 0.038 | yes |
+| W3 early stages x2 | 7 | victims | +1.44 [+0.49, +2.41] | +2.30 [+1.28, +3.33] | 0.0001 | 0.038 | yes |
+| W3 early stages x4 | 2 | incidents | +7.89 [+7.18, +8.62] | +7.74 [+6.99, +8.48] | 0.0001 | 0.038 | yes |
+| W3 early stages x4 | 2 | victims | +2.01 [+1.16, +2.86] | +1.08 [+0.17, +2.00] | 0.0218 | 1.000 | no |
+| W3 early stages x4 | 7 | incidents | +6.52 [+5.88, +7.19] | +6.83 [+5.94, +7.72] | 0.0001 | 0.038 | yes |
+| W3 early stages x4 | 7 | victims | +2.59 [+1.48, +3.72] | +2.43 [+1.49, +3.38] | 0.0001 | 0.038 | yes |
+| W3 late stages x2 | 2 | incidents | +5.30 [+4.68, +5.95] | +4.32 [+3.65, +5.00] | 0.0001 | 0.038 | yes |
+| W3 late stages x2 | 2 | victims | +2.10 [+1.19, +3.06] | +1.83 [+0.90, +2.74] | 0.0005 | 0.147 | no |
+| W3 late stages x2 | 7 | incidents | +3.52 [+2.86, +4.17] | +4.09 [+3.36, +4.81] | 0.0001 | 0.038 | yes |
+| W3 late stages x2 | 7 | victims | +2.49 [+1.58, +3.39] | +1.75 [+0.74, +2.76] | 0.0007 | 0.205 | no |
+| W3 late stages x4 | 2 | incidents | +7.06 [+6.32, +7.80] | +6.43 [+5.67, +7.18] | 0.0001 | 0.038 | yes |
+| W3 late stages x4 | 2 | victims | +2.58 [+1.67, +3.50] | +2.14 [+1.04, +3.20] | 0.0003 | 0.090 | no |
+| W3 late stages x4 | 7 | incidents | +5.64 [+4.95, +6.33] | +6.04 [+5.33, +6.75] | 0.0001 | 0.038 | yes |
+| W3 late stages x4 | 7 | victims | +3.68 [+2.68, +4.69] | +2.57 [+1.57, +3.55] | 0.0001 | 0.038 | yes |
+| W0 instant work | 2 | incidents | +38.77 [+36.60, +40.82] | +39.11 [+37.08, +41.14] | 0.0001 | 0.038 | yes |
+| W0 instant work | 2 | victims | +6.98 [+5.97, +7.98] | +5.85 [+4.68, +7.01] | 0.0001 | 0.038 | yes |
+| W0 instant work | 7 | incidents | +31.75 [+30.15, +33.32] | +32.20 [+30.14, +34.20] | 0.0001 | 0.038 | yes |
+| W0 instant work | 7 | victims | +8.76 [+7.49, +10.02] | +7.28 [+6.01, +8.53] | 0.0001 | 0.038 | yes |
+| V0 instant travel to tasks | 2 | incidents | +5.56 [+4.56, +6.55] | +5.16 [+4.24, +6.07] | 0.0001 | 0.038 | yes |
+| V0 instant travel to tasks | 7 | incidents | +5.39 [+4.39, +6.37] | +5.24 [+4.27, +6.22] | 0.0001 | 0.038 | yes |
+| V0 instant travel to tasks | 7 | victims | +2.54 [+1.51, +3.59] | +1.27 [+0.17, +2.36] | 0.0236 | 1.000 | no |
+| V0 instant travel to tasks and to rest | 2 | incidents | +13.17 [+11.91, +14.43] | +11.09 [+9.97, +12.17] | 0.0001 | 0.038 | yes |
+| V0 instant travel to tasks and to rest | 7 | incidents | +16.75 [+15.32, +18.16] | +16.75 [+15.47, +18.01] | 0.0001 | 0.038 | yes |
+| V0 instant travel to tasks and to rest | 7 | victims | +4.04 [+2.73, +5.33] | +2.62 [+1.49, +3.78] | 0.0001 | 0.038 | yes |
+| V1 search/extraction x4 direct, perimeter x0.5 | 7 | incidents | +2.84 [+1.86, +3.80] | +2.78 [+1.73, +3.80] | 0.0001 | 0.038 | yes |
+| V1 search/extraction x4 direct, perimeter x0.5 | 7 | victims | +1.98 [+0.84, +3.12] | -0.18 [-1.41, +1.04] | 0.7759 | 1.000 | no |
+| TM1 team mix a | 2 | incidents | +2.45 [+1.72, +3.16] | +2.55 [+1.84, +3.26] | 0.0001 | 0.038 | yes |
+| TM1 team mix a | 7 | incidents | +1.35 [+0.60, +2.10] | +1.82 [+0.96, +2.71] | 0.0001 | 0.038 | yes |
+| TM1 team mix b | 2 | incidents | +1.24 [+0.56, +1.91] | +1.99 [+1.17, +2.86] | 0.0001 | 0.038 | yes |
+| TM1 team mix c | 2 | incidents | +2.35 [+1.57, +3.11] | +2.43 [+1.75, +3.13] | 0.0001 | 0.038 | yes |
+| TM1 team mix c | 7 | incidents | +1.22 [+0.43, +2.01] | +1.49 [+0.63, +2.41] | 0.0004 | 0.119 | no |
+| RR0 all five responses (not jointly priced) | 7 | victims | +1.00 [+0.11, +1.87] | -0.62 [-1.72, +0.49] | 0.2685 | 1.000 | no |
+| C: value of road information at latency 100 (omniscient minus setting) | 2 | incidents | +1.28 [+0.63, +1.96] | +0.26 [-0.35, +0.84] | 0.3924 | 1.000 | no |
+| C: value of road information at latency 100 (omniscient minus setting) | 7 | incidents | +1.54 [+0.89, +2.21] | +1.32 [+0.47, +2.17] | 0.0023 | 0.669 | no |
+
+**Count: 76 confirmed tests, 29 not confirmed.** All confirmed tests are in the work, travel, team-mix and discovery families
+(M5, W1a, W1b, W2, W3, W0, V0, V1, TM1). None of the detector, forecast, urgency, foresight, coordination, communication,
+road-information or cheaper-response probes is confirmed.
+
+## E. Capacity budget: rest, travel, work and information, in the same unit
+
+One table, stress 2 and 7, incident headroom with 95% CI and in team-equivalents (K1 slope), from the development seeds;
+the confirmation status of each screened probe is in D2 (the K1 and K2 rows are sensitivity runs, not screened). A team-equivalent here is one more team in service for the
+whole run.
+
+| Lever | What changes | Stress 2: incidents [CI], team-equiv. | Stress 7: incidents [CI], team-equiv. | Victims lost (fewer), stress 2 / 7 |
+|---|---|---|---|---|
+| **Rest** | rest 25% shorter | +1.71 [+1.16, +2.27], 0.3 | +2.32 [+1.67, +2.97], 0.3 | +1.52 / +1.44 |
+| Rest | stamina drain per tick 25% lower | +2.19 [+1.68, +2.70], 0.4 | +1.50 [+0.88, +2.11], 0.2 | +1.53 / +1.27 |
+| Rest | rest 50% shorter | +3.25 [+2.64, +3.87], 0.6 | +3.62 [+2.93, +4.32], 0.4 | +3.07 / +3.18 |
+| **Travel** | instant travel to tasks | +5.56 [+4.56, +6.55], 1.1 | +5.39 [+4.39, +6.37], 0.7 | +0.30 / +2.54 |
+| Travel | instant travel to tasks and to rest | +13.17 [+11.91, +14.43], 2.6 | +16.75 [+15.32, +18.16], 2.1 | +1.07 / +4.04 |
+| **Work** | work 25% faster, drain per tick unchanged (W1a) | +4.44 [+3.84, +5.05], 0.9 | +3.90 [+3.20, +4.60], 0.5 | +2.39 / +3.04 |
+| Work | work 25% faster, drain tied to work (W1b) | +1.62 [+1.10, +2.15], 0.3 | +0.60 [-0.14, +1.35], 0.1 (not confirmed) | +0.02 / +0.94 |
+| Work | work x2, drain per tick unchanged | +12.11 [+11.31, +12.89], 2.4 | +9.74 [+8.85, +10.63], 1.2 | +3.93 / +4.56 |
+| Work | work x2, drain tied to work | +3.41 [+2.71, +4.11], 0.7 | +2.92 [+2.24, +3.64], 0.4 | +1.12 / +1.75 |
+| Work | EXTRACTION teams only, work x2 | +4.01 [+3.32, +4.69], 0.8 | +3.24 [+2.56, +3.92], 0.4 | +2.13 / +2.84 |
+| Work | instant work (ceiling, mostly demand) | +38.77 [+36.60, +40.82], 7.7 | +31.75 [+30.15, +33.32], 3.9 | +6.98 / +8.76 |
+| **Information** | discovery oracle (M5) | +1.89 [+1.15, +2.63], 0.4 | +3.23 [+2.41, +4.08], 0.4 | +1.82 / +1.79 |
+| Information | perfect detector (D2) | +0.28 [-0.33, +0.89], 0.1 | +0.01 [-0.84, +0.85], 0.0 | -0.30 / -0.57 |
+| Information | omniscient roads (vs shared R1 picture) | -0.15 [-0.72, +0.44], 0.0 | +0.11 [-0.50, +0.71], 0.0 | -0.68 / -0.38 |
+| Decisions | central optimal assignment (DQ1, not confirmed after Holm) | +1.23 [+0.65, +1.82], 0.2 | +0.82 [+0.17, +1.47], 0.1 | +0.96 / +1.51 |
+| Loss for scale | one team offline (K2) | -2.73 [-3.49, -1.98], -0.5 | -2.52 [-3.33, -1.71], -0.3 | -1.55 / -1.69 |
+
+![headroom in team-equivalents](figures/headroom_team_equivalents.png)
+
+![where team time goes](figures/time_budget.png)
+
+**Reading the budget.**
+
+* Between 60 and 69 percent of fleet time is rest-related (resting plus travelling to rest) and 7 to 10 percent is spent
+  working on scene (B0.1). Travel to tasks takes 16 to 25 percent. The fleet's capacity is a rest, travel and work problem; detection
+  and forecasting touch none of those shares.
+* **Work speed has the largest confirmed headroom**, but only if it does not burn stamina and equipment faster: with the drain tied to the work done,
+  a speed-up gives a quarter to a third of the gain (W1b against W1a).
+* **Travel is worth less than work** (instant travel to tasks +5.6 against instant work +38.8), and travel to rest is worth more
+  than travel to tasks (+13 to +17 for both together), so shortening rest trips matters more than shortening trips to incidents.
+* **Information is worth about 0.4 team-equivalent at best (M5, discovery)**: as much as shortening each rest by a quarter.
+  Everything else in the information family is indistinguishable from zero, with an upper bound of 0.2 team-equivalent.
+* Instant work (W0) and the K1 and V0 ceilings are demand-inflated: spawned incidents rise by almost as much as resolved ones,
+  so the victims-lost column is the cleaner benefit measure for them.
+
+## F. Which ceilings are realisable
+
+| Ceiling | Size | Realisable? | By what |
+|---|---|---|---|
+| Discovery (M5) | +1.7 / +3.1 incidents (about 0.4 team-equiv.), confirmed | **Partly**: a real system finds incidents faster, not instantly | More or better scouting, reports from the public, sensing, a coverage model; the simulator measures the ceiling only. See G.1 |
+| Work speed (W1a/W1b) | +4.4 / +3.9 for x1.25 with no extra drain; a quarter to a third of it if drain follows the work | **Yes**, by equipment | Powered and heavy tools that cut effort per unit of work; see G.2 |
+| Rest and drain (K1) | 0.3 to 0.6 team-equivalent for 25 to 50% | **Yes**, in principle | Relief rotation, shelters, food and water logistics, better gear; not an AI problem |
+| Travel (V0) | +5.4 to +5.6 (tasks), +13 to +17 (tasks and rest) | **Partly** | Vehicles, helicopters, cleared roads, closer rest points; an "aerial" tier in G.2 |
+| Team mix (TM1) | +2.4 / +1.3 incidents (mix a), victims not significant | **Yes** (free) but the effect on victims is not established | Reassign the 10 teams across the five specialisations |
+| Central assignment (DQ1) | +1.2 / +0.8, not confirmed, flagged demand-driven | Small at best | A better allocator; the CBBA auction is within about 1 incident of optimal |
+| Perfect communications (DQ2) | +0.7 / +0.5, below materiality | No case for it from this world | Not worth chasing for throughput |
+| Detector (D1-D3) | about 0 | **Nothing to realise** | The gates miss many short faults, but catching them changes no outcome |
+| Hazard forecast and prevention (S1), foresight (M1-M4) | about 0 | **Nothing to realise** | These responses do not exist as cheap actions in v1 |
+| Road information (R1-R3, C) | about 0 below a latency of about 30 ticks | Not needed | Only an hour-long delay makes it worth +1.3 (not confirmed) |
+| Cheaper responses (RR1-RR5, RR0) | about 0, RR4 harmful | No | RR2a fires 0.15 times per seed; RR3 lane opens 1.4 to 1.8 times per seed with no effect |
+
+## G. Design notes (no implementation)
+
+### G.1 Deployable AI, per channel with real headroom
+
+Only one information channel has confirmed headroom: **discovery**. The detector, hazard-forecast, urgency, foresight, road
+and communication channels measured zero or below materiality, so no model is proposed for them.
+
+**Channel: incident discovery (where are the incidents?).**
+
+* **Headroom (evidence):** M5, no fog of war, +1.71 [+1.05, +2.40] incidents at stress 2 and +3.10 [+2.28, +3.95] at stress 7
+  on the held-out seeds, Holm-confirmed; fewer victims lost at every stress (+1.1 to +1.8, development seeds). The Step 3
+  measurement of 226 ticks between spawn and discovery on average agrees. Realistic gain is a fraction of that ceiling
+  and is **not measured here**.
+* **What an AI would predict:** for each cell and time window, the chance that an undiscovered incident exists, to rank
+  where SEARCH teams (or a survey asset) should look next; or, alternatively, an arrival forecast that pre-positions teams.
+* **Inputs available at run time:** time since a cell was last observed, the incidents found so far (their cells and
+  ticks), building density and district from the terrain table, the Omori-style rate of recent arrivals, the fraction of
+  the map covered. Nothing from the fault channel is needed.
+* **Labels:** the simulator logs every incident's spawn tick, cell and discovery tick (the per-incident probe diagnostics log);
+  a label is "an undiscovered incident existed in this cell at this tick" (positive) or not. Labels for training come from
+  the laptop world only.
+* **Caveat that decides whether it can work at all:** the world places random arrivals through a hash and the
+  causal model places damage on teams' routes; if arrival cells have no spatial structure, a coverage-and-revisit rule (no
+  learning) already captures what a model could. **This was not tested** (the oracle gives the ceiling, not the
+  predictability). The first experiment is a Bayes-optimal baseline: score the best static or recency-based search
+  priority against M5 before training anything.
+* **Evidence of value to ask for:** closing at least half of the M5 gap, paired against P on held-out seeds, with the
+  same demand guard.
+
+**Channels with no case for an AI in v1:** fault detection (perfect detector +0.28 and +0.01, upper bounds +0.9), hazard
+forecasting and prevention (S1 about 0), foresight of fire and collapse (M2 to M4 about 0), urgency (M1 negative or 0), road
+knowledge (R1 to R3 about 0), communication reliability (DQ2 below materiality).
+
+### G.2 Equipment and capability tiers (v2 sketch)
+
+**Goal:** turn the confirmed work and travel headroom into something a design can buy, without a wire or schema change.
+
+* **Tool classes** per team: hand, powered, heavy, aerial (aerial: speed and search, not work).
+* **`work_multiplier` table** (work type by tool class; values are starting guesses to be set from the W2 and W1 results, not
+  tuned to a probe):
+
+  | Specialization | hand | powered | heavy |
+  |---|---|---|---|
+  | EXTRACTION | 1.0 | 1.5 | 2.0 |
+  | PERIMETER | 1.0 | 1.5 | 2.0 |
+  | SUPPORT | 1.0 | 1.25 | 1.5 |
+  | SEARCH | 1.0 | 1.0 (aerial: travel x2) | n/a |
+  | MEDICAL | 1.0 | 1.0 | n/a |
+
+  EXTRACTION and PERIMETER first because W2 ranks them first (+4.0 and +3.3 incidents at x2, SEARCH +1.0, MEDICAL +0.4).
+* **Constraints (so a tier is not free):** a powered or heavy tool must **pay its drain per unit of work** (W1b, not W1a;
+  otherwise a x1.25 speed-up that costs nothing is worth +4.4 and one that costs per unit only +1.6), burns equipment faster
+  per tick, and heavy tools slow travel (V1 shows a slow team costs more than a fast one gains: perimeter at half speed lost
+  1.7 incidents). Aerial teams move over debris at a higher speed but do no ground work.
+* **Mapping with no wire change:** the team index already carries the specialization (`probe_team_spec`, mixes a, b, c are
+  index-to-specialization tables); a tier is derived from the same index (for example indices 0..2 heavy, 3..6 powered,
+  rest hand), so the 4-byte team record and every wire format stay as they are.
+* **Files that would change:** `core/team.h/.c` (tier field computed from the index, drain scaling), `core/incident.c`
+  (work multiplier applied where work progress is added, the same place the W probes hook), `core/simulation.c` (speed by
+  tier, the V1 hook), `core/scoring.c` (bids see tier capability, as RR4 did, but only for the bid, not the allocator),
+  `core/environment.h/.c` (a stage flag only if heavy tools gate on a stage; W3 says stages are neutral, so not needed),
+  `laptop/main.c` (one `--tiers=...` flag), and the board stubs.
+* **Test before building:** TM1 (free reconfiguration) is the cheapest first test; then a W1b-style run with the table
+  above against the W1b result; then a heavy-tool slow-travel run.
+
+### G.3 Dashboard: what each team KNOWS against the true map
+
+The dashboard map draws the true terrain (the mission link carries the true map, 37 B payload per row) and
+`laptop/tools/static/dashboard/route.js` re-runs the pathfinder over each cell's `navigable` flag and `travel_cost`
+(`origin/feature/dashboard-2.5d`; the cell record is flags with a `road_blocked` bit and a 2-byte travel cost). With road
+knowledge on, a team plans over its **believed** costs, so the path the dashboard draws from the true map and the path the
+team follows can differ, and a viewer cannot see why a team stops at a blocked cell.
+
+Fields and rates the dashboard needs:
+
+* **Believed layer** (one table, since the simulator keeps one fleet picture): per cell a kind (clear, partial debris,
+  blocked), the tick learned, and a stale flag. Send as a **delta event** `{tick, cell, kind, learned_tick, reporter, delivered_tick}`.
+  Rates measured: about 10 damaged cells per seed at stress 2 and 17 at stress 7, so a few dozen deltas per 3000 ticks, with
+  reports lost 51 to 68 percent of the time under the default settings; the whole channel is under 1 event per 100 ticks.
+* **Truth versus belief difference:** a derived per-cell state `unknown damage`, `believed damage that has cleared`
+  (stale), `known`, with counts per tick (the `stale_cell_ticks` counter), and for a selected team the believed path against
+  the true-map path (`route.js` run over both cost tables).
+* **Stall markers:** a team stopped at a truly blocked step (`causal_actions_crossing_stall`), about 18 to 80 per seed
+  depending on the propagation setting.
+* **Latency of what the viewer sees:** a delta carries both `learned_tick` and `delivered_tick`, so the map can draw
+  "known to the observer but not yet to the fleet".
+* **Not needed at the measured damage rate:** per-team beliefs (the model has one fleet table; see A and A2).
+
+## H. Scorecard, caveats and what was not done
+
+**Overall scorecard (Step 5 brief).**
+
+| Question | Answer |
+|---|---|
+| Is "a perfect detector adds at most 5 percent" right? | Yes, and smaller: +0.28 [-0.33, +0.89] (stress 2) and +0.01 [-0.84, +0.85] (stress 7) incidents on 100 seeds; the Step 4 stress-7 value of +1.75 does not replicate |
+| Where is there headroom? | Work speed (largest), travel, rest and stamina (capacity), team mix, and discovery (information) |
+| Is any information channel worth building? | One: discovery (M5, about 0.4 team-equivalent) |
+| Do cheaper responses make the detector more valuable? | No (+0.19 and -0.27 incidents with all five on) |
+| Does the road-knowledge simplification matter? | Not below a latency of about 30 ticks (18 minutes); at 100 ticks +1.3 at stress 7 on both seed sets but not confirmed after Holm |
+| Is coordination (central assignment) a lever? | At most about 1 incident, not confirmed |
+| Is communication a lever? | Below materiality (+0.7 and +0.5 incidents) |
+
+**Caveats.**
+
+* **Demand response.** The world generates arrivals as capacity frees up, so "incidents resolved" gains for large capacity
+  changes are partly demand (flagged in the "Spawned" column); the K1 slope is inflated and team-equivalents are understated;
+  victims lost is the cleaner outcome.
+* **Probe values are ceilings, not designs.** M5, W0, V0, DQ1 and the oracles remove a constraint for free; what the real
+  cost of getting there would be is not measured.
+* **Shared road picture** understates ignorance (A2), so the value of road information is a lower bound; the Addendum C
+  sweep shows the lower bound is flat below a latency of 30 ticks.
+* **Step 4 stress-7 detector headline withdrawn:** it was a 40-seed result that does not replicate on 100 seeds (B1a).
+* **Single world:** one map generator, hash-based arrivals, 10 teams, 3000 ticks, causal profile only; the specialisation
+  load and fault model are those of the frozen v1 world.
+* **Multiple testing:** 376 contrasts screened, Holm over the whole family; the confirmed list is stable at that size.
+  Held-out tests share seeds across probes (paired baselines), so confirmations are not independent across rows.
+* **S1 hazard-level prevention is a literal null** (the only priced in-field option is never chosen), not a measurement of cheap
+  prevention (B1b).
+* **Pre-existing failures:** four `make check-*` targets fail identically at the frozen Step 4 tree and the board multi-board
+  link needs a vendored BSP folder; none is touched here.
+* **Scale:** the simulator has two inconsistent length scales (`docs/SCALE_AUDIT.md`); nothing here depends on metres except the
+  comm-fault model.
+
+**Wall-clock notes.** Machine time for the runs was several days on one 4-core machine with exactly 4 workers and
+nothing else running; the final held-out runs finished at 11:17 UTC on 27 October. The elapsed time was longer: about 20
+minutes were lost to a queue that never started (a process-match bug), and the container restarted several times, one of
+which cost about 22 hours because no watcher was alive when the turn ended. The remedy was an hourly scheduled check, a
+pid-file-based restart script and a watcher kept alive at all times. Finished runs are skipped on restart, so no run was
+repeated except the 54 stress-2 baselines re-run on the frozen binary (P).
+
