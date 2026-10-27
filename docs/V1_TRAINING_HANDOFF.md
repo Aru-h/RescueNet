@@ -1,5 +1,7 @@
 # Training a model for the v1 world: hand-off notes
 
+> **Superseded in part by docs/HEADROOM_MAP.md (Step 5):** the stress-7 detector headroom (+1.75) and the shipped-AI planner gain (+1.23) did not replicate on 100 seeds (Step 5: +0.01 [-0.84, +0.85] and +0.14 [-0.47, +0.73]); the +1.68 (fixed gates + shipped AI) was not re-measured in Step 5 and is UNCONFIRMED. **Section 8 has been rewritten from `docs/HEADROOM_MAP.md`; the old Step 4 table is kept there, marked.**
+
 
 For the owner of the fault-predictor model. **Nothing here has been run for a new model**: no training data was generated,
 no model was trained, calibrated or exported, `ml/` and the shipped weights are untouched. These are the commands, seed
@@ -100,7 +102,7 @@ additional, outside check: score the exported model on them in closed loop (sect
   closed-loop, not only by offline AUC.
 * **Closed-loop shift.** Training rows come from the AI-off gates; once a model is on, it changes team behaviour (which
   teams rest, when), so the states it sees at deployment differ from its training rows. The Step 3.6 and Step 4 numbers
-  for the shipped model show this effect (its gain at stress 7 exists although it was trained on the old world).
+  for the shipped model show this effect (its gain at stress 7 exists although it was trained on the old world). ‡ *(Superseded in part by `docs/HEADROOM_MAP.md`, Step 5: the shipped model's stress-7 gain did not replicate on 100 seeds, +0.14 [-0.47, +0.73] on the planner; see the banner and section 8.)*
 * **No team-count or hardware claims.** Nothing here concerns the number of teams; a true team-count sweep was not done.
 
 ## 6. What the model's output is used for
@@ -146,34 +148,70 @@ into `core/`. The header must define the same symbols as `core/fault_predictor_w
 
 ## 8. What a new model must beat
 
+**Rewritten after Step 5 from `docs/HEADROOM_MAP.md`** (100 development seeds 1001-1100, confirmed on 100 held-out seeds
+3001-3100, paired 95% intervals, v1 world, planner P as the consumer of the detector). The Step 4 version of this section
+is kept at the end, marked as superseded.
+
+**Plainly: a retrained detector cannot be expected to improve mission outcomes in the v1 world.**
+
+* **The detector ceiling is indistinguishable from zero.** A perfect fault detector given to the planner (PD minus P) adds
+  **+0.28 [-0.33, +0.89] incidents per seed at stress 2 and +0.01 [-0.84, +0.85] at stress 7**; the upper bound of either
+  interval is about +0.9 incidents (about 2 percent of throughput). Detection delay (5 to 40 ticks), a 30 percent miss rate with
+  1 percent false alarms, and removing 25 to 75 percent of the baseline's evidence all leave this at zero. The Step 4
+  stress-7 figure (+1.75) was a small-sample result that did not replicate.
+* **The shipped model on the planner is also zero:** PA minus P is **-0.05 [-0.60, +0.50] at stress 2 and +0.14
+  [-0.47, +0.73] at stress 7**. The Step 4 "+1.23 at stress 7" did not replicate. The +1.68 on the fixed gates (FA minus F) was
+  not re-measured in Step 5 and is **unconfirmed**; do not use it as a target. Fixed gates and planner are also
+  indistinguishable (F minus P -0.26 and -0.28).
+* **Where the headroom is.** Not in detection. The confirmed headroom in the v1 world is in work speed, travel, rest and
+  stamina, team mix and incident discovery (`docs/HEADROOM_MAP.md`, sections D to G); a fault model cannot supply any of it.
+  Cheaper responses (relief, support repair, lane opening, degraded mode, autonomy) do not make a better detector more valuable:
+  with all five on, the detector-oracle gain is +0.19 and -0.27 incidents.
+* **Success criteria for a new model** (replace the old "match or exceed the shipped model's gain"):
+  1. **Host/board parity:** the exported weights reproduce the training framework's outputs on the host and on the board
+     (`make check-feature-spec-fresh`, `make check-feature-pack-parity`, `python ml/export_parity_fixture.py --checkpoint <your checkpoint>`,
+     `make check-model-parity`), with the board build still compiling and linking (`make check-board-single`).
+  2. **Calibration quality:** scores are well calibrated on the validation seeds 5301-5340 (the reliability histograms and the
+     isotonic tables of `final_eval.sh calibrate`, section 7), because the planner reads the score as a probability.
+  3. **No harm** against the baselines in the same rows: PA minus P and FA minus F with intervals that do not exclude 0 on the
+     negative side at stress 1, 2, 3.5 and 7, and no worse victims lost. The shipped model (-0.05 and +0.14 on the planner) is the
+     reference, not a target to beat.
+  4. **Not** an incidents gain: no incidents gain is expected, and one should not be claimed unless it is confirmed on held-out
+     seeds with the multiple-testing correction used in Step 5.
+* **Noise floor.** With 100 seeds, a paired 95% interval on incidents is about +-0.6 to +-0.9 incidents per seed; differences below
+  that are not resolvable. With the 40 seeds of the Step 4 harness the interval is wider (about +-0.9 to +-1.3). A candidate whose interval
+  overlaps the shipped model's has not shown an improvement.
+* **Victims lost** shows no reliable change in any detector comparison; do not claim a victims-lost gain from one comparison.
+* **Fault load** to expect in your training data (fixed gates, share of team-ticks with the fault active): mobility 6.9 /
+  11.8 / 17.3 / 26.2%, resource 3.5 / 6.0 / 9.4 / 14.8%, communication about 1.0-1.3%, environment (route-touch label) 1.9 /
+  3.6 / 5.6 / 8.7%, mission about 0%, at stress 1 / 2 / 3.5 / 7. Mission is essentially never active; do not expect to learn it.
+* The gates catch mobility faults fast (median 2 ticks) but miss 38 to 43 percent of mobility, 85 to 86 percent of communication
+  and 63 to 67 percent of resource episodes before they end (`docs/HEADROOM_MAP.md`, B0.2); the missed episodes are where any
+  headroom would have to come from, and the perfect-detector result says catching them changes no outcome.
+* Report your own candidate with `final_eval.sh` (section 7) and the held-out seeds only once, after thresholds and
+  calibration are fixed on validation and development seeds. (The seed ranges and commands in sections 2, 3 and 7 are unchanged.
+  Step 5 read held-out seeds 3001-3100 for the world measurements; no model was trained or tuned on them.)
+
+### Step 4 table and ceiling (superseded in part; kept for reference)
+
 From `docs/FINAL_EVALUATION.md` (v1 world, 40 seeds pooled, 95% paired intervals). The shipped model is the **context** row, not a
-fair baseline: it was trained on the old fault model. Incidents resolved per seed:
+fair baseline: it was trained on the old fault model. Incidents resolved per seed. ‡ *The stress-7 PD, FA and PA rows and the
+differences derived from them (+1.75, +1.68, +1.23) did not replicate (the first and third) or were not re-measured (the second)
+in Step 5; see the banner.*
 
 | Stress | Fixed gates F | Planner P | Planner + perfect detector PD (ceiling) | Shipped model on fixed gates FA | Shipped model on planner PA |
 |---|---|---|---|---|---|
 | 1 | 44.30 | 44.45 | 45.60 | 44.48 | 44.08 |
 | 2 (realistic headline) | 42.52 | 42.33 | 42.67 | 42.08 | 42.48 |
 | 3.5 | 39.83 | 40.23 | 40.12 | 40.27 | 40.27 |
-| 7 (harsh stress test) | 34.23 | 33.25 | 35.00 | 35.90 | 34.48 |
+| 7 (harsh stress test) ‡ | 34.23 | 33.25 | 35.00 | 35.90 | 34.48 |
 
-What these numbers say a model can and cannot win:
-
-* **Ceiling.** The detector-oracle headroom (PD minus P) is +1.15 [+0.15, +2.17] at stress 1, +0.35 [-0.53, +1.25] at stress 2,
-  -0.10 [-1.23, +1.02] at stress 3.5 and +1.75 [+0.47, +2.98] at stress 7 incidents per seed. At the realistic stress 2 there is
-  essentially nothing for any detector to win (the interval includes 0); the largest possible gain anywhere is about 5%.
-* **The shipped model's gain**, to be matched or exceeded: at stress 7, +1.68 [+0.05, +3.12] on the fixed gates (FA minus F)
-  and +1.23 [+0.20, +2.25] on the planner (PA minus P); at stress 1, 2 and 3.5 its gain is indistinguishable from 0 (point
-  estimates -0.45 to +0.45). A new model has to beat these in the same rows, and at stress 7 there is only about +0.5
-  between the shipped model's planner gain and the ceiling.
-* **Noise floor.** Differences below about one incident per seed are not resolvable with 40 seeds. A model that scores a
-  point estimate above the shipped one but with an interval that overlaps it has not shown an improvement.
-* **Victims lost** shows no reliable change anywhere (every pooled interval includes 0); do not claim a victims-lost gain from
-  one comparison.
-* **Fault load** to expect in your training data (fixed gates, share of team-ticks with the fault active): mobility 6.9 /
-  11.8 / 17.3 / 26.2%, resource 3.5 / 6.0 / 9.4 / 14.8%, communication about 1.0-1.3%, environment (route-touch label) 1.9 /
-  3.6 / 5.6 / 8.7%, mission about 0%, at stress 1 / 2 / 3.5 / 7. Mission is essentially never active; do not expect to learn it.
-* Report your own candidate with `final_eval.sh` (section 7) and the held-out seeds only once, after thresholds and
-  calibration are fixed on validation and development seeds.
+* **Ceiling (Step 4).** The detector-oracle headroom (PD minus P) was +1.15 [+0.15, +2.17] at stress 1, +0.35 [-0.53, +1.25] at stress 2,
+  -0.10 [-1.23, +1.02] at stress 3.5 and +1.75 [+0.47, +2.98] ‡ at stress 7 incidents per seed. ‡ *(Superseded: stress 7 is +0.01 [-0.84, +0.85] in
+  Step 5; the stress 1 and 3.5 values were not re-measured.)*
+* **The shipped model's gain (Step 4).** At stress 7, +1.68 [+0.05, +3.12] ‡ on the fixed gates (FA minus F) and +1.23 [+0.20, +2.25] ‡
+  on the planner (PA minus P); at stress 1, 2 and 3.5 indistinguishable from 0. ‡ *(Superseded: PA minus P is +0.14 [-0.47, +0.73]
+  at stress 7 in Step 5; the +1.68 is unconfirmed. The old instruction to "match or exceed" these no longer applies.)*
 
 ## 9. Things that are easy to get wrong
 

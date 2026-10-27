@@ -1,5 +1,7 @@
 # Final evaluation of the v1 world (Step 4)
 
+> **Superseded in part by docs/HEADROOM_MAP.md (Step 5):** the stress-7 detector headroom (+1.75) and the shipped-AI planner gain (+1.23) did not replicate on 100 seeds (Step 5: +0.01 [-0.84, +0.85] and +0.14 [-0.47, +0.73]); the +1.68 (fixed gates + shipped AI) was not re-measured in Step 5 and is UNCONFIRMED. Figures and conclusions built on them are marked ‡ below; the original numbers are left unchanged.
+
 Pre-registration: `docs/FINAL_EVALUATION_PREREG.md`, committed as `33337b4` before any Step 4 run. Raw harness output (every
 table below, unedited): `docs/FINAL_EVALUATION_harness_output.md`; numbers behind the figures:
 `docs/figures/final_eval_results.json`. Produced by `laptop/tools/final_eval.sh` at commit `f63de4a` (clean tree) in about 95
@@ -18,27 +20,28 @@ design and tables.
 1. **A perfect fault detector is worth at most about 5% more incidents resolved, and at the realistic stress it is worth
    about nothing.** Giving the planner the true fault state adds +0.35 incidents per seed at stress 2 (95% interval -0.53 to
    +1.25, out of 42.3), -0.10 at stress 3.5, and +1.75 at stress 7 (+0.47 to +2.98, out of 33.3). The best case is therefore
-   a few percent, and it does not grow steadily with stress.
+   a few percent, and it does not grow steadily with stress. ‡ *(Superseded in part by `docs/HEADROOM_MAP.md`, Step 5: not replicated on 100 seeds; the +1.68 is unconfirmed. See the banner.)*
 2. **The gain from detection is not monotone in stress.** It is positive at both ends (+1.15 [+0.15, +2.17] at stress 1 and
    +1.75 at stress 7) and about zero in the middle. I predicted a steady rise and was wrong. The stress 1 result is borderline
    (the lower bound is +0.15; the held-out seeds alone give +0.70 [-0.65, +2.00]) and I have no tested explanation for it;
    with four comparisons a borderline interval can be chance.
+   ‡ *(Item 2 is built on the stress-7 end of the curve (+1.75), which did not replicate (Step 5: +0.01 [-0.84, +0.85]); the stress-1 end (+1.15) was not re-measured in Step 5. The "U-shaped" reading is therefore unsupported; see `docs/HEADROOM_MAP.md`.)*
 3. **Most of what faults cost is not recoverable by detecting them better.** Against a no-fault reference (47.4 incidents
    per seed), faults cost the planner 2.95, 5.07, 7.17 and 14.15 incidents at stress 1, 2, 3.5 and 7. A perfect detector
-   recovers 39%, 7%, -1% and 12% of that. The rest is the cost of the repair itself: a faulted team has to go home for about
+   recovers 39%, 7%, -1% and 12% of that. ‡ *(the 12% at stress 7 is the superseded +1.75; see the banner.)* The rest is the cost of the repair itself: a faulted team has to go home for about
    70 ticks (mobility) or 40 (resource), and about 91-95% of faults end that way at every stress (`fault_ending.png`).
 4. **The planner is not distinguishable from the fixed gates at any stress** (all four pooled intervals include 0: +0.15,
    -0.20, +0.40, -0.97 incidents per seed).
 5. **The shipped AI helps at stress 7 and not elsewhere**, on a world it was not trained on: +1.68 [+0.05, +3.12] on the fixed
    gates and +1.23 [+0.20, +2.25] on the planner at stress 7; every other pooled interval includes 0. Its stress 7 gain is
-   about the size of the detector ceiling (+1.75), so at that stress a new model has little measurable room beyond it.
+   about the size of the detector ceiling (+1.75), so at that stress a new model has little measurable room beyond it. ‡ *(Superseded in part by `docs/HEADROOM_MAP.md`, Step 5: not replicated on 100 seeds; the +1.68 is unconfirmed. See the banner.)*
 6. **Capacity falls steadily with stress, but half the fleet is resting in every world.** Mean teams in service (working or
    available) is 4.16, 3.77, 3.32 and 2.58 of 10 at stress 1, 2, 3.5 and 7 (planner), against 4.81 with no faults at all.
    About half of all team-ticks are RESTING in every condition (46.6% with no faults, 48-53% with them), which is the normal
    stamina rest cycle. Faults take away a further 14%, 22%, 31% and 46% of the in-service level.
 7. **Headroom does not track effective capacity** the way I predicted: the rank correlation between headroom and teams in
    service across the four stress levels is -0.20, not -0.8 or lower. The stress 7 end fits ("more headroom when fewer
-   teams are in service"); the stress 1 end does not.
+   teams are in service"); the stress 1 end does not. ‡ *(Superseded in part by `docs/HEADROOM_MAP.md`, Step 5: not replicated on 100 seeds; the +1.68 is unconfirmed. See the banner.)*
 8. **Everything at stress 2 and 7 reproduces Step 3.6 exactly** (40 of 40 seeds identical, all five systems, incidents and
    victims), so the harness and the earlier results agree.
 
@@ -77,7 +80,9 @@ Paired differences in incidents resolved per seed, pooled over 40 seeds (95% int
 | 1 | **+1.15 [+0.15, +2.17]** | +0.15 [-0.97, +1.25] | +0.17 [-0.90, +1.25] | -0.38 [-1.10, +0.38] |
 | 2 | +0.35 [-0.53, +1.25] | -0.20 [-1.23, +0.80] | -0.45 [-1.65, +0.70] | +0.15 [-0.72, +0.97] |
 | 3.5 | -0.10 [-1.23, +1.02] | +0.40 [-0.53, +1.30] | +0.45 [-0.62, +1.57] | +0.05 [-0.93, +1.05] |
-| 7 | **+1.75 [+0.47, +2.98]** | -0.97 [-2.30, +0.38] | **+1.68 [+0.05, +3.12]** | **+1.23 [+0.20, +2.25]** |
+| 7 | **+1.75 [+0.47, +2.98]** ‡ | -0.97 [-2.30, +0.38] | **+1.68 [+0.05, +3.12]** ‡ | **+1.23 [+0.20, +2.25]** ‡ |
+
+*‡ Superseded in part by `docs/HEADROOM_MAP.md` (Step 5): the stress-7 detector headroom (+1.75) and the shipped-AI planner gain (+1.23) did not replicate on 100 seeds; the +1.68 was not re-measured and is UNCONFIRMED. Original numbers unchanged.*
 
 Victims lost: all 16 pooled paired intervals include 0 (see the raw output). No conclusion is drawn from victims lost.
 
@@ -102,21 +107,21 @@ Fault exposure (fixed gates, share of team-ticks with the fault active): mobilit
 |---|---|---|---|
 | A | Mean teams in service falls with stress, every system | monotone for all five systems (planner 4.16, 3.77, 3.32, 2.58) | **yes** |
 | A2 | Planner in-service share: at least 0.85 (stress 1); 0.72-0.88 (stress 2); 0.35-0.60 (stress 7) | 0.416, 0.377, 0.258 | **no (all three)**: I did not account for the ~50% of time teams spend resting in every world |
-| B | Detector headroom ordered by stress (1 <= 2 <= 3.5 <= 7) | +1.15, +0.35, -0.10, +1.75 | **no** |
-| B2 | Headroom interval includes 0 at stress 1 and 2, excludes 0 at stress 7 | stress 1 interval excludes 0 | **no** (stress 2 and 7 as predicted) |
+| B | Detector headroom ordered by stress (1 <= 2 <= 3.5 <= 7) | +1.15, +0.35, -0.10, +1.75 | **no** ‡ |
+| B2 | Headroom interval includes 0 at stress 1 and 2, excludes 0 at stress 7 | stress 1 interval excludes 0 | **no** (stress 2 and 7 as predicted) ‡ |
 | B3 | Stress 3.5 headroom between the stress 2 and stress 7 values | -0.10 (below both) | **no** |
-| C | Rank correlation of headroom with teams in service -0.8 or lower | -0.20 | **no** |
-| C2 | The rank correlation is -1 | -0.20 | **no** |
-| D | AI gain includes 0 at stress 1 and 2, positive and excluding 0 at stress 7 | yes for both FA minus F and PA minus P | **yes** |
-| D2 | AI-gain point estimates ordered with stress | FA minus F: +0.17, -0.45, +0.45, +1.68; PA minus P: -0.38, +0.15, +0.05, +1.23 | **no** |
+| C | Rank correlation of headroom with teams in service -0.8 or lower | -0.20 | **no** ‡ |
+| C2 | The rank correlation is -1 | -0.20 | **no** ‡ |
+| D | AI gain includes 0 at stress 1 and 2, positive and excluding 0 at stress 7 | yes for both FA minus F and PA minus P | **yes** ‡ |
+| D2 | AI-gain point estimates ordered with stress | FA minus F: +0.17, -0.45, +0.45, +1.68; PA minus P: -0.38, +0.15, +0.05, +1.23 | **no** ‡ |
 | E | Planner minus fixed gates includes 0 at all four stress levels | all four include 0 | **yes** |
 | F | Fixed-gate incidents fall monotonically with stress | 44.30, 42.52, 39.83, 34.23 | **yes** |
 | G | Victims lost: most pooled intervals include 0 | all 16 include 0 | **yes** |
 | H | Stress 2 and 7 rows equal Step 3.6 exactly | 40 of 40 seeds identical for all five systems at both stress levels | **yes** |
 
-Six predictions held (A, D, E, F, G, H); seven did not (A2, B, B2, B3, C, C2, D2). The failures are about the shape of the
+Six predictions held (A, D, E, F, G, H); seven did not (A2, B, B2, B3, C, C2, D2). ‡ *(B, B2, C, C2, D and D2 depend on the superseded stress-7 figures; see the banner.)* The failures are about the shape of the
 headroom curve and about my estimate of how much of the fleet is in service; none changes a conclusion about the planner or the
-AI. The requested prediction, that headroom grows as teams in service falls, is **not supported** by these four points.
+AI. The requested prediction, that headroom grows as teams in service falls, is **not supported** by these four points. ‡ *(Superseded in part by `docs/HEADROOM_MAP.md`, Step 5: not replicated on 100 seeds; the +1.68 is unconfirmed. See the banner.)*
 
 ## What was not done and what is not claimed
 

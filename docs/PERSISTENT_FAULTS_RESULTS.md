@@ -1,5 +1,7 @@
 # Persistent faults: results (Step 3.6)
 
+> **Superseded in part by docs/HEADROOM_MAP.md (Step 5):** the stress-7 detector headroom (+1.75) and the shipped-AI planner gain (+1.23) did not replicate on 100 seeds (Step 5: +0.01 [-0.84, +0.85] and +0.14 [-0.47, +0.73]); the +1.68 (fixed gates + shipped AI) was not re-measured in Step 5 and is UNCONFIRMED. Figures and conclusions built on them are marked ‡ below; the original numbers are left unchanged.
+
 Pre-registration (parameters, comparisons, predictions): `docs/PERSISTENT_FAULTS_PROPOSAL.md` section 9,
 committed as `e0dd4a9` before any planner or AI comparison was run. No parameter changed afterwards. The
 frozen binaries are the implementation commit `ac63040` (the later commit `1a47a1e` only adds a check, a
@@ -17,7 +19,7 @@ drawn from one set alone.
    oracle fault probability minus planner without it: stress 2 **+0.35 [-0.53, +1.25]** incidents per seed
    pooled (about 0); stress 7 **+1.75 [+0.47, +2.98]** (interval excludes 0; dev +1.55, held-out +1.95). So the
    "perfect detector adds about 0" finding of Step 3.5 does not carry over to a world where faults persist,
-   but only the harsh stress shows it.
+   but only the harsh stress shows it. ‡ *(Superseded in part by `docs/HEADROOM_MAP.md`, Step 5: not replicated on 100 seeds; the +1.68 is unconfirmed. See the banner.)*
 2. **A perfect forecaster is worth about nothing**, with either preventive option or both. Hazard oracle minus
    planner: PREVENT (rest at base) -0.10 [-0.50, +0.35] at stress 2 and +0.40 [-0.42, +1.23] at stress 7;
    PREVENT_FIELD exactly 0.00 at both (it was never chosen); both options together equal PREVENT alone.
@@ -30,7 +32,7 @@ drawn from one set alone.
    faulted team home within a few ticks, which cancels the repair.
 6. **The shipped AI, evaluated as context, now helps at stress 7**: fixed gates + AI minus fixed gates +1.68
    [+0.05, +3.12]; planner + AI minus planner +1.23 [+0.20, +2.25]. At stress 2 it is about 0 (-0.45, +0.15).
-   It was trained on the old timer model and not retrained, so this is a distribution-shift context number.
+   It was trained on the old timer model and not retrained, so this is a distribution-shift context number. ‡ *(Superseded in part by `docs/HEADROOM_MAP.md`, Step 5: not replicated on 100 seeds; the +1.68 is unconfirmed. See the banner.)*
 
 ## Main table (incidents resolved per seed; victims lost in the last three columns)
 
@@ -70,14 +72,16 @@ Paired differences, pooled (95% CI):
 | field repair on (timer to on) | +0.23 [-0.68, +1.18] | -0.20 [-1.00, +0.60] | -0.50 [-1.85, +0.85] | -1.32 [-2.70, +0.10] |
 | semantics (on to v1) | 0.00 | 0.00 | 0.00 | 0.00 |
 | P minus F | -0.20 [-1.23, +0.80] | -0.97 [-2.30, +0.38] | +0.23 [-1.45, +1.75] | +0.45 [-1.35, +2.20] |
-| **P-det minus P** (detector headroom) | **+0.35 [-0.53, +1.25]** | **+1.75 [+0.47, +2.98]** | +0.07 [-1.35, +1.48] | +1.07 [-0.65, +2.80] |
+| **P-det minus P** (detector headroom) | **+0.35 [-0.53, +1.25]** | **+1.75 [+0.47, +2.98]** ‡ | +0.07 [-1.35, +1.48] | +1.07 [-0.65, +2.80] |
 | **P-haz[rest] minus P** | -0.10 [-0.50, +0.35] | +0.40 [-0.42, +1.23] | -0.10 [-0.60, +0.38] | -0.85 [-1.73, +0.00] |
 | **P-haz[field] minus P** | 0.00 | 0.00 | 0.00 | 0.00 |
 | **P-haz[both] minus P** | -0.10 [-0.50, +0.35] | +0.40 [-0.42, +1.23] | -0.10 [-0.60, +0.38] | -0.85 [-1.73, +0.00] |
-| P-both minus P | -0.35 [-1.43, +0.72] | +1.75 [+0.47, +3.05] | +0.65 [-1.00, +2.35] | +0.50 [-1.05, +2.10] |
-| F + AI minus F | -0.45 [-1.65, +0.70] | +1.68 [+0.05, +3.12] | +0.78 [-0.53, +2.08] | +1.18 [-0.70, +3.12] |
-| P + AI minus P | +0.15 [-0.72, +0.97] | +1.23 [+0.20, +2.25] | +0.15 [-0.85, +1.20] | -0.35 [-1.80, +1.15] |
+| P-both minus P | -0.35 [-1.43, +0.72] | +1.75 [+0.47, +3.05] ‡ | +0.65 [-1.00, +2.35] | +0.50 [-1.05, +2.10] |
+| F + AI minus F | -0.45 [-1.65, +0.70] | +1.68 [+0.05, +3.12] ‡ | +0.78 [-0.53, +2.08] | +1.18 [-0.70, +3.12] |
+| P + AI minus P | +0.15 [-0.72, +0.97] | +1.23 [+0.20, +2.25] ‡ | +0.15 [-0.85, +1.20] | -0.35 [-1.80, +1.15] |
 | Planner, Step 3.5 world minus F Step 3.5 world | +0.30 [-0.65, +1.25] | -0.42 [-1.18, +0.33] | +0.05 [-1.10, +1.20] | +0.03 [-1.10, +1.15] |
+
+*‡ Superseded in part by `docs/HEADROOM_MAP.md` (Step 5): the stress-7 detector headroom (+1.75) and the shipped-AI planner gain (+1.23) did not replicate on 100 seeds; the +1.68 was not re-measured and is UNCONFIRMED. Original numbers unchanged.*
 
 Notes on the table:
 * "Semantics" is exactly 0 everywhere because the fixed gates (AI off) never issue ABORT_MISSION or REQUEST_TASK_REALLOCATION
@@ -87,6 +91,7 @@ Notes on the table:
 * The hazard-oracle victims-lost reduction at stress 7 held-out (-1.85 [-3.10, -0.75]) is one set; pooled it is -0.85
   [-1.73, 0.00]. I draw no conclusion (as pre-registered).
 
+* ‡ *The "dev and held-out agree in sign for the detector headroom at stress 7" note above refers to the superseded +1.75; Step 5 on 100 seeds gives +0.01 [-0.84, +0.85].*
 ## What ends a fault (mean per seed, 40 seeds pooled)
 
 Base repair = the team rested at a safe zone; field repair = a completed field repair; natural = the 10.8 h tail ran
@@ -113,7 +118,7 @@ it is still the same response regardless of which detector asks for it: the rule
 persistent fault within a few ticks, so a perfect detector adds only what the gates miss or delay (+1.75 at stress 7; I did not measure the gates'
 miss rate or detection delay separately, so I cannot say which), and a perfect forecaster adds nothing, which I read as rest
 costing more than the faults it prevents (it is the expected-cost comparison the planner makes; I did not measure the
-counterfactual).
+counterfactual). ‡ *(Superseded in part by `docs/HEADROOM_MAP.md`, Step 5: not replicated on 100 seeds; the +1.68 is unconfirmed. See the banner.)*
 
 ## Field repair
 
@@ -141,23 +146,23 @@ measurable effect (-0.10 and +0.40). PREVENT_FIELD was chosen 0 times: its benef
 | 2 | Fault share of team-ticks 25-40% at stress 7, 10-20% at stress 2 | mobility 26.2% / 11.8% (in range); resource 14.8% / 6.0% (below) | **partly** (mobility yes, resource lower) |
 | 3 | `repair` alone on the fixed gates: 0 to +2 at stress 7, about 0 at stress 2 | -0.20 [-1.00, +0.60] and +0.23 [-0.68, +1.18] | **no at stress 7** (about 0, wrong sign), yes at stress 2; explained by repairs not completing |
 | 4 | P minus F: +1 to +3 at stress 7, 0 to +1 at stress 2 | -0.97 [-2.30, +0.38] and -0.20 [-1.23, +0.80] | **no** |
-| 5 | Detector headroom: +0.5 to +2 at stress 7, about 0 at stress 2 | +1.75 [+0.47, +2.98] and +0.35 [-0.53, +1.25] | **yes** |
+| 5 | Detector headroom: +0.5 to +2 at stress 7, about 0 at stress 2 | +1.75 [+0.47, +2.98] ‡ and +0.35 [-0.53, +1.25] | **yes** |
 | 6a | P-haz[rest] about 0 (at most +1) | +0.40 [-0.42, +1.23] and -0.10 [-0.50, +0.35] | **yes** |
 | 6b | P-haz[field] about 0 | exactly 0 (never chosen) | **yes** |
 | 6c | P-haz[both] about 0, not above the larger of 6a and 6b by more than noise | +0.40 and -0.10 (equal to 6a) | **yes** |
-| 7 | P-both about the sum of 5 and 6, dominated by 5 | +1.75 [+0.47, +3.05] at stress 7 (= detector headroom); -0.35 at stress 2 (predicted about +0.35) | **yes at stress 7**; at stress 2 consistent with about 0 |
-| 8 | Hazard headroom <= detector headroom | 0.40 <= 1.75 and -0.10 <= 0.35 | **yes** |
+| 7 | P-both about the sum of 5 and 6, dominated by 5 | +1.75 [+0.47, +3.05] ‡ at stress 7 (= detector headroom); -0.35 at stress 2 (predicted about +0.35) | **yes at stress 7**; at stress 2 consistent with about 0 |
+| 8 | Hazard headroom <= detector headroom | 0.40 <= 1.75 and -0.10 <= 0.35 | **yes** ‡ |
 | 8b | Under 2 PREVENT / PREVENT_FIELD per seed | PREVENT 13.8 and 8.8; PREVENT_FIELD 0 | **no** for PREVENT, yes for PREVENT_FIELD |
-| 9 | Planner + AI minus P about 0 or negative | +1.23 [+0.20, +2.25] at stress 7; +0.15 at stress 2 | **no at stress 7** (the AI helps), yes at stress 2 |
+| 9 | Planner + AI minus P about 0 or negative | +1.23 [+0.20, +2.25] ‡ at stress 7; +0.15 at stress 2 | **no at stress 7** (the AI helps), yes at stress 2 |
 | 10 | Victims lost: no conclusion | all pooled intervals include 0 except F v1 vs Step 3.5 world at stress 7 (+1.38 [+0.03, +2.77]) and the timer-only step (+2.70 [+1.25, +4.25]) | yes (the exceptions are the persistence cost itself) |
 | 11 | Most faults end by base repair; natural under 10% | base repair 90-95%, natural 3-7% | **yes** |
 
-Not predicted: the shipped AI helping at stress 7; the planner taking 9-14 rest trips per seed for no gain.
+Not predicted: the shipped AI helping at stress 7; the planner taking 9-14 rest trips per seed for no gain. ‡ *(Superseded in part by `docs/HEADROOM_MAP.md`, Step 5: not replicated on 100 seeds; the +1.68 is unconfirmed. See the banner.)*
 
 ## Reading this plainly
 
 * If a perfect detector adds anything it is at the harsh stress, and it is +1.75 incidents per seed out of ~35 (5%),
-  with an interval that begins at +0.47. At the realistic stress it is +0.35 [-0.53, +1.25].
+  with an interval that begins at +0.47. At the realistic stress it is +0.35 [-0.53, +1.25]. ‡ *(Superseded in part by `docs/HEADROOM_MAP.md`, Step 5: not replicated on 100 seeds; the +1.68 is unconfirmed. See the banner.)*
 * A perfect forecaster, with a rest option or an in-field maintenance option, adds nothing measurable at either stress.
 * The planner is not better than the fixed gates in any version of the world tested.
 * Per the pre-registration, the planner kept its Step 3.5 V and margin and its Step 3.5 calibration tables; I did not retune it.

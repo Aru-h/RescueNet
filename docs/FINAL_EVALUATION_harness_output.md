@@ -1,5 +1,7 @@
 # Final evaluation: results
 
+> **Superseded in part by docs/HEADROOM_MAP.md (Step 5):** the stress-7 detector headroom (+1.75) and the shipped-AI planner gain (+1.23) did not replicate on 100 seeds (Step 5: +0.01 [-0.84, +0.85] and +0.14 [-0.47, +0.73]); the +1.68 (fixed gates + shipped AI) was not re-measured in Step 5 and is UNCONFIRMED. Figures and conclusions built on them are marked ‡ below; the original numbers are left unchanged.
+
 AI rows: **shipped model (trained on the old fault model - context only)**.
 
 ```
@@ -84,10 +86,12 @@ Resting, returning to rest, faulted (mobility or resource fault active) and in s
 | 3.5 | Planner minus fixed gates: P minus F | -0.60 [-2.00, +0.75] | +1.40 [+0.40, +2.40] | **+0.40 [-0.53, +1.30]** |
 | 3.5 | Shipped-AI gain on fixed gates: FA minus F * | -0.30 [-1.90, +1.35] | +1.20 [-0.15, +2.70] | **+0.45 [-0.62, +1.57]** |
 | 3.5 | Shipped-AI gain on planner: PA minus P * | +0.85 [-0.55, +2.30] | -0.75 [-2.05, +0.50] | **+0.05 [-0.93, +1.05]** |
-| 7 | Detector headroom: PD minus P | +1.55 [-0.70, +3.60] | +1.95 [+0.60, +3.30] | **+1.75 [+0.47, +2.98]** |
+| 7 | Detector headroom: PD minus P | +1.55 [-0.70, +3.60] | +1.95 [+0.60, +3.30] | **+1.75 [+0.47, +2.98]** ‡ |
 | 7 | Planner minus fixed gates: P minus F | -0.70 [-2.50, +1.30] | -1.25 [-3.15, +0.40] | **-0.97 [-2.30, +0.38]** |
-| 7 | Shipped-AI gain on fixed gates: FA minus F * | +1.80 [-0.35, +3.85] | +1.55 [-0.95, +3.50] | **+1.68 [+0.05, +3.12]** |
-| 7 | Shipped-AI gain on planner: PA minus P * | +1.75 [+0.30, +3.10] | +0.70 [-0.65, +2.10] | **+1.23 [+0.20, +2.25]** |
+| 7 | Shipped-AI gain on fixed gates: FA minus F * | +1.80 [-0.35, +3.85] | +1.55 [-0.95, +3.50] | **+1.68 [+0.05, +3.12]** ‡ |
+| 7 | Shipped-AI gain on planner: PA minus P * | +1.75 [+0.30, +3.10] | +0.70 [-0.65, +2.10] | **+1.23 [+0.20, +2.25]** ‡ |
+
+*‡ Superseded in part by `docs/HEADROOM_MAP.md` (Step 5): the stress-7 detector headroom (+1.75) and the shipped-AI planner gain (+1.23) did not replicate on 100 seeds; the +1.68 was not re-measured and is UNCONFIRMED. Original numbers unchanged.*
 
 ## Paired differences, victims lost per seed (95% CI; no conclusion is drawn from one comparison alone)
 
@@ -117,9 +121,11 @@ Resting, returning to rest, faulted (mobility or resource fault active) and in s
 | 1 | 4.16 | +1.15 [+0.15, +2.17] |
 | 2 | 3.77 | +0.35 [-0.53, +1.25] |
 | 3.5 | 3.32 | -0.10 [-1.23, +1.02] |
-| 7 | 2.58 | +1.75 [+0.47, +2.98] |
+| 7 | 2.58 | +1.75 [+0.47, +2.98] ‡ |
 
-Spearman rank correlation of headroom with stress: +0.20; with teams in service: -0.20 (4 points; a descriptive summary, not a test).
+*‡ Superseded in part by `docs/HEADROOM_MAP.md` (Step 5): the stress-7 detector headroom (+1.75) and the shipped-AI planner gain (+1.23) did not replicate on 100 seeds; the +1.68 was not re-measured and is UNCONFIRMED. Original numbers unchanged.*
+
+Spearman rank correlation of headroom with stress: +0.20; with teams in service: -0.20 (4 points; a descriptive summary, not a test). ‡ *(Superseded in part by `docs/HEADROOM_MAP.md`, Step 5: not replicated on 100 seeds; the +1.68 is unconfirmed. See the banner.)*
 
 ## How much of the loss to faults a perfect detector recovers (descriptive, not pre-registered)
 
@@ -130,7 +136,9 @@ Incidents resolved per seed: no-fault reference (fixed gates) minus the planner,
 | 1 | 47.40 | 44.45 | 2.95 | +1.15 | 39% |
 | 2 | 47.40 | 42.33 | 5.07 | +0.35 | 7% |
 | 3.5 | 47.40 | 40.23 | 7.17 | -0.10 | -1% |
-| 7 | 47.40 | 33.25 | 14.15 | +1.75 | 12% |
+| 7 | 47.40 | 33.25 | 14.15 | +1.75 | 12% ‡ |
+
+*‡ Superseded in part by `docs/HEADROOM_MAP.md` (Step 5): the stress-7 detector headroom (+1.75) and the shipped-AI planner gain (+1.23) did not replicate on 100 seeds; the +1.68 was not re-measured and is UNCONFIRMED. Original numbers unchanged.*
 
 ## Fault exposure by class (fixed gates F; share of team-ticks with the fault active, development and held-out averaged)
 
