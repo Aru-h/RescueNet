@@ -428,6 +428,38 @@ def api_recording_file(name):
     return Response(content, mimetype="text/plain")
 
 
+@app.route("/api/recordings/<name>/preview")
+def api_recording_preview(name):
+    """Enough of a recording to draw a thumbnail of its city on the
+    Choose-a-run page: the header, the first building list, the map size,
+    and where the teams and safe zones start. Reads only the first few
+    lines (up to the first frame), never the whole file."""
+    if not _RECORDING_NAME_RE.match(name):
+        return jsonify({"status": "error", "message": "invalid recording name"}), 400
+    path = RECORDINGS_DIR / name
+    if not path.is_file():
+        return jsonify({"status": "error", "message": "recording not found"}), 404
+    out = {"header": _read_recording_header(path), "env": None, "width": None, "height": None, "teams": [], "safezones": []}
+    try:
+        with gzip.open(path, "rt") as f:
+            for i, line in enumerate(f):
+                if line.startswith("STATICENV ") and out["env"] is None:
+                    out["env"] = json.loads(line[len("STATICENV "):])
+                elif line.startswith("STATICMAP ") and out["width"] is None:
+                    m = json.loads(line[len("STATICMAP "):])
+                    out["width"], out["height"] = m.get("width"), m.get("height")
+                elif line.startswith("LIVEFRAME "):
+                    frame = json.loads(line[len("LIVEFRAME "):])
+                    out["teams"] = [{"x": t.get("x"), "y": t.get("y")} for t in frame.get("teams", [])]
+                    out["safezones"] = [{"x": s.get("x"), "y": s.get("y")} for s in frame.get("safezones", [])]
+                    break
+                if i > 200:
+                    break
+    except (OSError, json.JSONDecodeError, EOFError):
+        return jsonify({"status": "error", "message": "recording could not be read"}), 500
+    return jsonify({"status": "success", **out})
+
+
 def parse_diag(stderr_text):
     rested = []
     transitions = []
@@ -624,6 +656,13 @@ def landing():
     library and font it uses is served from /static, so it needs no
     internet connection."""
     return render_template("landing.html")
+
+
+@app.route("/replay")
+def replay():
+    """Choose a run to replay: featured runs first, then every run this
+    app has recorded. Picking one opens it on the sim page."""
+    return render_template("replay.html")
 
 
 @app.route("/api/status")

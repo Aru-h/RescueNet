@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Recorded runs · RescueNet</title>
+<meta name="theme-color" content="#0b0b0b">
+<link rel="stylesheet" href="/static/fonts/fonts.css">
+<script src="/static/shared/rn-sky.js"></script>
+<style>
+/* Choose a run to replay. The same dark surface as the landing page's connect screens (RNSky's --deep colours), so it
+   drifts with the visitor's clock like every other page. Featured runs first, then every run this app has saved. */
+:root {
+  --display: 'Archivo', 'Helvetica Neue', Arial, sans-serif; --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --c-bg: var(--deep, #0b0b0b); --c-fg: var(--deep-fg, #e6e6e3); --c-mute: var(--deep-mute, #b4b4af); --c-faint: var(--deep-faint, #9a9a95);
+  --c-rule: var(--deep-rule, #3a3a38); --c-teal: var(--deep-teal, #4fd1c9); --red: #e1251b;
+  --gx: clamp(16px, 2.4vw, 32px);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--c-bg); color: var(--c-fg); }
+body { font-family: var(--display); font-size: 16px; line-height: 1.45; -webkit-font-smoothing: antialiased; min-height: 100vh; }
+.mono { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+a { color: inherit; }
+.page { padding: calc(env(safe-area-inset-top, 0px) + 22px) max(var(--gx), env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 40px) max(var(--gx), env(safe-area-inset-left, 0px)); display: flex; flex-direction: column; gap: 28px; max-width: 1440px; margin: 0 auto; }
+.top { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.back { text-decoration: none; padding: 8px 0; }
+.back:hover, .back:focus-visible { text-decoration: underline; text-underline-offset: 4px; }
+h1 { margin: 0; font-size: clamp(28px, 4.2vw, 64px); font-weight: 900; font-stretch: 125%; text-transform: uppercase; line-height: .92; letter-spacing: -.02em; }
+.lede { margin: -10px 0 0; max-width: 58ch; color: var(--c-mute); }
+.sec-h { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--c-rule); padding-bottom: 10px; }
+.sec-h span:first-child { color: var(--c-fg); }
+.sec-h span:last-child { color: var(--c-mute); }
+a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
+
+/* featured: a large card per run, its city drawn from the recording */
+.featured { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr)); gap: 16px; }
+.card { display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr); gap: 24px; padding: 20px; border: 1px solid var(--c-faint); text-decoration: none; transition: border-color .2s; }
+.card:hover, .card:focus-visible { border-color: var(--c-fg); }
+.card canvas { width: 100%; aspect-ratio: 1; display: block; }
+.card .body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.card strong { font-size: clamp(22px, 2.4vw, 34px); font-weight: 900; font-stretch: 125%; text-transform: uppercase; line-height: .95; }
+.card p { margin: 0; font-size: 15px; max-width: 46ch; }
+.facts { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--c-mute); }
+.go { margin-top: auto; }
+@media (max-width: 560px) { .card { grid-template-columns: 1fr; } .card canvas { max-width: 260px; } }
+
+/* your runs: one row each, newest first */
+.runs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.run { display: grid; grid-template-columns: 56px minmax(0, 1.3fr) minmax(0, 2fr) auto; gap: 18px; align-items: center; padding: 12px 8px; border-bottom: 1px solid var(--c-rule); text-decoration: none; }
+.run:hover, .run:focus-visible { background: color-mix(in srgb, var(--c-fg) 6%, transparent); outline-offset: -2px; }
+.run canvas { width: 56px; height: 56px; display: block; }
+.run .when { font-size: 15px; }
+.run .when small { display: block; color: var(--c-mute); font-family: var(--mono); font-size: 11px; letter-spacing: .06em; margin-top: 2px; overflow-wrap: anywhere; }
+.run .go { margin: 0; }
+@media (max-width: 720px) { .run { grid-template-columns: 48px minmax(0, 1fr); align-items: start; gap: 6px 14px; } .run canvas { width: 48px; height: 48px; } .run .facts { grid-column: 2; } .run .go { display: none; } .run .when small { display: none; } }   /* the whole row is the link */
+.empty, .error { padding: 18px 0; color: var(--c-mute); max-width: 60ch; }
+.error code, .empty code { font-family: var(--mono); color: var(--c-fg); font-size: .92em; }
+.foot { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px 24px; color: var(--c-mute); }
+@media (max-width: 720px) { .foot .keys { display: none; } }
+</style>
+</head>
+<body>
+<main class="page">
+  <div class="top">
+    <a class="back mono" href="/landing" id="back">&larr; Back</a>
+  </div>
+  <h1>Watch a recorded run</h1>
+  <p class="lede">Pick a run to replay. Scrub through it, follow a team, and take over at any moment to continue it live.</p>
+
+  <section aria-labelledby="featH" id="featSec" hidden>
+    <div class="sec-h mono"><span id="featH">01 &middot; Featured</span><span>Runs we chose to show</span></div>
+    <div class="featured" id="featured"></div>
+  </section>
+
+  <section aria-labelledby="runsH">
+    <div class="sec-h mono"><span id="runsH"><span id="runsNum">02</span> &middot; Your runs</span><span id="runsCount"></span></div>
+    <ul class="runs" id="runs"></ul>
+    <p class="empty" id="empty" hidden>No runs yet. Every live simulation is saved here automatically. <a href="/landing">Start one &rarr;</a></p>
+    <p class="error" id="error" hidden></p>
+  </section>
+
+  <div class="foot mono"><span>Every live run is saved here automatically</span><span class="keys">&uarr; &darr; to choose &middot; Enter to watch</span></div>
+</main>
+<script>
+(function () {
+  'use strict';
+  /* runs we chose to show first: matched by file name, with a title and one line of why */
+  var FEATURED = [
+    { match: /^demo_/, title: 'Demo mission', blurb: 'Ten teams through six hours of breaking equipment and failing radios. The run we show first.' }
+  ];
+  var PROFILES = { none: 'No faults', mobility: 'Mobility faults', communication: 'Radio faults', resource: 'Resource faults', combined: 'Mixed faults', random: 'Random faults' };
+  var TICK_S = 36;   /* one simulator tick is 36 seconds (core/mission_state.h) */
+  var $ = function (s) { return document.querySelector(s); };
+  function hm(ticks) { var m = Math.round(ticks * TICK_S / 60), h = Math.floor(m / 60); return h ? h + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '') : m + ' min'; }
+  function clock(ticks) { var m = Math.round(ticks * TICK_S / 60); return 'T+' + String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); }
+  function facts(r) {
+    var f = [];
+    if (r.ticks) f.push(hm(r.ticks));
+    f.push(PROFILES[r.fault_profile] || (r.fault_profile ? r.fault_profile + ' faults' : 'Faults not recorded'));
+    f.push(r.link_loss == null ? '5% radio loss (default)' : Math.round(r.link_loss * 100) + '% radio loss');
+    f.push(r.model_loaded === true ? 'AI on' : r.model_loaded === false ? 'AI off' : 'AI not recorded');
+    if (r.seed != null) f.push('Seed ' + r.seed);
+    if (r.start_tick) f.push('Continued from ' + clock(r.start_tick));
+    return f;
+  }
+  function when(r) {
+    var d = r.created ? new Date(r.created) : new Date(r.mtime * 1000);
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' }) + ', ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+  function href(r) { return '/sim?run=' + encodeURIComponent(r.filename); }
+  function colours() { var cs = getComputedStyle(document.documentElement); return { bg: cs.getPropertyValue('--c-bg').trim(), fg: cs.getPropertyValue('--c-fg').trim(), rule: cs.getPropertyValue('--c-rule').trim(), mute: cs.getPropertyValue('--c-mute').trim(), teal: cs.getPropertyValue('--c-teal').trim(), red: '#e1251b' }; }
+
+  /* the recorded city, as the run starts: buildings in ink, damaged ones filled, destroyed ones red, the epicentre ringed,
+     safe zones in teal, teams as dots */
+  function drawCity(canvas, pv) {
+    var d = Math.min(2, window.devicePixelRatio || 1), w = canvas.clientWidth || 56, x = canvas.getContext('2d');
+    canvas.width = Math.round(w * d); canvas.height = Math.round(w * d); x.setTransform(d, 0, 0, d, 0, 0);
+    var c = colours(), W = pv.width || 36, H = pv.height || 36, q = w / Math.max(W, H), small = w < 100;
+    x.fillStyle = c.bg; x.fillRect(0, 0, w, w); x.lineWidth = small ? .6 : 1;
+    (pv.env && pv.env.buildings || []).forEach(function (b) {
+      var px = b.x * q + q * .12, py = b.y * q + q * .12, bw = (b.w || 1) * q - q * .24, bh = (b.h || 1) * q - q * .24;
+      if (b.damage >= 75) { x.fillStyle = c.red; x.globalAlpha = .85; x.fillRect(px, py, bw, bh); x.globalAlpha = 1; }
+      else if (b.damage >= 50) { x.fillStyle = c.mute; x.globalAlpha = .55; x.fillRect(px, py, bw, bh); x.globalAlpha = 1; }
+      else { x.strokeStyle = c.mute; x.globalAlpha = .75; x.strokeRect(px, py, bw, bh); x.globalAlpha = 1; }
+    });
+    var ep = pv.env && pv.env.epicenter;
+    if (ep && ep.active) { x.strokeStyle = c.red; x.lineWidth = small ? .8 : 1.5; [2.5, 5].forEach(function (r) { x.beginPath(); x.arc((ep.x + .5) * q, (ep.y + .5) * q, r * q, 0, 6.283); x.stroke(); }); }
+    x.fillStyle = c.teal; (pv.safezones || []).forEach(function (s) { x.fillRect(s.x * q, s.y * q, q, q); });
+    x.fillStyle = c.fg; (pv.teams || []).forEach(function (t) { x.beginPath(); x.arc((t.x + .5) * q, (t.y + .5) * q, Math.max(1.2, q * .45), 0, 6.283); x.fill(); });
+  }
+  var previews = {};
+  function preview(r, canvas) {
+    var p = previews[r.filename] || (previews[r.filename] = fetch('/api/recordings/' + encodeURIComponent(r.filename) + '/preview').then(function (res) { return res.ok ? res.json() : null; }).catch(function () { return null; }));
+    p.then(function (pv) { if (pv && pv.env) { canvas._pv = pv; drawCity(canvas, pv); } });
+  }
+
+  function featuredCard(r, f) {
+    var a = document.createElement('a'); a.className = 'card'; a.href = href(r);
+    var cv = document.createElement('canvas'); cv.setAttribute('aria-hidden', 'true');
+    var body = document.createElement('div'); body.className = 'body';
+    var t = document.createElement('strong'); t.textContent = f.title;
+    var p = document.createElement('p'); p.textContent = f.blurb;
+    var fx = document.createElement('div'); fx.className = 'facts mono'; facts(r).forEach(function (s) { var sp = document.createElement('span'); sp.textContent = s; fx.appendChild(sp); });
+    var go = document.createElement('span'); go.className = 'go mono'; go.textContent = 'Watch →';
+    body.append(t, p, fx, go); a.append(cv, body); $('#featured').appendChild(a); preview(r, cv);
+  }
+  function runRow(r) {
+    var li = document.createElement('li'), a = document.createElement('a'); a.className = 'run'; a.href = href(r);
+    var cv = document.createElement('canvas'); cv.setAttribute('aria-hidden', 'true');
+    var w = document.createElement('div'); w.className = 'when'; w.textContent = when(r);
+    var sm = document.createElement('small'); sm.textContent = r.filename; w.appendChild(sm);
+    var fx = document.createElement('div'); fx.className = 'facts mono'; facts(r).forEach(function (s) { var sp = document.createElement('span'); sp.textContent = s; fx.appendChild(sp); });
+    var go = document.createElement('span'); go.className = 'go mono'; go.textContent = 'Watch →';
+    a.append(cv, w, fx, go); li.appendChild(a); $('#runs').appendChild(li); preview(r, cv);
+  }
+
+  fetch('/api/recordings', { cache: 'no-store' }).then(function (res) { if (!res.ok) throw new Error(res.status); return res.json(); }).then(function (list) {
+    var feat = [], rest = [];
+    list.forEach(function (r) { var f = FEATURED.filter(function (F) { return F.match.test(r.filename); })[0]; if (f) feat.push([r, f]); else rest.push(r); });
+    if (feat.length) { $('#featSec').hidden = false; feat.forEach(function (x) { featuredCard(x[0], x[1]); }); }
+    else $('#runsNum').textContent = '01';
+    $('#runsCount').textContent = rest.length ? rest.length + (rest.length === 1 ? ' run' : ' runs') : '';
+    if (!rest.length) $('#empty').hidden = false;
+    rest.forEach(runRow);
+  }).catch(function () {
+    var e = $('#error'); e.hidden = false;
+    e.innerHTML = 'The list of runs could not be loaded. This page needs the RescueNet app: start it with <code>python laptop/tools/app.py</code> and open <code>http://127.0.0.1:5050/replay</code>.';
+  });
+
+  /* up and down move between runs; Enter opens one (links do that already); Escape goes back */
+  document.addEventListener('keydown', function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'Escape') { location.href = $('#back').href; return; }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    var items = [].slice.call(document.querySelectorAll('.card, .run')); if (!items.length) return;
+    var i = items.indexOf(document.activeElement); e.preventDefault();
+    i = i < 0 ? 0 : Math.max(0, Math.min(items.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)));
+    items[i].focus(); items[i].scrollIntoView({ block: 'nearest' });
+  });
+  /* the clock palette moves: redraw the cities in the new colours */
+  if (window.RNSky) RNSky.onChange(function (p) {
+    var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', RNSky.hex(p.deep));
+    document.querySelectorAll('canvas').forEach(function (c) { if (c._pv) drawCity(c, c._pv); });
+  });
+})();
+</script>
+</body>
+</html>

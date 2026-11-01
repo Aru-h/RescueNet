@@ -1408,9 +1408,9 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     connNote.innerHTML = what + ' open from the RescueNet app on your computer. Start it with ' + APP_CMD + ' and open the address it prints (usually <code>http://127.0.0.1:5050</code>).';
     connNote.hidden = false;
   }
-  function goApp(what) { appStatus().then(function (st) { if (st) location.href = './'; else needApp(what); }); }
-  optSim.addEventListener('click', function () { goApp('The simulator'); });
-  $('#optReplay').addEventListener('click', function () { goApp('Recorded runs'); });
+  function goApp(what, path) { appStatus().then(function (st) { if (st) location.href = path; else needApp(what); }); }
+  optSim.addEventListener('click', function () { goApp('The simulator', './'); });
+  $('#optReplay').addEventListener('click', function () { goApp('Recorded runs', 'replay'); });
   optBoard.addEventListener('click', function () { showView('board'); });
   $('#bcBack').addEventListener('click', function () { showView('choice', optBoard); });
   function connectKey(e) {
