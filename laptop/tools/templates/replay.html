@@ -33,7 +33,8 @@ h1 { margin: 0; font-size: clamp(28px, 4.2vw, 64px); font-weight: 900; font-stre
 a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 
 /* featured: a large card per run, its city drawn from the recording */
-.featured { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr)); gap: 16px; }
+.featured { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 16px; }
+.featured > .card:first-child { grid-column: 1 / -1; }   /* the lead run gets the full width; the rest share a row below it */
 .card { display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr); gap: 24px; padding: 20px; border: 1px solid var(--c-faint); text-decoration: none; transition: border-color .2s; }
 .card:hover, .card:focus-visible { border-color: var(--c-fg); }
 .card canvas { width: 100%; aspect-ratio: 1; display: block; }
@@ -43,6 +44,15 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 .facts { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--c-mute); }
 .go { margin-top: auto; }
 @media (max-width: 560px) { .card { grid-template-columns: 1fr; } .card canvas { max-width: 260px; } }
+/* runs on the way: shown as cards that do not open yet */
+.card.planned { grid-template-columns: 1fr; grid-template-rows: auto 1fr; gap: 16px; cursor: default; border-style: dashed; }
+.card.planned:hover { border-color: var(--c-faint); }
+.card.planned .pic { aspect-ratio: 4 / 3; max-width: 100%; border: 1px solid var(--c-rule); overflow: hidden; display: flex; align-items: center; justify-content: center; color: var(--c-faint); }
+.card.planned .pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.card.planned strong { font-size: clamp(20px, 1.8vw, 26px); }
+.card.planned p { font-size: 14.5px; }
+.card.planned .soon { margin-top: auto; color: var(--c-teal); }
+.card.planned .credit { color: var(--c-faint); text-transform: none; letter-spacing: .02em; }
 
 /* your runs: one row each, newest first */
 .runs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
@@ -154,6 +164,21 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     var go = document.createElement('span'); go.className = 'go mono'; go.textContent = 'Watch →';
     body.append(t, p, fx, go); a.append(cv, body); a.addEventListener('click', sampleClick); $('#featured').appendChild(a); preview(r, cv);
   }
+  /* a run that is on its way: a picture if there is one, what it will be, and no way in yet */
+  function plannedCard(pl) {
+    var a = document.createElement('div'); a.className = 'card planned';
+    var pic = document.createElement('div'); pic.className = 'pic';
+    if (pl.image) { var im = document.createElement('img'); im.src = pl.image; im.alt = pl.alt || ''; pic.appendChild(im); }
+    else { var ph = document.createElement('span'); ph.className = 'mono'; ph.textContent = 'Map in preparation'; pic.appendChild(ph); }
+    var body = document.createElement('div'); body.className = 'body';
+    var t = document.createElement('strong'); t.textContent = pl.title;
+    var p = document.createElement('p'); p.textContent = pl.blurb;
+    var fx = document.createElement('div'); fx.className = 'facts mono'; (pl.facts || []).forEach(function (s) { var sp = document.createElement('span'); sp.textContent = s; fx.appendChild(sp); });
+    body.append(t, p, fx);
+    if (pl.credit) { var c = document.createElement('div'); c.className = 'credit mono'; c.textContent = pl.credit; body.appendChild(c); }
+    var soon = document.createElement('span'); soon.className = 'soon mono'; soon.textContent = 'In preparation'; body.appendChild(soon);
+    a.append(pic, body); $('#featured').appendChild(a);
+  }
   function runRow(r) {
     var li = document.createElement('li'), a = document.createElement('a'); a.className = 'run'; a.href = href(r);
     var cv = document.createElement('canvas'); cv.setAttribute('aria-hidden', 'true');
@@ -167,7 +192,8 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   function render(list) {
     var feat = [], rest = [];
     list.forEach(function (r) { var f = FEATURED.filter(function (F) { return F.match.test(r.filename); })[0]; if (f) feat.push([r, f]); else rest.push(r); });
-    if (feat.length) { $('#featSec').hidden = false; feat.forEach(function (x) { featuredCard(x[0], x[1]); }); }
+    var planned = sampleMode && SAMPLE.planned ? SAMPLE.planned : [];
+    if (feat.length || planned.length) { $('#featSec').hidden = false; feat.forEach(function (x) { featuredCard(x[0], x[1]); }); planned.forEach(plannedCard); }
     else $('#runsNum').textContent = '01';
     $('#runsCount').textContent = rest.length ? rest.length + (rest.length === 1 ? ' run' : ' runs') : '';
     if (!rest.length) $('#empty').hidden = false;
