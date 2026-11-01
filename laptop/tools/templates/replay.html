@@ -44,8 +44,9 @@ h1 { margin: 0; font-size: clamp(28px, 4.2vw, 64px); font-weight: 900; font-stre
 a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 
 /* featured: a large card per run, its city drawn from the recording */
-.featured { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 16px; }
-.featured > .card.lead { grid-column: 1 / -1; }   /* the lead run gets the full width; the rest share a row below it */
+.featured { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; }
+.featured > .card { flex: 1 1 300px; min-width: 0; max-width: 560px; }   /* the cards below the lead share the full width, so the row stays centred on wide screens */
+.featured > .card.lead { flex-basis: 100%; max-width: none; }   /* the lead run gets the full width; the rest share a row below it */
 .card { display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr); gap: 24px; padding: 20px; border: 1px solid var(--c-faint); text-decoration: none; transition: border-color .2s; }
 .card:hover, .card:focus-visible { border-color: var(--c-fg); }
 .card canvas { width: 100%; aspect-ratio: 1; display: block; }
