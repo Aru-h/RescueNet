@@ -198,6 +198,8 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 .scene.sim .sc-map { opacity: 1; }
 .sc-cable, .sc-board .sc-trace { stroke: currentColor; }
 .sc-board .sc-trace { opacity: .35; transition: opacity .3s, stroke .3s; }
+.sc-shadow { fill: currentColor; stroke: none; opacity: 0; }
+.sc-board > rect:first-child { fill: var(--c-bg); }   /* solid, so the shadow only shows where the board has lifted off it */
 .sc-led { fill: currentColor; opacity: .25; transition: opacity .2s, fill .2s; }
 .sc-pulse { stroke: var(--c-teal); stroke-width: 4; stroke-dasharray: 5 30; opacity: 0; transition: opacity .25s; }
 .scene.board .sc-led { fill: var(--red); opacity: 1; animation: led 1.1s steps(2) infinite; }
@@ -1358,10 +1360,11 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 
   /* ---------- the connect drawing ----------
      One scene behind both halves, laid out from the halves' real boxes so the cable always joins them.
-     `want` is what the visitor points at or has chosen with the keyboard; `z` is the zoom into the laptop screen (0..1).
-     Going from Simulation to Board zooms out first, then the board lights, so the two never run at once. */
+     `want` is what the visitor points at or has chosen with the keyboard; `scZ` is the zoom into the laptop screen (0..1),
+     `scB` how far the board has come forward (0..1). Going from Simulation to Board zooms out first, then the board comes
+     forward and lights; going back, the board steps back first, so the two never run at once. */
   var halvesEl = $('#halves'), sceneEl = $('#connScene'), NS = 'http://www.w3.org/2000/svg';
-  var SC_ = null, scRaf = 0, scZ = 0, scWant = null, scHover = null, scBy = null, scT0 = 0, scLast = 0, pvCol = {};
+  var SC_ = null, scRaf = 0, scZ = 0, scB = 0, scWant = null, scHover = null, scBy = null, scT0 = 0, scLast = 0, pvCol = {};
   function el(tag, at, parent) { var e = document.createElementNS(NS, tag); for (var k in at) e.setAttribute(k, at[k]); if (parent) parent.appendChild(e); return e; }
   function pvColours() { var cs = getComputedStyle(connect); pvCol.ink = cs.getPropertyValue('--c-bg').trim(); pvCol.paper = cs.getPropertyValue('--c-fg').trim(); pvCol['on-ink-rule'] = cs.getPropertyValue('--c-rule').trim(); pvCol.teal = cs.getPropertyValue('--c-teal').trim(); pvCol.red = cs.getPropertyValue('--red').trim(); }
   if (window.RNSky) RNSky.onChange(function () { pvColours(); if (SC_) drawMap(0); });
@@ -1393,6 +1396,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     lap.appendChild(map);
     var top = el('svg', { width: H.width, height: H.height, fill: 'none', stroke: 'currentColor', 'stroke-width': 2 });
     var cable = el('path', { class: 'sc-cable' }, top), pulse = el('path', { class: 'sc-pulse' }, top);
+    var shadow = el('rect', { class: 'sc-shadow', x: bx, y: by, width: bw, height: bh, rx: bw * .03 }, top);
     var g = el('g', { class: 'sc-board' }, top);
     el('rect', { x: bx, y: by, width: bw, height: bh, rx: bw * .03 }, g);
     [[.05, .08], [.95, .08], [.05, .92], [.95, .92]].forEach(function (c) { el('circle', { cx: bx + bw * c[0], cy: by + bh * c[1], r: bw * .016 }, g); });
@@ -1409,7 +1413,9 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     var end = vert ? { x: usbX + usbW, y: by + bh * .5 } : { x: usbX, y: by + bh * .5 }, edge = { x: L.x + L.w, y: portY };
     /* zoom: move the screen centre to the half's centre and scale it up to cover the half */
     var scx = sx + sw / 2, scy = sy + sh / 2, tcx = A1.cx, tcy = A1.cy - pad * .3 - (baseH + bz) * (K - 1) / 2;
-    SC_ = { rx: L.x + L.w - 10, lap: lap, map: map, cable: cable, pulse: pulse, K: K, d: d, sw: sw, sh: sh, port: { x: portX, y: portY }, end: end, edge: edge, vert: vert, scx: scx, scy: scy, tcx: tcx, tcy: tcy };
+    /* the board comes forward about its centre, as far as its half allows without reaching the words */
+    var bcx = bx + bw / 2, bcy = by + bh / 2, BK = Math.max(1, Math.min(1.3, (Rb.w - 40) / (bw + 2 * usbW), (A2.h + pad * .6) / bh));
+    SC_ = { board: g, shadow: shadow, bc: { x: bcx, y: bcy }, BK: BK, rx: L.x + L.w - 10, lap: lap, map: map, cable: cable, pulse: pulse, K: K, d: d, sw: sw, sh: sh, port: { x: portX, y: portY }, end: end, edge: edge, vert: vert, scx: scx, scy: scy, tcx: tcx, tcy: tcy };
     sceneApply(); drawMap(0);
   }
   function sceneApply() {
@@ -1418,7 +1424,12 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     /* scale about the screen centre: x' = scx + (x - scx) * k + tx */
     S.lap.style.transform = 'translate(' + (S.scx * (1 - k) + tx) + 'px,' + (S.scy * (1 - k) + ty) + 'px) scale(' + k + ')';
     /* the cable stays plugged into the laptop as it grows */
-    var p = { x: Math.min(S.rx + 8, S.scx + (S.port.x - S.scx) * k + tx), y: S.scy + (S.port.y - S.scy) * k + ty }, q = S.end;
+    var b = smooth(scB), kb = 1 + (S.BK - 1) * b, lift = 10 * b;
+    S.board.setAttribute('transform', 'translate(' + (S.bc.x * (1 - kb)) + ' ' + (S.bc.y * (1 - kb) - lift) + ') scale(' + kb + ')');
+    S.shadow.setAttribute('transform', 'translate(' + (S.bc.x * (1 - kb) + lift * .6) + ' ' + (S.bc.y * (1 - kb) + lift * .4) + ') scale(' + kb + ')');
+    S.shadow.style.opacity = (.12 * b).toFixed(3);
+    var p = { x: Math.min(S.rx + 8, S.scx + (S.port.x - S.scx) * k + tx), y: S.scy + (S.port.y - S.scy) * k + ty };
+    var q = { x: S.bc.x + (S.end.x - S.bc.x) * kb, y: S.bc.y + (S.end.y - S.bc.y) * kb - lift };
     var dpath = S.vert
       ? 'M' + p.x + ' ' + p.y + 'C' + (S.rx) + ' ' + p.y + ' ' + (S.rx) + ' ' + q.y + ' ' + q.x + ' ' + q.y
       : 'M' + p.x + ' ' + p.y + 'C' + (p.x + 70) + ' ' + (p.y + 55) + ' ' + (q.x - 110) + ' ' + (q.y + 60) + ' ' + q.x + ' ' + q.y;
@@ -1462,15 +1473,19 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   function sceneTick(now) {
     scRaf = requestAnimationFrame(sceneTick);
     var dt = Math.min(.1, (now - (scLast || now)) / 1000); scLast = now;
-    var want = sceneTarget(), goal = want === 'sim' && !reduce ? 1 : 0;
-    if (scZ !== goal) { scZ = goal > scZ ? Math.min(1, scZ + dt / .55) : Math.max(0, scZ - dt / .4); sceneApply(); }
+    /* one moves at a time: the board steps back before the laptop zooms, and the laptop zooms out before the board comes forward */
+    var want = sceneTarget(), goal = want === 'sim' && !reduce && scB < .03 ? 1 : 0, goalB = want === 'board' && !reduce && scZ < .03 ? 1 : 0;
+    var moved = false;
+    if (scZ !== goal) { scZ = goal > scZ ? Math.min(1, scZ + dt / .55) : Math.max(0, scZ - dt / .4); moved = true; }
+    if (scB !== goalB) { scB = goalB > scB ? Math.min(1, scB + dt / .45) : Math.max(0, scB - dt / .35); moved = true; }
+    if (moved) sceneApply();
     sceneEl.classList.toggle('sim', want === 'sim');
     sceneEl.classList.toggle('board', want === 'board' && scZ < .03);
     if (want === 'sim' && !reduce) drawMap((now - scT0) / 1000);
     else if (scWant === 'sim') drawMap(0);
     scWant = want;
   }
-  function sceneStart() { pvColours(); scZ = 0; scLast = 0; scHover = null; scBy = null; scT0 = performance.now(); requestAnimationFrame(function () { sceneBuild(); cancelAnimationFrame(scRaf); scRaf = requestAnimationFrame(sceneTick); }); }
+  function sceneStart() { pvColours(); scZ = 0; scB = 0; scLast = 0; scHover = null; scBy = null; scT0 = performance.now(); requestAnimationFrame(function () { sceneBuild(); cancelAnimationFrame(scRaf); scRaf = requestAnimationFrame(sceneTick); }); }
   function sceneStop() { cancelAnimationFrame(scRaf); scRaf = 0; }
   optSim.addEventListener('pointermove', function (e) { if (e.pointerType !== 'touch') choose('sim', 'mouse'); });
   optBoard.addEventListener('pointermove', function (e) { if (e.pointerType !== 'touch') choose('board', 'mouse'); });
