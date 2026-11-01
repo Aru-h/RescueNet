@@ -47,6 +47,12 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+For the dashboard alone, `pip install -r laptop/tools/requirements-app.txt`
+installs just Flask and pyserial. Once installed, the app needs no internet:
+its JavaScript libraries and fonts are in `laptop/tools/static/`. To install
+on a laptop with no network at all, see the comments at the top of
+`laptop/tools/requirements-app.txt`.
+
 ## 2. Five-minute evaluation without the board
 
 The laptop build runs exactly the same `core/` code as the board.

@@ -1,0 +1,1602 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RescueNet</title>
+<meta name="theme-color" content="#e6e6e3">
+<link rel="icon" id="favicon" type="image/svg+xml" href="data:,">
+<link rel="stylesheet" href="/static/fonts/fonts.css">
+<style>
+/* Layout concept: a printed survey sheet. Grain paper, one black ink, one hard red, a cold teal only for the radio network.
+   The hero is a halftone print of the 3D district right after an earthquake, drawn over with fluid ink; scrolling zooms into the same map that
+   rebuilds itself as the text scrolls past; the ledger and the Enter page close it. */
+:root {
+  --paper: #e6e6e3;
+  --paper-2: #d8d8d4;
+  --ink: #0b0b0b;
+  --red: #e1251b;
+  --teal: #0f8f8a;
+  --mute: #5f5f5c;
+  --rule: #b9b9b4;
+  /* defaults for noon; the sky script (RNSky) rewrites all of these from the visitor's clock */
+  --red-text: #c62118; --paper-0: rgba(230,230,227,0);
+  --on-ink-mute: #b4b4af; --on-ink-rule: #3a3a38; --on-ink-faint: #9a9a95; --on-ink-teal: #3fb8b2; --on-ink-teal2: #62c9c4;
+  --gx: clamp(16px, 2.4vw, 48px);
+  --display: 'Archivo', 'Arial Black', Impact, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { background: var(--paper); transition: background-color 1.2s; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  transition: background-color 1.2s, color 1.2s;
+  font-family: var(--display);
+  font-stretch: 100%;
+  font-weight: 450;
+  -webkit-font-smoothing: antialiased;
+  padding-left: max(0px, env(safe-area-inset-left, 0px));
+  padding-right: max(0px, env(safe-area-inset-right, 0px));
+  overflow-x: hidden;
+}
+a { color: inherit; text-decoration: none; }
+:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+.mono { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.px { padding-left: max(var(--gx), env(safe-area-inset-left, 0px)); padding-right: max(var(--gx), env(safe-area-inset-right, 0px)); }
+
+/* film grain over everything */
+body::after {
+  content: ""; position: fixed; inset: -50%; width: 200%; height: 200%; pointer-events: none; z-index: 60; opacity: .55;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .5 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  mix-blend-mode: multiply; animation: grain .9s steps(6) infinite;
+}
+/* after dark the grain is light specks instead of dark ones */
+html.xover .nav { mix-blend-mode: normal; color: var(--ink); }
+html.xover .cur { mix-blend-mode: normal; background: var(--ink); }
+html.night body::after { filter: invert(1); mix-blend-mode: screen; opacity: .28; }
+@keyframes grain { 0% { transform: translate(0,0) } 20% { transform: translate(-3%,2%) } 40% { transform: translate(2%,-3%) } 60% { transform: translate(-2%,-1%) } 80% { transform: translate(3%,3%) } 100% { transform: translate(0,0) } }
+
+/* navigation: corners and centre, inverted against whatever is behind it */
+.nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 40; color: #fff; mix-blend-mode: difference;
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: start;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 22px);
+}
+.nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.nav ul:last-child { align-items: flex-end; text-align: right; }
+.nav a { font-size: 12px; font-weight: 600; font-stretch: 125%; letter-spacing: .06em; text-transform: uppercase; line-height: 1.8; }
+.nav a:hover { text-decoration: underline; text-underline-offset: 4px; }
+.mark { display: flex; flex-direction: column; align-items: center; gap: 6px; font-weight: 800; font-stretch: 125%; font-size: 13px; letter-spacing: .02em; }
+.mark svg { width: 46px; height: 46px; display: block; }
+.mark a { color: inherit; text-decoration: none; }
+.mark .repo { font-weight: 800; font-stretch: 125%; font-size: 13px; letter-spacing: .02em; text-transform: uppercase; }
+.mark .repo:hover { text-decoration: underline; text-underline-offset: 4px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* hero */
+.hero.dragging { cursor: grabbing; }
+.hero { position: relative; height: 100svh; min-height: 560px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+#halftone { position: absolute; left: 50%; top: 44%; width: min(46vw, 60svh); aspect-ratio: 1; transform: translate(-50%, -50%); }
+/* the ink follows the cursor over the whole landing page; it sits under the nav and is covered by the connect screen */
+#ink { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; z-index: 30; mix-blend-mode: multiply; pointer-events: none; }
+#ink.fluid { mix-blend-mode: difference; }
+.hero-foot { position: relative; z-index: 2; }
+.hero-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; padding-bottom: 14px; }
+.hero-row p { margin: 0; max-width: 34ch; font-size: 15px; line-height: 1.35; font-weight: 500; }
+.hero-row .mono { color: var(--mute); text-align: right; }
+.wordmark { margin: 0; color: var(--red); font-weight: 900; font-stretch: 125%; line-height: .8; letter-spacing: -.02em; text-transform: uppercase; white-space: nowrap; display: block; margin-bottom: -.05em; margin-left: -.045em; }
+.wordmark .ch { display: inline-block; overflow: hidden; vertical-align: top; }
+.wordmark .ch i { display: inline-block; font-style: normal; }
+
+/* sticky map story */
+.story { position: relative; }
+.stage { position: sticky; top: 0; height: 100svh; overflow: hidden; }
+#scene { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* the 3D city is one fixed layer behind the hero and the story; main sits above it and lets pointer events through over the story */
+.city { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+main { position: relative; z-index: 1; pointer-events: none; }
+main > section:not(.story) { pointer-events: auto; }
+#scene3d { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: none; cursor: grab; touch-action: pan-y; pointer-events: auto; --mk1: 1; --mk2: 1;
+  -webkit-mask-image: linear-gradient(90deg, rgba(0,0,0,var(--mk1)) 0%, rgba(0,0,0,var(--mk2)) 26%, #000 48%); mask-image: linear-gradient(90deg, rgba(0,0,0,var(--mk1)) 0%, rgba(0,0,0,var(--mk2)) 26%, #000 48%); }
+#scene3d.dragging { cursor: grabbing; }
+.tag { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; background: var(--paper); color: var(--ink); padding: 3px 7px 2px; border: 1px solid var(--ink); white-space: nowrap; opacity: 0; transition: opacity .3s; }
+.tag.hot { color: var(--paper); background: var(--red); border-color: var(--red); }
+.drag-hint { position: absolute; right: max(var(--gx), env(safe-area-inset-right, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); color: var(--mute); }
+.stage-hud { position: absolute; left: var(--gx); bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); color: var(--mute); display: flex; gap: 18px; flex-wrap: wrap; }
+.steps { position: relative; z-index: 2; margin-top: -100svh; pointer-events: none; }
+.step { height: 170svh; display: flex; flex-direction: column; justify-content: center; padding-top: 120px; padding-bottom: 56px; max-width: min(46ch, 44vw); padding-left: max(var(--gx), env(safe-area-inset-left, 0px)); }
+.step .in { will-change: opacity, transform; }
+.captions { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.captions .in { position: absolute; left: max(var(--gx), env(safe-area-inset-left, 0px)); top: 50%; max-width: min(46ch, 44vw); transform: translateY(-50%); }
+.pips { position: absolute; left: max(var(--gx), env(safe-area-inset-left, 0px)); top: calc(env(safe-area-inset-top, 0px) + 118px); transform: none; display: none; gap: 8px; z-index: 3; }
+.pips i { display: block; width: 26px; height: 3px; background: var(--rule); transition: background .3s; }
+.pips i.on { background: var(--red); }
+.pips i.done { background: var(--ink); }
+.kicker { color: var(--red-text); margin: 0 0 18px; }
+.src { margin: 14px 0 0; color: var(--mute); font-size: 10px; }
+.in h2 { margin: 0 0 18px; font-size: clamp(26px, 3.2vw, 54px); font-weight: 900; font-stretch: 125%; line-height: .96; text-transform: uppercase; letter-spacing: -.015em; text-wrap: balance; }
+.in p.body { margin: 0; font-size: 17px; line-height: 1.45; max-width: 38ch; }
+
+/* generic sections */
+.sec { padding-top: clamp(72px, 12vw, 160px); padding-bottom: clamp(72px, 12vw, 160px); }
+.sec h2 { margin: 0 0 40px; font-size: clamp(34px, 6.4vw, 108px); font-weight: 900; font-stretch: 125%; line-height: .92; text-transform: uppercase; letter-spacing: -.02em; text-wrap: balance; }
+.board { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(24px, 5vw, 80px); align-items: start; }
+.specs { margin: 0; padding: 0; list-style: none; border-top: 2px solid var(--ink); }
+.specs li { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--rule); font-size: 15px; line-height: 1.35; }
+.specs li b { font-family: var(--mono); font-weight: 400; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); padding-top: 3px; }
+.ladder { border-top: 2px solid var(--ink); }
+.rung { display: grid; grid-template-columns: 3.2rem minmax(0, 1fr) auto; align-items: baseline; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--rule); }
+.rung .p { font-size: 34px; font-weight: 900; font-stretch: 125%; line-height: 1; }
+.rung .n { font-weight: 700; font-stretch: 112%; text-transform: uppercase; font-size: 15px; }
+.rung .r { color: var(--mute); font-size: 13px; }
+.chip { display: inline-block; font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; border: 1px solid currentColor; padding: 3px 8px 2px; white-space: nowrap; }
+.note { margin-top: 18px; color: var(--mute); font-size: 13px; max-width: 52ch; }
+
+.ledger-sec { background: var(--ink); color: var(--paper); }
+.ledger-sec h2 { color: var(--paper); }
+.ledger { border-top: 2px solid var(--paper); }
+.row { display: grid; grid-template-columns: minmax(0, 1.2fr) auto minmax(0, 1fr); gap: 16px 28px; align-items: baseline; padding: 18px 0; border-bottom: 1px solid var(--on-ink-rule); }
+.row .c { font-size: clamp(16px, 1.5vw, 21px); font-weight: 650; font-stretch: 108%; line-height: 1.2; }
+.row .d { font-size: 14px; line-height: 1.4; color: var(--on-ink-mute); }
+.row.wd .c { text-decoration: line-through; text-decoration-color: var(--red); text-decoration-thickness: 2px; color: var(--on-ink-faint); }
+.st-on { color: var(--on-ink-teal); background: transparent; }
+.st-host { color: var(--on-ink-teal2); }
+.st-sim { color: var(--paper); }
+.st-not { color: var(--on-ink-mute); border-style: dashed; }
+.st-wd { color: var(--paper); background: var(--red); border-color: var(--red); }
+
+.cta { text-align: left; }
+.enter { display: block; width: 100%; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: var(--ink); font-family: var(--display); font-weight: 900; font-stretch: 125%; text-transform: uppercase; letter-spacing: -.02em; line-height: .82; font-size: 18vw; -webkit-text-stroke: 3px var(--ink); color: transparent; transition: color .25s, -webkit-text-stroke-color .25s; }
+.enter:hover, .enter:focus-visible { color: var(--red); -webkit-text-stroke-color: var(--red); }
+.cta-row { display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; padding-top: 28px; }
+.cta-row p { margin: 0; max-width: 44ch; font-size: 16px; line-height: 1.4; }
+.caret { display: inline-block; width: .6em; height: 1em; background: var(--ink); vertical-align: -.15em; margin-left: 6px; animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 28px); color: var(--mute); display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+/* cursor and enter transition */
+.cur { position: fixed; left: 0; top: 0; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #fff; mix-blend-mode: difference; pointer-events: none; z-index: 80; display: none; }
+.has-cursor, .has-cursor a, .has-cursor button { cursor: none; }
+.has-cursor .cur { display: block; }
+.tune-btn { position: fixed; right: max(var(--gx), env(safe-area-inset-right, 0px)); top: calc(env(safe-area-inset-top, 0px) + 112px); z-index: 65; font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; background: var(--ink); color: var(--paper); border: 0; padding: 8px 12px; cursor: pointer; display: none; }
+.tune-btn.show { display: block; }
+.tune[hidden] { display: none; }
+.tune { position: fixed; right: max(var(--gx), env(safe-area-inset-right, 0px)); top: calc(env(safe-area-inset-top, 0px) + 150px); z-index: 66; width: min(280px, calc(100vw - 32px)); background: var(--paper); border: 1.5px solid var(--ink); padding: 12px 14px; display: grid; gap: 6px; font-family: var(--mono); font-size: 11px; }
+.tune-h { display: flex; justify-content: space-between; align-items: center; font-family: var(--display); font-stretch: 125%; text-transform: uppercase; font-size: 14px; }
+.tune-h button { background: none; border: 0; font-size: 20px; cursor: pointer; color: var(--ink); min-width: 32px; min-height: 32px; }
+.tune label { display: flex; justify-content: space-between; text-transform: uppercase; letter-spacing: .06em; color: var(--mute); margin-top: 6px; }
+.tune output { color: var(--ink); font-variant-numeric: tabular-nums; }
+.tune input { width: 100%; accent-color: var(--ink); }
+.tune output.sky { display: block; color: var(--mute); }
+.tune select { width: 100%; font-family: var(--mono); font-size: 12px; padding: 6px; border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink); min-height: 34px; }
+.tune small { color: var(--mute); font-size: 10px; }
+.tune-row { display: flex; gap: 6px; margin-top: 8px; }
+.tune-row button { flex: 1; font-family: var(--mono); font-size: 11px; text-transform: uppercase; border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink); padding: 7px; cursor: pointer; }
+.tune button:focus-visible, .tune input:focus-visible, .tune-btn:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+.wipe { position: fixed; inset: 0; z-index: 70; background: var(--ink); clip-path: circle(0 at 50% 50%); pointer-events: none; }
+/* the connect screens stay dark at every hour, in a deep version of the hour's paper colour (RNSky --deep), so they drift with the page */
+#connect { --c-bg: var(--deep, #0b0b0b); --c-fg: var(--deep-fg, #e6e6e3); --c-mute: var(--deep-mute, #b4b4af); --c-faint: var(--deep-faint, #9a9a95); --c-rule: var(--deep-rule, #3a3a38); --c-teal: var(--deep-teal, #4fd1c9); }
+.wipe { background: var(--deep, #0b0b0b); }
+#connect { position: fixed; inset: 0; z-index: 75; background: var(--c-bg); color: var(--c-fg); display: none; overflow-y: auto; }
+#connect.on { display: block; }
+#connect:focus { outline: none; }
+.conn { min-height: 100vh; min-height: 100svh; display: flex; flex-direction: column; gap: 18px; padding-top: calc(env(safe-area-inset-top, 0px) + 22px); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); }
+.conn[hidden], .bc[hidden] { display: none; }
+.conn h3, .bc h3 { margin: 0; padding-right: 120px; font-size: clamp(28px, 4.2vw, 64px); font-weight: 900; font-stretch: 125%; text-transform: uppercase; line-height: .92; letter-spacing: -.02em; }
+/* two full-height halves over one drawing: a laptop on the left, a USB cable across the gap, a board on the right.
+   Pointing at Simulation zooms into the laptop's screen; pointing at Board lights the board and runs data down the cable.
+   With nothing chosen the drawing is still. */
+.halves { position: relative; flex: 1; display: flex; gap: 12px; min-height: 380px; }
+.scene { position: absolute; inset: 0; pointer-events: none; color: var(--c-fg); }
+.scene svg { position: absolute; left: 0; top: 0; overflow: visible; }
+.sc-left { position: absolute; overflow: hidden; }
+.sc-lap { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+.sc-map { position: absolute; transform-origin: 0 0; opacity: .5; transition: opacity .35s; }
+.scene.sim .sc-map { opacity: 1; }
+.sc-cable, .sc-board .sc-trace { stroke: currentColor; }
+.sc-board .sc-trace { opacity: .35; transition: opacity .3s, stroke .3s; }
+.sc-led { fill: currentColor; opacity: .25; transition: opacity .2s, fill .2s; }
+.sc-pulse { stroke: var(--c-teal); stroke-width: 4; stroke-dasharray: 5 30; opacity: 0; transition: opacity .25s; }
+.scene.board .sc-led { fill: var(--red); opacity: 1; animation: led 1.1s steps(2) infinite; }
+.scene.board .sc-trace { opacity: 1; stroke: var(--c-teal); }
+.scene.board .sc-pulse { opacity: 1; animation: pulse 1.1s linear infinite; }
+.half { position: relative; z-index: 1; flex: 1 1 0; min-width: 0; overflow: hidden; border: 1px solid var(--c-faint); background: transparent; color: inherit; text-align: left; font-family: inherit; cursor: pointer; padding: clamp(18px, 2.4vw, 36px); display: flex; flex-direction: column; justify-content: flex-end; gap: 12px; transition: border-color .2s; }
+.half:hover, .half:focus-visible, .half.sel { border-color: var(--c-fg); }
+.half > * { position: relative; }
+.half .key { position: absolute; top: clamp(18px, 2.4vw, 36px); left: clamp(18px, 2.4vw, 36px); border: 1px solid currentColor; padding: 3px 8px 2px; }
+.half strong { font-size: clamp(26px, 3.4vw, 60px); font-weight: 900; font-stretch: 125%; text-transform: uppercase; line-height: .95; }
+.half .desc { font-size: 15px; line-height: 1.4; max-width: 42ch; }
+.half .need { color: var(--c-mute); }
+.half .need.seen { color: var(--c-teal); }
+.half .go { font-size: 13px; }
+@keyframes led { 50% { opacity: .15; } }
+@keyframes pulse { to { stroke-dashoffset: 35; } }
+.conn-foot { display: flex; justify-content: space-between; gap: 10px 24px; flex-wrap: wrap; align-items: center; }
+.conn-foot .hint, .conn-note { color: var(--c-mute); }
+.conn-note { margin: 0; font-size: 14px; line-height: 1.45; }
+.conn-note[hidden] { display: none; }
+.conn-note code, .bc code { font-family: var(--mono); font-size: .92em; color: var(--c-fg); }
+.linkbtn { background: none; border: 0; color: inherit; padding: 8px 0; min-height: 40px; cursor: pointer; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+.linkbtn:hover, .linkbtn:focus-visible { text-decoration: underline; text-underline-offset: 4px; }
+/* board connect */
+.bc { min-height: 100vh; min-height: 100svh; display: flex; flex-direction: column; gap: 22px; padding-top: calc(env(safe-area-inset-top, 0px) + 14px); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 32px); }
+.bc-grid { display: flex; flex-wrap: wrap; gap: 32px 48px; }
+.bc-form { flex: 999 1 460px; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.bc aside { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 22px; }
+.bc .lbl { color: var(--c-mute); margin-top: 14px; }
+.bc input[type=text], .bc select { font-family: var(--mono); font-size: 15px; padding: 11px 12px; min-height: 46px; border: 1.5px solid var(--c-fg); background: transparent; color: var(--c-fg); border-radius: 0; width: 100%; }
+.bc select option { color: #0b0b0b; }
+.bc input::placeholder { color: var(--c-faint); }
+.bc input:focus-visible, .bc select:focus-visible, .bc-go:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+.bc .row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.bc .small { margin: 2px 0 0; font-size: 13.5px; line-height: 1.45; color: var(--c-mute); }
+.bc .fixed { margin: 0; padding: 11px 0; border-top: 1px solid var(--c-rule); border-bottom: 1px solid var(--c-rule); font-size: 13px; }
+.bc .chk { display: flex; gap: 10px; align-items: center; font-size: 14px; margin-top: 14px; min-height: 32px; }
+.bc .chk input { width: 18px; height: 18px; accent-color: var(--red); }
+.bc-go { margin-top: 18px; align-self: flex-start; min-height: 54px; padding: 0 26px; border: 0; background: var(--red); color: #fff; font-family: var(--display); font-weight: 900; font-stretch: 112%; text-transform: uppercase; font-size: 17px; cursor: pointer; }
+.bc-go[disabled] { opacity: .6; cursor: progress; }
+.bc-log { border: 1.5px solid var(--c-fg); padding: 16px; display: flex; flex-direction: column; gap: 10px; min-height: 220px; }
+.bc-log-h { display: flex; justify-content: space-between; gap: 12px; }
+.bc-log-h span:first-child { color: var(--c-mute); }
+.bc-lines { font-size: 12.5px; line-height: 1.7; white-space: pre-line; text-transform: none; letter-spacing: 0; }
+.bc-open { align-self: flex-start; color: var(--c-fg); font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; text-decoration: underline; text-underline-offset: 4px; }
+.bc-open[hidden] { display: none; }
+.bc h4 { margin: 0 0 8px; font-size: 18px; font-weight: 900; font-stretch: 125%; text-transform: uppercase; }
+.bc dl { margin: 0; display: flex; flex-direction: column; gap: 10px; font-size: 14px; line-height: 1.45; }
+.bc dt { color: var(--c-mute); }
+.bc dd { margin: 2px 0 0; }
+@media (max-width: 860px) {
+  .halves { flex-direction: column; }
+  .half { min-height: 250px; }
+  .conn-foot .hint { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .scene.board .sc-led, .scene.board .sc-pulse { animation: none; } }
+.back { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 22px); right: max(var(--gx), env(safe-area-inset-right, 0px)); color: var(--paper); background: none; border: 0; font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
+
+@media (max-width: 860px) {
+  .nav a { font-size: 11px; }
+  .nav ul.l li:nth-child(n+2), .nav ul.r li:nth-child(-n+2) { display: none; }
+  #halftone { width: 78vw; top: 38%; }
+  .hero-row { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .hero-row .mono { text-align: left; }
+  .stage-hud { display: none; }
+  #scene3d { height: 64%; -webkit-mask-image: linear-gradient(#000 80%, transparent); mask-image: linear-gradient(#000 80%, transparent); }
+  .drag-hint { top: calc(58svh - 26px); bottom: auto; }
+  .step { max-width: none; justify-content: flex-end; padding-top: 0; padding-bottom: 7svh; padding-right: max(var(--gx), env(safe-area-inset-right, 0px)); }
+  .captions .in { top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 5svh); right: max(var(--gx), env(safe-area-inset-right, 0px)); max-width: none; transform: none; background: linear-gradient(to bottom, var(--paper-0), var(--paper) 22%); padding-top: 40px; }
+  .pips { top: auto; bottom: 60svh; transform: none; }
+  .in h2 { font-size: clamp(26px, 8vw, 40px); }
+  .in p.body { font-size: 15px; }
+  .board { grid-template-columns: minmax(0, 1fr); }
+  .specs li { grid-template-columns: 8.5rem minmax(0, 1fr); }
+  .row { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .enter { -webkit-text-stroke-width: 2px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body::after { animation: none; }
+  .caret { animation: none; }
+}
+</style>
+<script src="/static/shared/rn-sky.js"></script>
+<script>
+/* favicon: the RescueNet app icon, signal orange by day and night black after dark (pins point in, the centre stays empty) */
+(function () {
+  var pin = 'M0,0 L22.91,-42.71 A26,26 0 1 0 -22.91,-42.71 Z', link = document.getElementById('favicon'), last = null;
+  function icon(night) {
+    var bg = night ? '#0C0F14' : '#FF5B1F', odd = night ? '#FF5B1F' : '#0C0F14', rest = night ? '#F3F0E8' : '#FFFFFF';
+    var g = [0, 90, 180, 270].map(function (r, i) { return '<path d="' + pin + '" transform="rotate(' + r + ') translate(0,-16)" fill="' + (i ? rest : odd) + '"/>'; }).join('');
+    return 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="-128 -128 256 256"><rect x="-128" y="-128" width="256" height="256" rx="58" fill="' + bg + '"/>' + g + '</svg>');
+  }
+  function set(p) { if (!link || p.night === last) return; last = p.night; link.href = icon(p.night); }
+  if (window.RNSky) { RNSky.onChange(set); set(RNSky.current); } else if (link) link.href = icon(false);
+})();
+</script>
+
+</head>
+<body>
+<nav class="nav px" aria-label="Primary">
+  <ul class="l">
+    <li><a href="#story">Story</a></li>
+    <li><a href="#board">Board</a></li>
+    <li><a href="#ledger">Claims</a></li>
+  </ul>
+  <div class="mark">
+    <a href="#top" aria-label="Back to top"><svg viewBox="-100 -100 200 200" aria-hidden="true"><g fill="currentColor" fill-rule="evenodd">
+      <path d="M0,0 L22.91,-42.71 A26,26 0 1 0 -22.91,-42.71 Z" transform="translate(0,-14)" fill="none" stroke="currentColor" stroke-width="8" stroke-linejoin="round"/><circle cx="0" cy="-69" r="9"/>
+      <path d="M0,0 L22.91,-42.71 A26,26 0 1 0 -22.91,-42.71 Z M10,-55 A10,10 0 1 0 -10,-55 A10,10 0 1 0 10,-55 Z" transform="rotate(90) translate(0,-14)"/>
+      <path d="M0,0 L22.91,-42.71 A26,26 0 1 0 -22.91,-42.71 Z M10,-55 A10,10 0 1 0 -10,-55 A10,10 0 1 0 10,-55 Z" transform="rotate(180) translate(0,-14)"/>
+      <path d="M0,0 L22.91,-42.71 A26,26 0 1 0 -22.91,-42.71 Z M10,-55 A10,10 0 1 0 -10,-55 A10,10 0 1 0 10,-55 Z" transform="rotate(270) translate(0,-14)"/>
+    </g></svg></a>
+  </div>
+  <ul class="r">
+    <li><a href="#enter" data-enter>Enter</a></li>
+    <li><a href="https://github.com/Aru-h/RescueNet" target="_blank" rel="noopener">GitHub <span aria-hidden="true">&#8599;</span><span class="visually-hidden"> (opens in a new tab)</span></a></li>
+    <li><a href="#top">Top</a></li>
+  </ul>
+</nav>
+
+<div class="city" id="city" aria-hidden="false"><canvas id="scene3d" aria-label="3D map of the district after the earthquake. Drag sideways to turn it; double-click to reset."></canvas></div>
+
+<header class="hero" id="top">
+  <canvas id="halftone" aria-hidden="true"></canvas>
+  <canvas id="ink" aria-hidden="true"></canvas>
+  <div class="hero-foot px">
+    <div class="hero-row">
+      <p>Rescue coordination that keeps working after the network goes down. Every team carries the plan.</p>
+    </div>
+    <h1 class="wordmark" id="wordmark" aria-label="RescueNet"><span id="wm" aria-hidden="true">RESCUENET</span></h1>
+  </div>
+</header>
+
+<main>
+<section class="story" id="story">
+  <div class="stage">
+    <canvas id="scene" aria-label="Animated map: a damaged district, a central dispatcher losing contact, teams forming a mesh and sharing the work, and peers flagging a failing team"></canvas>
+    <div class="stage-hud mono"><span>36 &times; 36 cells</span><span>10 m per cell</span><span>1 tick = 36 s</span><span>10 teams</span></div>
+    <span class="tag" id="tagHQ">HQ &middot; dispatcher</span><span class="tag" id="tagVote"></span>
+    <span class="drag-hint mono" id="dragHint">&harr; Drag to turn the map</span>
+  </div>
+  <div class="steps">
+    <article class="step"><div class="in">
+      <p class="kicker mono">01 &mdash; The cost</p>
+      <h2>The first hours decide who is found.</h2>
+      <p class="body">The February 2023 earthquake killed more than 53,000 people in T&uuml;rkiye alone. Most survivors are pulled out in the first three days, and the rescue there was slowed by broken communications and poor coordination. That gap is what RescueNet works on.</p>
+      <p class="mono src">Sources: T&uuml;rkiye Interior Ministry via AP; UCL disaster researcher via NBC News</p>
+    </div></article>
+    <article class="step"><div class="in">
+      <p class="kicker mono">02 &mdash; The weak point</p>
+      <h2>One coordinator is one point of failure.</h2>
+      <p class="body">A central dispatcher needs every radio link to stay up. When the links fail, the teams stand idle and wait for orders that cannot arrive.</p>
+    </div></article>
+    <article class="step"><div class="in">
+      <p class="kicker mono">03 &mdash; The idea</p>
+      <h2>So every team carries the plan.</h2>
+      <p class="body">Each team bids for the incidents it can reach soonest, and the teams agree on the result between themselves (consensus-based bundle allocation). No server and no dispatcher, and every unit computes the same answer.</p>
+    </div></article>
+    <article class="step"><div class="in">
+      <p class="kicker mono">04 &mdash; The watchdog</p>
+      <h2>A failing team is flagged before it stops.</h2>
+      <p class="body">Peers watch each other's radio beacons. When three agree that a team is in trouble, its work is handed to someone else. A small neural network predicts faults, and a watchdog and a digital twin check it.</p>
+    </div></article>
+  </div>
+</section>
+
+<section class="sec px" id="board">
+  <h2>Small enough for one board.</h2>
+  <div class="board">
+    <ul class="specs">
+      <li><b>Target</b><span>STM32N6570-DK, Cortex-M55</span></li>
+      <li><b>Operating system</b><span>&mu;T-Kernel 3.0</span></li>
+      <li><b>Fault predictor</b><span>float32 network, 75 &rarr; 128 &rarr; 64 &rarr; 5, exported as C weights</span></li>
+      <li><b>Submitted build</b><span>Single board, one program. We ran it on the DK ourselves before submitting. No log of that run was kept.</span></li>
+      <li><b>Why it is hard</b><span>Allocation, radio consensus, fault detection and the model share one small chip.</span></li>
+    </ul>
+    <div>
+      <div class="ladder" role="table" aria-label="Task priorities, lower number runs first">
+        <div class="rung" role="row"><span class="p">4</span><span class="n">Link</span><span class="r">radio and serial frames</span></div>
+        <div class="rung" role="row"><span class="p">10</span><span class="n">Simulation</span><span class="r">the tick</span></div>
+        <div class="rung" role="row"><span class="p">11</span><span class="n">AI workers</span><span class="r">two, in parallel</span></div>
+        <div class="rung" role="row"><span class="p">12</span><span class="n">Telemetry</span><span class="r">to the dashboard</span></div>
+        <div class="rung" role="row"><span class="p">20</span><span class="n">Monitor</span><span class="r">watchdog</span></div>
+        <div class="rung" role="row"><span class="p">30</span><span class="n">Logger</span><span class="r">last</span></div>
+      </div>
+      <p class="note"><span class="chip st-not" style="color:var(--ink)">Compiles for Cortex-M55 &middot; not run on the board</span><br><br>This split of the program into prioritised tasks is built and compiles. It has not run on the hardware yet, so it makes no timing claims.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sec px ledger-sec" id="ledger">
+  <h2>What we measured, and what we withdrew.</h2>
+  <div class="ledger">
+    <div class="row"><div class="c">The submitted build ran on the board</div><span class="chip st-on">On board</span><div class="d">Our own test before submission. No log or video was kept, so how much of a mission it covered is not recorded.</div></div>
+    <div class="row"><div class="c">The C model matches PyTorch to 4e-7</div><span class="chip st-host">Host-verified</span><div class="d">A 19-vector fixture on a laptop. Board parity has not been run.</div></div>
+    <div class="row"><div class="c">The AI adds +3.05 incidents per mission</div><span class="chip st-sim">Simulator only</span><div class="d">Under the original fault model. A later pre-registered study showed the gain vanishes against a realistic baseline.</div></div>
+    <div class="row"><div class="c">A perfect detector adds about nothing</div><span class="chip st-sim">Simulator only</span><div class="d">Pre-registered, held-out seeds. Capacity, not detection, is the limit in this world.</div></div>
+    <div class="row"><div class="c">The task split does not change results</div><span class="chip st-not">Not run</span><div class="d">The host checks exist. The board baseline hashes were never captured.</div></div>
+    <div class="row wd"><div class="c">A perfect detector adds +1.75 incidents</div><span class="chip st-wd">Withdrawn</span><div class="d">Did not replicate on the corrected baseline. The same goes for +1.68 and +1.23.</div></div>
+  </div>
+</section>
+
+<section class="sec px cta" id="enter">
+  <button class="enter" id="enterBtn" type="button" aria-label="Enter the simulator"><span id="enterTxt" style="display:inline-block" aria-hidden="true">Enter</span></button>
+  <div class="cta-row">
+    <p>Run a full mission in your browser, or connect a board. Press any key to go in.<span class="caret" aria-hidden="true"></span></p>
+  </div>
+  <footer class="mono"><span>RescueNet &middot; decentralised rescue coordination</span><span>Simulation needs no hardware</span></footer>
+</section>
+</main>
+
+<div class="wipe" id="wipe"></div>
+<section id="connect" aria-label="Connect" aria-hidden="true" tabindex="-1">
+  <button class="back" id="backBtn" type="button">Esc &middot; Back</button>
+  <div class="conn px" id="choiceView">
+    <h3>How do you want to connect?</h3>
+    <div class="halves" id="halves">
+      <div class="scene" id="connScene" aria-hidden="true"></div>
+      <button class="half" id="optSim" type="button">
+        <span class="key mono" aria-hidden="true">1</span>
+        <strong>Simulation</strong>
+        <span class="desc">Run the whole mission on this computer. Choose a seed and a fault profile.</span>
+        <span class="need mono">No hardware needed</span>
+        <span class="go mono">Start &rarr;</span>
+      </button>
+      <button class="half" id="optBoard" type="button">
+        <span class="key mono" aria-hidden="true">2</span>
+        <strong>Board</strong>
+        <span class="desc">Connect a board over USB and watch the teams run on real hardware. Tested on the STM32N6570-DK.</span>
+        <span class="need mono" id="boardSeen">Needs a board, a USB cable and the laptop app</span>
+        <span class="go mono">Plug in &rarr;</span>
+      </button>
+    </div>
+    <p class="conn-note" id="connNote" role="status" hidden></p>
+    <div class="conn-foot">
+      <button class="linkbtn" id="optReplay" type="button">Watch a recorded run &rarr;</button>
+      <span class="hint mono">Press 1 or 2 to choose, Enter to go</span>
+    </div>
+  </div>
+
+  <div class="bc px" id="bcView" hidden>
+    <div><button class="linkbtn" id="bcBack" type="button">&larr; Choose again</button></div>
+    <h3>Connect a board</h3>
+    <div class="bc-grid">
+      <form class="bc-form" id="bcForm" novalidate>
+        <label class="lbl mono" for="bcPort">01 &middot; Serial port</label>
+        <input id="bcPort" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <p class="small">The name your computer gave the board when you plugged it in. See &ldquo;Finding your port&rdquo;.</p>
+        <label class="lbl mono" for="bcBaud">02 &middot; Baud rate</label>
+        <div class="row2">
+          <select id="bcBaud"><option>9600</option><option>19200</option><option>38400</option><option>57600</option><option selected>115200</option><option>230400</option><option>460800</option><option>921600</option><option value="custom">Custom&hellip;</option></select>
+          <input id="bcBaudCustom" type="text" inputmode="numeric" placeholder="e.g. 250000" aria-label="Custom baud rate" hidden>
+        </div>
+        <p class="small">Must match the firmware. The RescueNet firmware uses 115200.</p>
+        <div class="lbl mono">03 &middot; Serial format</div>
+        <p class="fixed mono">8 data bits &middot; no parity &middot; 1 stop bit (8N1), set by the firmware</p>
+        <label class="chk"><input type="checkbox" id="bcRemember" checked>Remember the port and baud rate on this computer</label>
+        <button class="bc-go" id="bcGo" type="submit">Connect &rarr;</button>
+      </form>
+      <aside>
+        <div class="bc-log">
+          <div class="bc-log-h"><span class="mono">Connection</span><span class="mono" id="bcState">Not connected</span></div>
+          <div class="mono bc-lines" id="bcLines" role="status" aria-live="polite">Press Connect. The RescueNet app on this computer opens the port and waits for the board to answer.</div>
+          <a class="bc-open" id="bcOpen" href="/" hidden>Open the dashboard &rarr;</a>
+        </div>
+        <div>
+          <h4>Finding your port</h4>
+          <dl>
+            <div><dt class="mono">macOS</dt><dd>Usually <code>/dev/tty.usbmodem&hellip;</code>. In Terminal: <code>ls /dev/tty.usb*</code></dd></div>
+            <div><dt class="mono">Linux</dt><dd>Usually <code>/dev/ttyACM0</code>. You may need to be in the <code>dialout</code> group.</dd></div>
+            <div><dt class="mono">Windows</dt><dd>A <code>COM</code> number. Device Manager &rarr; Ports (COM &amp; LPT).</dd></div>
+          </dl>
+          <p class="small">Boards with an ST-LINK show up as a virtual COM port once they are plugged in over USB.</p>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+<div class="cur" id="cur"></div>
+<button type="button" class="tune-btn" id="tuneBtn" aria-expanded="false" aria-controls="tunePanel">Tune map</button>
+<div class="tune" id="tunePanel" hidden>
+  <div class="tune-h"><strong>Map look</strong><button type="button" id="tuneClose" aria-label="Close map settings">&times;</button></div>
+  <label for="tStyle">Style</label>
+  <select id="tStyle"><option value="ink">Ink lines (on the buildings)</option><option value="dots">Surface dots (on the buildings)</option><option value="print">Print (screen halftone)</option><option value="clean">Clean 3D</option></select>
+  <label for="tTime">Time of day</label>
+  <select id="tTime"><option value="auto">Your clock</option><option value="6.4">Dawn</option><option value="12.5">Noon</option><option value="17.1">Golden hour</option><option value="18.6">Dusk</option><option value="23">Night</option><option value="custom" hidden>Custom</option></select>
+  <label for="tHour">Preview hour <output id="oHour"></output></label>
+  <input type="range" id="tHour" min="0" max="23.75" step="0.25">
+  <small>Preview only, never saved. Reload follows your clock again. Shift+T plays a whole day in 24 s.</small>
+  <label for="tCell">Dot / line size <output id="oCell"></output></label>
+  <input type="range" id="tCell" min="1.5" max="9" step="0.1">
+  <small>Smaller dots = sharper, finer print.</small>
+  <label for="tPrint">Print effect <output id="oPrint"></output></label>
+  <input type="range" id="tPrint" min="0" max="1" step="0.05">
+  <small>0 = plain 3D render, 1 = full halftone print.</small>
+  <label for="tSharp">Render sharpness <output id="oSharp"></output></label>
+  <input type="range" id="tSharp" min="0.75" max="3" step="0.25">
+  <small>Higher = crisper edges, more work for the graphics card.</small>
+  <div class="tune-row"><button type="button" id="tuneReset">Reset</button><button type="button" id="tuneCopy">Copy values</button></div>
+</div>
+
+<script src="/static/vendor/gsap-3.12.5/gsap.min.js"></script>
+<script src="/static/vendor/gsap-3.12.5/ScrollTrigger.min.js"></script>
+<script src="/static/vendor/lenis-1.1.20/lenis.min.js"></script>
+<script src="/static/vendor/three-r128/three.min.js"></script>
+<script>
+(function () {
+  'use strict';
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var fine = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  var $ = function (s) { return document.querySelector(s); };
+  var clamp = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
+  var smooth = function (t) { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); };
+  var hasGsap = !!window.gsap && !!window.ScrollTrigger;
+  if (hasGsap) gsap.registerPlugin(ScrollTrigger);
+
+  /* seeded random so the district is the same for everyone */
+  function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; var t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+  /* ---------- the district (shared by hero and story) ---------- */
+  var N = 24, R = rng(11), cells = [], roads = [], teams = [], incidents = [];
+  for (var y = 0; y < N; y++) for (var x = 0; x < N; x++) {
+    var road = (x % 5 === 0 || y % 5 === 0);
+    var bld = !road && R() < 0.8;
+    cells.push({ x: x, y: y, road: road, bld: bld, rub: bld && R() < 0.5, order: R() });
+    if (road) roads.push({ x: x, y: y });
+  }
+  (function place() {
+    var tries = 0, rr = rng(5);
+    while (teams.length < 10 && tries++ < 4000) {
+      var c = roads[Math.floor(rr() * roads.length)], ok = true;
+      for (var i = 0; i < teams.length; i++) if (Math.hypot(teams[i].x - c.x, teams[i].y - c.y) < 4.2) ok = false;
+      if (ok) teams.push({ x: c.x, y: c.y });
+    }
+    var rub = cells.filter(function (c) { return c.rub; }), r2 = rng(9);
+    while (incidents.length < 8 && rub.length) {
+      var k = rub[Math.floor(r2() * rub.length)], good = true;
+      for (var j = 0; j < incidents.length; j++) if (Math.hypot(incidents[j].x - k.x, incidents[j].y - k.y) < 3.2) good = false;
+      if (good) incidents.push({ x: k.x, y: k.y });
+    }
+  })();
+  var used = {}, assign = incidents.map(function (inc) {
+    var best = -1, bd = 1e9;
+    teams.forEach(function (t, i) { var d = Math.hypot(t.x - inc.x, t.y - inc.y); if (!used[i] && d < bd) { bd = d; best = i; } });
+    used[best] = true; return best;
+  });
+  var FAULTY = assign[2];                        /* the team that fails in scene 4 */
+  var spare = -1; (function () { var bd = 1e9; teams.forEach(function (t, i) { if (!used[i]) { var d = Math.hypot(t.x - incidents[2].x, t.y - incidents[2].y); if (d < bd) { bd = d; spare = i; } } }); if (spare < 0) spare = (FAULTY + 1) % teams.length; })();
+  var meshLinks = []; teams.forEach(function (t, i) {
+    teams.map(function (u, j) { return { j: j, d: Math.hypot(t.x - u.x, t.y - u.y) }; }).filter(function (o) { return o.j !== i; })
+      .sort(function (a, b) { return a.d - b.d; }).slice(0, 3).forEach(function (o) { if (!meshLinks.some(function (l) { return (l[0] === i && l[1] === o.j) || (l[0] === o.j && l[1] === i); })) meshLinks.push([i, o.j]); });
+  });
+
+  /* ---------- hero: wordmark fit, halftone city, ink ---------- */
+  var hero = $('#top'), wm = $('#wm'), wmEl = $('#wordmark');
+  function fitText(box, inner, avail) {
+    box.style.fontSize = '100px'; if (inner !== box) inner.style.fontSize = '100px';
+    var w = inner.getBoundingClientRect().width || 1, fs = 100 * avail / w;
+    box.style.fontSize = fs + 'px'; if (inner !== box) inner.style.fontSize = fs + 'px';
+  }
+  function gxPx() { var b = document.createElement('div'); b.style.cssText = 'position:absolute;visibility:hidden;width:var(--gx)'; document.body.appendChild(b); var w = b.getBoundingClientRect().width || 24; b.remove(); return w; }
+  function fitWordmark() {
+    var gx = gxPx();
+    fitText(wmEl, wm, hero.clientWidth - 2 * gx);
+    var eb = $('#enterBtn'), es = $('#enterTxt'); if (eb && es) fitText(eb, es, eb.clientWidth - 6);
+  }
+  (function splitWordmark() {
+    var t = wm.textContent; wm.textContent = '';
+    t.split('').forEach(function (ch) { var s = document.createElement('span'); s.className = 'ch'; var i = document.createElement('i'); i.textContent = ch; s.appendChild(i); wm.appendChild(s); });
+  })();
+
+  var ht = $('#halftone'), hx = ht.getContext('2d');
+  function drawHalftone() {
+    var s = ht.clientWidth, d = Math.min(2, window.devicePixelRatio || 1);
+    ht.width = ht.height = Math.round(s * d); hx.setTransform(d, 0, 0, d, 0, 0); hx.clearRect(0, 0, s, s);
+    var off = document.createElement('canvas'); off.width = off.height = 240; var o = off.getContext('2d'), cs = 240 / N;
+    o.fillStyle = '#fff'; o.fillRect(0, 0, 240, 240);
+    cells.forEach(function (c) {
+      if (c.bld) { var v = c.rub ? 20 : 150 + c.order * 40; o.fillStyle = 'rgb(' + v + ',' + v + ',' + v + ')'; o.fillRect(c.x * cs + 1, c.y * cs + 1, cs - 2, cs - 2); }
+      else if (c.road) { o.fillStyle = '#e8e8e8'; o.fillRect(c.x * cs, c.y * cs, cs, cs); }
+    });
+    var img = o.getImageData(0, 0, 240, 240).data, step = Math.max(5, s / 70);
+    hx.fillStyle = '#161616';
+    for (var py = step / 2; py < s; py += step) for (var px = step / 2; px < s; px += step) {
+      var sx = Math.floor(px / s * 240), sy = Math.floor(py / s * 240), lum = img[(sy * 240 + sx) * 4] / 255;
+      var r = (1 - lum) * step * 0.62; if (r < 0.35) continue;
+      hx.beginPath(); hx.arc(px, py, r, 0, 6.2832); hx.fill();
+    }
+    hx.fillStyle = '#e1251b';
+    incidents.forEach(function (inc) { var q = s / N; hx.fillRect((inc.x + .1) * q, (inc.y + .1) * q, q * .8, q * .8); });
+  }
+
+  /* page ink: a small WebGL2 fluid simulation (stable fluids: advect, divergence, Jacobi pressure, gradient subtract).
+     The dye is cut into a hard-edged mask and drawn white with mix-blend-mode: difference, so it reads black on the
+     paper and cyan over the red wordmark. Strokes drift, thin and break apart as the dye decays. */
+  var ink = $('#ink'); document.body.appendChild(ink);   /* out of the hero, so it covers the whole page while you scroll */
+  var inkPointer = { x: 0, y: 0, px: 0, py: 0, moved: false, has: false };
+  function fluidInk() {
+    if (reduce) return null;
+    var gl = null; try { gl = ink.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false }); } catch (e) { gl = null; }
+    if (!gl || !gl.getExtension('EXT_color_buffer_float')) return null;
+    /* tuned against a frame-by-frame recording of the reference: ribbon strokes, a wider push, slightly faster fade */
+    var CFG = { sim: 256, dye: 512, velDiss: .95, dyeDiss: .980, iters: 20, radius: 7e-5, velRadius: 4, force: 5900, reveal: 3.9, edge: .5, budget: 2.3e6 };
+    var VS = '#version 300 es\nprecision highp float;in vec2 aPos;uniform vec2 uTexel;out vec2 vUv,vL,vR,vT,vB;' +
+      'void main(){vUv=aPos*.5+.5;vL=vUv-vec2(uTexel.x,0.);vR=vUv+vec2(uTexel.x,0.);vT=vUv+vec2(0.,uTexel.y);vB=vUv-vec2(0.,uTexel.y);gl_Position=vec4(aPos,0.,1.);}';
+    var HEAD = '#version 300 es\nprecision highp float;precision highp sampler2D;in vec2 vUv,vL,vR,vT,vB;out vec4 o;';
+    var FS = {
+      splat: HEAD + 'uniform sampler2D uT;uniform float uAspect,uRadius;uniform vec2 uPoint,uPrev;uniform vec3 uColor;void main(){vec2 pa=vUv-uPrev,ba=uPoint-uPrev;pa.x*=uAspect;ba.x*=uAspect;float h=clamp(dot(pa,ba)/max(dot(ba,ba),1e-9),0.,1.);vec2 d=pa-ba*h;o=vec4(texture(uT,vUv).xyz+exp(-dot(d,d)/uRadius)*uColor,1.);}',
+      advect: HEAD + 'uniform sampler2D uVel,uSrc;uniform vec2 uTexel;uniform float uDt,uDiss;void main(){vec2 c=vUv-uDt*texture(uVel,vUv).xy*uTexel;o=uDiss*texture(uSrc,c);}',
+      div: HEAD + 'uniform sampler2D uVel;void main(){float L=texture(uVel,vL).x,R=texture(uVel,vR).x,T=texture(uVel,vT).y,B=texture(uVel,vB).y;vec2 C=texture(uVel,vUv).xy;if(vL.x<0.)L=-C.x;if(vR.x>1.)R=-C.x;if(vT.y>1.)T=-C.y;if(vB.y<0.)B=-C.y;o=vec4(.5*(R-L+T-B),0.,0.,1.);}',
+      clear: HEAD + 'uniform sampler2D uT;uniform float uVal;void main(){o=uVal*texture(uT,vUv);}',
+      press: HEAD + 'uniform sampler2D uP,uDiv;void main(){float L=texture(uP,vL).x,R=texture(uP,vR).x,T=texture(uP,vT).x,B=texture(uP,vB).x;o=vec4((L+R+B+T-texture(uDiv,vUv).x)*.25,0.,0.,1.);}',
+      grad: HEAD + 'uniform sampler2D uP,uVel;void main(){float L=texture(uP,vL).x,R=texture(uP,vR).x,T=texture(uP,vT).x,B=texture(uP,vB).x;o=vec4(texture(uVel,vUv).xy-vec2(R-L,T-B),0.,1.);}',
+      show: HEAD + 'uniform sampler2D uDye;uniform float uReveal,uEdge;void main(){float raw=texture(uDye,vUv).r*uReveal;float aa=max(fwidth(raw),.01);float m=smoothstep(uEdge-aa,uEdge+aa,raw);o=vec4(vec3(m),m);}'
+    };
+    function shader(type, src) { var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+    var P = {};
+    try {
+      var vs = shader(gl.VERTEX_SHADER, VS);
+      Object.keys(FS).forEach(function (k) {
+        var p = gl.createProgram(); gl.attachShader(p, vs); gl.attachShader(p, shader(gl.FRAGMENT_SHADER, FS[k])); gl.bindAttribLocation(p, 0, 'aPos'); gl.linkProgram(p);
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+        var u = {}, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); for (var i = 0; i < n; i++) { var nm = gl.getActiveUniform(p, i).name; u[nm] = gl.getUniformLocation(p, nm); }
+        P[k] = { p: p, u: u };
+      });
+    } catch (e) { return null; }
+    var quad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    function target(w, h) {
+      var t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+      var f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+      gl.viewport(0, 0, w, h); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+      return { t: t, f: f, w: w, h: h, ok: gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE };
+    }
+    function pair(w, h) { var a = target(w, h), b = target(w, h); return { w: w, h: h, ok: a.ok && b.ok, tx: [1 / w, 1 / h], get r() { return a; }, get o() { return b; }, swap: function () { var x = a; a = b; b = x; } }; }
+    function res(r, W, H) { var a = W / H; if (a < 1) a = 1 / a; var big = Math.round(r * a); return W > H ? [big, r] : [r, big]; }
+    var vel, dye, prs, dv, W = 1, H = 1;
+    function size() {
+      var w = window.innerWidth || 1, h = window.innerHeight || 1, dpr = Math.min(window.devicePixelRatio || 1, Math.sqrt(CFG.budget / (w * h)));
+      ink.width = Math.round(w * dpr); ink.height = Math.round(h * dpr); W = ink.width; H = ink.height;
+      var s = res(CFG.sim, W, H), d = res(CFG.dye, W, H);
+      vel = pair(s[0], s[1]); prs = pair(s[0], s[1]); dv = target(s[0], s[1]); dye = pair(d[0], d[1]);
+      return vel.ok && prs.ok && dv.ok && dye.ok;
+    }
+    if (!size()) return null;
+    function bindTex(unit, t) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t.t); return unit; }
+    function run(prog, out, set) {
+      gl.useProgram(prog.p); gl.uniform2f(prog.u.uTexel, vel.tx[0], vel.tx[1]); set(prog.u);
+      if (out) { gl.bindFramebuffer(gl.FRAMEBUFFER, out.f); gl.viewport(0, 0, out.w, out.h); } else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H); }
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    function splat(x, y, dx, dy, px, py) { if (px === undefined) { px = x; py = y; }
+      var aspect = W / H, rad = CFG.radius * (aspect > 1 ? aspect : 1);
+      run(P.splat, vel.o, function (u) { gl.uniform1i(u.uT, bindTex(0, vel.r)); gl.uniform1f(u.uAspect, aspect); gl.uniform1f(u.uRadius, rad * CFG.velRadius); gl.uniform2f(u.uPoint, x, y); gl.uniform2f(u.uPrev, px, py); gl.uniform3f(u.uColor, dx, dy, 0); }); vel.swap();
+      run(P.splat, dye.o, function (u) { gl.uniform1i(u.uT, bindTex(0, dye.r)); gl.uniform1f(u.uAspect, aspect); gl.uniform1f(u.uRadius, rad); gl.uniform2f(u.uPoint, x, y); gl.uniform2f(u.uPrev, px, py); gl.uniform3f(u.uColor, 1, 0, 0); }); dye.swap();
+    }
+    var DT = 1 / 60;
+    function step() {
+      run(P.div, dv, function (u) { gl.uniform1i(u.uVel, bindTex(0, vel.r)); });
+      run(P.clear, prs.o, function (u) { gl.uniform1i(u.uT, bindTex(0, prs.r)); gl.uniform1f(u.uVal, .8); }); prs.swap();
+      for (var i = 0; i < CFG.iters; i++) { run(P.press, prs.o, function (u) { gl.uniform1i(u.uP, bindTex(0, prs.r)); gl.uniform1i(u.uDiv, bindTex(1, dv)); }); prs.swap(); }
+      run(P.grad, vel.o, function (u) { gl.uniform1i(u.uP, bindTex(0, prs.r)); gl.uniform1i(u.uVel, bindTex(1, vel.r)); }); vel.swap();
+      run(P.advect, vel.o, function (u) { gl.uniform1i(u.uVel, bindTex(0, vel.r)); gl.uniform1i(u.uSrc, bindTex(0, vel.r)); gl.uniform1f(u.uDt, DT); gl.uniform1f(u.uDiss, CFG.velDiss); }); vel.swap();
+      run(P.advect, dye.o, function (u) { gl.uniform1i(u.uVel, bindTex(0, vel.r)); gl.uniform1i(u.uSrc, bindTex(1, dye.r)); gl.uniform1f(u.uDt, DT); gl.uniform1f(u.uDiss, CFG.dyeDiss); }); dye.swap();
+    }
+    function show() {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+      run(P.show, null, function (u) { gl.uniform1i(u.uDye, bindTex(0, dye.r)); gl.uniform1f(u.uReveal, CFG.reveal); gl.uniform1f(u.uEdge, CFG.edge); });
+    }
+    var acc = 0, lastT = 0, idle = 1e9;
+    function frame(now) {
+      if (entering) { lastT = now; inkPointer.moved = false; return; }   /* paused while the connect screen is open */
+      var dt = lastT ? Math.min(.1, (now - lastT) / 1000) : DT; lastT = now; acc += dt;
+      if (inkPointer.moved) {
+        var aspect = W / H, dx = inkPointer.x - inkPointer.px, dy = inkPointer.y - inkPointer.py;
+        if (aspect < 1) dx *= aspect; if (aspect > 1) dy /= aspect;
+        splat(inkPointer.x, inkPointer.y, dx * CFG.force, dy * CFG.force, inkPointer.px, inkPointer.py);
+        inkPointer.px = inkPointer.x; inkPointer.py = inkPointer.y; inkPointer.moved = false; idle = 0;
+      }
+      if (idle > 600) { acc = 0; return; }
+      var n = 0; while (acc >= DT && n < 3) { step(); acc -= DT; n++; idle++; } if (n === 3) acc = 0;
+      show();
+    }
+    ink.classList.add('fluid');
+    return { size: function () { size(); }, frame: frame };
+  }
+  /* fallback when WebGL2 or float render targets are missing: a soft canvas trail */
+  function canvasInk() {
+    var ix = ink.getContext('2d'); if (!ix) return null; var dabs = [], LIFE = 1400;
+    return {
+      size: function () { ink.width = window.innerWidth; ink.height = window.innerHeight; },
+      frame: function (now) {
+        if (inkPointer.moved) { dabs.push({ x: inkPointer.x * ink.width, y: (1 - inkPointer.y) * ink.height, t: now }); inkPointer.moved = false; }
+        while (dabs.length && now - dabs[0].t > LIFE) dabs.shift();
+        ix.clearRect(0, 0, ink.width, ink.height); ix.fillStyle = '#0b0b0b';
+        dabs.forEach(function (d) { var a = 1 - (now - d.t) / LIFE; ix.globalAlpha = a; ix.beginPath(); ix.arc(d.x, d.y, 4 + 12 * a, 0, 6.2832); ix.fill(); }); ix.globalAlpha = 1;
+      }
+    };
+  }
+  var INK = fluidInk() || (reduce ? null : canvasInk());
+  function sizeInk() { if (INK) INK.size(); }
+  function inkFrame(now) { if (INK) INK.frame(now); }
+  function pointAt(cx, cy) {
+    var x = cx / Math.max(1, window.innerWidth), y = 1 - cy / Math.max(1, window.innerHeight);
+    if (!inkPointer.has) { inkPointer.px = x; inkPointer.py = y; inkPointer.has = true; }
+    inkPointer.x = x; inkPointer.y = y; inkPointer.moved = true;
+  }
+  window.addEventListener('pointermove', function (e) { if (e.pointerType === 'touch' || entering) return; pointAt(e.clientX, e.clientY); });
+  document.addEventListener('mouseout', function (e) { if (!e.relatedTarget) inkPointer.has = false; });
+  function introScribble() {
+    if (reduce || !INK) return;
+    var b = hero.getBoundingClientRect(), t0 = performance.now(), cx = b.left + b.width * .5, cy = b.top + b.height * .44, ax = Math.min(b.width * .26, 360), ay = Math.min(b.height * .22, 190);
+    inkPointer.has = false;
+    (function stepI(now) {
+      var t = (now - t0) / 1600; if (t > 1) { inkPointer.has = false; return; }
+      var a = t * Math.PI * 2.2; pointAt(cx + Math.sin(a + .4) * ax * (.5 + t * .6), cy + Math.sin(a * 2) * ay * (.9 - t * .3));
+      requestAnimationFrame(stepI);
+    })(t0);
+  }
+
+  /* ---------- story scene ---------- */
+  var SC = $('#scene'), sx = SC.getContext('2d'), W = 0, H = 0, DPR = 1, sq = { x: 0, y: 0, s: 0 }, G = -1;
+  function sizeScene() {
+    DPR = Math.min(2, window.devicePixelRatio || 1); W = SC.clientWidth; H = SC.clientHeight; SC.width = W * DPR; SC.height = H * DPR;
+    var narrow = W < 860, s = narrow ? Math.min(W * .88, H * .4) : Math.min(W * .54, H * .72);
+    sq.s = s; sq.x = narrow ? (W - s) / 2 : W - s - Math.max(28, W * .04); sq.y = narrow ? 112 : (H - s) / 2 + 16;
+  }
+  function P(c) { var q = sq.s / N; return { x: sq.x + (c.x + .5) * q, y: sq.y + (c.y + .5) * q }; }
+  function line(a, b, w, col, dash) { sx.save(); sx.lineWidth = w; sx.strokeStyle = col; if (dash) sx.setLineDash(dash); sx.beginPath(); sx.moveTo(a.x, a.y); sx.lineTo(b.x, b.y); sx.stroke(); sx.restore(); }
+  function part(a, b, k) { return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k }; }
+  function drawScene(g, now) {
+    sx.setTransform(DPR, 0, 0, DPR, 0, 0); sx.clearRect(0, 0, W, H);
+    var q = sq.s / N, dmg = smooth((g + .9) / 1.0), tt = now / 1000;
+    sx.strokeStyle = '#0b0b0b'; sx.lineWidth = 1.5; sx.strokeRect(sq.x, sq.y, sq.s, sq.s);
+    sx.strokeStyle = 'rgba(11,11,11,.12)'; sx.lineWidth = 1;
+    for (var i = 5; i < N; i += 5) { sx.beginPath(); sx.moveTo(sq.x + i * q, sq.y); sx.lineTo(sq.x + i * q, sq.y + sq.s); sx.moveTo(sq.x, sq.y + i * q); sx.lineTo(sq.x + sq.s, sq.y + i * q); sx.stroke(); }
+    cells.forEach(function (c) {
+      if (!c.bld) return; var x = sq.x + c.x * q, y = sq.y + c.y * q;
+      if (c.rub && c.order < dmg) { sx.fillStyle = '#0b0b0b'; var j = (c.order * 7 % 1) * q * .18; sx.fillRect(x + 1 + j, y + 1, q - 2 - j, q - 2 - j * .6); }
+      else { sx.fillStyle = 'rgba(11,11,11,.14)'; sx.fillRect(x + 1.5, y + 1.5, q - 3, q - 3); }
+    });
+    var tp = teams.map(P), ip = incidents.map(P);
+    var hub = { x: sq.x + q * 2.5, y: sq.y + q * 2.5 };
+    var star = smooth((g - .35) / .5) * (1 - smooth((g - 1.45) / .4)), cut = clamp((g - .4) / .7, 0, 1);
+    var mesh = smooth((g - 1.55) / .5), asg = clamp((g - 1.65) / .6, 0, 1), flt = clamp((g - 2.25) / .75, 0, 1);
+    /* star: hub and spokes, cut one by one */
+    if (star > .01) {
+      sx.globalAlpha = star;
+      teams.forEach(function (t, i) {
+        var u = clamp((cut - i / teams.length * .75) / .25, 0, 1);
+        if (u <= 0) line(hub, tp[i], 1.2, '#0b0b0b');
+        else { line(hub, part(hub, tp[i], 1 - u * .45), 1.2, 'rgba(11,11,11,.35)', [3, 5]); var m = part(hub, tp[i], .5); sx.strokeStyle = '#e1251b'; sx.lineWidth = 2.4; var z = q * .42; sx.beginPath(); sx.moveTo(m.x - z, m.y - z); sx.lineTo(m.x + z, m.y + z); sx.moveTo(m.x + z, m.y - z); sx.lineTo(m.x - z, m.y + z); sx.stroke(); }
+      });
+      sx.fillStyle = '#0b0b0b'; sx.beginPath(); sx.arc(hub.x, hub.y, q * 1.25, 0, 6.2832); sx.fill();
+      sx.fillStyle = '#e6e6e3'; sx.font = '600 10px JetBrains Mono, monospace'; sx.textAlign = 'center'; sx.fillText('HQ', hub.x, hub.y + 3.5); sx.textAlign = 'left';
+      sx.globalAlpha = 1;
+    }
+    /* mesh between peers */
+    if (mesh > .01) {
+      meshLinks.forEach(function (l, n) {
+        sx.globalAlpha = mesh * .9; line(tp[l[0]], tp[l[1]], 1.4, '#0f8f8a');
+        var k = (tt * .35 + n * .17) % 1, d = part(tp[l[0]], tp[l[1]], k); sx.fillStyle = '#0f8f8a'; sx.beginPath(); sx.arc(d.x, d.y, 2.2, 0, 6.2832); sx.fill();
+      }); sx.globalAlpha = 1;
+    }
+    /* assignments */
+    var voteN = Math.min(9, Math.floor(flt * 11));
+    if (asg > 0) incidents.forEach(function (inc, i) {
+      var from = assign[i], moved = (i === 2 && flt > .72), col = '#0b0b0b';
+      if (i === 2) {
+        if (flt > .72) { line(tp[from], ip[i], 1.2, 'rgba(11,11,11,.3)', [3, 5]); var k = smooth((flt - .72) / .28); var e = part(tp[spare], ip[i], k); line(tp[spare], e, 2.6, col); return; }
+      }
+      var e2 = part(tp[from], ip[i], smooth(asg)); line(tp[from], e2, 2.6, col);
+    });
+    /* peers vote on the faulty team */
+    if (flt > 0) {
+      var fp = tp[FAULTY], pulse = (tt * .9) % 1;
+      sx.strokeStyle = 'rgba(225,37,27,' + (.8 * (1 - pulse)) + ')'; sx.lineWidth = 2; sx.beginPath(); sx.arc(fp.x, fp.y, q * (.7 + pulse * 2.2), 0, 6.2832); sx.stroke();
+      var peers = teams.map(function (t, i) { return i; }).filter(function (i) { return i !== FAULTY; });
+      peers.forEach(function (i, n) { if (n < voteN) line(tp[i], part(tp[i], fp, .86), 1, 'rgba(15,143,138,.7)', [2, 4]); });
+      sx.fillStyle = '#0b0b0b'; sx.font = '600 11px JetBrains Mono, monospace';
+      var lbl = voteN + ' / 9 agree' + (voteN >= 3 ? '  → ELEVATED' : ''); sx.fillStyle = voteN >= 3 ? '#e1251b' : '#0b0b0b';
+      var left = fp.x - 170 > sq.x; sx.textAlign = left ? 'right' : 'left';
+      sx.fillText(lbl, left ? fp.x - q * .9 : fp.x + q * .9, fp.y - q * 1.1); sx.textAlign = 'left';
+    }
+    /* incidents and teams on top */
+    var done = smooth((g + .3) / .6);
+    incidents.forEach(function (inc, i) {
+      if (dmg < .55) return; var p = ip[i], s = q * .9 * done; sx.fillStyle = '#e1251b'; sx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
+      var r = ((tt * .6 + i * .13) % 1); sx.strokeStyle = 'rgba(225,37,27,' + (.5 * (1 - r)) + ')'; sx.lineWidth = 1.5; sx.strokeRect(p.x - s / 2 - r * q * 1.6, p.y - s / 2 - r * q * 1.6, s + r * q * 3.2, s + r * q * 3.2);
+    });
+    teams.forEach(function (t, i) {
+      var p = tp[i], isolated = (cut > .2 && mesh < .3 && g > .5), bad = (i === FAULTY && voteN >= 3);
+      sx.beginPath(); sx.arc(p.x, p.y, q * .5, 0, 6.2832);
+      if (bad) { sx.fillStyle = '#e1251b'; sx.fill(); }
+      else if (isolated) { sx.fillStyle = '#e6e6e3'; sx.fill(); sx.strokeStyle = '#0b0b0b'; sx.lineWidth = 1.6; sx.stroke(); }
+      else { sx.fillStyle = '#0b0b0b'; sx.fill(); if (mesh > .3) { sx.strokeStyle = '#0f8f8a'; sx.lineWidth = 2; sx.beginPath(); sx.arc(p.x, p.y, q * .72, 0, 6.2832); sx.stroke(); } }
+    });
+    /* legend */
+    sx.font = '400 10.5px JetBrains Mono, monospace'; sx.fillStyle = '#5f5f5c';
+    var ly = sq.y + sq.s + 20; if (W >= 860 && ly < H - 14) { sx.fillText('■ incident   ● team   — radio link   ─ assignment', sq.x, ly); }
+  }
+
+  /* ---------- the 3D city (Three.js): one fixed layer behind the hero and the story. The 2D drawScene above stays as the fallback. ----------
+     On load an earthquake hits (shake, collapses, dust); the hero shows the city as a halftone print, and scrolling into the story
+     zooms in and blends to clean shading for the story beats. */
+  var S3 = $('#scene3d'), T3 = null, cityLayer = $('#city');
+  var TUNE = { style: 'ink', cell: 2.6, print: 1, sharp: Math.min(1.75, window.devicePixelRatio || 1) };
+  try { var savedTune = JSON.parse(localStorage.getItem('rn-map-tune2') || 'null'); if (savedTune) { delete savedTune.time; Object.assign(TUNE, savedTune); } } catch (e) {}
+  function W3(c) { return { x: c.x - N / 2 + .5, z: c.y - N / 2 + .5 }; }
+  function init3D() {
+    if (!window.THREE || !S3) return null;
+    var r; try { r = new THREE.WebGLRenderer({ canvas: S3, antialias: true, alpha: true }); } catch (e) { return null; }
+    if (!r.getContext()) return null;
+    r.setClearColor(0x000000, 0); r.setPixelRatio(TUNE.sharp);
+    r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap;
+    var scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(30, 1, .5, 500);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xb4b4ae, .92));
+    var sun = new THREE.DirectionalLight(0xffffff, .72); sun.position.set(-20, 38, 14); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+    var sc = sun.shadow.camera; sc.left = -30; sc.right = 30; sc.top = 30; sc.bottom = -30; sc.near = 1; sc.far = 160; sun.shadow.bias = -0.0006; scene.add(sun);
+    var shadowGround = new THREE.Mesh(new THREE.PlaneGeometry(140, 140), new THREE.ShadowMaterial({ opacity: .26 }));
+    shadowGround.rotation.x = -Math.PI / 2; shadowGround.position.y = -.81; shadowGround.receiveShadow = true; scene.add(shadowGround);
+
+    var unit = new THREE.BoxGeometry(1, 1, 1), unitE = new THREE.EdgesGeometry(unit), dummy = new THREE.Object3D();
+    var edgeMat = new THREE.LineBasicMaterial({ color: 0x0b0b0b, transparent: true, opacity: .45 });
+    var lite = new THREE.MeshLambertMaterial({ color: 0xf2f2ef }), dark = new THREE.MeshLambertMaterial({ color: 0x141414 });
+    var midMat = new THREE.MeshLambertMaterial({ color: 0x8a8a85 }), crackMat = new THREE.MeshBasicMaterial({ color: 0x0b0b0b });
+    /* surface styles: dots or ink hatching computed on the buildings in world space, so they move with the city instead of crawling over it */
+    /* power after the quake: every cell gets an outage rank; collapsed cells lose power first, then about half of the rest.
+       uOut rises from 0 to .45 as the quake hits and falls back when the city rebuilds, so the city always loads fully lit */
+    var powD = new Uint8Array(N * N * 4), pR = rng(91);
+    cells.forEach(function (c) { var o = (c.y * N + c.x) * 4; powD[o] = c.rub ? 1 : 8 + Math.floor(pR() * 247); powD[o + 3] = 255; });
+    var powTex = new THREE.DataTexture(powD, N, N, THREE.RGBAFormat); powTex.magFilter = powTex.minFilter = THREE.NearestFilter; powTex.needsUpdate = true;
+    var SU = { uStyle: { value: 0 }, uMix: { value: 1 }, uCellW: { value: .14 }, uNight: { value: 0 }, uSunA: { value: .8 }, uOut: { value: 0 }, uTime: { value: 0 },
+      uPaper: { value: new THREE.Color(0xf0f0ed) }, uInk: { value: new THREE.Color(0x0b0b0b) }, uTint: { value: new THREE.Color(1, 1, 1) }, uPow: { value: powTex } };
+    function surf(mat, def) {
+      mat.extensions = mat.extensions || {}; mat.extensions.derivatives = true;
+      mat.defines = { RN_N: N.toFixed(1) }; if (def) mat.defines[def] = '';
+      mat.onBeforeCompile = function (sh) {
+        Object.keys(SU).forEach(function (k) { sh.uniforms[k] = SU[k]; });
+        sh.vertexShader = 'varying vec3 vWPos;\n' + sh.vertexShader.replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\n  vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\n  #ifdef USE_INSTANCING\n  vWPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;\n  #endif');
+        sh.fragmentShader = 'uniform float uStyle, uMix, uCellW, uNight, uSunA, uOut, uTime;\nuniform vec3 uPaper, uInk, uTint;\nuniform sampler2D uPow;\nvarying vec3 vWPos;\nfloat rnh(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }\n' + sh.fragmentShader.replace('gl_FragColor = vec4( outgoingLight, diffuseColor.a );', [
+          'vec3 col = outgoingLight;',
+          'vec3 nrm = normalize(cross(dFdx(vWPos), dFdy(vWPos))); vec3 an = abs(nrm);',
+          'vec2 uv = an.y > max(an.x, an.z) ? vWPos.xz : (an.x > an.z ? vWPos.zy : vWPos.xy);',
+          'float lum = dot(col, vec3(.299, .587, .114));',
+          'vec2 hd = vec2(cos(uSunA), sin(uSunA)); float s1 = dot(uv, hd) / (uCellW * 1.3), h1 = abs(fract(s1) - .5), a1 = fwidth(s1);',
+          /* ink or dots on the buildings; shadowed faces are darker, so the sun's shadows print as hatching */
+          'if (uStyle > .5 && uMix < .999) {',
+          '  float dk = clamp((.86 - lum) * 1.75, 0., 1.), ink = 0.;',
+          '  if (uStyle < 1.5) { vec2 f = fract(uv / uCellW) - .5; float d = length(f), aa = fwidth(d), r = .64 * sqrt(dk); ink = 1. - smoothstep(r - aa, r + aa, d); }',
+          '  if (uStyle > 1.5) { float w1 = dk > .3 ? .08 + .3 * (dk - .3) : 0.; ink = w1 > 0. ? 1. - smoothstep(w1 - a1, w1 + a1, h1) : 0.;',
+          '         if (dk > .55) { float s2 = dot(uv, vec2(-hd.y, hd.x)) / (uCellW * 1.3), h2 = abs(fract(s2) - .5), a2 = fwidth(s2); ink = max(ink, 1. - smoothstep(.1 - a2, .1 + a2, h2)); } }',
+          '  col = mix(mix(uPaper, uInk, dk > .88 ? 1. : ink), col, uMix);',
+          '}',
+          /* time of day applies in every style and at every zoom, so it holds through all four story steps */
+          'col *= uTint;',
+          'if (uNight > .001) {',
+          '  float lit = clamp((lum - .3) * 2.2, 0., 1.);',
+          '  vec3 nightC = mix(vec3(.045, .05, .065), vec3(.12, .13, .16), lit);',
+          '  if (uStyle > 1.5) { float wN = lit > .12 ? .03 + .1 * lit : 0.; float line = wN > 0. ? 1. - smoothstep(wN - a1, wN + a1, h1) : 0.; nightC = mix(nightC, vec3(.7, .72, .76), line * .55 * (1. - .6 * uMix)); }',
+          '  #ifdef RN_WIN',
+          '  if (an.y < .5) {',
+          '    vec2 cell = floor(vWPos.xz + RN_N * .5); float pw = texture2D(uPow, (cell + .5) / RN_N).r;',
+          '    float on = step(uOut, pw) * (1. - step(.01, uOut) * step(.9, rnh(cell + 3.1)) * step(.6, fract(sin(floor(uTime * 9.) + rnh(cell) * 40.) * 43.7)));',
+          '    vec2 wc = vec2(uv.x * 6.5, vWPos.y * 4.5), id = floor(wc), fw = fract(wc);',
+          '    float win = step(.28, fw.x) * step(fw.x, .72) * step(.3, fw.y) * step(fw.y, .78) * step(.45, rnh(id + cell * 7.13)) * on;',
+          '    nightC = mix(nightC, vec3(.98, .85, .55), win);',
+          '  }',
+          '  #endif',
+          '  #ifdef RN_LAMP',
+          '  if (an.y > .5) { vec2 q = (vWPos.xz + RN_N * .5 - .5) / 5., iq = floor(q + .5); float rr = length((q - iq) * 5.), on = step(uOut * .9, rnh(iq + .7));',
+          '    nightC += vec3(.95, .6, .24) * on * (smoothstep(1.6, 0., rr) * .32 + 1. - smoothstep(.12, .2, rr)); }',
+          '  #endif',
+          '  col = mix(col, nightC, uNight);',
+          '}',
+          'gl_FragColor = vec4( col, diffuseColor.a );'].join('\n'));
+      };
+      return mat;
+    }
+    surf(lite, 'RN_WIN'); surf(dark); surf(midMat);
+    var slabGeo = new THREE.BoxGeometry(N + .8, .8, N + .8), slab = new THREE.Mesh(slabGeo, surf(new THREE.MeshLambertMaterial({ color: 0xc9c9c4 }), 'RN_LAMP'));
+    slab.position.y = -.4; slab.receiveShadow = true; scene.add(slab);
+    var slabE = new THREE.LineSegments(new THREE.EdgesGeometry(slabGeo), new THREE.LineBasicMaterial({ color: 0x0b0b0b })); slabE.position.copy(slab.position); scene.add(slabE);
+    var lotMat = surf(new THREE.MeshLambertMaterial({ color: 0xe0e0dc }), 'RN_LAMP');
+    for (var by = 1; by < N; by += 5) for (var bx = 1; bx < N; bx += 5) {
+      var w = Math.min(4, N - bx), d = Math.min(4, N - by), lot = new THREE.Mesh(new THREE.BoxGeometry(w, .06, d), lotMat);
+      lot.position.set(bx + w / 2 - N / 2, .03, by + d / 2 - N / 2); lot.receiveShadow = true; scene.add(lot);
+    }
+
+    /* fissures: jagged dark strips torn across the ground */
+    var fis = [], fR = rng(77);
+    for (var f = 0; f < 7; f++) {
+      var fx = (fR() - .5) * N * .8, fz = (fR() - .5) * N * .8, fa = fR() * Math.PI * 2;
+      for (var s = 0; s < 18; s++) {
+        fa += (fR() - .5) * 1.1; var len = .45 + fR() * .75, nx = fx + Math.cos(fa) * len, nz = fz + Math.sin(fa) * len;
+        if (Math.abs(nx) > N / 2 - .3 || Math.abs(nz) > N / 2 - .3) break;
+        fis.push({ x: (fx + nx) / 2, z: (fz + nz) / 2, len: len + .06, a: fa, w: .14 + fR() * .22, at: s / 18 }); fx = nx; fz = nz;
+      }
+    }
+    var fisMesh = new THREE.InstancedMesh(unit, crackMat, Math.max(1, fis.length)); scene.add(fisMesh);
+
+    /* buildings: every one stands in a pivot group so it can lean from its base */
+    var bR = rng(33), lR = rng(55), blds = [];
+    cells.forEach(function (c) {
+      if (!c.bld) return; var p = W3(c), h = .5 + Math.pow(bR(), 1.6) * 3.2;
+      var g = new THREE.Group(); g.position.set(p.x, .06, p.z); scene.add(g);
+      var m = new THREE.Mesh(unit, lite); m.scale.set(.84, h, .84); m.position.y = h / 2; m.castShadow = m.receiveShadow = true;
+      m.add(new THREE.LineSegments(unitE, edgeMat)); g.add(m);
+      var b = { g: g, m: m, c: c, p: p, h: h, sH: h * (.2 + bR() * .3), side: bR() < .5 ? -1 : 1, axX: bR() < .5,
+        lean: (!c.rub && h > 2.1 && lR() < .32) ? (lR() < .5 ? -1 : 1) * (.05 + lR() * .09) : 0, tc: .55 + c.order * 1.4, ph: bR() * 6.28 };
+      blds.push(b);
+    });
+    var rub = blds.filter(function (b) { return b.c.rub; });
+    var chunks = new THREE.InstancedMesh(unit, midMat, Math.max(1, rub.length)); chunks.castShadow = true; chunks.receiveShadow = true; scene.add(chunks);
+    var crowns = new THREE.InstancedMesh(unit, lite, Math.max(1, rub.length * 3)); crowns.castShadow = true; scene.add(crowns);
+    var rubble = new THREE.InstancedMesh(unit, dark, Math.max(1, rub.length * 5)); rubble.castShadow = true; scene.add(rubble);
+    var rR = rng(44);
+    rub.forEach(function (b) {
+      b.crown = [0, 1, 2].map(function () { return [(rR() - .5) * .5, (rR() - .5) * .5, .12 + rR() * .35, .16 + rR() * .2]; });
+      b.bits = [0, 1, 2, 3, 4].map(function () { var a = rR() * 6.28, dd = .45 + rR() * .6; return [Math.cos(a) * dd + b.side * (b.axX ? 0 : .3), Math.sin(a) * dd + b.side * (b.axX ? .3 : 0), .14 + rR() * .3, rR() * 3, rR() * 3]; });
+    });
+
+    /* soft sprite texture shared by dust, smoke and glow */
+    var soft = (function () { var c = document.createElement('canvas'); c.width = c.height = 64; var x = c.getContext('2d'), gr = x.createRadialGradient(32, 32, 2, 32, 32, 31); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(.45, 'rgba(255,255,255,.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = gr; x.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c); })();
+    function puffs(n, color) { var a = []; for (var i = 0; i < n; i++) { var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: soft, color: color, transparent: true, depthWrite: false, opacity: 0 })); sp.visible = false; scene.add(sp); a.push(sp); } return a; }
+    /* dust plumes over the tallest collapses, smoke columns over the fires */
+    var plumeSrc = rub.slice().sort(function (a, b) { return b.h - a.h; }).slice(0, 7);
+    var plumes = plumeSrc.map(function (b, i) { return { b: b, s: puffs(7, 0xc4c4bf), dir: (i * 2.39) % 6.28 }; });
+    var fireSrc = rub.filter(function (b) { return Math.abs(b.p.x) < N * .35 && Math.abs(b.p.z) < N * .35; }).sort(function (a, b) { return a.c.order - b.c.order; }).slice(0, 6);
+    var fires = fireSrc.map(function (b) {
+      var g = new THREE.Group(); g.position.set(b.p.x + b.side * .2, .1, b.p.z); scene.add(g);
+      var f1 = new THREE.Mesh(new THREE.ConeGeometry(.36, 1.25, 7), new THREE.MeshBasicMaterial({ color: 0xe1251b })); f1.position.y = .45; g.add(f1);
+      var f2 = new THREE.Mesh(new THREE.ConeGeometry(.16, .6, 6), new THREE.MeshBasicMaterial({ color: 0xff7a2a })); f2.position.set(.12, .3, .05); g.add(f2);
+      var glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: soft, color: 0xe1251b, transparent: true, depthWrite: false, opacity: .55, blending: THREE.AdditiveBlending })); glow.scale.set(3.2, 3.2, 1); glow.position.y = .5; g.add(glow);
+      var ember = new THREE.Mesh(new THREE.CircleGeometry(.95, 20), new THREE.MeshBasicMaterial({ color: 0xe1251b, transparent: true, opacity: .85, depthWrite: false })); ember.rotation.x = -Math.PI / 2; ember.position.y = .02; g.add(ember);
+      g.visible = false;
+      return { b: b, g: g, f1: f1, f2: f2, glow: glow, s: puffs(6, 0x6a6a64) };
+    });
+
+    /* the earthquake: collapse progress per building, driven by time since load */
+    /* the sky follows the visitor's clock (RNSky, shared with every page): the sun crosses the city from east to west and its shadows
+       fall across the blocks, long at dawn and dusk; the hatching turns with the sun; the whole map takes the hour's paper colour;
+       after dark the city prints as a negative with lit windows and street lamps, and after the quake about half of them go out. */
+    var hemi = scene.children.filter(function (o) { return o.isHemisphereLight; })[0], skyAt = -1;
+    var sunWhite = new THREE.Color(0xffffff), sunWarm = new THREE.Color(0xffb27a), moonC = new THREE.Color(0xb4c6ff);
+    function skyClock(tt) {
+      if (tt - skyAt < .2 && skyAt >= 0) return; skyAt = tt;
+      var P = window.RNSky ? RNSky.current : null, h = P ? P.hour : new Date().getHours() + new Date().getMinutes() / 60;
+      /* day follows the sun's height, so 9 am is softer than noon; night follows the paper, so the map and the page darken together */
+      var day = clamp(Math.sin(Math.PI * (h - 6) / 12), 0, 1), night = P ? 1 - smooth((P.light - .03) / .2) : 1 - smooth(day / .2);
+      var az = Math.PI * clamp((h - 6) / 12, 0, 1), elv = .12 + 1.0 * day, nt = smooth(night), moon = night > .5;
+      /* the light slides from the sun to the moon instead of jumping, so shadows swing round smoothly at dawn and dusk */
+      var sx = Math.cos(az) * Math.cos(elv) * 46, sy = Math.sin(elv) * 46, sz = -Math.sin(az) * Math.cos(elv) * 30 + 8;
+      var mx = Math.cos(2.3) * Math.cos(.9) * 46, my = Math.sin(.9) * 46, mz = -Math.sin(2.3) * Math.cos(.9) * 30 + 8;
+      sun.position.set(sx + (mx - sx) * nt, sy + (my - sy) * nt, sz + (mz - sz) * nt);
+      sun.color.copy(sunWhite).lerp(sunWarm, .7 * (1 - smooth((elv - .12) / .55))).lerp(moonC, nt);
+      sun.intensity = (.3 + .5 * day) * (1 - nt) + .22 * nt; if (hemi) hemi.intensity = .6 + .2 * day;
+      SU.uNight.value = night; SU.uSunA.value = az + (2.3 - az) * nt + .6;
+      if (P) {
+        var pc = P.paper, ic = P.ink;
+        SU.uPaper.value.setRGB(pc[0], pc[1], pc[2]).lerp(sunWhite, .45);
+        SU.uTint.value.setRGB(clamp(pc[0] / .902, .7, 1.1), clamp(pc[1] / .902, .7, 1.1), clamp(pc[2] / .89, .7, 1.1)).lerp(sunWhite, night);
+        inkC.setRGB(ic[0], ic[1], ic[2]); white.setRGB(pc[0], pc[1], pc[2]);
+        SU.uInk.value.copy(P.night ? new THREE.Color(0x0b0b0b) : inkC);
+        edgeMat.color.copy(inkC); slabE.material.color.copy(inkC);
+        [starOk, starCut, routes].forEach(function (o) { o.mat.color.copy(inkC); });
+      }
+    }
+    var t00 = performance.now(), introDone = false, lastIntroT = -1, qStart = null, rebuild = null;   /* the quake waits for the story's first section; the city rebuilds when you return to the top */
+    function requestRebuild() { if (qStart !== null && !rebuild) rebuild = { t0: (performance.now() - t00) / 1000 }; }
+    function quake(t, still) {
+      var pre = t < 0, amp = (reduce || pre || still) ? 0 : Math.max(0, 1 - t / 2.6), all = pre ? 0 : reduce ? 1 : smooth((t - .35) / 1.8);
+      blds.forEach(function (b, i) {
+        var cp = pre ? 0 : reduce ? 1 : smooth((t - b.tc) / .9), shud = Math.sin(t * 37 + b.ph) * .02 * amp;
+        if (b.c.rub) { var sy = b.h + (b.sH - b.h) * cp; b.m.scale.y = sy; b.m.position.y = sy / 2; b.cp = cp; }
+        var ln = b.lean * all;
+        if (b.axX) { b.g.rotation.x = ln + shud; b.g.rotation.z = shud * .6; } else { b.g.rotation.z = ln + shud; b.g.rotation.x = shud * .6; }
+      });
+      rub.forEach(function (b, k) {
+        var cp = b.cp, cH = Math.max(.25, Math.min(1.5, b.h - b.sH)), fall = cp * cp;
+        var off = b.side * .62 * cp, y = (b.sH + cH / 2) + (.16 + cH * .22 - (b.sH + cH / 2)) * fall;
+        dummy.position.set(b.p.x + (b.axX ? 0 : off), .06 + y, b.p.z + (b.axX ? off : 0));
+        dummy.rotation.set(b.axX ? b.side * 1.2 * cp : .15 * cp, .3 * cp, b.axX ? .1 * cp : -b.side * 1.2 * cp);
+        dummy.scale.set(.78, cp > .01 ? cH : .0001, .78); dummy.updateMatrix(); chunks.setMatrixAt(k, dummy.matrix);
+        var top = .06 + b.sH + (b.h - b.sH) * (1 - cp);
+        b.crown.forEach(function (q, j) { var hb = q[2] * cp + .0001; dummy.position.set(b.p.x + q[0], top + hb / 2, b.p.z + q[1]); dummy.rotation.set(0, j, 0); dummy.scale.set(q[3], hb, q[3]); dummy.updateMatrix(); crowns.setMatrixAt(k * 3 + j, dummy.matrix); });
+        b.bits.forEach(function (q, j) { var sz = q[2] * cp + .0001; dummy.position.set(b.p.x + q[0], .06 + sz * .35, b.p.z + q[1]); dummy.rotation.set(q[3], q[4], 0); dummy.scale.set(sz, sz * .7, sz); dummy.updateMatrix(); rubble.setMatrixAt(k * 5 + j, dummy.matrix); });
+      });
+      fis.forEach(function (s, i) { var k = pre ? 0 : reduce ? 1 : smooth((t - .4 - s.at * .9) / .35); dummy.position.set(s.x, .075, s.z); dummy.rotation.set(0, -s.a, 0); dummy.scale.set(s.len * k + .0001, .03, s.w); dummy.updateMatrix(); fisMesh.setMatrixAt(i, dummy.matrix); });
+      chunks.instanceMatrix.needsUpdate = crowns.instanceMatrix.needsUpdate = rubble.instanceMatrix.needsUpdate = fisMesh.instanceMatrix.needsUpdate = true;
+      return amp;
+    }
+    var maxTc = blds.reduce(function (m, b) { return Math.max(m, b.tc); }, 0) + 1.2;
+
+    function animatePuffs(t) {
+      plumes.forEach(function (pl) {
+        var ts = reduce ? -30 : pl.b.tc + .15, local = t - ts, L = 7, I = .35 + .65 * Math.exp(-Math.max(0, local) / 4);
+        pl.s.forEach(function (sp, j) {
+          var age = local - j * .32; if (age < 0) { sp.visible = false; return; }
+          age = age % L; var k = age / L, dir = pl.dir + j * .7;
+          sp.visible = true; sp.position.set(pl.b.p.x + Math.cos(dir) * age * .22 + age * .12, .4 + age * (.45 + (j % 3) * .12), pl.b.p.z + Math.sin(dir) * age * .22);
+          var sz = (.8 + age * .45) * (1 + I * .3); sp.scale.set(sz, sz, 1); sp.material.opacity = .3 * I * Math.sin(Math.PI * k);
+        });
+      });
+      fires.forEach(function (fi, i) {
+        var ts = reduce ? -30 : fi.b.tc + .3, local = t - ts; fi.g.visible = local > 0; if (local < 0) { fi.s.forEach(function (sp) { sp.visible = false; }); return; }
+        var fl = 1 + Math.sin(t * 13 + i) * .12 + Math.sin(t * 23 + i * 2) * .08; fi.f1.scale.set(fl, fl * (1 + Math.sin(t * 9 + i) * .15), fl); fi.f2.scale.setScalar(2 - fl);
+        fi.glow.material.opacity = .45 + Math.sin(t * 11 + i) * .1;
+        fi.s.forEach(function (sp, j) {
+          var L = 8, age = local - j * .5; if (age < 0) { sp.visible = false; return; } age = age % L; var k = age / L;
+          sp.visible = true; sp.position.set(fi.g.position.x + age * .28 + Math.sin(age + j) * .15, 1 + age * .8, fi.g.position.z + Math.cos(age * .7 + j) * .15);
+          var sz = .6 + age * .4; sp.scale.set(sz, sz, 1); sp.material.opacity = .28 * Math.sin(Math.PI * k);
+        });
+      });
+    }
+
+    /* halftone print pass for the hero, blended out as the camera zooms into the story */
+    var rt = new THREE.WebGLRenderTarget(2, 2, { format: THREE.RGBAFormat });
+    var htMat = new THREE.ShaderMaterial({
+      uniforms: { tScene: { value: rt.texture }, uRes: { value: new THREE.Vector2(1, 1) }, uMix: { value: 0 }, uCell: { value: 6 } },
+      vertexShader: 'varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position.xy,0.,1.);}',
+      fragmentShader: [
+        'uniform sampler2D tScene;uniform vec2 uRes;uniform float uMix,uCell;varying vec2 vUv;',
+        'void main(){vec4 src=texture2D(tScene,vUv);float A=.7853982;mat2 R=mat2(cos(A),-sin(A),sin(A),cos(A));mat2 Ri=mat2(cos(A),sin(A),-sin(A),cos(A));',
+        'vec2 q=R*(vUv*uRes);vec2 c=(floor(q/uCell)+.5)*uCell;vec4 s=texture2D(tScene,(Ri*c)/uRes);',
+        'float a=s.a;vec3 col=a>.001?s.rgb/a:vec3(1.);float lum=dot(col,vec3(.299,.587,.114));',
+        'float dk=clamp((1.-lum)*1.25+.06,0.,1.)*a;float rad=uCell*.62*sqrt(dk);float m=1.-smoothstep(rad-.7,rad+.7,length(q-c));',
+        'float red=clamp((col.r-max(col.g,col.b))*2.4,0.,1.);float tl=clamp((col.g-col.r)*2.5,0.,1.);',
+        'vec3 ink=mix(mix(vec3(.043),vec3(.88,.145,.106),red),vec3(.06,.56,.54),tl);',
+        'vec4 px=texture2D(tScene,vUv);float pa=px.a;vec3 pc=pa>.001?px.rgb/pa:vec3(1.);float pl=dot(pc,vec3(.299,.587,.114));float edge=step(.5,(1.-pl)*pa)*step(pl,.22);',
+        'vec3 ink2=mix(ink,vec3(.043),edge*(1.-red));float mm=max(m,edge);',
+        'gl_FragColor=mix(vec4(ink2*mm,mm),src,uMix);}'
+      ].join('\n'),
+      depthTest: false, depthWrite: false, blending: THREE.NoBlending
+    });
+    var htScene = new THREE.Scene(), htCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1); htScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), htMat));
+
+    /* story markers and links (unchanged behaviour) */
+    var red = new THREE.Color(0xe1251b), teal = new THREE.Color(0x0f8f8a), inkC = new THREE.Color(0x0b0b0b), white = new THREE.Color(0xf2f2ef);
+    var incs = incidents.map(function (inc, i) {
+      var p = W3(inc), g = new THREE.Group(); g.position.set(p.x, .1, p.z); scene.add(g);
+      var beamM = new THREE.MeshBasicMaterial({ color: 0xe1251b, transparent: true, opacity: .3, depthWrite: false });
+      var beam = new THREE.Mesh(new THREE.CylinderGeometry(.22, .22, 9, 16, 1, true), beamM); beam.position.y = 4.5; g.add(beam);
+      var ringM = new THREE.MeshBasicMaterial({ color: 0xe1251b, side: THREE.DoubleSide, transparent: true });
+      var ring = new THREE.Mesh(new THREE.RingGeometry(.55, .72, 40), ringM); ring.rotation.x = -Math.PI / 2; ring.position.y = .05; g.add(ring);
+      var pulse = new THREE.Mesh(new THREE.RingGeometry(.9, 1.0, 40), ringM.clone()); pulse.rotation.x = -Math.PI / 2; pulse.position.y = .05; g.add(pulse);
+      var core = new THREE.Mesh(new THREE.BoxGeometry(.42, .42, .42), new THREE.MeshLambertMaterial({ color: 0xe1251b })); core.position.y = .5; core.castShadow = true; g.add(core);
+      return { g: g, beamM: beamM, ringM: ringM, pulse: pulse, core: core, p: p };
+    });
+    var hubCell = { x: 2, y: 2 }, hub = W3(hubCell);
+    var tower = new THREE.Mesh(new THREE.BoxGeometry(1.1, 4.6, 1.1), dark); tower.position.set(hub.x, 2.36, hub.z); tower.castShadow = true; scene.add(tower);
+    var mast = new THREE.Mesh(new THREE.CylinderGeometry(.05, .05, 1.8, 6), dark); mast.position.set(hub.x, 5.5, hub.z); scene.add(mast);
+    var lampM = new THREE.MeshBasicMaterial({ color: 0xe1251b }), lamp = new THREE.Mesh(new THREE.SphereGeometry(.16, 12, 10), lampM); lamp.position.set(hub.x, 6.45, hub.z); scene.add(lamp);
+    var hubTop = new THREE.Vector3(hub.x, 6.3, hub.z);
+    function marker(i) {
+      var g = new THREE.Group(); scene.add(g);
+      var stemM = new THREE.MeshLambertMaterial({ color: 0x0b0b0b }), headM = new THREE.MeshLambertMaterial({ color: 0x0b0b0b });
+      var stem = new THREE.Mesh(new THREE.CylinderGeometry(.06, .06, 1.3, 8), stemM); stem.position.y = .7; stem.castShadow = true; g.add(stem);
+      var head = new THREE.Mesh(new THREE.SphereGeometry(.34, 18, 14), headM); head.position.y = 1.5; head.castShadow = true; g.add(head);
+      var baseM = new THREE.MeshBasicMaterial({ color: 0x0b0b0b, side: THREE.DoubleSide });
+      var base = new THREE.Mesh(new THREE.RingGeometry(.4, .55, 32), baseM); base.rotation.x = -Math.PI / 2; base.position.y = .08; g.add(base);
+      var haloM = new THREE.MeshBasicMaterial({ color: 0x0f8f8a, side: THREE.DoubleSide, transparent: true, opacity: 0 });
+      var halo = new THREE.Mesh(new THREE.RingGeometry(.7, .8, 36), haloM); halo.rotation.x = -Math.PI / 2; halo.position.y = .09; g.add(halo);
+      return { g: g, head: head, headM: headM, stemM: stemM, baseM: baseM, haloM: haloM, halo: halo, heading: 0 };
+    }
+    var marks = teams.map(function (t, i) { return marker(i); });
+    var assignOf = {}; assign.forEach(function (t, k) { assignOf[t] = k; });
+    function segs(n, color, opacity) {
+      var arr = new Float32Array(n * 6), geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+      var mat = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: opacity }), obj = new THREE.LineSegments(geo, mat); obj.frustumCulled = false; scene.add(obj);
+      return { arr: arr, geo: geo, mat: mat, set: function (i, a, b) { var o = i * 6; arr[o] = a.x; arr[o + 1] = a.y; arr[o + 2] = a.z; arr[o + 3] = b.x; arr[o + 4] = b.y; arr[o + 5] = b.z; }, done: function () { geo.attributes.position.needsUpdate = true; } };
+    }
+    var starOk = segs(teams.length, 0x0b0b0b, .85), starCut = segs(teams.length, 0x0b0b0b, .25), meshL = segs(meshLinks.length, 0x0f8f8a, .8);
+    var votes = segs(teams.length, 0x0f8f8a, .75), routes = segs(incidents.length + 1, 0x0b0b0b, .9);
+    var xTex = (function () { var c = document.createElement('canvas'); c.width = c.height = 64; var x = c.getContext('2d'); x.strokeStyle = '#e1251b'; x.lineWidth = 9; x.lineCap = 'round'; x.beginPath(); x.moveTo(14, 14); x.lineTo(50, 50); x.moveTo(50, 14); x.lineTo(14, 50); x.stroke(); return new THREE.CanvasTexture(c); })();
+    var xs = teams.map(function () { var s = new THREE.Sprite(new THREE.SpriteMaterial({ map: xTex, transparent: true, depthTest: false })); s.scale.set(1.1, 1.1, 1); scene.add(s); return s; });
+    var packets = new THREE.InstancedMesh(new THREE.SphereGeometry(.11, 8, 6), new THREE.MeshBasicMaterial({ color: 0x0f8f8a }), meshLinks.length); scene.add(packets);
+
+    var tagHQ = $('#tagHQ'), tagVote = $('#tagVote'), stage = $('.stage'), v3 = new THREE.Vector3();
+    function project(x, y, z) { v3.set(x, y, z).project(cam); var sr = S3.getBoundingClientRect(), st = stage.getBoundingClientRect(); return { x: (v3.x * .5 + .5) * sr.width + sr.left - st.left, y: (-v3.y * .5 + .5) * sr.height + sr.top - st.top, vis: v3.z < 1 }; }
+    function place(el, p, show) { if (!el) return; el.style.opacity = show && p.vis ? '1' : '0'; el.style.transform = 'translate(' + p.x.toFixed(1) + 'px,' + p.y.toFixed(1) + 'px) translate(-50%,-130%)'; }
+
+    /* camera: a wide hero shot, then the story keyframes; plus a slow continuous orbit and whatever the visitor drags */
+    var inc2 = W3(incidents[2]);
+    var KF = [
+      { g: 0, az: .65, el: .8, d: 46, x: 0, z: 0 },
+      { g: 1, az: 1.35, el: .6, d: 38, x: hub.x * .45, z: hub.z * .45 },
+      { g: 2, az: 2.2, el: .74, d: 46, x: 0, z: 0 },
+      { g: 3, az: 2.95, el: .62, d: 40, x: inc2.x * .5, z: inc2.z * .5 }
+    ];
+    var HERO = { az: .42, el: .36, d: 58, x: 0, z: 2 };
+    var cur = { az: HERO.az, el: HERO.el, d: HERO.d, x: HERO.x, z: HERO.z }, user = { az: 0, el: 0 }, drag = null, heroEl = $('#top');
+    function camTarget(g, tt, zf) {
+      var gg = clamp(g, 0, 3), i = 0; while (i < KF.length - 2 && gg > KF[i + 1].g) i++;
+      var a = KF[i], b = KF[i + 1], f = smooth((gg - a.g) / (b.g - a.g)), o = {};
+      ['az', 'el', 'd', 'x', 'z'].forEach(function (k) { var sv = a[k] + (b[k] - a[k]) * f; o[k] = HERO[k] + (sv - HERO[k]) * zf; });
+      o.az += (reduce ? 0 : tt * .035 + Math.sin(tt * .21) * .06) + user.az; o.el = clamp(o.el + user.el + (reduce ? 0 : Math.sin(tt * .17) * .025), .22, 1.35);
+      if (S3.clientWidth < 860) o.d *= 1.3 + .75 * (1 - zf);
+      return o;
+    }
+    S3.addEventListener('pointerdown', function (e) { drag = { x: e.clientX, y: e.clientY, id: e.pointerId }; try { S3.setPointerCapture(e.pointerId); } catch (er) {} S3.classList.add('dragging'); });
+    S3.addEventListener('pointermove', function (e) { if (!drag || e.pointerId !== drag.id) return; user.az -= (e.clientX - drag.x) * .0065; user.el += (e.clientY - drag.y) * .004; user.el = clamp(user.el, -.45, .55); drag.x = e.clientX; drag.y = e.clientY; });
+    function endDrag() { drag = null; S3.classList.remove('dragging'); }
+    S3.addEventListener('pointerup', endDrag); S3.addEventListener('pointercancel', endDrag);
+    /* left-click drag on the hero turns the city too; hovering still draws ink */
+    var heroDrag = $('#top');
+    heroDrag.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0 || e.pointerType === 'touch' || (e.target.closest && e.target.closest('a,button,input'))) return;
+      e.preventDefault(); drag = { x: e.clientX, y: e.clientY, id: e.pointerId }; S3.classList.add('dragging'); heroDrag.classList.add('dragging');
+    });
+    window.addEventListener('pointermove', function (e) { if (!drag || e.pointerId !== drag.id || e.target === S3) return; user.az -= (e.clientX - drag.x) * .0065; user.el += (e.clientY - drag.y) * .004; user.el = clamp(user.el, -.45, .55); drag.x = e.clientX; drag.y = e.clientY; });
+    window.addEventListener('pointerup', function () { if (drag) { endDrag(); heroDrag.classList.remove('dragging'); } });
+    S3.addEventListener('dblclick', function () { user.az = 0; user.el = 0; });
+
+    var zNow = 0;
+    function size() {
+      var w = S3.clientWidth, h = S3.clientHeight; if (!w || !h) return; r.setSize(w, h, false); cam.aspect = w / h;
+      var pr = r.getPixelRatio(); rt.setSize(Math.round(w * pr), Math.round(h * pr)); htMat.uniforms.uRes.value.set(Math.round(w * pr), Math.round(h * pr)); htMat.uniforms.uCell.value = TUNE.cell * pr;
+      cam.updateProjectionMatrix();
+    }
+    size();
+    function offset(zf) {
+      var w = S3.clientWidth, h = S3.clientHeight;
+      if (w >= 860) cam.setViewOffset(w, h, -w * .18 * zf, h * .07 * (1 - zf), w, h); else cam.setViewOffset(w, h, 0, h * .05 * (1 - zf), w, h);
+      cam.updateProjectionMatrix();
+    }
+
+    function draw(g, now) {
+      var tt = (now - t00) / 1000, dmg = smooth((g + .9) / 1.0);
+      var zf = smooth(clamp(window.scrollY / Math.max(1, heroEl.offsetHeight), 0, 1)); zNow = zf;
+      var star = smooth((g - .35) / .5) * (1 - smooth((g - 1.45) / .4)), cut = clamp((g - .4) / .7, 0, 1);
+      var mesh = smooth((g - 1.55) / .5), asg = clamp((g - 1.65) / .6, 0, 1), flt = clamp((g - 2.25) / .75, 0, 1);
+      var voteN = Math.min(9, Math.floor(flt * 11)), flagged = voteN >= 3;
+
+      var amp = 0;
+      if (qStart === null && !rebuild && g > -.35 && heroGone() > .5) qStart = tt;
+      if (qStart !== null && !rebuild && window.scrollY < heroEl.offsetHeight * .12) requestRebuild();
+      var tq = qStart === null ? -100 : tt - qStart;
+      if (rebuild) {
+        /* play the collapse backwards in ~1.6 s, then re-arm the quake */
+        var k = clamp((tt - rebuild.t0) / 1.6, 0, 1), from = Math.min(tq, maxTc);
+        quake(from * (1 - smooth(k)) - (k >= 1 ? 100 : 0), true); animatePuffs(-100);
+        if (k >= 1) { rebuild = null; qStart = null; introDone = false; }
+      } else {
+        if (!introDone) { amp = quake(tq); if (tq > maxTc) { introDone = true; quake(maxTc + 5); } }
+        animatePuffs(tq);
+      }
+      SU.uTime.value = reduce ? 0 : tt;
+      SU.uOut.value = qStart === null ? 0 : rebuild ? .45 * (1 - smooth(clamp((tt - rebuild.t0) / 1.6, 0, 1))) : .45 * smooth((tq - .3) / 1.4);
+
+      var pos = teams.map(function (t, i) {
+        var b = W3(t), x = b.x, z = b.z, k = assignOf[i];
+        if (k !== undefined) {
+          var tg = incs[k].p, dx = tg.x - b.x, dz = tg.z - b.z, L = Math.hypot(dx, dz) || 1, stop = Math.max(0, L - .9) / L;
+          var pr = smooth(asg) * stop; if (i === FAULTY) pr = Math.min(pr, .5 * stop);
+          x = b.x + dx * pr; z = b.z + dz * pr;
+        }
+        if (i === spare && flt > .55) {
+          var tg2 = incs[2].p, ex = tg2.x - b.x, ez = tg2.z - b.z, L2 = Math.hypot(ex, ez) || 1, kk = smooth((flt - .55) / .45) * Math.max(0, L2 - .9) / L2;
+          x = b.x + ex * kk; z = b.z + ez * kk;
+        }
+        return { x: x, z: z, b: b };
+      });
+      var showMarks = zf > .55;
+      marks.forEach(function (m, i) {
+        var p = pos[i], isolated = cut > .2 && mesh < .3 && g > .5, bad = i === FAULTY && flagged;
+        m.g.visible = showMarks; m.g.position.set(p.x, .06, p.z);
+        m.head.position.y = 1.5 + (asg > 0 && asg < 1 && assignOf[i] !== undefined && !(i === FAULTY && asg > .5) ? Math.abs(Math.sin(tt * 7 + i)) * .12 : 0);
+        m.headM.color.copy(bad ? red : isolated ? white : inkC); m.stemM.color.copy(bad ? red : inkC); m.baseM.color.copy(bad ? red : inkC);
+        m.haloM.opacity = mesh * .9; m.haloM.color.copy(bad ? red : teal); m.halo.scale.setScalar(1 + (bad ? ((tt * 1.2) % 1) * 1.6 : 0));
+        if (bad) m.haloM.opacity = .9 * (1 - ((tt * 1.2) % 1));
+      });
+      teams.forEach(function (t, i) {
+        var hp = new THREE.Vector3(pos[i].x, 1.6, pos[i].z), u = clamp((cut - i / teams.length * .75) / .25, 0, 1);
+        if (star > .01 && u <= 0) { starOk.set(i, hubTop, hp); starCut.set(i, hubTop, hubTop); }
+        else if (star > .01) { starOk.set(i, hubTop, hubTop); starCut.set(i, hubTop, hubTop.clone().lerp(hp, 1 - u * .45)); }
+        else { starOk.set(i, hubTop, hubTop); starCut.set(i, hubTop, hubTop); }
+        var mid = hubTop.clone().lerp(hp, .5); xs[i].position.copy(mid); xs[i].material.opacity = star * (u > 0 ? 1 : 0);
+      });
+      starOk.mat.opacity = .85 * star; starCut.mat.opacity = .3 * star; starOk.done(); starCut.done();
+      lampM.color.copy(cut > .9 ? inkC : red); lamp.visible = star > .05 && (Math.sin(tt * 6) > -.2 || cut > .9);
+      meshLinks.forEach(function (l, n) {
+        var a = new THREE.Vector3(pos[l[0]].x, 1.5, pos[l[0]].z), b = new THREE.Vector3(pos[l[1]].x, 1.5, pos[l[1]].z);
+        meshL.set(n, a, b); var k = (tt * .4 + n * .173) % 1; dummy.position.copy(a.lerp(b, k)); dummy.rotation.set(0, 0, 0); dummy.scale.setScalar(mesh > .05 ? 1 : .0001); dummy.updateMatrix(); packets.setMatrixAt(n, dummy.matrix);
+      });
+      meshL.mat.opacity = .8 * mesh; meshL.done(); packets.instanceMatrix.needsUpdate = true;
+      incidents.forEach(function (inc, k) {
+        var from = assign[k], b = pos[from].b;
+        routes.set(k, new THREE.Vector3(b.x, .14, b.z), asg > 0 ? new THREE.Vector3(pos[from].x, .14, pos[from].z) : new THREE.Vector3(b.x, .14, b.z));
+      });
+      var sb = pos[spare].b; routes.set(incidents.length, new THREE.Vector3(sb.x, .14, sb.z), new THREE.Vector3(pos[spare].x, .14, pos[spare].z)); routes.done();
+      var fp = new THREE.Vector3(pos[FAULTY].x, 1.5, pos[FAULTY].z), vn = 0;
+      teams.forEach(function (t, i) { if (i === FAULTY) { votes.set(i, fp, fp); return; } var on = vn < voteN; vn++; var a = new THREE.Vector3(pos[i].x, 1.5, pos[i].z); votes.set(i, a, on ? a.clone().lerp(fp, .9) : a); });
+      votes.mat.opacity = .75 * (flt > 0 ? 1 : 0); votes.done();
+      incs.forEach(function (o, k) {
+        var vis = smooth((dmg - .5) / .3); o.g.scale.setScalar(.0001 + vis);
+        var solved = k === 2 ? smooth((flt - .93) / .07) : smooth((asg - .9) / .1);
+        var col = red.clone().lerp(teal, solved); o.beamM.color.copy(col); o.ringM.color.copy(col); o.core.material.color.copy(col); o.pulse.material.color.copy(col);
+        var ph = (tt * .7 + k * .13) % 1; o.pulse.scale.setScalar(1 + ph * 1.8); o.pulse.material.opacity = (1 - ph) * .7 * (1 - solved * .7);
+        o.core.rotation.y = tt * .8 + k;
+      });
+
+      var tgt = camTarget(g, tt, zf);
+      ['az', 'el', 'd', 'x', 'z'].forEach(function (k) { cur[k] += (tgt[k] - cur[k]) * (drag ? .25 : .07); });
+      cam.position.set(cur.x + Math.sin(cur.az) * Math.cos(cur.el) * cur.d, Math.sin(cur.el) * cur.d, cur.z + Math.cos(cur.az) * Math.cos(cur.el) * cur.d);
+      var jx = 0, jy = 0, jz = 0; if (amp > 0) { jx = (Math.sin(tt * 61) + Math.sin(tt * 37)) * .28 * amp; jy = Math.sin(tt * 53) * .2 * amp; jz = Math.sin(tt * 47 + 1) * .28 * amp; }
+      cam.position.x += jx; cam.position.y += jy; cam.position.z += jz;
+      cam.lookAt(cur.x + jx * .5, .8, cur.z + jz * .5);
+      if (S3.width !== Math.round(S3.clientWidth * r.getPixelRatio())) size();
+      offset(zf);
+      S3.style.setProperty('--mk1', (1 + (.06 - 1) * zf).toFixed(3)); S3.style.setProperty('--mk2', (1 + (.22 - 1) * zf).toFixed(3));
+      var clean = Math.max(smooth((zf - .15) / .75), 1 - TUNE.print), st = TUNE.style;
+      var mix = st === 'print' ? clean : 1; htMat.uniforms.uMix.value = mix;
+      skyClock(tt);
+      SU.uStyle.value = st === 'dots' ? 1 : st === 'ink' ? 2 : 0; SU.uMix.value = (st === 'dots' || st === 'ink') ? clean : 1; SU.uCellW.value = TUNE.cell * .055;
+      edgeMat.opacity = (st === 'ink' ? .45 + .5 * (1 - clean) : .45) * (1 - .4 * SU.uNight.value);
+      if (mix > .995) r.render(scene, cam);
+      else { r.setRenderTarget(rt); r.clear(); r.render(scene, cam); r.setRenderTarget(null); r.clear(); r.render(htScene, htCam); }
+      place(tagHQ, project(hub.x, 7.2, hub.z), star > .3);
+      if (tagVote) { tagVote.textContent = voteN + ' / 9 agree' + (flagged ? ' → ELEVATED' : ''); tagVote.classList.toggle('hot', flagged); place(tagVote, project(fp.x, 2.6, fp.z), flt > .02); }
+    }
+    function retune() { r.setPixelRatio(TUNE.sharp); size(); }
+    return { draw: draw, size: size, retune: retune, rebuild: requestRebuild, zoom: function () { return zNow; } };
+  }
+
+  /* step text fades as the stage moves through g */
+  var stepEls = Array.prototype.slice.call(document.querySelectorAll('.step .in'));
+  function heroGone() { var h = $('#top'); return smooth((window.scrollY / Math.max(1, h.offsetHeight) - .82) / .18); }
+  function updateSteps(g) {
+    var nar = narrowMQ.matches, hg = heroGone();
+    pips.style.opacity = hg.toFixed(3);
+    stepEls.forEach(function (el, k) { var d = g - k, o = clamp(1 - Math.abs(d) / .55, 0, 1) * hg; el.style.opacity = o.toFixed(3); el.style.visibility = o > 0 ? 'visible' : 'hidden'; el.style.transform = nar ? 'translateY(' + (-d * 36).toFixed(1) + 'px)' : 'translateY(calc(-50% + ' + (-d * 44).toFixed(1) + 'px))'; });
+    var near = Math.round(clamp(g, 0, 3)); Array.prototype.forEach.call(pips.children, function (p, i) { p.className = i === near && g > -.5 ? 'on' : i < near ? 'done' : ''; });
+  }
+  /* u is raw scroll progress (u = k when step k is centred); g holds still for HOLD of every step, so each beat pauses */
+  var HOLD = .5;
+  function stepH() { var s = document.querySelector('.step'); return s ? s.offsetHeight : window.innerHeight; }
+  function readU() { var b = $('#story').getBoundingClientRect(), vh = window.innerHeight, sh = stepH(); return (-b.top - (sh / 2 - vh / 2)) / sh; }
+  function plateau(u) { var base = Math.floor(u), f = u - base, h = HOLD / 2; if (f < h) return base; if (f > 1 - h) return base + 1; return base + (f - h) / (1 - HOLD); }
+  function readG() { return plateau(readU()); }
+  /* pin the step text inside the sticky stage so text and map pause together */
+  var captions = document.createElement('div'); captions.className = 'captions'; $('.stage').appendChild(captions);
+  stepEls.forEach(function (el) { captions.appendChild(el); });
+  var pips = document.createElement('div'); pips.className = 'pips'; pips.setAttribute('aria-hidden', 'true');
+  stepEls.forEach(function () { pips.appendChild(document.createElement('i')); }); $('.stage').appendChild(pips); pips.style.display = 'flex';
+  var narrowMQ = window.matchMedia('(max-width: 860px)');
+  /* soft magnet: when the visitor stops near a step, ease onto it; fast scrolling never triggers it */
+  var movedAt = 0, snapped = true, lastDir = 1;
+  function magnet() {
+    if (!lenis || reduce || entering) return;
+    var now = performance.now(), v = Math.abs(lenis.velocity || 0);
+    if (v > .12) { movedAt = now; snapped = false; lastDir = (lenis.velocity > 0) ? 1 : -1; return; }
+    if (snapped || now - movedAt < 180) return;
+    var u = readU();
+    if (u < -.45 || u > 3.45) { if (now - movedAt >= 520) { snapped = true; sectionMagnet(); } return; }
+    snapped = true;
+    /* inside a hold zone: settle on that step; in a transition: finish it in the direction the visitor was going */
+    var k = Math.round(u), d = u - k; if (Math.abs(d) < .02) return;
+    if (Math.abs(d) > HOLD / 2) k = lastDir > 0 ? Math.ceil(u) : Math.floor(u);
+    k = clamp(k, 0, 3);
+    var sh = stepH(), top = $('#story').getBoundingClientRect().top + window.scrollY;
+    lenis.scrollTo(top + sh / 2 - window.innerHeight / 2 + k * sh, { duration: 1.0, easing: function (t) { return 1 - Math.pow(1 - t, 3); } });
+  }
+
+  /* a weaker magnet for the sections after the story: only when the reader stops with a heading already close to the top,
+     and only a short, slow settle, so it helps them land on the section without taking the scroll away */
+  function sectionMagnet() {
+    var vh = window.innerHeight, best = null;
+    ['#board', '#ledger', '#enter'].forEach(function (id) {
+      var el = $(id); if (!el) return; var t = el.getBoundingClientRect().top;
+      if (Math.abs(t) > 2 && Math.abs(t) < vh * .1 && (best === null || Math.abs(t) < Math.abs(best))) best = t;
+    });
+    if (best === null) return;
+    var y = clamp(window.scrollY + best, 0, document.documentElement.scrollHeight - vh);
+    if (Math.abs(y - window.scrollY) > 2) lenis.scrollTo(y, { duration: 1.2, easing: function (t) { return 1 - Math.pow(1 - t, 3); } });
+  }
+
+  /* ---------- custom cursor ---------- */
+  var cur = $('#cur');
+  if (fine && !reduce) {
+    document.body.classList.add('has-cursor');
+    var cx = innerWidth / 2, cy = innerHeight / 2, tx = cx, ty = cy, sc = 1, tsc = 1;
+    window.addEventListener('pointermove', function (e) { tx = e.clientX; ty = e.clientY; });
+    document.addEventListener('pointerover', function (e) { tsc = e.target.closest && e.target.closest('a,button') ? 3.4 : 1; });
+    (function loop() { cx += (tx - cx) * .28; cy += (ty - cy) * .28; sc += (tsc - sc) * .2; cur.style.transform = 'translate(' + cx + 'px,' + cy + 'px) scale(' + sc.toFixed(3) + ')'; requestAnimationFrame(loop); })();
+  }
+
+  /* ---------- enter transition ---------- */
+  var connect = $('#connect'), wipe = $('#wipe'), entering = false, inCta = false;
+  function enter(x, y) {
+    if (entering) return; entering = true; var kb = x == null;
+    x = x == null ? innerWidth / 2 : x; y = y == null ? innerHeight / 2 : y;
+    var done = function () { connect.classList.add('on'); connect.setAttribute('aria-hidden', 'false'); document.body.style.overflow = 'hidden'; showView('choice'); connOpen(); };
+    if (hasGsap && !reduce) {
+      wipe.style.clipPath = 'circle(0px at ' + x + 'px ' + y + 'px)';
+      gsap.to(wipe, { duration: .9, ease: 'power3.inOut', onUpdate: function () { }, clipPath: 'circle(' + Math.hypot(innerWidth, innerHeight) + 'px at ' + x + 'px ' + y + 'px)', onComplete: done });
+    } else done();
+  }
+  function leave() {
+    if (!entering) return; inkPointer.has = false; connClose(); connect.classList.remove('on'); connect.setAttribute('aria-hidden', 'true'); document.body.style.overflow = '';
+    if (hasGsap && !reduce) gsap.to(wipe, { duration: .7, ease: 'power3.inOut', clipPath: 'circle(0px at 50% 50%)', onComplete: function () { entering = false; } }); else { wipe.style.clipPath = 'circle(0 at 50% 50%)'; entering = false; }
+  }
+  $('#enterBtn').addEventListener('click', function (e) { enter(e.clientX, e.clientY); });
+  document.querySelectorAll('[data-enter]').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); enter(e.clientX, e.clientY); }); });
+  $('#backBtn').addEventListener('click', function () { if (!bcView.hidden) showView('choice'); else leave(); });
+
+  /* ---------- connect: choose Simulation or Board; Board opens the connect form ----------
+     The page never opens a serial port itself: the RescueNet laptop app (laptop/tools/app.py) does, through /api/board/connect.
+     So every action first checks that the app is the one answering; anywhere else (this page on its own) it says how to start it. */
+  var choiceView = $('#choiceView'), bcView = $('#bcView'), optSim = $('#optSim'), optBoard = $('#optBoard'), connNote = $('#connNote');
+  var APP_CMD = '<code>python laptop/tools/app.py</code>';
+  function showView(v, focusFirst) {
+    choiceView.hidden = v !== 'choice'; bcView.hidden = v !== 'board'; connect.scrollTop = 0;
+    if (v === 'board') { var pt = $('#bcPort'); setTimeout(function () { pt.focus({ preventScroll: true }); }, 30); sceneStop(); }
+    else { connect.focus({ preventScroll: true }); sceneStart(); if (focusFirst) setTimeout(function () { choose(focusFirst === optBoard ? 'board' : 'sim', 'key'); }, 0); }
+  }
+  function timed(url, opt, ms) {
+    var ac = window.AbortController ? new AbortController() : null, t = setTimeout(function () { if (ac) ac.abort(); }, ms || 2500);
+    opt = opt || {}; opt.cache = 'no-store'; if (ac) opt.signal = ac.signal;
+    return fetch(url, opt).then(function (r) { clearTimeout(t); return r.json().then(function (j) { return { ok: r.ok, j: j }; }); }, function (e) { clearTimeout(t); throw e; });
+  }
+  /* /api/status hands out queued telemetry, so it is called only a few times and never left polling */
+  function appStatus() {
+    return timed('api/status', {}, 2000).then(function (r) { var j = r.j; return j && typeof j === 'object' && j.board && typeof j.board === 'object' && ('sim_only' in j) ? j : null; }, function () { return null; });
+  }
+  function needApp(what) {
+    connNote.innerHTML = what + ' open from the RescueNet app on your computer. Start it with ' + APP_CMD + ' and open the address it prints (usually <code>http://127.0.0.1:5050</code>).';
+    connNote.hidden = false;
+  }
+  function goApp(what) { appStatus().then(function (st) { if (st) location.href = './'; else needApp(what); }); }
+  optSim.addEventListener('click', function () { goApp('The simulator'); });
+  $('#optReplay').addEventListener('click', function () { goApp('Recorded runs'); });
+  optBoard.addEventListener('click', function () { showView('board'); });
+  $('#bcBack').addEventListener('click', function () { showView('choice', optBoard); });
+  function connectKey(e) {
+    if (e.key === 'Escape') { if (!bcView.hidden) showView('choice', optBoard); else leave(); return; }
+    if (!bcView.hidden || e.metaKey || e.ctrlKey || e.altKey || (e.target.closest && e.target.closest('input,select,textarea'))) return;
+    if (e.key === '1' || e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); choose('sim', 'key'); }
+    else if (e.key === '2' || e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); choose('board', 'key'); }
+    else if ((e.key === 'Enter' || e.key === ' ') && scHover && (document.activeElement === optSim || document.activeElement === optBoard || document.activeElement === connect)) { e.preventDefault(); (scHover === 'sim' ? optSim : optBoard).click(); }
+  }
+  /* a quiet hint only: Chrome and Edge can list USB serial ports this site was allowed to see before. No port is ever opened here,
+     and nothing negative is shown, because a first visit can never see anything. */
+  function serialPeek() {
+    try {
+      if (!navigator.serial || !navigator.serial.getPorts) return;
+      navigator.serial.getPorts().then(function (ps) {
+        var st = ps.some(function (p) { try { return p.getInfo().usbVendorId === 0x0483; } catch (e) { return false; } });
+        if (st) { var el = $('#boardSeen'); el.textContent = 'Board found · STMicroelectronics'; el.classList.add('seen'); }
+      }, function () {});
+    } catch (e) {}
+  }
+  function connOpen() { connNote.hidden = true; serialPeek(); }
+  function connClose() { sceneStop(); }
+
+  /* ---------- the connect drawing ----------
+     One scene behind both halves, laid out from the halves' real boxes so the cable always joins them.
+     `want` is what the visitor points at or has chosen with the keyboard; `z` is the zoom into the laptop screen (0..1).
+     Going from Simulation to Board zooms out first, then the board lights, so the two never run at once. */
+  var halvesEl = $('#halves'), sceneEl = $('#connScene'), NS = 'http://www.w3.org/2000/svg';
+  var SC_ = null, scRaf = 0, scZ = 0, scWant = null, scHover = null, scBy = null, scT0 = 0, scLast = 0, pvCol = {};
+  function el(tag, at, parent) { var e = document.createElementNS(NS, tag); for (var k in at) e.setAttribute(k, at[k]); if (parent) parent.appendChild(e); return e; }
+  function pvColours() { var cs = getComputedStyle(connect); pvCol.ink = cs.getPropertyValue('--c-bg').trim(); pvCol.paper = cs.getPropertyValue('--c-fg').trim(); pvCol['on-ink-rule'] = cs.getPropertyValue('--c-rule').trim(); pvCol.teal = cs.getPropertyValue('--c-teal').trim(); pvCol.red = cs.getPropertyValue('--red').trim(); }
+  if (window.RNSky) RNSky.onChange(function () { pvColours(); if (SC_) drawMap(0); });
+  function sceneBuild() {
+    sceneEl.innerHTML = ''; var H = halvesEl.getBoundingClientRect(); if (!H.width) return;
+    var a = optSim.getBoundingClientRect(), b = optBoard.getBoundingClientRect(), vert = b.top > a.bottom - 2;
+    function box(r) { return { x: r.left - H.left, y: r.top - H.top, w: r.width, h: r.height }; }
+    var L = box(a), Rb = box(b), pad = vert ? 40 : 52;
+    /* art sits between the number badge and each half's own text, measured from the page so it never runs into the words */
+    function art(B, btn) { var top = B.y + pad, txt = btn.querySelector('strong').getBoundingClientRect().top - H.top, h = Math.max(50, txt - 18 - top); return { cx: B.x + B.w / 2, cy: top + h / 2, w: B.w - 48, h: h }; }
+    var A1 = art(L, optSim), A2 = art(Rb, optBoard);
+    /* laptop: screen 16:10 plus a base */
+    var lw = Math.min(A1.w * .7, A1.h * 1.35), sw = lw * .84, sh = sw * .62, bz = lw * .035, baseH = lw * .045;
+    var sx = A1.cx - sw / 2, sy = A1.cy - (sh + baseH) / 2;
+    /* board */
+    var bw = Math.min(A2.w * .62, A2.h * 1.5), bh = bw * .64, bx = A2.cx - bw / 2 + bw * .05, by = A2.cy - bh / 2;
+    var left = document.createElement('div'); left.className = 'sc-left'; left.style.cssText = 'left:' + (L.x + 1) + 'px;top:' + (L.y + 1) + 'px;width:' + (L.w - 2) + 'px;height:' + (L.h - 2) + 'px';
+    var lap = document.createElement('div'); lap.className = 'sc-lap'; left.appendChild(lap);
+    var ox = -(L.x + 1), oy = -(L.y + 1);   /* lap coordinates are the halves' coordinates */
+    var lsvg = el('svg', { width: H.width, height: H.height, fill: 'none', stroke: 'currentColor', 'stroke-width': 2 }); lsvg.style.left = ox + 'px'; lsvg.style.top = oy + 'px'; lap.appendChild(lsvg);
+    el('rect', { x: sx - bz, y: sy - bz, width: sw + 2 * bz, height: sh + 2 * bz, rx: bz * 1.2 }, lsvg);
+    el('path', { d: 'M' + (sx - bz - lw * .07) + ' ' + (sy + sh + bz + baseH) + 'L' + (sx - bz) + ' ' + (sy + sh + bz) + 'H' + (sx + sw + bz) + 'L' + (sx + sw + bz + lw * .07) + ' ' + (sy + sh + bz + baseH) + 'Z' }, lsvg);
+    var portX = sx + sw + bz + lw * .07, portY = sy + sh + bz + baseH * .5;
+    /* the screen is drawn big and shrunk while zoomed out, so it is sharp when it fills the half */
+    /* zoom until the laptop is about 80% of the box: its frame stays visible and it never reaches the text */
+    var lapH = sh + 2 * bz + baseH, K = Math.max(1, Math.min((L.w * .8) / (sw + 2 * bz), (A1.h + pad * .6) / lapH)), map = document.createElement('canvas'); map.className = 'sc-map';
+    var d = Math.min(2, window.devicePixelRatio || 1); map.width = Math.round(sw * K * d); map.height = Math.round(sh * K * d);
+    map.style.cssText = 'left:' + (sx + ox) + 'px;top:' + (sy + oy) + 'px;width:' + (sw * K) + 'px;height:' + (sh * K) + 'px;transform:scale(' + (1 / K) + ')';
+    lap.appendChild(map);
+    var top = el('svg', { width: H.width, height: H.height, fill: 'none', stroke: 'currentColor', 'stroke-width': 2 });
+    var cable = el('path', { class: 'sc-cable' }, top), pulse = el('path', { class: 'sc-pulse' }, top);
+    var g = el('g', { class: 'sc-board' }, top);
+    el('rect', { x: bx, y: by, width: bw, height: bh, rx: bw * .03 }, g);
+    [[.05, .08], [.95, .08], [.05, .92], [.95, .92]].forEach(function (c) { el('circle', { cx: bx + bw * c[0], cy: by + bh * c[1], r: bw * .016 }, g); });
+    var cw = bw * .27, cx0 = bx + bw * .44, cy0 = by + bh * .5 - cw / 2;
+    el('rect', { x: cx0, y: cy0, width: cw, height: cw, rx: 3 }, g);
+    var pins = ''; for (var i = 1; i < 5; i++) { var t = cw * i / 5; pins += 'M' + (cx0 - 9) + ' ' + (cy0 + t) + 'h9M' + (cx0 + cw) + ' ' + (cy0 + t) + 'h9M' + (cx0 + t) + ' ' + (cy0 - 9) + 'v9M' + (cx0 + t) + ' ' + (cy0 + cw) + 'v9'; }
+    el('path', { d: pins }, g);
+    var usbW = bw * .1, usbH = bh * .2, usbX = vert ? bx + bw - usbW * .45 : bx - usbW * .55, usbY = by + bh * .5 - usbH / 2;
+    el('rect', { x: usbX, y: usbY, width: usbW, height: usbH, rx: 2 }, g);
+    el('path', { class: 'sc-trace', d: (vert ? 'M' + usbX + ' ' + (by + bh * .5) + 'H' + (cx0 + cw + 14) : 'M' + (usbX + usbW) + ' ' + (by + bh * .5) + 'H' + (cx0 - 14)) + 'M' + (cx0 + cw + 14) + ' ' + (by + bh * .35) + 'H' + (bx + bw * .8) + 'V' + (by + bh * .22) + 'M' + (cx0 + cw / 2) + ' ' + (cy0 + cw + 14) + 'V' + (by + bh * .86) + 'H' + (bx + bw * .9) }, g);
+    el('path', { d: 'M' + (bx + bw * .12) + ' ' + (by + bh * .9) + 'H' + (bx + bw * .4), 'stroke-dasharray': '3 6', 'stroke-width': 6 }, g);
+    el('circle', { class: 'sc-led', cx: bx + bw * .8, cy: by + bh * .16, r: bw * .022, stroke: 'none' }, g);
+    sceneEl.appendChild(left); sceneEl.appendChild(top);
+    var end = vert ? { x: usbX + usbW, y: by + bh * .5 } : { x: usbX, y: by + bh * .5 }, edge = { x: L.x + L.w, y: portY };
+    /* zoom: move the screen centre to the half's centre and scale it up to cover the half */
+    var scx = sx + sw / 2, scy = sy + sh / 2, tcx = A1.cx, tcy = A1.cy - pad * .3 - (baseH + bz) * (K - 1) / 2;
+    SC_ = { rx: L.x + L.w - 10, lap: lap, map: map, cable: cable, pulse: pulse, K: K, d: d, sw: sw, sh: sh, port: { x: portX, y: portY }, end: end, edge: edge, vert: vert, scx: scx, scy: scy, tcx: tcx, tcy: tcy };
+    sceneApply(); drawMap(0);
+  }
+  function sceneApply() {
+    var S = SC_; if (!S) return; var e = smooth(scZ), k = 1 + (S.K - 1) * e;
+    var tx = (S.tcx - S.scx) * e, ty = (S.tcy - S.scy) * e;
+    /* scale about the screen centre: x' = scx + (x - scx) * k + tx */
+    S.lap.style.transform = 'translate(' + (S.scx * (1 - k) + tx) + 'px,' + (S.scy * (1 - k) + ty) + 'px) scale(' + k + ')';
+    /* the cable stays plugged into the laptop as it grows */
+    var p = { x: Math.min(S.rx + 8, S.scx + (S.port.x - S.scx) * k + tx), y: S.scy + (S.port.y - S.scy) * k + ty }, q = S.end;
+    var dpath = S.vert
+      ? 'M' + p.x + ' ' + p.y + 'C' + (S.rx) + ' ' + p.y + ' ' + (S.rx) + ' ' + q.y + ' ' + q.x + ' ' + q.y
+      : 'M' + p.x + ' ' + p.y + 'C' + (p.x + 70) + ' ' + (p.y + 55) + ' ' + (q.x - 110) + ' ' + (q.y + 60) + ' ' + q.x + ' ' + q.y;
+    S.cable.setAttribute('d', dpath); S.pulse.setAttribute('d', dpath);
+  }
+  /* the district on the laptop screen: teams heading to the incidents they won. Frozen unless Simulation is chosen. */
+  function drawMap(t) {
+    var S = SC_; if (!S) return; var c = S.map, x = c.getContext('2d'), w = c.width / S.d, h = c.height / S.d;
+    x.setTransform(S.d, 0, 0, S.d, 0, 0); x.fillStyle = pvCol.ink || '#0b0b0b'; x.fillRect(0, 0, w, h);
+    var sz = Math.min(w * .86, h * .86), q = sz / N, ox = (w - sz) / 2, oy = (h - sz) / 2;
+    x.lineWidth = Math.max(1, q * .06); x.strokeStyle = pvCol['on-ink-rule'] || '#3a3a38'; x.fillStyle = pvCol['on-ink-rule'] || '#3a3a38';
+    cells.forEach(function (c2) { if (!c2.bld) return; var px = ox + c2.x * q + q * .1, py = oy + c2.y * q + q * .1; if (c2.rub) x.fillRect(px, py, q * .8, q * .8); else x.strokeRect(px, py, q * .8, q * .8); });
+    incidents.forEach(function (inc, k) {
+      var ph = (t * .6 + k * .17) % 1; x.strokeStyle = pvCol.red; x.lineWidth = Math.max(1, q * .08);
+      if (t > 0) { x.globalAlpha = 1 - ph; x.beginPath(); x.arc(ox + (inc.x + .5) * q, oy + (inc.y + .5) * q, q * (.5 + ph * 1.4), 0, 6.283); x.stroke(); x.globalAlpha = 1; }
+      x.fillStyle = pvCol.red; x.fillRect(ox + inc.x * q + q * .2, oy + inc.y * q + q * .2, q * .6, q * .6);
+    });
+    teams.forEach(function (tm, i) {
+      var k = assign.indexOf(i), hx = ox + (tm.x + .5) * q, hy = oy + (tm.y + .5) * q, px = hx, py = hy;
+      if (k >= 0) {
+        var inc = incidents[k], tx = ox + (inc.x + .5) * q, ty = oy + (inc.y + .5) * q, cyc = (t * .12 + i * .09) % 1, f = smooth(Math.min(1, cyc / .55));
+        px = hx + (tx - hx) * f; py = hy + (ty - hy) * f;
+        x.strokeStyle = pvCol.teal; x.globalAlpha = .85; x.lineWidth = Math.max(1, q * .07); x.setLineDash([q * .25, q * .3]); x.beginPath(); x.moveTo(hx, hy); x.lineTo(px, py); x.stroke(); x.setLineDash([]); x.globalAlpha = 1;
+      }
+      x.fillStyle = pvCol.paper; x.beginPath(); x.arc(px, py, Math.max(2, q * .32), 0, 6.283); x.fill();
+    });
+  }
+  /* one choice at a time, and the latest input wins: moving the mouse over a half chooses it; 1, 2 or the arrow keys
+     only highlight (they never open anything), even with the mouse resting on the other half, until the mouse moves again.
+     Enter opens whatever is highlighted. */
+  function choose(which, by) {
+    if (scHover === which && scBy === by) return; scHover = which; scBy = by;
+    var btn = which === 'sim' ? optSim : which === 'board' ? optBoard : null;
+    if (by === 'key' && btn) btn.focus({ preventScroll: true });
+    else if (by === 'mouse' && (document.activeElement === optSim || document.activeElement === optBoard)) connect.focus({ preventScroll: true });
+  }
+  function sceneTarget() {
+    optSim.classList.toggle('sel', scHover === 'sim'); optBoard.classList.toggle('sel', scHover === 'board');
+    return scHover;
+  }
+  function sceneTick(now) {
+    scRaf = requestAnimationFrame(sceneTick);
+    var dt = Math.min(.1, (now - (scLast || now)) / 1000); scLast = now;
+    var want = sceneTarget(), goal = want === 'sim' && !reduce ? 1 : 0;
+    if (scZ !== goal) { scZ = goal > scZ ? Math.min(1, scZ + dt / .55) : Math.max(0, scZ - dt / .4); sceneApply(); }
+    sceneEl.classList.toggle('sim', want === 'sim');
+    sceneEl.classList.toggle('board', want === 'board' && scZ < .03);
+    if (want === 'sim' && !reduce) drawMap((now - scT0) / 1000);
+    else if (scWant === 'sim') drawMap(0);
+    scWant = want;
+  }
+  function sceneStart() { pvColours(); scZ = 0; scLast = 0; scHover = null; scBy = null; scT0 = performance.now(); requestAnimationFrame(function () { sceneBuild(); cancelAnimationFrame(scRaf); scRaf = requestAnimationFrame(sceneTick); }); }
+  function sceneStop() { cancelAnimationFrame(scRaf); scRaf = 0; }
+  optSim.addEventListener('pointermove', function (e) { if (e.pointerType !== 'touch') choose('sim', 'mouse'); });
+  optBoard.addEventListener('pointermove', function (e) { if (e.pointerType !== 'touch') choose('board', 'mouse'); });
+  [optSim, optBoard].forEach(function (b) { b.addEventListener('pointerleave', function () { if (scBy === 'mouse') { scHover = null; scBy = null; } }); });
+  window.addEventListener('resize', function () { if (entering && !choiceView.hidden) sceneBuild(); });
+
+  /* board connect form */
+  (function boardForm() {
+    var port = $('#bcPort'), baud = $('#bcBaud'), custom = $('#bcBaudCustom'), remember = $('#bcRemember'), go = $('#bcGo'), lines = $('#bcLines'), state = $('#bcState'), open = $('#bcOpen');
+    var plat = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '').toLowerCase();
+    port.placeholder = plat.indexOf('mac') >= 0 ? 'e.g. /dev/tty.usbmodem1103' : plat.indexOf('win') >= 0 ? 'e.g. COM3' : 'e.g. /dev/ttyACM0';
+    try { var saved = JSON.parse(localStorage.getItem('rn-board') || 'null'); if (saved) { if (saved.port) port.value = saved.port; if (saved.baud) { var o = [].some.call(baud.options, function (op) { return op.value === String(saved.baud); }); if (o) baud.value = String(saved.baud); else { baud.value = 'custom'; custom.value = saved.baud; custom.hidden = false; } } } } catch (e) {}
+    baud.addEventListener('change', function () { custom.hidden = baud.value !== 'custom'; if (!custom.hidden) custom.focus(); });
+    function say(t, keep) { lines.textContent = keep ? lines.textContent + '\n' + t : t; }
+    function setState(t) { state.textContent = t; }
+    function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    $('#bcForm').addEventListener('submit', function (e) {
+      e.preventDefault(); open.hidden = true;
+      var p = port.value.trim(), b = baud.value === 'custom' ? parseInt(custom.value, 10) : parseInt(baud.value, 10);
+      if (!p) { say('Type the serial port first.'); port.focus(); return; }
+      if (!(b > 0)) { say('Type a baud rate, for example 115200.'); custom.focus(); return; }
+      try { if (remember.checked) localStorage.setItem('rn-board', JSON.stringify({ port: p, baud: b })); else localStorage.removeItem('rn-board'); } catch (er) {}
+      go.disabled = true; setState('Checking'); say('Looking for the RescueNet app on this computer…');
+      appStatus().then(function (st) {
+        if (!st) {
+          setState('App not running');
+          lines.innerHTML = 'The RescueNet app is not answering here, so this page cannot open a serial port.\nStart it with ' + APP_CMD + ' and open the address it prints (usually <code>http://127.0.0.1:5050</code>).';
+          return;
+        }
+        say('Opening ' + p + ' at ' + b + ' baud, 8N1…', true); setState('Opening');
+        return timed('api/board/connect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ port: p, baudrate: b }) }, 6000).then(function (r) {
+          if (!r.ok || !r.j || r.j.status !== 'success') { setState('Could not open'); say('Could not open ' + p + ((r.j && r.j.message) ? ': ' + r.j.message : '') + '. Check the port name and that no other program is using it.', true); return; }
+          setState('Port open'); say('Port open. Waiting for the board to answer…', true);
+          var frames = false, ready = false, n = 0;
+          return (function poll() {
+            return wait(1000).then(appStatus).then(function (s2) {
+              n++; if (s2 && s2.board) { if (s2.board.all_ready) ready = true; if (s2.board.new_telemetry && s2.board.new_telemetry.length) frames = true; }
+              if (!ready && n < 3) return poll();
+              if (ready) { setState('Board ready'); say('The board answered.', true); }
+              else if (frames) { setState('Board talking'); say('Data is arriving. The dashboard finishes the handshake.', true); }
+              else say('No answer yet. The board may still be starting; the dashboard keeps listening.', true);
+              open.hidden = false;
+            });
+          })();
+        });
+      }).catch(function () { setState('Error'); say('Something went wrong talking to the app. Try again.', true); }).then(function () { go.disabled = false; });
+    });
+  })();
+  window.addEventListener('keydown', function (e) {
+    if (e.shiftKey && (e.key === 'R' || e.key === 'r') && T3 && T3.rebuild) { T3.rebuild(); return; }
+    if (e.shiftKey && (e.key === 'T' || e.key === 't') && window.RNSky && !(e.target.closest && e.target.closest('input,select,textarea'))) { RNSky.timelapse(24); return; }
+    if (entering) { connectKey(e); return; }
+    if (e.metaKey || e.ctrlKey || e.altKey || ['Tab', 'Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Escape', 'F5', 'F12'].indexOf(e.key) >= 0) return;
+    if (inCta) { e.preventDefault(); enter(); }
+  });
+  if ('IntersectionObserver' in window) new IntersectionObserver(function (es) { inCta = es[0].isIntersecting; }, { threshold: .55 }).observe($('#enter'));
+
+  /* ---------- scroll: Lenis + ScrollTrigger ---------- */
+  var lenis = null;
+  if (window.Lenis && !reduce) {
+    lenis = new Lenis({ lerp: .1, smoothWheel: true });
+    if (hasGsap) { lenis.on('scroll', ScrollTrigger.update); gsap.ticker.add(function (t) { lenis.raf(t * 1000); }); gsap.ticker.lagSmoothing(0); }
+    else { (function raf(t) { lenis.raf(t); requestAnimationFrame(raf); })(0); }
+  }
+  document.querySelectorAll('a[href^="#"]').forEach(function (a) {
+    a.addEventListener('click', function (e) { var id = a.getAttribute('href'); if (id.length < 2 || a.hasAttribute('data-enter')) return; var t = document.querySelector(id); if (!t) return; e.preventDefault(); if (lenis) lenis.scrollTo(t, { offset: 0 }); else t.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth' }); });
+  });
+
+  /* ---------- boot ---------- */
+  function layout() { fitWordmark(); drawHalftone(); sizeInk(); sizeScene(); if (T3) T3.size(); }
+  layout();
+  if (document.fonts) {
+    var refit = function () { fitWordmark(); drawHalftone(); };
+    document.fonts.addEventListener && document.fonts.addEventListener('loadingdone', refit);
+    document.fonts.load('900 100px Archivo').then(refit, function () {}); document.fonts.ready.then(refit);
+  }
+  var rt; window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(function () { layout(); if (hasGsap) ScrollTrigger.refresh(); }, 150); });
+
+  function frame(now) {
+    inkFrame(now);
+    var g = readG();
+    var lop = 1; if (T3) { var sr = $('#story').getBoundingClientRect(); lop = clamp(sr.bottom / window.innerHeight, 0, 1); cityLayer.style.opacity = lop.toFixed(3); cityLayer.style.visibility = lop > 0 ? 'visible' : 'hidden'; }
+    if (g > -1.3 && g < 3.7 && lop > 0) { if (T3) T3.draw(g, now); else drawScene(g, now); updateSteps(g); G = g; }
+    else stepEls.forEach(function (el) { el.style.visibility = 'hidden'; });
+    magnet();
+  }
+  T3 = init3D(); if (T3) { SC.style.display = 'none'; S3.style.display = 'block'; ht.style.display = 'none'; } else if (S3) { S3.style.display = 'none'; cityLayer.style.display = 'none'; $('#dragHint').style.display = 'none'; }
+  (function tunePanel() {
+    if (!T3) return;
+    var btn = $('#tuneBtn'), panel = $('#tunePanel'), DEF = { style: 'ink', cell: 2.6, print: 1, sharp: Math.min(1.75, window.devicePixelRatio || 1) };
+    btn.classList.add('show');
+    var F = [['cell', 'tCell', 'oCell', function (v) { return v.toFixed(1) + ' px'; }], ['print', 'tPrint', 'oPrint', function (v) { return Math.round(v * 100) + '%'; }], ['sharp', 'tSharp', 'oSharp', function (v) { return v.toFixed(2) + '×'; }]];
+    $('#tStyle').addEventListener('change', function (e) { TUNE.style = e.target.value; sync(); });
+    var hasSky = !!window.RNSky;
+    $('#tTime').addEventListener('change', function (e) { if (hasSky) RNSky.preview(e.target.value === 'auto' ? null : +e.target.value); syncTime(); });
+    $('#tHour').addEventListener('input', function (e) { if (hasSky) RNSky.preview(+e.target.value); syncTime(); });
+    function hhmm(h) { var m = Math.round(h * 60) % 1440; return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + m % 60).slice(-2); }
+    function syncTime() { if (!hasSky) return; var h = RNSky.hour(), sel = $('#tTime'), v = sel.value; $('#tHour').value = (Math.round(h * 4) / 4) % 24; $('#oHour').textContent = hhmm(h); if (v !== 'auto' && Math.abs(+v - h) > .01) sel.value = 'custom'; }
+    if (hasSky) RNSky.onChange(function () { if (!panel.hidden) syncTime(); });
+    function sync() { $('#tStyle').value = TUNE.style; syncTime(); F.forEach(function (f) { $('#' + f[1]).value = TUNE[f[0]]; $('#' + f[2]).textContent = f[3](+TUNE[f[0]]); }); try { localStorage.setItem('rn-map-tune2', JSON.stringify(TUNE)); } catch (e) {} }
+    F.forEach(function (f) { $('#' + f[1]).addEventListener('input', function (e) { TUNE[f[0]] = parseFloat(e.target.value); sync(); T3.retune(); }); });
+    function open(o) { panel.hidden = !o; btn.setAttribute('aria-expanded', String(o)); if (o) syncTime(); }
+    btn.addEventListener('click', function () { open(panel.hidden); });
+    $('#tuneClose').addEventListener('click', function () { open(false); btn.focus(); });
+    $('#tuneReset').addEventListener('click', function () { Object.assign(TUNE, DEF); if (hasSky) RNSky.preview(null); $('#tTime').value = 'auto'; sync(); T3.retune(); });
+    $('#tuneCopy').addEventListener('click', function () {
+      var b = $('#tuneCopy'), t = JSON.stringify({ style: TUNE.style, hour: window.RNSky ? +RNSky.hour().toFixed(2) : null, dotSize: TUNE.cell, printEffect: TUNE.print, sharpness: TUNE.sharp });
+      try { navigator.clipboard.writeText(t).then(function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy values'; }, 1400); }, function () { b.textContent = t; }); } catch (e) { b.textContent = t; }
+    });
+    sync();
+  })();
+  if (hasGsap) { gsap.ticker.add(function () { frame(performance.now()); }); }
+  else { (function loop(t) { frame(t); requestAnimationFrame(loop); })(0); }
+
+  /* intro: letters rise, then a first stroke of ink so the page invites the mouse */
+  if (hasGsap && !reduce) {
+    gsap.from('.wordmark .ch i', { yPercent: 105, duration: 1.1, ease: 'power4.out', stagger: .05, delay: .15 });
+    gsap.from('.nav, .hero-row', { opacity: 0, duration: .9, delay: .5 });
+    gsap.delayedCall(.9, introScribble);
+    gsap.to('#halftone', { yPercent: -8, ease: 'none', scrollTrigger: { trigger: '.hero', start: 'top top', end: 'bottom top', scrub: true } });
+    gsap.to('#wordmark', { yPercent: 18, ease: 'none', scrollTrigger: { trigger: '.hero', start: 'top top', end: 'bottom top', scrub: true } });
+    gsap.utils.toArray('.sec h2, .row, .rung, .specs li').forEach(function (el) {
+      gsap.from(el, { opacity: 0, y: 28, duration: .8, ease: 'power3.out', scrollTrigger: { trigger: el, start: 'top 88%', once: true } });
+    });
+  }
+})();
+</script>
+</body>
+</html>

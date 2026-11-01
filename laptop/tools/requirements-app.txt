@@ -1,0 +1,18 @@
+# Just what the dashboard app (laptop/tools/app.py) needs: the web server
+# and the serial port for a real board. The repo root's requirements.txt
+# also pulls in the analysis and ML stack (numpy, pandas, scikit-learn,
+# torch), which the app never imports.
+#
+# Usage:
+#   pip install -r laptop/tools/requirements-app.txt
+#
+# Fully offline (e.g. a demo laptop with no network): on a machine with
+# internet, download the wheels once, copy the folder across, then install
+# from it with no index:
+#   python3 -m pip download -r laptop/tools/requirements-app.txt -d wheelhouse
+#   python3 -m pip install --no-index --find-links wheelhouse -r laptop/tools/requirements-app.txt
+# Download with the same OS and Python version as the demo laptop: some
+# wheels (markupsafe) are built per Python version, and a wheel for
+# another version makes the offline install fail.
+flask
+pyserial

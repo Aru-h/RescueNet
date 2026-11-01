@@ -618,6 +618,14 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/landing")
+def landing():
+    """The RescueNet landing page and its Simulation / Board choice. Every
+    library and font it uses is served from /static, so it needs no
+    internet connection."""
+    return render_template("landing.html")
+
+
 @app.route("/api/status")
 def api_status():
     connected = bridge.serial_conn is not None and bridge.serial_conn.is_open
@@ -673,6 +681,15 @@ def api_status():
 
 @app.route("/api/board/connect", methods=["POST"])
 def api_board_connect():
+    # In sim mode bridge is a SimBoardSource, whose connect() takes no
+    # port - answer with an error instead of letting the call raise.
+    if SIM_ONLY:
+        return jsonify({
+            "status": "error",
+            "message": "This app.py process was started in sim mode "
+                       "- restart it without SIM_ONLY=1 / --no-hardware "
+                       "to connect a board",
+        }), 400
     data = _json_object_body()
     if data is None:
         return _bad_json_body()
