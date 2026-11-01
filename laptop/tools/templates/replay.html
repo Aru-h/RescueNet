@@ -55,6 +55,8 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 @media (max-width: 720px) { .run { grid-template-columns: 48px minmax(0, 1fr); align-items: start; gap: 6px 14px; } .run canvas { width: 48px; height: 48px; } .run .facts { grid-column: 2; } .run .go { display: none; } .run .when small { display: none; } }   /* the whole row is the link */
 .empty, .error { padding: 18px 0; color: var(--c-mute); max-width: 60ch; }
 .error code, .empty code { font-family: var(--mono); color: var(--c-fg); font-size: .92em; }
+.note { margin: 0; padding: 12px 14px; border: 1px solid var(--c-faint); color: var(--c-mute); max-width: 70ch; }
+.note code { font-family: var(--mono); color: var(--c-fg); font-size: .92em; }
 .foot { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px 24px; color: var(--c-mute); }
 @media (max-width: 720px) { .foot .keys { display: none; } }
 </style>
@@ -66,6 +68,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   </div>
   <h1>Watch a recorded run</h1>
   <p class="lede">Pick a run to replay. Scrub through it, follow a team, and take over at any moment to continue it live.</p>
+  <p class="note" id="note" role="status" hidden></p>
 
   <section aria-labelledby="featH" id="featSec" hidden>
     <div class="sec-h mono"><span id="featH">01 &middot; Featured</span><span>Runs we chose to show</span></div>
@@ -107,7 +110,14 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     var d = r.created ? new Date(r.created) : new Date(r.mtime * 1000);
     return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' }) + ', ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   }
-  function href(r) { return '/sim?run=' + encodeURIComponent(r.filename); }
+  /* without the app (this page opened on its own) a built-in copy of the app's runs stands in: RN_SAMPLE, when the page
+     carries one. The runs are real recordings, but they cannot be opened from here, so a click explains instead. */
+  var SAMPLE = window.RN_SAMPLE || null, sampleMode = false;
+  function href(r) { return sampleMode ? '#' : '/sim?run=' + encodeURIComponent(r.filename); }
+  function sampleClick(e) {
+    if (!sampleMode) return; e.preventDefault();
+    var n = $('#note'); n.hidden = false; n.innerHTML = 'Runs open on the sim page of the RescueNet app. Start it with <code>python laptop/tools/app.py</code> and open <code>http://127.0.0.1:5050/replay</code>.';
+  }
   function colours() { var cs = getComputedStyle(document.documentElement); return { bg: cs.getPropertyValue('--c-bg').trim(), fg: cs.getPropertyValue('--c-fg').trim(), rule: cs.getPropertyValue('--c-rule').trim(), mute: cs.getPropertyValue('--c-mute').trim(), teal: cs.getPropertyValue('--c-teal').trim(), red: '#e1251b' }; }
 
   /* the recorded city, as the run starts: buildings in ink, damaged ones filled, destroyed ones red, the epicentre ringed,
@@ -130,7 +140,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   }
   var previews = {};
   function preview(r, canvas) {
-    var p = previews[r.filename] || (previews[r.filename] = fetch('/api/recordings/' + encodeURIComponent(r.filename) + '/preview').then(function (res) { return res.ok ? res.json() : null; }).catch(function () { return null; }));
+    var p = previews[r.filename] || (previews[r.filename] = sampleMode ? Promise.resolve(SAMPLE.previews[r.filename] || null) : fetch('/api/recordings/' + encodeURIComponent(r.filename) + '/preview').then(function (res) { return res.ok ? res.json() : null; }).catch(function () { return null; }));
     p.then(function (pv) { if (pv && pv.env) { canvas._pv = pv; drawCity(canvas, pv); } });
   }
 
@@ -142,7 +152,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     var p = document.createElement('p'); p.textContent = f.blurb;
     var fx = document.createElement('div'); fx.className = 'facts mono'; facts(r).forEach(function (s) { var sp = document.createElement('span'); sp.textContent = s; fx.appendChild(sp); });
     var go = document.createElement('span'); go.className = 'go mono'; go.textContent = 'Watch →';
-    body.append(t, p, fx, go); a.append(cv, body); $('#featured').appendChild(a); preview(r, cv);
+    body.append(t, p, fx, go); a.append(cv, body); a.addEventListener('click', sampleClick); $('#featured').appendChild(a); preview(r, cv);
   }
   function runRow(r) {
     var li = document.createElement('li'), a = document.createElement('a'); a.className = 'run'; a.href = href(r);
@@ -151,10 +161,10 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     var sm = document.createElement('small'); sm.textContent = r.filename; w.appendChild(sm);
     var fx = document.createElement('div'); fx.className = 'facts mono'; facts(r).forEach(function (s) { var sp = document.createElement('span'); sp.textContent = s; fx.appendChild(sp); });
     var go = document.createElement('span'); go.className = 'go mono'; go.textContent = 'Watch →';
-    a.append(cv, w, fx, go); li.appendChild(a); $('#runs').appendChild(li); preview(r, cv);
+    a.append(cv, w, fx, go); a.addEventListener('click', sampleClick); li.appendChild(a); $('#runs').appendChild(li); preview(r, cv);
   }
 
-  fetch('/api/recordings', { cache: 'no-store' }).then(function (res) { if (!res.ok) throw new Error(res.status); return res.json(); }).then(function (list) {
+  function render(list) {
     var feat = [], rest = [];
     list.forEach(function (r) { var f = FEATURED.filter(function (F) { return F.match.test(r.filename); })[0]; if (f) feat.push([r, f]); else rest.push(r); });
     if (feat.length) { $('#featSec').hidden = false; feat.forEach(function (x) { featuredCard(x[0], x[1]); }); }
@@ -162,7 +172,14 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     $('#runsCount').textContent = rest.length ? rest.length + (rest.length === 1 ? ' run' : ' runs') : '';
     if (!rest.length) $('#empty').hidden = false;
     rest.forEach(runRow);
-  }).catch(function () {
+  }
+  fetch('/api/recordings', { cache: 'no-store' }).then(function (res) { if (!res.ok) throw new Error(res.status); return res.json(); }).then(render).catch(function () {
+    if (SAMPLE) {
+      sampleMode = true; render(SAMPLE.list);
+      var n = $('#note'); n.hidden = false; n.textContent = 'Example runs, recorded by the RescueNet app. Open this page from the app to see and replay your own.';
+      if (SAMPLE.back) $('#back').href = SAMPLE.back;
+      return;
+    }
     var e = $('#error'); e.hidden = false;
     e.innerHTML = 'The list of runs could not be loaded. This page needs the RescueNet app: start it with <code>python laptop/tools/app.py</code> and open <code>http://127.0.0.1:5050/replay</code>.';
   });
@@ -170,7 +187,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   /* up and down move between runs; Enter opens one (links do that already); Escape goes back */
   document.addEventListener('keydown', function (e) {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === 'Escape') { location.href = $('#back').href; return; }
+    if (e.key === 'Escape') { if (!sampleMode) location.href = $('#back').href; return; }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     var items = [].slice.call(document.querySelectorAll('.card, .run')); if (!items.length) return;
     var i = items.indexOf(document.activeElement); e.preventDefault();
