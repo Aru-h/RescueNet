@@ -27,9 +27,20 @@ a { color: inherit; }
 .back:hover, .back:focus-visible { text-decoration: underline; text-underline-offset: 4px; }
 h1 { margin: 0; font-size: clamp(28px, 4.2vw, 64px); font-weight: 900; font-stretch: 125%; text-transform: uppercase; line-height: .92; letter-spacing: -.02em; }
 .lede { margin: -10px 0 0; max-width: 58ch; color: var(--c-mute); }
-.sec-h { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--c-rule); padding-bottom: 10px; }
-.sec-h span:first-child { color: var(--c-fg); }
-.sec-h span:last-child { color: var(--c-mute); }
+.sec { display: flex; flex-direction: column; }
+.sec[hidden] { display: none; }
+.sec > :not(summary) { margin-top: 16px; }
+.sec-h { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: baseline; border-bottom: 1px solid var(--c-rule); padding: 6px 0 10px; cursor: pointer; list-style: none; }
+.sec-h::-webkit-details-marker { display: none; }
+.sec-h .ttl { color: var(--c-fg); }
+.sec-h .ttl::before { content: '+'; display: inline-block; width: 1.6em; }
+.sec[open] > .sec-h .ttl::before { content: '\2212'; }
+.sec-h .cnt { color: var(--c-mute); }
+.sec-h:hover .ttl, .sec-h:focus-visible .ttl { text-decoration: underline; text-underline-offset: 4px; }
+.sec-h:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
+/* closed, the heading names what is inside, so the page still says what runs there are */
+.sec-h .peek { grid-column: 1 / -1; display: none; padding-left: 1.6em; color: var(--c-mute); text-transform: none; letter-spacing: .02em; font-size: 12.5px; }
+.sec:not([open]) > .sec-h .peek { display: block; }
 a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 
 /* featured: a large card per run, its city drawn from the recording */
@@ -80,17 +91,17 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   <p class="lede">Pick a run to replay. Scrub through it, follow a team, and take over at any moment to continue it live.</p>
   <p class="note" id="note" role="status" hidden></p>
 
-  <section aria-labelledby="featH" id="featSec" hidden>
-    <div class="sec-h mono"><span id="featH">01 &middot; Featured</span></div>
+  <details class="sec" id="featSec" data-key="featured" open hidden>
+    <summary class="sec-h mono"><span class="ttl" id="featH">01 &middot; Featured</span><span class="cnt" id="featCount"></span><span class="peek" id="featPeek"></span></summary>
     <div class="featured" id="featured"></div>
-  </section>
+  </details>
 
-  <section aria-labelledby="runsH">
-    <div class="sec-h mono"><span id="runsH"><span id="runsNum">02</span> &middot; Your runs</span><span id="runsCount"></span></div>
+  <details class="sec" id="runsSec" data-key="runs" open>
+    <summary class="sec-h mono"><span class="ttl" id="runsH"><span id="runsNum">02</span> &middot; Your runs</span><span class="cnt" id="runsCount"></span><span class="peek" id="runsPeek"></span></summary>
     <ul class="runs" id="runs"></ul>
     <p class="empty" id="empty" hidden>No runs yet. Every live simulation is saved here automatically. <a href="/landing">Start one &rarr;</a></p>
     <p class="error" id="error" hidden></p>
-  </section>
+  </details>
 
   <div class="foot mono"><span>Every live run is saved here automatically</span><span class="keys">&uarr; &darr; to choose &middot; Enter to watch</span></div>
 </main>
@@ -193,11 +204,26 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     var feat = [], rest = [];
     list.forEach(function (r) { var f = FEATURED.filter(function (F) { return F.match.test(r.filename); })[0]; if (f) feat.push([r, f]); else rest.push(r); });
     var planned = sampleMode && SAMPLE.planned ? SAMPLE.planned : [];
-    if (feat.length || planned.length) { $('#featSec').hidden = false; feat.forEach(function (x) { featuredCard(x[0], x[1]); }); planned.forEach(plannedCard); }
+    if (feat.length || planned.length) {
+      $('#featSec').hidden = false; feat.forEach(function (x) { featuredCard(x[0], x[1]); }); planned.forEach(plannedCard);
+      var nf = feat.length + planned.length;
+      $('#featCount').textContent = nf + (nf === 1 ? ' run' : ' runs') + (planned.length ? ', ' + planned.length + ' in preparation' : '');
+      $('#featPeek').textContent = feat.map(function (x) { return x[1].title; }).concat(planned.map(function (p) { return p.title; })).join(' · ');
+    }
     else $('#runsNum').textContent = '01';
     $('#runsCount').textContent = rest.length ? rest.length + (rest.length === 1 ? ' run' : ' runs') : '';
     if (!rest.length) $('#empty').hidden = false;
     rest.forEach(runRow);
+    if (rest.length) $('#runsPeek').textContent = 'Latest ' + when(rest[0]) + (rest.length > 1 ? ' · earliest ' + when(rest[rest.length - 1]) : '');
+    remembered();
+  }
+  /* each section remembers whether this viewer left it open or closed */
+  function remembered() {
+    document.querySelectorAll('details.sec').forEach(function (d) {
+      var k = 'rn-replay-' + d.dataset.key;
+      try { var v = localStorage.getItem(k); if (v === 'closed') d.open = false; else if (v === 'open') d.open = true; } catch (e) {}
+      d.addEventListener('toggle', function () { try { localStorage.setItem(k, d.open ? 'open' : 'closed'); } catch (e) {} });
+    });
   }
   fetch('/api/recordings', { cache: 'no-store' }).then(function (res) { if (!res.ok) throw new Error(res.status); return res.json(); }).then(render).catch(function () {
     if (SAMPLE) {
@@ -214,7 +240,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === 'Escape') { if (!sampleMode) location.href = $('#back').href; return; }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-    var items = [].slice.call(document.querySelectorAll('.card, .run')); if (!items.length) return;
+    var items = [].slice.call(document.querySelectorAll('a.card, .run')).filter(function (el) { return el.offsetParent !== null; }); if (!items.length) return;
     var i = items.indexOf(document.activeElement); e.preventDefault();
     i = i < 0 ? 0 : Math.max(0, Math.min(items.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)));
     items[i].focus(); items[i].scrollIntoView({ block: 'nearest' });
