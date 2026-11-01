@@ -176,7 +176,6 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   fetch('/api/recordings', { cache: 'no-store' }).then(function (res) { if (!res.ok) throw new Error(res.status); return res.json(); }).then(render).catch(function () {
     if (SAMPLE) {
       sampleMode = true; render(SAMPLE.list);
-      var n = $('#note'); n.hidden = false; n.textContent = 'Example runs, recorded by the RescueNet app. Open this page from the app to see and replay your own.';
       if (SAMPLE.back) $('#back').href = SAMPLE.back;
       return;
     }
