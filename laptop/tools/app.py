@@ -679,6 +679,27 @@ def api_status():
     })
 
 
+@app.route("/api/board/ports")
+def api_board_ports():
+    """Serial ports this computer can see, for the landing page's Board
+    form to offer instead of making the user type a device name. Boards
+    with an ST-LINK (STMicroelectronics, USB vendor 0x0483) are marked
+    and listed first. Read-only: nothing is opened."""
+    try:
+        from serial.tools import list_ports
+        found = list_ports.comports()
+    except Exception as exc:  # pyserial missing or the OS refused the scan
+        return jsonify({"status": "error", "message": str(exc), "ports": []}), 500
+    ports = [{
+        "device": p.device,
+        "description": p.description if p.description and p.description != "n/a" else "",
+        "manufacturer": p.manufacturer or "",
+        "stlink": p.vid == 0x0483,
+    } for p in found]
+    ports.sort(key=lambda p: (not p["stlink"], p["device"]))
+    return jsonify({"status": "success", "ports": ports})
+
+
 @app.route("/api/board/connect", methods=["POST"])
 def api_board_connect():
     # In sim mode bridge is a SimBoardSource, whose connect() takes no
