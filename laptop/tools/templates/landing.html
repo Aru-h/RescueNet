@@ -1361,8 +1361,8 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   /* ---------- the connect drawing ----------
      One scene behind both halves, laid out from the halves' real boxes so the cable always joins them.
      `want` is what the visitor points at or has chosen with the keyboard; `scZ` is the zoom into the laptop screen (0..1),
-     `scB` how far the board has come forward (0..1). Going from Simulation to Board zooms out first, then the board comes
-     forward and lights; going back, the board steps back first, so the two never run at once. */
+     `scB` how far the board has come forward (0..1). Switching between them runs both at once: one eases back while the
+     other comes forward. */
   var halvesEl = $('#halves'), sceneEl = $('#connScene'), NS = 'http://www.w3.org/2000/svg';
   var SC_ = null, scRaf = 0, scZ = 0, scB = 0, scWant = null, scHover = null, scBy = null, scT0 = 0, scLast = 0, pvCol = {};
   function el(tag, at, parent) { var e = document.createElementNS(NS, tag); for (var k in at) e.setAttribute(k, at[k]); if (parent) parent.appendChild(e); return e; }
@@ -1473,14 +1473,14 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   function sceneTick(now) {
     scRaf = requestAnimationFrame(sceneTick);
     var dt = Math.min(.1, (now - (scLast || now)) / 1000); scLast = now;
-    /* one moves at a time: the board steps back before the laptop zooms, and the laptop zooms out before the board comes forward */
-    var want = sceneTarget(), goal = want === 'sim' && !reduce && scB < .03 ? 1 : 0, goalB = want === 'board' && !reduce && scZ < .03 ? 1 : 0;
+    /* both move at once: the one being left eases back while the one being chosen comes forward, so a switch answers at once */
+    var want = sceneTarget(), goal = want === 'sim' && !reduce ? 1 : 0, goalB = want === 'board' && !reduce ? 1 : 0;
     var moved = false;
     if (scZ !== goal) { scZ = goal > scZ ? Math.min(1, scZ + dt / .55) : Math.max(0, scZ - dt / .4); moved = true; }
     if (scB !== goalB) { scB = goalB > scB ? Math.min(1, scB + dt / .45) : Math.max(0, scB - dt / .35); moved = true; }
     if (moved) sceneApply();
     sceneEl.classList.toggle('sim', want === 'sim');
-    sceneEl.classList.toggle('board', want === 'board' && scZ < .03);
+    sceneEl.classList.toggle('board', want === 'board');
     if (want === 'sim' && !reduce) drawMap((now - scT0) / 1000);
     else if (scWant === 'sim') drawMap(0);
     scWant = want;
