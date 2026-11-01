@@ -51,6 +51,20 @@
     x.beginPath(); x.arc(cx, cy, s / 2, 0, 6.283); x.lineWidth = Math.max(1.5, s / 5); x.strokeStyle = COLOUR.gathering; x.stroke();
   }
   function team(x, cx, cy, s, ink) { x.beginPath(); x.arc(cx, cy, s / 2, 0, 6.283); x.fillStyle = ink; x.fill(); }
+  /* an INSARAG worksite: a box (the worksite marking), outlined while unassigned, blue while a team works it, green with a
+     horizontal line through the whole marking once complete (Vol II Man B 6.2). state: 'open' | 'active' | 'complete' */
+  function worksite(x, cx, cy, s, state, ink, bg) {
+    var w = s, h = s * .78, l = cx - w / 2, t = cy - h / 2;
+    x.lineWidth = Math.max(1.2, s / 9);
+    x.fillStyle = state === 'active' ? COLOUR.active : state === 'complete' ? COLOUR.complete : bg;
+    x.fillRect(l, t, w, h); x.strokeStyle = ink; x.strokeRect(l, t, w, h);
+    if (state === 'complete') { x.beginPath(); x.moveTo(l - s * .25, cy); x.lineTo(l + w + s * .25, cy); x.stroke(); }
+  }
+  /* a task that is not a live-rescue worksite (sector assessment, supplies, evacuation, road clearing): a small open triangle */
+  function task(x, cx, cy, s, ink) {
+    var h = s / 2; x.beginPath(); x.moveTo(cx, cy - h); x.lineTo(cx + h, cy + h * .8); x.lineTo(cx - h, cy + h * .8); x.closePath();
+    x.lineWidth = Math.max(1, s / 8); x.strokeStyle = ink; x.stroke();
+  }
 
   /* ---- the legend, as small inline SVGs drawn from the same constants ---- */
   var LEGEND = {
@@ -62,14 +76,18 @@
     assembly: ['Assembly point', '<rect x="2" y="2" width="10" height="10" fill="var(--c-teal, #4fd1c9)" stroke="currentColor"/>'],
     gathering: ['People gathering', '<circle cx="7" cy="7" r="4.5" fill="none" stroke="' + COLOUR.gathering + '" stroke-width="2.2"/>'],
     team: ['Team', '<circle cx="7" cy="7" r="3.5" fill="currentColor"/>'],
-    barrier: ['Road blocked', '<path d="M7 .8L13.2 7 7 13.2.8 7z" fill="' + COLOUR.barrier + '"/><rect x="3.9" y="6.1" width="6.2" height="1.8" fill="#fff"/>']
+    barrier: ['Road blocked', '<path d="M7 .8L13.2 7 7 13.2.8 7z" fill="' + COLOUR.barrier + '"/><rect x="3.9" y="6.1" width="6.2" height="1.8" fill="#fff"/>'],
+    wsOpen: ['Worksite, no team yet', '<rect x="1.5" y="3" width="11" height="8.5" fill="none" stroke="currentColor" stroke-width="1.4"/>'],
+    wsActive: ['Worksite, team working', '<rect x="1.5" y="3" width="11" height="8.5" fill="' + COLOUR.active + '" stroke="currentColor" stroke-width="1.4"/>'],
+    wsDone: ['Worksite complete', '<rect x="2.5" y="3" width="9" height="8.5" fill="' + COLOUR.complete + '" stroke="currentColor" stroke-width="1.4"/><path d="M0 7.2h14" stroke="currentColor" stroke-width="1.4"/>'],
+    task: ['Other task', '<path d="M7 2.5l5 8.6H2z" fill="none" stroke="currentColor" stroke-width="1.3"/>']
   };
   function legendItem(key) { var it = LEGEND[key]; return '<li><svg viewBox="0 0 14 14" aria-hidden="true">' + it[1] + '</svg>' + it[0] + '</li>'; }
   function legendHTML(keys) { return keys.map(legendItem).join(''); }
 
   root.RNNotation = {
     COLOUR: COLOUR, SECTOR_LETTERS: SECTOR_LETTERS, damageClass: damageClass,
-    building: building, star: star, barrier: barrier, assembly: assembly, gathering: gathering, team: team,
+    building: building, star: star, barrier: barrier, assembly: assembly, gathering: gathering, team: team, worksite: worksite, task: task,
     LEGEND: LEGEND, legendHTML: legendHTML
   };
 })(typeof window !== 'undefined' ? window : globalThis);
