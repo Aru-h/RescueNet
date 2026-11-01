@@ -238,7 +238,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 .conn-note { margin: 0; font-size: 14px; line-height: 1.45; }
 .conn-note[hidden] { display: none; }
 .conn-note code, .bc code { font-family: var(--mono); font-size: .92em; color: var(--c-fg); }
-.linkbtn { background: none; border: 0; color: inherit; padding: 8px 0; min-height: 40px; cursor: pointer; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+.linkbtn { background: none; border: 0; color: inherit; padding: 8px 0; min-height: 40px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
 .linkbtn:hover, .linkbtn:focus-visible { text-decoration: underline; text-underline-offset: 4px; }
 /* board connect */
 .bc { min-height: 100vh; min-height: 100svh; display: flex; flex-direction: column; gap: 22px; padding-top: calc(env(safe-area-inset-top, 0px) + 14px); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 32px); }
@@ -494,7 +494,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     </div>
     <p class="conn-note" id="connNote" role="status" hidden></p>
     <div class="conn-foot">
-      <button class="linkbtn" id="optReplay" type="button">Watch a recorded run &rarr;</button>
+      <a class="linkbtn" id="optReplay" href="https://claude.ai/artifact/LSm8W25mVcmCEVwXRNKLpj" target="_blank" rel="noopener">Watch a recorded run &rarr;</a>
       <span class="hint mono">Press 1 or 2 to choose, Enter to go</span>
     </div>
   </div>
@@ -1410,7 +1410,10 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   }
   function goApp(what, path) { appStatus().then(function (st) { if (st) location.href = path; else needApp(what); }); }
   optSim.addEventListener('click', function () { goApp('The simulator', './'); });
-  $('#optReplay').addEventListener('click', function () { goApp('Recorded runs', 'replay'); });
+  /* Watch a recorded run: the app's own run list when the app answers, otherwise the published run list (a real link,
+     so it opens in a new tab from a hosted copy of this page). Checked when the connect screen opens, before any click. */
+  var optReplay = $('#optReplay');
+  function replayLink() { appStatus().then(function (st) { if (st) { optReplay.href = 'replay'; optReplay.removeAttribute('target'); optReplay.removeAttribute('rel'); } }); }
   optBoard.addEventListener('click', function () { showView('board'); });
   $('#bcBack').addEventListener('click', function () { showView('choice', optBoard); });
   function connectKey(e) {
@@ -1431,7 +1434,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
       }, function () {});
     } catch (e) {}
   }
-  function connOpen() { connNote.hidden = true; serialPeek(); }
+  function connOpen() { connNote.hidden = true; serialPeek(); replayLink(); }
   function connClose() { sceneStop(); }
 
   /* ---------- the connect drawing ----------
