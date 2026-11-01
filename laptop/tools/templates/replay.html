@@ -206,8 +206,8 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     var planned = sampleMode && SAMPLE.planned ? SAMPLE.planned : [];
     if (feat.length || planned.length) {
       $('#featSec').hidden = false; feat.forEach(function (x) { featuredCard(x[0], x[1]); }); planned.forEach(plannedCard);
-      var nf = feat.length + planned.length;
-      $('#featCount').textContent = nf + (nf === 1 ? ' run' : ' runs') + (planned.length ? ', ' + planned.length + ' in preparation' : '');
+      /* only recordings count as runs; cards still in preparation are counted apart */
+      $('#featCount').textContent = (feat.length ? feat.length + (feat.length === 1 ? ' run' : ' runs') : '') + (feat.length && planned.length ? ' · ' : '') + (planned.length ? planned.length + ' in preparation' : '');
       $('#featPeek').textContent = feat.map(function (x) { return x[1].title; }).concat(planned.map(function (p) { return p.title; })).join(' · ');
     }
     else $('#runsNum').textContent = '01';
