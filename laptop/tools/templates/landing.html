@@ -194,15 +194,29 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 .scene svg { position: absolute; left: 0; top: 0; overflow: visible; }
 .sc-left { position: absolute; overflow: hidden; }
 .sc-lap { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
-.sc-map { position: absolute; transform-origin: 0 0; opacity: .5; transition: opacity .35s; }
+.sc-map { position: absolute; transform-origin: 0 0; opacity: .55; transition: opacity .35s; }
 .scene.sim .sc-map { opacity: 1; }
-.sc-cable, .sc-board .sc-trace { stroke: currentColor; }
-.sc-board .sc-trace { opacity: .35; transition: opacity .3s, stroke .3s; }
+.scene.board .sc-map { opacity: .85; }   /* the board is driving the laptop: its screen wakes */
+/* backdrops: a district behind the laptop, a field of boards behind the board; faint, and gone before the headings */
+.sc-bg { position: absolute; overflow: hidden; opacity: .32; transition: opacity .4s; }
+.sc-bg canvas, .sc-bg svg { position: absolute; left: 0; top: 0; }
+.scene.sim .sc-bg-sim { opacity: .5; }
+.sc-bg-board { opacity: .2; }
+.sc-radio { stroke-dasharray: 2 6; opacity: .7; }
+.sc-solid, .sc-pcb { fill: var(--c-bg); }   /* solid, so what is behind (backdrop, shadow) only shows around them */
+.sc-cable { stroke: currentColor; transition: opacity .35s; }
+.scene.sim .sc-cable { opacity: .35; }   /* Simulation needs no board: the cable goes quiet */
+.sc-board .sc-trace { stroke: currentColor; stroke-width: 1.2; opacity: .35; transition: opacity .3s, stroke .3s; }
+.sc-pins { stroke-width: 2.2; stroke-linecap: round; opacity: .8; }
+.sc-lbl { fill: currentColor; stroke: none; font-family: var(--mono); letter-spacing: .04em; opacity: .7; }
+.sc-port { fill: var(--c-bg); }
 .sc-shadow { fill: currentColor; stroke: none; opacity: 0; }
-.sc-board > rect:first-child { fill: var(--c-bg); }   /* solid, so the shadow only shows where the board has lifted off it */
+.sc-npu { fill: currentColor; fill-opacity: 0; }
 .sc-led { fill: currentColor; opacity: .25; transition: opacity .2s, fill .2s; }
 .sc-pulse { stroke: var(--c-teal); stroke-width: 4; stroke-dasharray: 5 30; opacity: 0; transition: opacity .25s; }
-.scene.board .sc-led { fill: var(--red); opacity: 1; animation: led 1.1s steps(2) infinite; }
+.scene.board .sc-led1 { fill: var(--red); opacity: 1; animation: led 1.1s steps(2) infinite; }
+.scene.board .sc-led2 { fill: var(--c-teal); opacity: 1; animation: led 1.1s steps(2) infinite .55s; }
+.scene.board .sc-npu { fill: var(--c-teal); animation: npu 1.3s steps(3) infinite; }
 .scene.board .sc-trace { opacity: 1; stroke: var(--c-teal); }
 .scene.board .sc-pulse { opacity: 1; animation: pulse 1.1s linear infinite; }
 .half { position: relative; z-index: 1; flex: 1 1 0; min-width: 0; overflow: hidden; border: 1px solid var(--c-faint); background: transparent; color: inherit; text-align: left; font-family: inherit; cursor: pointer; padding: clamp(18px, 2.4vw, 36px); display: flex; flex-direction: column; justify-content: flex-end; gap: 12px; transition: border-color .2s; }
@@ -215,6 +229,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 .half .need.seen { color: var(--c-teal); }
 .half .go { font-size: 13px; }
 @keyframes led { 50% { opacity: .15; } }
+@keyframes npu { 0% { fill-opacity: .12; } 33% { fill-opacity: .5; } 66% { fill-opacity: .28; } }
 @keyframes pulse { to { stroke-dashoffset: 35; } }
 .conn-foot { display: flex; justify-content: space-between; gap: 10px 24px; flex-wrap: wrap; align-items: center; }
 .conn-foot .hint, .conn-note { color: var(--c-mute); }
@@ -255,7 +270,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   .half { min-height: 250px; }
   .conn-foot .hint { display: none; }
 }
-@media (prefers-reduced-motion: reduce) { .scene.board .sc-led, .scene.board .sc-pulse { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .scene.board .sc-led1, .scene.board .sc-led2, .scene.board .sc-npu, .scene.board .sc-pulse { animation: none; } .scene.board .sc-npu { fill-opacity: .35; } }
 .back { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 22px); right: max(var(--gx), env(safe-area-inset-right, 0px)); color: var(--paper); background: none; border: 0; font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }
 
 @media (max-width: 860px) {
@@ -1360,102 +1375,224 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 
   /* ---------- the connect drawing ----------
      One scene behind both halves, laid out from the halves' real boxes so the cable always joins them.
-     `want` is what the visitor points at or has chosen with the keyboard; `scZ` is the zoom into the laptop screen (0..1),
-     `scB` how far the board has come forward (0..1). Switching between them runs both at once: one eases back while the
-     other comes forward. */
+     Behind each drawing sits a faint backdrop: a wide district with teams on the move behind the laptop (the laptop's
+     screen is a window onto that same district), and a field of boards, one per team, behind the board. The backdrops are
+     context only: choosing Board lights the real board and its cable, never the boards behind it.
+     `want` is what the visitor points at or has chosen with the keyboard. scZ (the zoom into the laptop) and scB (the board
+     coming forward) follow it on the same critically damped spring, so both move together, at the same pace in both
+     directions, and turn smoothly when the visitor changes their mind half way. */
   var halvesEl = $('#halves'), sceneEl = $('#connScene'), NS = 'http://www.w3.org/2000/svg';
-  var SC_ = null, scRaf = 0, scZ = 0, scB = 0, scWant = null, scHover = null, scBy = null, scT0 = 0, scLast = 0, pvCol = {};
+  var SC_ = null, scRaf = 0, scZ = 0, scVZ = 0, scB = 0, scVB = 0, scClock = 0, scWant = null, scHover = null, scBy = null, scLast = 0, pvCol = {};
   function el(tag, at, parent) { var e = document.createElementNS(NS, tag); for (var k in at) e.setAttribute(k, at[k]); if (parent) parent.appendChild(e); return e; }
   function pvColours() { var cs = getComputedStyle(connect); pvCol.ink = cs.getPropertyValue('--c-bg').trim(); pvCol.paper = cs.getPropertyValue('--c-fg').trim(); pvCol['on-ink-rule'] = cs.getPropertyValue('--c-rule').trim(); pvCol.teal = cs.getPropertyValue('--c-teal').trim(); pvCol.red = cs.getPropertyValue('--red').trim(); }
-  if (window.RNSky) RNSky.onChange(function () { pvColours(); if (SC_) drawMap(0); });
+  if (window.RNSky) RNSky.onChange(function () { pvColours(); if (SC_) { cityStatic(); drawCity(scClock); } });
+
+  /* the district behind the laptop: wider than the hero's, same rules (a road every fifth row and column) */
+  var CITY = (function () {
+    var W = 64, H = 44, r = rng(23), cs = [], rd = [], tm = [], inc = [], tries = 0;
+    for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
+      var road = (x % 5 === 0 || y % 5 === 0), bld = !road && r() < .8;
+      cs.push({ bld: bld, rub: bld && r() < .45 }); if (road) rd.push({ x: x, y: y });
+    }
+    while (tm.length < 48 && tries++ < 8000) { var c = rd[Math.floor(r() * rd.length)], ok = true; tm.forEach(function (t) { if (Math.hypot(t.x - c.x, t.y - c.y) < 4) ok = false; }); if (ok) tm.push({ x: c.x, y: c.y }); }
+    var rub = []; cs.forEach(function (c, i) { if (c.rub) rub.push({ x: i % W, y: Math.floor(i / W) }); }); tries = 0;
+    while (inc.length < 34 && tries++ < 8000) { var k = rub[Math.floor(r() * rub.length)], good = true; inc.forEach(function (i) { if (Math.hypot(i.x - k.x, i.y - k.y) < 3) good = false; }); if (good) inc.push(k); }
+    var used = {}, as = inc.map(function (i) { var best = -1, bd = 1e9; tm.forEach(function (t, j) { var d = Math.hypot(t.x - i.x, t.y - i.y); if (!used[j] && d < bd) { bd = d; best = j; } }); used[best] = true; return best; });
+    return { W: W, H: H, cells: cs, teams: tm, incidents: inc, assign: as };
+  })();
+  /* buildings, drawn once per layout or palette change: (ox, oy) is where cell (0,0) lands, q the cell size, both in the context's pixels */
+  function paintCells(x, ox, oy, q, w, h) {
+    x.lineWidth = Math.max(1, q * .06); x.strokeStyle = x.fillStyle = pvCol['on-ink-rule'] || '#3a3a38';
+    var c0 = Math.max(0, Math.floor(-ox / q)), c1 = Math.min(CITY.W, Math.ceil((w - ox) / q)), r0 = Math.max(0, Math.floor(-oy / q)), r1 = Math.min(CITY.H, Math.ceil((h - oy) / q));
+    for (var yy = r0; yy < r1; yy++) for (var xx = c0; xx < c1; xx++) {
+      var c = CITY.cells[yy * CITY.W + xx]; if (!c.bld) continue;
+      if (c.rub) x.fillRect(ox + xx * q + q * .1, oy + yy * q + q * .1, q * .8, q * .8); else x.strokeRect(ox + xx * q + q * .1, oy + yy * q + q * .1, q * .8, q * .8);
+    }
+  }
+  /* incidents and teams, every frame: each assigned team walks from its post to its incident and starts again */
+  function paintMovers(x, ox, oy, q, t, live) {
+    CITY.incidents.forEach(function (inc, k) {
+      var cx = ox + (inc.x + .5) * q, cy = oy + (inc.y + .5) * q; x.strokeStyle = x.fillStyle = pvCol.red;
+      if (live) { var ph = (t * .6 + k * .17) % 1; x.lineWidth = Math.max(1, q * .08); x.globalAlpha = 1 - ph; x.beginPath(); x.arc(cx, cy, q * (.5 + ph * 1.4), 0, 6.283); x.stroke(); x.globalAlpha = 1; }
+      x.fillRect(ox + inc.x * q + q * .2, oy + inc.y * q + q * .2, q * .6, q * .6);
+    });
+    CITY.teams.forEach(function (tm, i) {
+      var k = CITY.assign.indexOf(i), hx = ox + (tm.x + .5) * q, hy = oy + (tm.y + .5) * q, px = hx, py = hy;
+      if (k >= 0) {
+        var inc = CITY.incidents[k], tx = ox + (inc.x + .5) * q, ty = oy + (inc.y + .5) * q, cyc = (t * .12 + i * .09) % 1, f = smooth(Math.min(1, cyc / .55));
+        px = hx + (tx - hx) * f; py = hy + (ty - hy) * f;
+        x.strokeStyle = pvCol.teal; x.globalAlpha = .85; x.lineWidth = Math.max(1, q * .07); x.setLineDash([q * .25, q * .3]); x.beginPath(); x.moveTo(hx, hy); x.lineTo(px, py); x.stroke(); x.setLineDash([]); x.globalAlpha = 1;
+      }
+      x.fillStyle = pvCol.paper; x.beginPath(); x.arc(px, py, Math.max(1.5, q * .32), 0, 6.283); x.fill();
+    });
+  }
+  function cityStatic() {
+    var S = SC_; if (!S) return;
+    [[S.bgStat, S.box, S.q, false], [S.mapStat, S.mbox, S.q * S.K, true]].forEach(function (a) {
+      var c = a[0], x = c.getContext('2d'), w = c.width / S.d, h = c.height / S.d;
+      x.setTransform(S.d, 0, 0, S.d, 0, 0); x.clearRect(0, 0, w, h);
+      if (a[3]) { x.fillStyle = pvCol.ink || '#0b0b0b'; x.fillRect(0, 0, w, h); }
+      paintCells(x, a[1].x, a[1].y, a[2], w, h);
+    });
+  }
+  function drawCity(t) {
+    var S = SC_; if (!S) return; var live = !reduce && t > 0;
+    [[S.bg, S.bgStat, S.box, S.q], [S.map, S.mapStat, S.mbox, S.q * S.K]].forEach(function (a) {
+      var x = a[0].getContext('2d'); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, a[0].width, a[0].height); x.drawImage(a[1], 0, 0);
+      x.setTransform(S.d, 0, 0, S.d, 0, 0); paintMovers(x, a[2].x, a[2].y, a[3], t, live);
+    });
+  }
+
+  /* the board, after the STM32N6570-DK: the cable plugs into its ST-LINK USB-C port. `vert` (stacked halves) mirrors it so
+     the port faces the cable on the right; `rich` adds the small parts (pin rows, labels) when there is room for them */
+  function drawBoard(g, bx, by, bw, bh, vert, rich) {
+    function X(f) { return vert ? bx + bw * (1 - f) : bx + bw * f; }
+    function Y(f) { return by + bh * f; }
+    function R(fx, fy, fw, fh, at) { var x0 = vert ? bx + bw * (1 - fx - fw) : bx + bw * fx; return el('rect', Object.assign({ x: x0, y: Y(fy), width: bw * fw, height: bh * fh }, at || {}), g); }
+    function T(fx, fy, s, at) { var t = el('text', Object.assign({ x: X(fx), y: Y(fy), class: 'sc-lbl', 'text-anchor': vert ? 'end' : 'start' }, at || {}), g); t.textContent = s; return t; }
+    function dots(fx0, fx1, fy, n) { var d = ''; for (var i = 0; i < n; i++) { var x = X(fx0 + (fx1 - fx0) * i / (n - 1)); d += 'M' + x + ' ' + Y(fy) + 'h.01'; } el('path', { d: d, class: 'sc-pins' }, g); }
+    var thin = { 'stroke-width': 1 }; g.style.fontSize = Math.max(5.5, bw * .03).toFixed(1) + 'px';
+    el('rect', { x: bx, y: by, width: bw, height: bh, rx: bw * .03, class: 'sc-pcb' }, g);
+    [[.04, .07], [.96, .07], [.04, .93], [.96, .93]].forEach(function (c) { el('circle', Object.assign({ cx: X(c[0]), cy: Y(c[1]), r: bw * .016 }, thin), g); });
+    /* the STM32N6: pins on four sides, its neural processor (NPU) inside */
+    var cw = bw * .25, cx0 = vert ? X(.42) - cw : X(.42), cy0 = Y(.5) - cw / 2, pins = '';
+    el('rect', { x: cx0, y: cy0, width: cw, height: cw, rx: 3 }, g);
+    for (var i = 1; i < 6; i++) { var t = cw * i / 6; pins += 'M' + (cx0 - 7) + ' ' + (cy0 + t) + 'h7M' + (cx0 + cw) + ' ' + (cy0 + t) + 'h7M' + (cx0 + t) + ' ' + (cy0 - 7) + 'v7M' + (cx0 + t) + ' ' + (cy0 + cw) + 'v7'; }
+    el('path', Object.assign({ d: pins }, thin), g);
+    el('rect', Object.assign({ x: cx0 + cw * .52, y: cy0 + cw * .52, width: cw * .36, height: cw * .36, rx: 2, class: 'sc-npu' }, thin), g);
+    if (rich) {
+      var lb = el('text', { x: cx0 + cw * .12, y: cy0 + cw * .3, class: 'sc-lbl' }, g); lb.textContent = 'STM32N6';
+      var nl = el('text', { x: cx0 + cw * .7, y: cy0 + cw * .76, class: 'sc-lbl', 'text-anchor': 'middle' }, g); nl.textContent = 'NPU';
+    }
+    /* ports on the cable edge: the ST-LINK USB-C (the cable) and the second USB-C */
+    var pw = bw * .075, ph = bh * .17, px = vert ? bx + bw - pw * .45 : bx - pw * .55, py = Y(.5) - ph / 2;
+    el('rect', { x: px, y: py, width: pw, height: ph, rx: pw * .45, class: 'sc-port' }, g);
+    el('rect', Object.assign({ x: vert ? bx + bw - pw * .45 : bx - pw * .55, y: Y(.24) - ph * .4, width: pw, height: ph * .8, rx: pw * .4 }, thin), g);
+    if (rich) T(.09, .53, 'ST-LINK');
+    /* far edge: Ethernet (RJ45) and the USB-A host port */
+    var rjw = bw * .12, rjh = bh * .22, rjx = vert ? bx - rjw * .25 : bx + bw - rjw * .75;
+    el('rect', Object.assign({ x: rjx, y: Y(.2), width: rjw, height: rjh }, thin), g);
+    el('path', Object.assign({ d: 'M' + (rjx + rjw * .3) + ' ' + (Y(.2) + rjh) + 'v-' + (rjh * .25) + 'h' + (rjw * .4) + 'v' + (rjh * .25) }, thin), g);
+    el('rect', Object.assign({ x: vert ? bx - bw * .05 : bx + bw - bw * .05, y: Y(.62), width: bw * .1, height: bh * .14 }, thin), g);
+    /* bottom edge: microSD slot and the headset jack; two user LEDs and three buttons on the board */
+    R(.58, .97, .13, .05, thin);
+    el('circle', Object.assign({ cx: X(.84), cy: Y(1), r: bw * .026 }, thin), g);
+    el('circle', { class: 'sc-led sc-led1', cx: X(.7), cy: Y(.16), r: bw * .02, stroke: 'none' }, g);
+    el('circle', { class: 'sc-led sc-led2', cx: X(.76), cy: Y(.16), r: bw * .02, stroke: 'none' }, g);
+    [.1, .16, .22].forEach(function (f) { el('circle', Object.assign({ cx: X(f), cy: Y(.74), r: bw * .018 }, thin), g); });
+    if (rich) {
+      T(.68, .27, 'LD1 LD2'); T(.08, .82, 'RESET');
+      dots(.14, .54, .08, 14); dots(.2, .52, .92, 12);     /* the Arduino Uno headers */
+      dots(.8, .9, .47, 6); dots(.8, .9, .53, 6);          /* STMod+ */
+      R(.78, .03, .1, .07, thin);                           /* camera connector, its ribbon leaving the board */
+      el('path', Object.assign({ d: 'M' + X(.8) + ' ' + Y(.03) + 'v-' + (bh * .08) + 'M' + X(.86) + ' ' + Y(.03) + 'v-' + (bh * .08), 'stroke-dasharray': '2 3' }, thin), g);
+      T(.06, .2, 'STM32N6570-DK');
+    }
+    /* copper: the port to the chip, the chip to the LEDs, the network jack and the card slot */
+    var tr = 'M' + (vert ? px : px + pw) + ' ' + Y(.5) + 'H' + (vert ? cx0 + cw + 8 : cx0 - 8)
+      + 'M' + X(.62) + ' ' + (cy0 - 8) + 'V' + Y(.2) + 'H' + X(.68)
+      + 'M' + (vert ? cx0 - 8 : cx0 + cw + 8) + ' ' + Y(.45) + 'H' + X(.76) + 'V' + Y(.31) + 'H' + (vert ? rjx + rjw : rjx)
+      + 'M' + (cx0 + cw / 2) + ' ' + (cy0 + cw + 8) + 'V' + Y(.88) + 'H' + X(.64) + 'V' + Y(.97);
+    el('path', { class: 'sc-trace', d: tr }, g);
+    return { end: { x: vert ? px + pw : px, y: Y(.5) }, pw: pw };
+  }
+  /* the faint field of boards behind the real one: one per team, joined by the radio links they would use. Never lit. */
+  function drawField(svg, w, h, top, foot, bw) {
+    var cols = w > 420 ? 4 : 3, rows = 3, gw = bw * .5, gh = gw * .64, cwid = w / cols, rh = (foot - top) / rows, r = rng(31), pts = [];
+    for (var j = 0; j < rows; j++) for (var i = 0; i < cols; i++) {
+      if (j === 1 && (i === Math.floor((cols - 1) / 2) || i === Math.ceil((cols - 1) / 2))) continue;   /* the real board sits here */
+      pts.push({ x: cwid * (i + .5) + (r() - .5) * cwid * .35, y: top + rh * (j + .5) + (r() - .5) * rh * .3 });
+    }
+    var d = '';
+    pts.forEach(function (a, i) { pts.forEach(function (b, k) { if (k > i && Math.hypot(a.x - b.x, a.y - b.y) < Math.max(cwid, rh) * 1.45) d += 'M' + a.x + ' ' + a.y + 'L' + b.x + ' ' + b.y; }); });
+    el('path', { d: d, class: 'sc-radio' }, svg);
+    pts.forEach(function (p) {
+      var g = el('g', {}, svg);
+      el('rect', { x: p.x - gw / 2, y: p.y - gh / 2, width: gw, height: gh, rx: gw * .04, class: 'sc-pcb' }, g);
+      el('rect', { x: p.x - gw * .14, y: p.y - gw * .14, width: gw * .28, height: gw * .28, rx: 2 }, g);
+      el('circle', { cx: p.x + gw * .3, cy: p.y - gh * .3, r: gw * .03 }, g);
+    });
+  }
   function sceneBuild() {
     sceneEl.innerHTML = ''; var H = halvesEl.getBoundingClientRect(); if (!H.width) return;
     var a = optSim.getBoundingClientRect(), b = optBoard.getBoundingClientRect(), vert = b.top > a.bottom - 2;
     function box(r) { return { x: r.left - H.left, y: r.top - H.top, w: r.width, h: r.height }; }
     var L = box(a), Rb = box(b), pad = vert ? 40 : 52;
+    function textTop(btn) { return btn.querySelector('strong').getBoundingClientRect().top - H.top; }
     /* art sits between the number badge and each half's own text, measured from the page so it never runs into the words */
-    function art(B, btn) { var top = B.y + pad, txt = btn.querySelector('strong').getBoundingClientRect().top - H.top, h = Math.max(50, txt - 18 - top); return { cx: B.x + B.w / 2, cy: top + h / 2, w: B.w - 48, h: h }; }
-    var A1 = art(L, optSim), A2 = art(Rb, optBoard);
+    function art(B, btn) { var top = B.y + pad, h = Math.max(50, textTop(btn) - 18 - top); return { cx: B.x + B.w / 2, cy: top + h / 2, w: B.w - 48, h: h }; }
+    var A1 = art(L, optSim), A2 = art(Rb, optBoard), d = Math.min(2, window.devicePixelRatio || 1);
+    /* each backdrop fills its half and fades out before the half's heading */
+    function backdrop(B, btn, cls) {
+      var w = document.createElement('div'), fade = textTop(btn) - B.y - 6;
+      w.className = 'sc-bg ' + cls; w.style.cssText = 'left:' + (B.x + 1) + 'px;top:' + (B.y + 1) + 'px;width:' + (B.w - 2) + 'px;height:' + (B.h - 2) + 'px;';
+      var m = 'linear-gradient(to bottom, #000 0, #000 ' + Math.max(0, fade - 70) + 'px, transparent ' + fade + 'px)'; w.style.webkitMaskImage = m; w.style.maskImage = m;
+      sceneEl.appendChild(w); return { el: w, fade: fade };
+    }
     /* laptop: screen 16:10 plus a base */
     var lw = Math.min(A1.w * .7, A1.h * 1.35), sw = lw * .84, sh = sw * .62, bz = lw * .035, baseH = lw * .045;
     var sx = A1.cx - sw / 2, sy = A1.cy - (sh + baseH) / 2;
-    /* board */
-    var bw = Math.min(A2.w * .62, A2.h * 1.5), bh = bw * .64, bx = A2.cx - bw / 2 + bw * .05, by = A2.cy - bh / 2;
+    /* board: a little over half the laptop's width, as the real kit is beside a laptop */
+    var bw = Math.min(lw * .58, A2.w * .62, A2.h * 1.5), bh = bw * .64, bx = A2.cx - bw / 2 + (vert ? -bw * .05 : bw * .05), by = A2.cy - bh / 2;
+    /* the district behind the laptop, at the scale its screen shows it (about 24 cells across the screen, as in the hero) */
+    var q = sw / 24, cox = sx + sw / 2 - CITY.W * q / 2, coy = sy + sh / 2 - CITY.H * q / 2;
+    var bgS = backdrop(L, optSim, 'sc-bg-sim'), bg = document.createElement('canvas');
+    bg.width = Math.round((L.w - 2) * d); bg.height = Math.round((L.h - 2) * d); bg.style.cssText = 'width:' + (L.w - 2) + 'px;height:' + (L.h - 2) + 'px'; bgS.el.appendChild(bg);
+    var bgF = backdrop(Rb, optBoard, 'sc-bg-board'), fsvg = el('svg', { width: Rb.w - 2, height: Rb.h - 2, fill: 'none', stroke: 'currentColor', 'stroke-width': 1 });
+    bgF.el.appendChild(fsvg); drawField(fsvg, Rb.w - 2, Rb.h - 2, pad * .6, bgF.fade, bw);
     var left = document.createElement('div'); left.className = 'sc-left'; left.style.cssText = 'left:' + (L.x + 1) + 'px;top:' + (L.y + 1) + 'px;width:' + (L.w - 2) + 'px;height:' + (L.h - 2) + 'px';
     var lap = document.createElement('div'); lap.className = 'sc-lap'; left.appendChild(lap);
     var ox = -(L.x + 1), oy = -(L.y + 1);   /* lap coordinates are the halves' coordinates */
     var lsvg = el('svg', { width: H.width, height: H.height, fill: 'none', stroke: 'currentColor', 'stroke-width': 2 }); lsvg.style.left = ox + 'px'; lsvg.style.top = oy + 'px'; lap.appendChild(lsvg);
-    el('rect', { x: sx - bz, y: sy - bz, width: sw + 2 * bz, height: sh + 2 * bz, rx: bz * 1.2 }, lsvg);
-    el('path', { d: 'M' + (sx - bz - lw * .07) + ' ' + (sy + sh + bz + baseH) + 'L' + (sx - bz) + ' ' + (sy + sh + bz) + 'H' + (sx + sw + bz) + 'L' + (sx + sw + bz + lw * .07) + ' ' + (sy + sh + bz + baseH) + 'Z' }, lsvg);
+    el('rect', { x: sx - bz, y: sy - bz, width: sw + 2 * bz, height: sh + 2 * bz, rx: bz * 1.2, class: 'sc-solid' }, lsvg);
+    el('path', { class: 'sc-solid', d: 'M' + (sx - bz - lw * .07) + ' ' + (sy + sh + bz + baseH) + 'L' + (sx - bz) + ' ' + (sy + sh + bz) + 'H' + (sx + sw + bz) + 'L' + (sx + sw + bz + lw * .07) + ' ' + (sy + sh + bz + baseH) + 'Z' }, lsvg);
     var portX = sx + sw + bz + lw * .07, portY = sy + sh + bz + baseH * .5;
-    /* the screen is drawn big and shrunk while zoomed out, so it is sharp when it fills the half */
-    /* zoom until the laptop is about 80% of the box: its frame stays visible and it never reaches the text */
+    /* zoom until the laptop is about 80% of the box: its frame stays visible and it never reaches the text.
+       The screen is drawn big and shrunk while zoomed out, so it is sharp when it fills the half. */
     var lapH = sh + 2 * bz + baseH, K = Math.max(1, Math.min((L.w * .8) / (sw + 2 * bz), (A1.h + pad * .6) / lapH)), map = document.createElement('canvas'); map.className = 'sc-map';
-    var d = Math.min(2, window.devicePixelRatio || 1); map.width = Math.round(sw * K * d); map.height = Math.round(sh * K * d);
+    map.width = Math.round(sw * K * d); map.height = Math.round(sh * K * d);
     map.style.cssText = 'left:' + (sx + ox) + 'px;top:' + (sy + oy) + 'px;width:' + (sw * K) + 'px;height:' + (sh * K) + 'px;transform:scale(' + (1 / K) + ')';
     lap.appendChild(map);
     var top = el('svg', { width: H.width, height: H.height, fill: 'none', stroke: 'currentColor', 'stroke-width': 2 });
     var cable = el('path', { class: 'sc-cable' }, top), pulse = el('path', { class: 'sc-pulse' }, top);
     var shadow = el('rect', { class: 'sc-shadow', x: bx, y: by, width: bw, height: bh, rx: bw * .03 }, top);
-    var g = el('g', { class: 'sc-board' }, top);
-    el('rect', { x: bx, y: by, width: bw, height: bh, rx: bw * .03 }, g);
-    [[.05, .08], [.95, .08], [.05, .92], [.95, .92]].forEach(function (c) { el('circle', { cx: bx + bw * c[0], cy: by + bh * c[1], r: bw * .016 }, g); });
-    var cw = bw * .27, cx0 = bx + bw * .44, cy0 = by + bh * .5 - cw / 2;
-    el('rect', { x: cx0, y: cy0, width: cw, height: cw, rx: 3 }, g);
-    var pins = ''; for (var i = 1; i < 5; i++) { var t = cw * i / 5; pins += 'M' + (cx0 - 9) + ' ' + (cy0 + t) + 'h9M' + (cx0 + cw) + ' ' + (cy0 + t) + 'h9M' + (cx0 + t) + ' ' + (cy0 - 9) + 'v9M' + (cx0 + t) + ' ' + (cy0 + cw) + 'v9'; }
-    el('path', { d: pins }, g);
-    var usbW = bw * .1, usbH = bh * .2, usbX = vert ? bx + bw - usbW * .45 : bx - usbW * .55, usbY = by + bh * .5 - usbH / 2;
-    el('rect', { x: usbX, y: usbY, width: usbW, height: usbH, rx: 2 }, g);
-    el('path', { class: 'sc-trace', d: (vert ? 'M' + usbX + ' ' + (by + bh * .5) + 'H' + (cx0 + cw + 14) : 'M' + (usbX + usbW) + ' ' + (by + bh * .5) + 'H' + (cx0 - 14)) + 'M' + (cx0 + cw + 14) + ' ' + (by + bh * .35) + 'H' + (bx + bw * .8) + 'V' + (by + bh * .22) + 'M' + (cx0 + cw / 2) + ' ' + (cy0 + cw + 14) + 'V' + (by + bh * .86) + 'H' + (bx + bw * .9) }, g);
-    el('path', { d: 'M' + (bx + bw * .12) + ' ' + (by + bh * .9) + 'H' + (bx + bw * .4), 'stroke-dasharray': '3 6', 'stroke-width': 6 }, g);
-    el('circle', { class: 'sc-led', cx: bx + bw * .8, cy: by + bh * .16, r: bw * .022, stroke: 'none' }, g);
+    var g = el('g', { class: 'sc-board' }, top), brd = drawBoard(g, bx, by, bw, bh, vert, bw >= 170);
     sceneEl.appendChild(left); sceneEl.appendChild(top);
-    var end = vert ? { x: usbX + usbW, y: by + bh * .5 } : { x: usbX, y: by + bh * .5 }, edge = { x: L.x + L.w, y: portY };
+    /* the board comes forward about its centre, as far as its half allows without reaching the words */
+    var bcx = bx + bw / 2, bcy = by + bh / 2, BK = Math.max(1, Math.min(1.45, (Rb.w - 40) / (bw + 2 * brd.pw), (A2.h + pad * .6) / bh));
     /* zoom: move the screen centre to the half's centre and scale it up to cover the half */
     var scx = sx + sw / 2, scy = sy + sh / 2, tcx = A1.cx, tcy = A1.cy - pad * .3 - (baseH + bz) * (K - 1) / 2;
-    /* the board comes forward about its centre, as far as its half allows without reaching the words */
-    var bcx = bx + bw / 2, bcy = by + bh / 2, BK = Math.max(1, Math.min(1.3, (Rb.w - 40) / (bw + 2 * usbW), (A2.h + pad * .6) / bh));
-    SC_ = { board: g, shadow: shadow, bc: { x: bcx, y: bcy }, BK: BK, rx: L.x + L.w - 10, lap: lap, map: map, cable: cable, pulse: pulse, K: K, d: d, sw: sw, sh: sh, port: { x: portX, y: portY }, end: end, edge: edge, vert: vert, scx: scx, scy: scy, tcx: tcx, tcy: tcy };
-    sceneApply(); drawMap(0);
+    var bgStat = document.createElement('canvas'), mapStat = document.createElement('canvas');
+    bgStat.width = bg.width; bgStat.height = bg.height; mapStat.width = map.width; mapStat.height = map.height;
+    var chord = Math.hypot(brd.end.x - portX, brd.end.y - portY);
+    SC_ = { board: g, shadow: shadow, bc: { x: bcx, y: bcy }, BK: BK, rx: L.x + L.w - 10, lap: lap, map: map, bg: bg, bgStat: bgStat, mapStat: mapStat, q: q,
+      box: { x: cox - L.x - 1, y: coy - L.y - 1 }, mbox: { x: (cox - sx) * K, y: (coy - sy) * K }, cable: cable, pulse: pulse, K: K, d: d,
+      port: { x: portX, y: portY }, end: brd.end, vert: vert, floor: Math.min(textTop(optSim), textTop(optBoard)) - 16, scx: scx, scy: scy, tcx: tcx, tcy: tcy, rope: chord * 1.22 };
+    sceneApply(); cityStatic(); drawCity(scClock);
   }
   function sceneApply() {
-    var S = SC_; if (!S) return; var e = smooth(scZ), k = 1 + (S.K - 1) * e;
+    var S = SC_; if (!S) return; var e = clamp(scZ, 0, 1), k = 1 + (S.K - 1) * e;
     var tx = (S.tcx - S.scx) * e, ty = (S.tcy - S.scy) * e;
     /* scale about the screen centre: x' = scx + (x - scx) * k + tx */
     S.lap.style.transform = 'translate(' + (S.scx * (1 - k) + tx) + 'px,' + (S.scy * (1 - k) + ty) + 'px) scale(' + k + ')';
-    /* the cable stays plugged into the laptop as it grows */
-    var b = smooth(scB), kb = 1 + (S.BK - 1) * b, lift = 10 * b;
+    var b = clamp(scB, 0, 1), kb = 1 + (S.BK - 1) * b, lift = 10 * b;
     S.board.setAttribute('transform', 'translate(' + (S.bc.x * (1 - kb)) + ' ' + (S.bc.y * (1 - kb) - lift) + ') scale(' + kb + ')');
     S.shadow.setAttribute('transform', 'translate(' + (S.bc.x * (1 - kb) + lift * .6) + ' ' + (S.bc.y * (1 - kb) + lift * .4) + ') scale(' + kb + ')');
     S.shadow.style.opacity = (.12 * b).toFixed(3);
+    /* both ends stay plugged in as they move */
     var p = { x: Math.min(S.rx + 8, S.scx + (S.port.x - S.scx) * k + tx), y: S.scy + (S.port.y - S.scy) * k + ty };
-    var q = { x: S.bc.x + (S.end.x - S.bc.x) * kb, y: S.bc.y + (S.end.y - S.bc.y) * kb - lift };
-    var dpath = S.vert
-      ? 'M' + p.x + ' ' + p.y + 'C' + (S.rx) + ' ' + p.y + ' ' + (S.rx) + ' ' + q.y + ' ' + q.x + ' ' + q.y
-      : 'M' + p.x + ' ' + p.y + 'C' + (p.x + 70) + ' ' + (p.y + 55) + ' ' + (q.x - 110) + ' ' + (q.y + 60) + ' ' + q.x + ' ' + q.y;
+    var q = { x: S.bc.x + (S.end.x - S.bc.x) * kb, y: S.bc.y + (S.end.y - S.bc.y) * kb - lift }, dpath;
+    if (S.vert) dpath = 'M' + p.x + ' ' + p.y + 'C' + (S.rx) + ' ' + p.y + ' ' + (S.rx) + ' ' + q.y + ' ' + q.x + ' ' + q.y;
+    else {
+      /* a cable of fixed length hangs between its ends: the closer they are, the more it sags (a parabola of the same length).
+         Choosing Board draws it a little tighter; it never hangs down into the headings. */
+      var d = Math.hypot(q.x - p.x, q.y - p.y), rope = S.rope * (1 - .06 * b), sag = d < rope ? Math.sqrt(3 * d * (rope - d) / 8) : 0;
+      var my = (p.y + q.y) / 2;
+      function lowest(sg) { var c = my + 2 * sg, den = p.y - 2 * c + q.y, t = den ? (p.y - c) / den : .5; t = clamp(t, 0, 1); return (1 - t) * (1 - t) * p.y + 2 * t * (1 - t) * c + t * t * q.y; }
+      if (lowest(sag) > S.floor) { var lo = 0, hi = sag; for (var it = 0; it < 12; it++) { var mid = (lo + hi) / 2; if (lowest(mid) > S.floor) hi = mid; else lo = mid; } sag = lo; }
+      dpath = 'M' + p.x + ' ' + p.y + 'Q' + ((p.x + q.x) / 2) + ' ' + (my + 2 * sag) + ' ' + q.x + ' ' + q.y;
+    }
     S.cable.setAttribute('d', dpath); S.pulse.setAttribute('d', dpath);
-  }
-  /* the district on the laptop screen: teams heading to the incidents they won. Frozen unless Simulation is chosen. */
-  function drawMap(t) {
-    var S = SC_; if (!S) return; var c = S.map, x = c.getContext('2d'), w = c.width / S.d, h = c.height / S.d;
-    x.setTransform(S.d, 0, 0, S.d, 0, 0); x.fillStyle = pvCol.ink || '#0b0b0b'; x.fillRect(0, 0, w, h);
-    var sz = Math.min(w * .86, h * .86), q = sz / N, ox = (w - sz) / 2, oy = (h - sz) / 2;
-    x.lineWidth = Math.max(1, q * .06); x.strokeStyle = pvCol['on-ink-rule'] || '#3a3a38'; x.fillStyle = pvCol['on-ink-rule'] || '#3a3a38';
-    cells.forEach(function (c2) { if (!c2.bld) return; var px = ox + c2.x * q + q * .1, py = oy + c2.y * q + q * .1; if (c2.rub) x.fillRect(px, py, q * .8, q * .8); else x.strokeRect(px, py, q * .8, q * .8); });
-    incidents.forEach(function (inc, k) {
-      var ph = (t * .6 + k * .17) % 1; x.strokeStyle = pvCol.red; x.lineWidth = Math.max(1, q * .08);
-      if (t > 0) { x.globalAlpha = 1 - ph; x.beginPath(); x.arc(ox + (inc.x + .5) * q, oy + (inc.y + .5) * q, q * (.5 + ph * 1.4), 0, 6.283); x.stroke(); x.globalAlpha = 1; }
-      x.fillStyle = pvCol.red; x.fillRect(ox + inc.x * q + q * .2, oy + inc.y * q + q * .2, q * .6, q * .6);
-    });
-    teams.forEach(function (tm, i) {
-      var k = assign.indexOf(i), hx = ox + (tm.x + .5) * q, hy = oy + (tm.y + .5) * q, px = hx, py = hy;
-      if (k >= 0) {
-        var inc = incidents[k], tx = ox + (inc.x + .5) * q, ty = oy + (inc.y + .5) * q, cyc = (t * .12 + i * .09) % 1, f = smooth(Math.min(1, cyc / .55));
-        px = hx + (tx - hx) * f; py = hy + (ty - hy) * f;
-        x.strokeStyle = pvCol.teal; x.globalAlpha = .85; x.lineWidth = Math.max(1, q * .07); x.setLineDash([q * .25, q * .3]); x.beginPath(); x.moveTo(hx, hy); x.lineTo(px, py); x.stroke(); x.setLineDash([]); x.globalAlpha = 1;
-      }
-      x.fillStyle = pvCol.paper; x.beginPath(); x.arc(px, py, Math.max(2, q * .32), 0, 6.283); x.fill();
-    });
   }
   /* one choice at a time, and the latest input wins: moving the mouse over a half chooses it; 1, 2 or the arrow keys
      only highlight (they never open anything), even with the mouse resting on the other half, until the mouse moves again.
@@ -1470,22 +1607,29 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     optSim.classList.toggle('sel', scHover === 'sim'); optBoard.classList.toggle('sel', scHover === 'board');
     return scHover;
   }
+  /* a critically damped spring (no overshoot): it eases in, eases out and turns round smoothly mid-way */
+  function spring(x, v, goal, dt) {
+    for (var s = 0; s < 4; s++) { var h = dt / 4, acc = 169 * (goal - x) - 26 * v; v += acc * h; x += v * h; }
+    if (Math.abs(goal - x) < .0005 && Math.abs(v) < .005) { x = goal; v = 0; }
+    return [x, v];
+  }
   function sceneTick(now) {
     scRaf = requestAnimationFrame(sceneTick);
-    var dt = Math.min(.1, (now - (scLast || now)) / 1000); scLast = now;
-    /* both move at once: the one being left eases back while the one being chosen comes forward, so a switch answers at once */
-    var want = sceneTarget(), goal = want === 'sim' && !reduce ? 1 : 0, goalB = want === 'board' && !reduce ? 1 : 0;
-    var moved = false;
-    if (scZ !== goal) { scZ = goal > scZ ? Math.min(1, scZ + dt / .55) : Math.max(0, scZ - dt / .4); moved = true; }
-    if (scB !== goalB) { scB = goalB > scB ? Math.min(1, scB + dt / .45) : Math.max(0, scB - dt / .35); moved = true; }
+    var dt = Math.min(.05, (now - (scLast || now)) / 1000); scLast = now;
+    var want = sceneTarget(), moved = false;
+    if (!reduce) {
+      var gz = want === 'sim' ? 1 : 0, gb = want === 'board' ? 1 : 0;
+      if (scZ !== gz || scVZ) { var r1 = spring(scZ, scVZ, gz, dt); scZ = r1[0]; scVZ = r1[1]; moved = true; }
+      if (scB !== gb || scVB) { var r2 = spring(scB, scVB, gb, dt); scB = r2[0]; scVB = r2[1]; moved = true; }
+    }
     if (moved) sceneApply();
     sceneEl.classList.toggle('sim', want === 'sim');
     sceneEl.classList.toggle('board', want === 'board');
-    if (want === 'sim' && !reduce) drawMap((now - scT0) / 1000);
-    else if (scWant === 'sim') drawMap(0);
+    /* the district keeps moving slowly; faster on the side being looked at */
+    if (!reduce) { scClock += dt * (want === 'sim' ? 1 : want === 'board' ? .7 : .35); drawCity(scClock); }
     scWant = want;
   }
-  function sceneStart() { pvColours(); scZ = 0; scB = 0; scLast = 0; scHover = null; scBy = null; scT0 = performance.now(); requestAnimationFrame(function () { sceneBuild(); cancelAnimationFrame(scRaf); scRaf = requestAnimationFrame(sceneTick); }); }
+  function sceneStart() { pvColours(); scZ = scVZ = scB = scVB = 0; scClock = reduce ? 0 : .01; scLast = 0; scHover = null; scBy = null; requestAnimationFrame(function () { sceneBuild(); cancelAnimationFrame(scRaf); scRaf = requestAnimationFrame(sceneTick); }); }
   function sceneStop() { cancelAnimationFrame(scRaf); scRaf = 0; }
   optSim.addEventListener('pointermove', function (e) { if (e.pointerType !== 'touch') choose('sim', 'mouse'); });
   optBoard.addEventListener('pointermove', function (e) { if (e.pointerType !== 'touch') choose('board', 'mouse'); });
