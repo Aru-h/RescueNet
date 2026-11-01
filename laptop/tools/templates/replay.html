@@ -45,7 +45,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 
 /* featured: a large card per run, its city drawn from the recording */
 .featured { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 16px; }
-.featured > .card:first-child { grid-column: 1 / -1; }   /* the lead run gets the full width; the rest share a row below it */
+.featured > .card.lead { grid-column: 1 / -1; }   /* the lead run gets the full width; the rest share a row below it */
 .card { display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr); gap: 24px; padding: 20px; border: 1px solid var(--c-faint); text-decoration: none; transition: border-color .2s; }
 .card:hover, .card:focus-visible { border-color: var(--c-fg); }
 .card canvas { width: 100%; aspect-ratio: 1; display: block; }
@@ -55,6 +55,11 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 .facts { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--c-mute); }
 .go { margin-top: auto; }
 @media (max-width: 560px) { .card { grid-template-columns: 1fr; } .card canvas { max-width: 260px; } }
+/* a featured run that is not the lead sits in the row below: picture on top, words under it */
+.card:not(.lead) { grid-template-columns: 1fr; grid-template-rows: auto 1fr; gap: 16px; }
+.card:not(.lead) canvas { aspect-ratio: 4 / 3; border: 1px solid var(--c-rule); }
+.card:not(.lead) strong { font-size: clamp(20px, 1.8vw, 26px); }
+.card:not(.lead) p { font-size: 14.5px; }
 /* runs on the way: shown as cards that do not open yet */
 .card.planned { grid-template-columns: 1fr; grid-template-rows: auto 1fr; gap: 16px; cursor: default; border-style: dashed; }
 .card.planned:hover { border-color: var(--c-faint); }
@@ -63,6 +68,10 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 .card.planned strong { font-size: clamp(20px, 1.8vw, 26px); }
 .card.planned p { font-size: 14.5px; }
 .card.planned .soon { margin-top: auto; color: var(--c-teal); }
+.card.planned.lead { grid-template-columns: minmax(0, 420px) minmax(0, 1fr); grid-template-rows: auto; gap: 24px; }
+.card.planned.lead strong { font-size: clamp(22px, 2.4vw, 34px); }
+.card.planned.lead p { font-size: 15px; }
+@media (max-width: 720px) { .card.planned.lead { grid-template-columns: 1fr; } }
 .card.planned .credit { color: var(--c-faint); text-transform: none; letter-spacing: .02em; }
 
 /* your runs: one row each, newest first */
@@ -91,12 +100,12 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   <p class="lede">Pick a run to replay. Scrub through it, follow a team, and take over at any moment to continue it live.</p>
   <p class="note" id="note" role="status" hidden></p>
 
-  <details class="sec" id="featSec" data-key="featured" open hidden>
+  <details class="sec" id="featSec" open hidden>
     <summary class="sec-h mono"><span class="ttl" id="featH">01 &middot; Featured</span><span class="cnt" id="featCount"></span><span class="peek" id="featPeek"></span></summary>
     <div class="featured" id="featured"></div>
   </details>
 
-  <details class="sec" id="runsSec" data-key="runs" open>
+  <details class="sec" id="runsSec">
     <summary class="sec-h mono"><span class="ttl" id="runsH"><span id="runsNum">02</span> &middot; Your runs</span><span class="cnt" id="runsCount"></span><span class="peek" id="runsPeek"></span></summary>
     <ul class="runs" id="runs"></ul>
     <p class="empty" id="empty" hidden>No runs yet. Every live simulation is saved here automatically. <a href="/landing">Start one &rarr;</a></p>
@@ -108,9 +117,10 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 <script>
 (function () {
   'use strict';
-  /* runs we chose to show first: matched by file name, with a title and one line of why */
+  /* runs we chose to show first: matched by file name, with a title and one line of why. `kind` orders them: real cities
+     (reconstructions of real earthquakes) before simulated ones, and the first of all leads the page at full width. */
   var FEATURED = [
-    { match: /^demo_/, title: 'Demo mission', blurb: 'Ten teams through six hours of breaking equipment and failing radios. The run we show first.' }
+    { match: /^demo_/, kind: 'sim', title: 'Demo mission', blurb: 'Ten teams through six hours of breaking equipment and failing radios. The run we show first.' }
   ];
   var PROFILES = { none: 'No faults', mobility: 'Mobility faults', communication: 'Radio faults', resource: 'Resource faults', combined: 'Mixed faults', random: 'Random faults' };
   var TICK_S = 36;   /* one simulator tick is 36 seconds (core/mission_state.h) */
@@ -144,10 +154,12 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   /* the recorded city, as the run starts: buildings in ink, damaged ones filled, destroyed ones red, the epicentre ringed,
      safe zones in teal, teams as dots */
   function drawCity(canvas, pv) {
-    var d = Math.min(2, window.devicePixelRatio || 1), w = canvas.clientWidth || 56, x = canvas.getContext('2d');
-    canvas.width = Math.round(w * d); canvas.height = Math.round(w * d); x.setTransform(d, 0, 0, d, 0, 0);
-    var c = colours(), W = pv.width || 36, H = pv.height || 36, q = w / Math.max(W, H), small = w < 100;
-    x.fillStyle = c.bg; x.fillRect(0, 0, w, w); x.lineWidth = small ? .6 : 1;
+    var d = Math.min(2, window.devicePixelRatio || 1), w = canvas.clientWidth || 56, h = canvas.clientHeight || w, x = canvas.getContext('2d');
+    canvas.width = Math.round(w * d); canvas.height = Math.round(h * d);
+    var c = colours(), W = pv.width || 36, H = pv.height || 36, q = Math.min(w, h) / Math.max(W, H), small = w < 100;
+    x.setTransform(d, 0, 0, d, 0, 0); x.fillStyle = c.bg; x.fillRect(0, 0, w, h);
+    x.translate((w - W * q) / 2, (h - H * q) / 2);   /* the city sits centred in whatever box it is given */
+    x.lineWidth = small ? .6 : 1;
     (pv.env && pv.env.buildings || []).forEach(function (b) {
       var px = b.x * q + q * .12, py = b.y * q + q * .12, bw = (b.w || 1) * q - q * .24, bh = (b.h || 1) * q - q * .24;
       if (b.damage >= 75) { x.fillStyle = c.red; x.globalAlpha = .85; x.fillRect(px, py, bw, bh); x.globalAlpha = 1; }
@@ -200,31 +212,45 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     a.append(cv, w, fx, go); a.addEventListener('click', sampleClick); li.appendChild(a); $('#runs').appendChild(li); preview(r, cv);
   }
 
-  function render(list) {
+  function split(list) {
     var feat = [], rest = [];
     list.forEach(function (r) { var f = FEATURED.filter(function (F) { return F.match.test(r.filename); })[0]; if (f) feat.push([r, f]); else rest.push(r); });
+    return { feat: feat, rest: rest };
+  }
+  var ORDER = { city: 0, sim: 1 };
+  function renderFeatured(feat) {
     var planned = sampleMode && SAMPLE.planned ? SAMPLE.planned : [];
-    if (feat.length || planned.length) {
-      $('#featSec').hidden = false; feat.forEach(function (x) { featuredCard(x[0], x[1]); }); planned.forEach(plannedCard);
-      /* only recordings count as runs; cards still in preparation are counted apart */
-      $('#featCount').textContent = (feat.length ? feat.length + (feat.length === 1 ? ' run' : ' runs') : '') + (feat.length && planned.length ? ' · ' : '') + (planned.length ? planned.length + ' in preparation' : '');
-      $('#featPeek').textContent = feat.map(function (x) { return x[1].title; }).concat(planned.map(function (p) { return p.title; })).join(' · ');
-    }
-    else $('#runsNum').textContent = '01';
-    $('#runsCount').textContent = rest.length ? rest.length + (rest.length === 1 ? ' run' : ' runs') : '';
-    if (!rest.length) $('#empty').hidden = false;
+    var items = feat.map(function (x) { return { kind: x[1].kind || 'sim', title: x[1].title, draw: function () { featuredCard(x[0], x[1]); } }; })
+      .concat(planned.map(function (p) { return { kind: p.kind || 'sim', title: p.title, draw: function () { plannedCard(p); } }; }));
+    items.sort(function (a, b) { return (ORDER[a.kind] || 0) - (ORDER[b.kind] || 0); });   /* stable: keeps each kind's own order */
+    if (!items.length) { $('#runsNum').textContent = '01'; return; }
+    $('#featSec').hidden = false; items.forEach(function (it) { it.draw(); });
+    $('#featured').firstElementChild.classList.add('lead');
+    /* only recordings count as runs; cards still in preparation are counted apart */
+    $('#featCount').textContent = (feat.length ? feat.length + (feat.length === 1 ? ' run' : ' runs') : '') + (feat.length && planned.length ? ' · ' : '') + (planned.length ? planned.length + ' in preparation' : '');
+    $('#featPeek').textContent = items.map(function (it) { return it.title; }).join(' · ');
+  }
+  /* your runs: drawn again whenever the list changes, so a run saved meanwhile appears without a reload */
+  var shown = '';
+  function renderRuns(rest) {
+    var key = rest.map(function (r) { return r.filename; }).join('|'); if (key === shown) return; shown = key;
+    $('#runs').innerHTML = '';
+    $('#runsCount').textContent = rest.length + (rest.length === 1 ? ' run' : ' runs');
+    $('#empty').hidden = !!rest.length;
     rest.forEach(runRow);
-    if (rest.length) $('#runsPeek').textContent = 'Latest ' + when(rest[0]) + (rest.length > 1 ? ' · earliest ' + when(rest[rest.length - 1]) : '');
-    remembered();
+    $('#runsPeek').textContent = rest.length ? 'Latest ' + when(rest[0]) + (rest.length > 1 ? ' · earliest ' + when(rest[rest.length - 1]) : '') : 'No runs yet';
   }
-  /* each section remembers whether this viewer left it open or closed */
-  function remembered() {
-    document.querySelectorAll('details.sec').forEach(function (d) {
-      var k = 'rn-replay-' + d.dataset.key;
-      try { var v = localStorage.getItem(k); if (v === 'closed') d.open = false; else if (v === 'open') d.open = true; } catch (e) {}
-      d.addEventListener('toggle', function () { try { localStorage.setItem(k, d.open ? 'open' : 'closed'); } catch (e) {} });
-    });
+  function render(list) { var p = split(list); renderFeatured(p.feat); renderRuns(p.rest); }
+  /* keep the count live without polling hard: look again when the section is opened, when the page comes back into
+     view, and every 20 s while it is showing. The list is a directory listing, so each look is cheap. */
+  function refresh() {
+    if (sampleMode || document.hidden) return;
+    fetch('/api/recordings', { cache: 'no-store' }).then(function (res) { return res.ok ? res.json() : null; }).then(function (list) { if (list) renderRuns(split(list).rest); }).catch(function () {});
   }
+  $('#runsSec').addEventListener('toggle', function () { if ($('#runsSec').open) refresh(); });
+  document.addEventListener('visibilitychange', refresh);
+  window.addEventListener('focus', refresh);
+  setInterval(refresh, 20000);
   fetch('/api/recordings', { cache: 'no-store' }).then(function (res) { if (!res.ok) throw new Error(res.status); return res.json(); }).then(render).catch(function () {
     if (SAMPLE) {
       sampleMode = true; render(SAMPLE.list);
