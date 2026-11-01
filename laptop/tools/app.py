@@ -451,7 +451,8 @@ def api_recording_preview(name):
                 elif line.startswith("LIVEFRAME "):
                     frame = json.loads(line[len("LIVEFRAME "):])
                     out["teams"] = [{"x": t.get("x"), "y": t.get("y")} for t in frame.get("teams", [])]
-                    out["safezones"] = [{"x": s.get("x"), "y": s.get("y")} for s in frame.get("safezones", [])]
+                    # unused safe-zone slots come through as capacity 0 at (0, 0): leave them out
+                    out["safezones"] = [{"x": s.get("x"), "y": s.get("y")} for s in frame.get("safezones", []) if s.get("capacity", 0) > 0]
                     break
                 if i > 200:
                     break
