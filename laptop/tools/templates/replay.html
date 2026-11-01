@@ -7,6 +7,7 @@
 <meta name="theme-color" content="#0b0b0b">
 <link rel="stylesheet" href="/static/fonts/fonts.css">
 <script src="/static/shared/rn-sky.js"></script>
+<script src="/static/shared/rn-notation.js"></script>
 <style>
 /* Choose a run to replay. The same dark surface as the landing page's connect screens (RNSky's --deep colours), so it
    drifts with the visitor's clock like every other page. Featured runs first, then every run this app has saved. */
@@ -92,11 +93,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 .legend { list-style: none; margin: -8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--c-mute); }
 .legend li { display: flex; align-items: center; gap: 7px; }
 .legend svg { width: 13px; height: 13px; flex: none; }
-.legend .lg-grey { fill: var(--c-mute); opacity: .7; }
-.legend .lg-line { stroke: var(--c-mute); stroke-width: 1.2; }
-.legend .lg-teal { fill: var(--c-teal); }
-.legend .lg-teal-line { stroke: var(--c-teal); }
-.legend .lg-dot { fill: var(--c-fg); }
+.legend svg { overflow: visible; }
 .note { margin: 0; padding: 12px 14px; border: 1px solid var(--c-faint); color: var(--c-mute); max-width: 70ch; }
 .note code { font-family: var(--mono); color: var(--c-fg); font-size: .92em; }
 .foot { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px 24px; color: var(--c-mute); }
@@ -111,16 +108,8 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   <h1>Watch a recorded run</h1>
   <p class="lede">Pick a run to replay. Scrub through it, follow a team, and take over at any moment to continue it live.</p>
   <p class="note" id="note" role="status" hidden></p>
-  <ul class="legend mono" aria-label="What the city drawings show">
-    <li><svg viewBox="0 0 14 14" aria-hidden="true"><rect x="1" y="1" width="12" height="12" fill="#e1251b"/></svg>Destroyed or severe</li>
-    <li><svg viewBox="0 0 14 14" aria-hidden="true"><rect x="1" y="1" width="12" height="12" class="lg-grey"/></svg>Damaged</li>
-    <li><svg viewBox="0 0 14 14" aria-hidden="true"><rect x="1.5" y="1.5" width="11" height="11" fill="none" class="lg-line"/></svg>Little or no damage</li>
-    <li><svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5.5" fill="none" stroke="#e1251b" stroke-width="1.5"/><circle cx="7" cy="7" r="2.5" fill="none" stroke="#e1251b" stroke-width="1.5"/></svg>Epicentre</li>
-    <li><svg viewBox="0 0 14 14" aria-hidden="true"><rect x="2" y="2" width="10" height="10" class="lg-teal"/></svg>Safe zone</li>
-    <li><svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke-width="2" class="lg-teal-line"/></svg>People gathering</li>
-    <li><svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="3.5" class="lg-dot"/></svg>Team</li>
-    <li><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3 3l8 8M3 11l8-8" stroke="#e1251b" stroke-width="2"/></svg>Road blocked</li>
-  </ul>
+  <!-- the key comes from the shared notation (static/shared/rn-notation.js), the same code that draws the maps -->
+  <ul class="legend mono" id="legend" aria-label="What the city drawings show"></ul>
 
   <details class="sec" id="featSec" open hidden>
     <summary class="sec-h mono"><span class="ttl" id="featH">01 &middot; Featured</span><span class="cnt" id="featCount"></span><span class="peek" id="featPeek"></span></summary>
@@ -173,25 +162,22 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   }
   function colours() { var cs = getComputedStyle(document.documentElement); return { bg: cs.getPropertyValue('--c-bg').trim(), fg: cs.getPropertyValue('--c-fg').trim(), rule: cs.getPropertyValue('--c-rule').trim(), mute: cs.getPropertyValue('--c-mute').trim(), teal: cs.getPropertyValue('--c-teal').trim(), red: '#e1251b' }; }
 
-  /* the recorded city, as the run starts: buildings in ink, damaged ones filled, destroyed ones red, the epicentre ringed,
-     safe zones in teal, teams as dots */
+  /* the recorded city, as the run starts, in the shared notation: buildings by damage class (Copernicus colours), the
+     epicentre as a star, safe zones as assembly points, teams as dots */
   function drawCity(canvas, pv) {
     var d = Math.min(2, window.devicePixelRatio || 1), w = canvas.clientWidth || 56, h = canvas.clientHeight || w, x = canvas.getContext('2d');
     canvas.width = Math.round(w * d); canvas.height = Math.round(h * d);
     var c = colours(), W = pv.width || 36, H = pv.height || 36, q = Math.min(w, h) / Math.max(W, H), small = w < 100;
     x.setTransform(d, 0, 0, d, 0, 0); x.fillStyle = c.bg; x.fillRect(0, 0, w, h);
     x.translate((w - W * q) / 2, (h - H * q) / 2);   /* the city sits centred in whatever box it is given */
-    x.lineWidth = small ? .6 : 1;
+    var N = RNNotation, lw = small ? .6 : 1;
     (pv.env && pv.env.buildings || []).forEach(function (b) {
-      var px = b.x * q + q * .12, py = b.y * q + q * .12, bw = (b.w || 1) * q - q * .24, bh = (b.h || 1) * q - q * .24;
-      if (b.damage >= 75) { x.fillStyle = c.red; x.globalAlpha = .85; x.fillRect(px, py, bw, bh); x.globalAlpha = 1; }
-      else if (b.damage >= 50) { x.fillStyle = c.mute; x.globalAlpha = .55; x.fillRect(px, py, bw, bh); x.globalAlpha = 1; }
-      else { x.strokeStyle = c.mute; x.globalAlpha = .75; x.strokeRect(px, py, bw, bh); x.globalAlpha = 1; }
+      N.building(x, b.x * q + q * .12, b.y * q + q * .12, (b.w || 1) * q - q * .24, (b.h || 1) * q - q * .24, b.damage, c.mute, lw);
     });
+    (pv.safezones || []).forEach(function (s) { N.assembly(x, (s.x + .5) * q, (s.y + .5) * q, Math.max(5, q * 1.5), c.teal, c.bg); });
+    (pv.teams || []).forEach(function (t) { N.team(x, (t.x + .5) * q, (t.y + .5) * q, Math.max(2.4, q * .9), c.fg); });
     var ep = pv.env && pv.env.epicenter;
-    if (ep && ep.active) { x.strokeStyle = c.red; x.lineWidth = small ? .8 : 1.5; [2.5, 5].forEach(function (r) { x.beginPath(); x.arc((ep.x + .5) * q, (ep.y + .5) * q, r * q, 0, 6.283); x.stroke(); }); }
-    x.fillStyle = c.teal; (pv.safezones || []).forEach(function (s) { x.fillRect(s.x * q, s.y * q, q, q); });
-    x.fillStyle = c.fg; (pv.teams || []).forEach(function (t) { x.beginPath(); x.arc((t.x + .5) * q, (t.y + .5) * q, Math.max(1.2, q * .45), 0, 6.283); x.fill(); });
+    if (ep && ep.active) N.star(x, (ep.x + .5) * q, (ep.y + .5) * q, Math.max(12, q * 3.4), c.fg);   /* a light edge, so the red star reads over red buildings */
   }
   var previews = {};
   function preview(r, canvas) {
@@ -262,6 +248,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     rest.forEach(runRow);
     $('#runsPeek').textContent = rest.length ? 'Latest ' + when(rest[0]) + (rest.length > 1 ? ' · earliest ' + when(rest[rest.length - 1]) : '') : 'No runs yet';
   }
+  $('#legend').innerHTML = RNNotation.legendHTML(['destroyed', 'moderate', 'slight', 'none', 'epicentre', 'assembly', 'gathering', 'team', 'barrier']);
   function render(list) { var p = split(list); renderFeatured(p.feat); renderRuns(p.rest); }
   /* keep the count live without polling hard: look again when the section is opened, when the page comes back into
      view, and every 20 s while it is showing. The list is a directory listing, so each look is cheap. */
