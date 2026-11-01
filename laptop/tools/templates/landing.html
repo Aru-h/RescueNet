@@ -201,7 +201,9 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 .sc-bg { position: absolute; overflow: hidden; opacity: .32; transition: opacity .4s; }
 .sc-bg canvas, .sc-bg svg { position: absolute; left: 0; top: 0; }
 .scene.sim .sc-bg-sim { opacity: .5; }
-.sc-bg-board { opacity: .2; }
+.sc-bg-board { opacity: .24; }
+.scene.board .sc-bg-board { opacity: .36; }
+.sc-ring { stroke: currentColor; stroke-width: 1.5; opacity: 0; }
 .sc-radio { stroke-dasharray: 2 6; opacity: .7; }
 .sc-solid, .sc-pcb { fill: var(--c-bg); }   /* solid, so what is behind (backdrop, shadow) only shows around them */
 .sc-cable { stroke: currentColor; transition: opacity .35s; }
@@ -1496,22 +1498,45 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     el('path', { class: 'sc-trace', d: tr }, g);
     return { end: { x: vert ? px + pw : px, y: Y(.5) }, pw: pw };
   }
-  /* the faint field of boards behind the real one: one per team, joined by the radio links they would use. Never lit. */
-  function drawField(svg, w, h, top, foot, bw) {
-    var cols = w > 420 ? 4 : 3, rows = 3, gw = bw * .5, gh = gw * .64, cwid = w / cols, rh = (foot - top) / rows, r = rng(31), pts = [];
+  /* the faint field of boards behind the real one: one per team, at slightly different depths, joined by the radio links
+     they would use. It drifts and leans with the pointer, and comes forward a little with the real board, but its links
+     never carry traffic: boards talking to each other over LoRa is not shown working yet. What it does show, when Board is
+     chosen, is one slow ring leaving the real board; the boards it passes catch its light for a moment. */
+  function drawField(svg, w, h, top, foot, bw, home) {
+    var cols = w > 420 ? 4 : 3, rows = 3, gw = bw * .5, gh = gw * .64, cwid = w / cols, rh = (foot - top) / rows, r = rng(31), gs = [], links = [];
     for (var j = 0; j < rows; j++) for (var i = 0; i < cols; i++) {
       if (j === 1 && (i === Math.floor((cols - 1) / 2) || i === Math.ceil((cols - 1) / 2))) continue;   /* the real board sits here */
-      pts.push({ x: cwid * (i + .5) + (r() - .5) * cwid * .35, y: top + rh * (j + .5) + (r() - .5) * rh * .3 });
+      gs.push({ x: cwid * (i + .5) + (r() - .5) * cwid * .35, y: top + rh * (j + .5) + (r() - .5) * rh * .3, z: .6 + r() * .6, ph: r() * 6.283, per: 7 + r() * 5 });
     }
-    var d = '';
-    pts.forEach(function (a, i) { pts.forEach(function (b, k) { if (k > i && Math.hypot(a.x - b.x, a.y - b.y) < Math.max(cwid, rh) * 1.45) d += 'M' + a.x + ' ' + a.y + 'L' + b.x + ' ' + b.y; }); });
-    el('path', { d: d, class: 'sc-radio' }, svg);
-    pts.forEach(function (p) {
-      var g = el('g', {}, svg);
-      el('rect', { x: p.x - gw / 2, y: p.y - gh / 2, width: gw, height: gh, rx: gw * .04, class: 'sc-pcb' }, g);
-      el('rect', { x: p.x - gw * .14, y: p.y - gw * .14, width: gw * .28, height: gw * .28, rx: 2 }, g);
-      el('circle', { cx: p.x + gw * .3, cy: p.y - gh * .3, r: gw * .03 }, g);
+    gs.forEach(function (a, i) { gs.forEach(function (b, k) { if (k > i && Math.hypot(a.x - b.x, a.y - b.y) < Math.max(cwid, rh) * 1.45) links.push([i, k]); }); });
+    var path = el('path', { class: 'sc-radio' }, svg), ring = el('circle', { class: 'sc-ring', cx: home.x, cy: home.y, r: 0 }, svg);
+    gs.forEach(function (p) {
+      p.g = el('g', { class: 'sc-ghost' }, svg);
+      el('rect', { x: p.x - gw / 2, y: p.y - gh / 2, width: gw, height: gh, rx: gw * .04, class: 'sc-pcb' }, p.g);
+      el('rect', { x: p.x - gw * .14, y: p.y - gw * .14, width: gw * .28, height: gw * .28, rx: 2 }, p.g);
+      el('circle', { cx: p.x + gw * .3, cy: p.y - gh * .3, r: gw * .03 }, p.g);
     });
+    return { gs: gs, links: links, path: path, ring: ring, home: home, gw: gw, cx: w / 2, cy: (top + foot) / 2, reach: Math.hypot(w, foot) * .75, ringT: -1 };
+  }
+  var scPtr = { x: 0, y: 0, tx: 0, ty: 0 };
+  halvesEl.addEventListener('pointermove', function (e) { var r = halvesEl.getBoundingClientRect(); scPtr.tx = (e.clientX - r.left) / r.width - .5; scPtr.ty = (e.clientY - r.top) / r.height - .5; });
+  function fieldTick(F, t, dt, b, boardOn) {
+    scPtr.x += (scPtr.tx - scPtr.x) * Math.min(1, dt * 4); scPtr.y += (scPtr.ty - scPtr.y) * Math.min(1, dt * 4);
+    /* one ring at a time while Board is chosen, slow enough to read as range rather than traffic */
+    if (boardOn && F.ringT < 0) F.ringT = 0;
+    if (F.ringT >= 0) { F.ringT += dt; if (F.ringT > 3.6) F.ringT = boardOn ? 0 : -1; }
+    var life = F.ringT >= 0 ? clamp(F.ringT / 2.6, 0, 1) : 1, rad = F.reach * (1 - Math.pow(1 - life, 2)), fade = F.ringT >= 0 ? (1 - life) : 0;
+    F.ring.setAttribute('r', rad.toFixed(1)); F.ring.style.opacity = (.8 * fade).toFixed(3);
+    var pos = F.gs.map(function (p) {
+      var k = 1 + .07 * b * p.z, dx = Math.sin(t * 6.283 / p.per + p.ph) * 4 * p.z - scPtr.x * 18 * p.z, dy = Math.cos(t * 6.283 / (p.per * 1.3) + p.ph) * 3 * p.z - scPtr.y * 12 * p.z;
+      var x = F.cx + (p.x - F.cx) * k + dx, y = F.cy + (p.y - F.cy) * k + dy, s = 1 + .05 * b * p.z;
+      p.g.setAttribute('transform', 'translate(' + (x - p.x * s).toFixed(2) + ' ' + (y - p.y * s).toFixed(2) + ') scale(' + s.toFixed(4) + ')');
+      var lit = fade * Math.max(0, 1 - Math.abs(Math.hypot(x - F.home.x, y - F.home.y) - rad) / (F.gw * .9));
+      p.g.style.opacity = (.55 + .2 * p.z + .6 * lit).toFixed(3);
+      return { x: x, y: y };
+    });
+    var d = ''; F.links.forEach(function (l) { var a = pos[l[0]], c = pos[l[1]]; d += 'M' + a.x.toFixed(1) + ' ' + a.y.toFixed(1) + 'L' + c.x.toFixed(1) + ' ' + c.y.toFixed(1); });
+    F.path.setAttribute('d', d);
   }
   function sceneBuild() {
     sceneEl.innerHTML = ''; var H = halvesEl.getBoundingClientRect(); if (!H.width) return;
@@ -1539,7 +1564,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     var bgS = backdrop(L, optSim, 'sc-bg-sim'), bg = document.createElement('canvas');
     bg.width = Math.round((L.w - 2) * d); bg.height = Math.round((L.h - 2) * d); bg.style.cssText = 'width:' + (L.w - 2) + 'px;height:' + (L.h - 2) + 'px'; bgS.el.appendChild(bg);
     var bgF = backdrop(Rb, optBoard, 'sc-bg-board'), fsvg = el('svg', { width: Rb.w - 2, height: Rb.h - 2, fill: 'none', stroke: 'currentColor', 'stroke-width': 1 });
-    bgF.el.appendChild(fsvg); drawField(fsvg, Rb.w - 2, Rb.h - 2, pad * .6, bgF.fade, bw);
+    bgF.el.appendChild(fsvg); var field = drawField(fsvg, Rb.w - 2, Rb.h - 2, pad * .6, bgF.fade, bw, { x: bx + bw / 2 - Rb.x - 1, y: by + bh / 2 - Rb.y - 1 });
     var left = document.createElement('div'); left.className = 'sc-left'; left.style.cssText = 'left:' + (L.x + 1) + 'px;top:' + (L.y + 1) + 'px;width:' + (L.w - 2) + 'px;height:' + (L.h - 2) + 'px';
     var lap = document.createElement('div'); lap.className = 'sc-lap'; left.appendChild(lap);
     var ox = -(L.x + 1), oy = -(L.y + 1);   /* lap coordinates are the halves' coordinates */
@@ -1565,10 +1590,10 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     var bgStat = document.createElement('canvas'), mapStat = document.createElement('canvas');
     bgStat.width = bg.width; bgStat.height = bg.height; mapStat.width = map.width; mapStat.height = map.height;
     var chord = Math.hypot(brd.end.x - portX, brd.end.y - portY);
-    SC_ = { board: g, shadow: shadow, bc: { x: bcx, y: bcy }, BK: BK, rx: L.x + L.w - 10, lap: lap, map: map, bg: bg, bgStat: bgStat, mapStat: mapStat, q: q,
+    SC_ = { field: field, board: g, shadow: shadow, bc: { x: bcx, y: bcy }, BK: BK, rx: L.x + L.w - 10, lap: lap, map: map, bg: bg, bgStat: bgStat, mapStat: mapStat, q: q,
       box: { x: cox - L.x - 1, y: coy - L.y - 1 }, mbox: { x: (cox - sx) * K, y: (coy - sy) * K }, cable: cable, pulse: pulse, K: K, d: d,
       port: { x: portX, y: portY }, end: brd.end, vert: vert, floor: Math.min(textTop(optSim), textTop(optBoard)) - 16, scx: scx, scy: scy, tcx: tcx, tcy: tcy, rope: chord * 1.22 };
-    sceneApply(); cityStatic(); drawCity(scClock);
+    sceneApply(); cityStatic(); drawCity(scClock); fieldTick(field, scClock, 0, 0, false);
   }
   function sceneApply() {
     var S = SC_; if (!S) return; var e = clamp(scZ, 0, 1), k = 1 + (S.K - 1) * e;
@@ -1626,7 +1651,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     sceneEl.classList.toggle('sim', want === 'sim');
     sceneEl.classList.toggle('board', want === 'board');
     /* the district keeps moving slowly; faster on the side being looked at */
-    if (!reduce) { scClock += dt * (want === 'sim' ? 1 : want === 'board' ? .7 : .35); drawCity(scClock); }
+    if (!reduce) { scClock += dt * (want === 'sim' ? 1 : want === 'board' ? .7 : .35); drawCity(scClock); if (SC_) fieldTick(SC_.field, scClock, dt, clamp(scB, 0, 1), want === 'board'); }
     scWant = want;
   }
   function sceneStart() { pvColours(); scZ = scVZ = scB = scVB = 0; scClock = reduce ? 0 : .01; scLast = 0; scHover = null; scBy = null; requestAnimationFrame(function () { sceneBuild(); cancelAnimationFrame(scRaf); scRaf = requestAnimationFrame(sceneTick); }); }
