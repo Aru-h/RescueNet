@@ -52,10 +52,10 @@ as records of what was measured then; none of them may be quoted for the current
 | C36 | 60-69% of fleet time is rest-related, 16-25% travel to tasks, 7-10% working on scene | SIM-ONLY; depends on the rest rules, which are an assumption | HEADROOM_MAP, TB tables |
 | C37 | Default output is byte-identical to the frozen reference (C1 md5 `b248bea7...`) | HOST-VERIFIED at `feature/causal-faults` `b7e28d7` (independently re-checked by the coordinator session) | `make check-state-hash`, rebuild + md5 |
 
-## Dashboard
+## Sim page
 | ID | Claim | Status | Evidence |
 |---|---|---|---|
-| C40 | 2D/2.5D/3D map, pins, cards, gateway markers work | HOST-VERIFIED: e2e suite (332 checks) passes on Linux except the known take-over step. Latest commits not confirmed by hand on the owner's Mac | `laptop/tools/dashboard_e2e_selftest.py` |
+| C40 | Flat and 3D map, worksite and team cards, sending a team by hand, replay and take-over work on the sim page | NOT RE-VERIFIED since the old dashboard was retired: the earlier 332-check suite (2D/2.5D/3D map, pins, gateway markers) went with it. The sim page has its own end-to-end check, not yet run on the owner's Mac. The sim page does not draw gateways | `laptop/tools/sim_e2e_selftest.py` (`make check-sim-e2e`) |
 | C41 | The recorded demo replays identically on every platform | **Not true**: it diverges at frame 88 on Linux x86_64 (maths-library differences) | KNOWN_LIMITATIONS item "The bundled demo recording does not replay exactly on Linux" (dashboard branch) |
 
 ## Public wording (how each CV / README sentence maps to claims)
@@ -66,7 +66,7 @@ as records of what was measured then; none of them may be quoted for the current
 | "AI improved incidents resolved by +3.05 per mission" | C10, C23, C30 | "+3 per mission under the original fault model; a later pre-registered study showed the gain vanishes against a realistic baseline" |
 | "task split with a determinism proof" | C04 | "determinism check (host-verified; board run pending)" until the board comparison exists |
 | "cost-based planner evaluated on held-out scenarios" | C23 | "evaluated" is accurate; do not say it improved results (no reliable difference) |
-| "2D/3D dashboard" | C40 | accurate; mention the Linux-only e2e and the replay limitation if asked |
+| "Flat/3D sim page" | C40 | accurate; mention that its e2e check has only run on Linux so far, and the replay limitation, if asked |
 
 ## Housekeeping found while writing this
 - KNOWN_LIMITATIONS numbering collided across branches. DONE: renumbered once to 1-24 in the merge. This file still cites items by title.

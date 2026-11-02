@@ -71,9 +71,9 @@ Same audience as the `core/` section above: accepted findings from the board/-sp
 
 ---
 
-# Known Limitations — system behaviour, detection, dashboard and demo
+# Known Limitations — system behaviour, detection, sim page and demo
 
-Audience: anyone running, presenting or judging the single-board STM32N6570-DK build and the laptop dashboard. These are known behaviours and gaps, not open bugs, unless marked otherwise. Each one says what you will see and why.
+Audience: anyone running, presenting or judging the single-board STM32N6570-DK build and the laptop app. These are known behaviours and gaps, not open bugs, unless marked otherwise. Each one says what you will see and why.
 
 ## A. Simulation behaviour
 
@@ -92,35 +92,33 @@ Audience: anyone running, presenting or judging the single-board STM32N6570-DK b
 6. **Mobility faults are only visible while a team is travelling.** (See also the CSV section above.) A mobility fault that starts and ends while the team is stationary leaves no observable stall.
 
 7. **The AI fault predictor is opt-in and off by default.** A trained float32 MLP (75 -> 128 -> 64 -> 5, sigmoid) runs on the CPU only when built with `-DFAULT_MODEL_LOADED=1`. The default build (`make`, `./tron`), the dataset generator and all checks stay AI-off: `fault_predictor_run()` returns all-zero scores and never touches the weights, so the CSV is unchanged. Turning the AI on changes team behaviour and therefore the CSV, so AI numbers must come from the separate AI build.
-   - **Run with the AI:** `make tron-ai` builds `./tron_ai` (`./tron` is untouched); for the dashboard: `make tron-ai && TRON_BINARY=./tron_ai SIM_ONLY=1 python laptop/tools/app.py`. The `+ai` row of `make evaluate` uses the same flags. On the board, the CubeIDE DevRam configuration defines `FAULT_MODEL_LOADED=1`; the boot `CONFIG` line shows `model_loaded=1`.
+   - **Run with the AI:** `make tron-ai` builds `./tron_ai` (`./tron` is untouched); for the app: `make tron-ai && TRON_BINARY=./tron_ai SIM_ONLY=1 python laptop/tools/app.py`. The `+ai` row of `make evaluate` uses the same flags. On the board, the CubeIDE DevRam configuration defines `FAULT_MODEL_LOADED=1`; the boot `CONFIG` line shows `model_loaded=1`.
    - **Board start-up:** on the board (`ENVIRONMENT_HAS_WORLD_STORAGE=0`) the AI outputs zero until every map and district row has arrived from the laptop over the mission link. On the laptop the world is local and nothing is waited for.
    - **The AI never acts alone.** Its score escalates past `LOCAL_RECOVERY` (return to safe zone, reallocate, abort) only when backed up by the watchdog anomaly flag, a sustained streak of high scores, or consensus ELEVATED. Because the watchdog threshold (`WATCHDOG_ANOMALY_THRESHOLD`, 0.10) was tuned while the AI returned zeros, a false watchdog alarm can now back up an AI score; measure with `laptop/tools/ai_fp_report.py` before relying on the AI-on behaviour.
    - **The gain is modest by construction of the simulator, not because detection is weak.** Faults are active on 58% of team-ticks (random profile) and clear on a fixed timer in `fault_injector_step()` (duration plus one PAR interval); nothing in the recovery layer can shorten them, so exposure is identical with or without the AI. Incidents resolved (held-out seeds 1001-1020): no faults 47.85, faults without AI 36.65, faults with a perfect ground-truth detector 39.70. The perfect detector recovers 27% of the 11.2 lost incidents, and all of it comes from resource faults (+3.20 of 9.7 lost; mobility +0.05 of 5.1 and communication +0.20 of 3.5, both within noise). Reproduce with `bash laptop/tools/ai_headroom_investigation.sh`. Not established: why mobility and communication faults are unrecoverable by the current recovery actions (needs experiments on the recovery logic).
 
 8. **`eval_*` CSV columns are evaluation output, never model input.** They log what each evaluator concluded. Training on them leaks the answer.
 
-## C. Manual override (dashboard simulation mode)
+## C. Manual override (live runs on the sim page)
 
-9. **An override guarantees only the initial commitment.** The pin is released as soon as the incident becomes `INC_ASSIGNED` to the pinned team, usually within a few ticks. From then on the team keeps the task through the simulation's normal state, and the normal rules (for example item 1, stamina/rest) still apply. The dashboard shows this as pending → committed → resolved or interrupted. An interrupted override is not re-pinned automatically; drag again if needed.
+9. **An override guarantees only the initial commitment.** The pin is released as soon as the incident becomes `INC_ASSIGNED` to the pinned team, usually within a few ticks. From then on the team keeps the task through the simulation's normal state, and the normal rules (for example item 1, stamina/rest) still apply. The sim page shows the team pinned to the worksite while the pin lasts and lists sent and released overrides as events. An interrupted override is not re-pinned automatically; send the team again if needed.
 
-10. **Overrides work only in dashboard simulation mode.** They are sent over the `--live` simulator's stdin. They are not available in replay mode or when the dashboard is connected to the real board.
+10. **Overrides work only on a live simulation run.** They are sent over the `--live` simulator's stdin. They are not available while you look at a recording (use Take over first); a board mission sends them to the board instead.
 
-11. **System tasks (sector sweeps, equipment runs) can't be override targets.** The shared pin check in `core/cbba.c` only searches real incidents, so a pin onto a system task would silently clear on the next tick. The simulation path rejects these with reason `system_task`, and the dashboard doesn't offer them as drop targets. **Open gap:** the board's USART1 override path has no such check; a board-side override onto a system task silently clears on the next tick.
+11. **System tasks (sector sweeps, equipment runs) can't be override targets.** The shared pin check in `core/cbba.c` only searches real incidents, so a pin onto a system task would silently clear on the next tick. The simulation path rejects these with reason `system_task`, and the sim page doesn't offer them as drop targets. **Open gap:** the board's USART1 override path has no such check; a board-side override onto a system task silently clears on the next tick.
 
 12. **Override rejections use only what the system itself knows.** A team is refused as `team_unavailable` only if the system has marked it degraded or peer consensus has raised it to the ELEVATED tier. Hidden (not yet detected) faults are never used, so an override onto a team with an undetected fault is accepted. This is deliberate: the reject reason must not leak ground truth.
 
 13. **Windows stdin support is untested.** The non-blocking stdin reader has a Windows branch (`PeekNamedPipe`), but it is not covered by the test suite. macOS and Linux are the tested platforms.
 
-## D. Dashboard map
+## D. Sim page map
 
-14. **Buildings are drawn as dots, not filled footprints.** The world generator lets ~120 building-lot cells overlap road cells, so filled footprints always clash with the road layer. A building is a small dot at its centre, and its footprint outline appears when zoomed in or when its card is open.
+14. **Blocked terrain is shown with the closest available flag.** `STATICMAP` has no separate rubble flag, so impassable (not navigable) cells stand in for rubble or blocked terrain. `road_blocked` marks blocked road cells specifically.
 
-15. **Blocked terrain is shown with the closest available flag.** `STATICMAP` has no separate rubble flag, so impassable (not navigable) cells stand in for rubble or blocked terrain. `road_blocked` marks blocked road cells specifically.
-
-16. **The consensus network view is undirected.** Each team records which peers it heard from, which is directional. The network view draws one line per team pair, active if either direction was heard. It simplifies the real data; it does not invent any.
+15. **The consensus network view is undirected.** Each team records which peers it heard from, which is directional. The peer-network ring draws one line per team pair, active if either direction was heard. It simplifies the real data; it does not invent any.
 
 ## E. Not yet verified on hardware
 
-17. **The DK build's timing and memory are not yet measured on the board.** Tick duration (DWT counter), stack/heap headroom over a full 3000-tick run, and the AI's inference time on the DK (weights ≈ 74 KB of flash, float32) still have to be measured on the physical board. Until then, treat them as estimates.
+16. **The DK build's timing and memory are not yet measured on the board.** Tick duration (DWT counter), stack/heap headroom over a full 3000-tick run, and the AI's inference time on the DK (weights ≈ 74 KB of flash, float32) still have to be measured on the physical board. Until then, treat them as estimates.
 
 18. **Confirmed running on the STM32N6570-DK only via the `DevRam` standalone-SRAM build (Application loaded directly by the debugger, no FSBL involved) — full handshake, world transfer, live telemetry and fault detection observed. Standalone Flash Boot hangs at the FSBL → Application handoff; diagnosis and evidence in [`docs/reports/ST_Support_Report.pdf`](docs/reports/ST_Support_Report.pdf), reported to ST (support case 00269955).** The FSBL prints its boot trace up through "init done, calling BOOT_Application" and then hangs indefinitely with no fault or watchdog reset — 100% reproducible across many rebuilds/reflashes/power cycles. A controlled SWD comparison shows the CPU's own debug access port becomes completely unreachable while hung in Flash Boot but works normally in DEV boot with the same debugger and cabling — pointing to a hardware/boot-ROM-level condition, not an application bug. **The full FSBL→XIP handoff has not yet been confirmed working end-to-end even under DEV boot with a debugger attached** — a real linker-script bug in the Application (linked for the wrong memory region) was found and fixed, but a live retest of that exact signed-FSBL + signed-Appli path has not been completed; do not assume it works without testing it. See [`docs/DK_DEMO_LAUNCH.md`](docs/DK_DEMO_LAUNCH.md) for the verified `DevRam` launch steps and the boot switch positions (DEV: BOOT1 on/BOOT0 off; Flash: both off). The board's mission-link session must be reset between mission runs — relaunching a mission without resetting the board first leaves reporting silently stuck.

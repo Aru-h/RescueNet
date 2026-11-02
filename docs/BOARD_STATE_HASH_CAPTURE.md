@@ -19,7 +19,7 @@ therefore which slot each lands in, cannot cause a mismatch.
    compiler defines (0 turns it off).
 2. SW1 on, SW2 off (DEV boot). Debug `DevRam/tron_board_Appli.elf`, Resume.
 3. **Reset the board before every run** (CubeIDE Restart, then Resume).
-4. Start the dashboard with its output kept (the board's console text arrives on
+4. Start the app with its output kept (the board's console text arrives on
    the same serial port and the bridge prints it as `[Board Log] ...`). It
    listens on port 5050 and runs `make` in the project folder when a mission
    starts, so `make` must be on the PATH of that shell.
@@ -43,9 +43,10 @@ therefore which slot each lands in, cannot cause a mismatch.
    `2>&1` on a native command wraps stderr lines as error records in the log;
    they are still plain text lines, and `statehash_compare.py` reads them. In
    PowerShell 7 the log is clean.)
-5. Connect to the board in the dashboard (`http://localhost:5050`), wait for the
-   handshake, then start the mission with a fixed seed, ticks and pace, either in
-   the UI or from a second terminal.
+5. Connect to the board on the landing page (`http://localhost:5050`, choose
+   Board), wait for the handshake, then start the mission with a fixed seed,
+   ticks and pace, either on the sim page in board mode (`/sim?board`) or from
+   a second terminal.
 
    Linux / macOS / MSYS2:
 
@@ -63,7 +64,7 @@ therefore which slot each lands in, cannot cause a mismatch.
      -ContentType 'application/json' `
      -Body '{"seed":1,"ticks":300,"time_scale":10,"fault_profile":"none"}'
    ```
-6. When the log shows `STATEHASH tick=300`, stop the dashboard (Ctrl+C), reset
+6. When the log shows `STATEHASH tick=300`, stop the app (Ctrl+C), reset
    the board and repeat steps 4-6 into `board_run2.log`.
 7. Compare:
 

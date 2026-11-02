@@ -112,15 +112,15 @@ accepted code-audit findings, implementation notes) is in
     assumptions (`docs/PERSISTENT_FAULTS_PROPOSAL.md` sections 3 and 9.1). The evaluation stress of 7 was never derived
     from data; stress 2 matches the literature MTBF.
 
-## D. Dashboard
+## D. Sim page
 
-17. **Manual overrides work only in simulation mode.** Dragging a team onto an
-    incident is not available in replay mode or when the dashboard is
-    connected to the board. After an override is committed, normal rules
-    (such as item 12) still apply.
+17. **Manual overrides work only on a live run.** Sending a team to a
+    worksite is not offered while you look at a recording (use Take over
+    first), and on a board mission Release is not offered. After an override
+    is committed, normal rules (such as item 12) still apply.
 18. **Replay take-over needs a matching simulator.** A recording can be taken
     over only by the same simulator build that made it (same code, AI on or
-    off); otherwise the dashboard refuses rather than show a diverging run.
+    off); otherwise the app refuses rather than show a diverging run.
 19. **Tested on macOS and Linux.** Windows is not tested. Absolute results
     differ slightly between platforms for the same seed.
 20. **The bundled demo recording does not replay exactly on Linux.** The
@@ -128,30 +128,21 @@ accepted code-audit findings, implementation notes) is in
     `demo_seed1041_combined_1200ticks.jsonl.gz` was recorded on Linux
     (x86_64, gcc) and replays exactly there. A recording made on one platform
     can diverge on another (the previous demo, recorded on macOS arm64,
-    diverged on Linux at frame 88), so "Take over from here" may refuse the
-    demo on macOS, and the take-over step of `make check-dashboard-e2e` may
+    diverged on Linux at frame 88), so "Take over" may refuse the
+    demo on macOS, and the take-over step of `make check-sim-e2e` may
     fail there. This is believed to be cross-platform floating-point
     divergence; the cause has not been confirmed.
-21. **The 3D incident pin has no time-pressure ring yet.** The simulator does
+21. **A worksite shows no time pressure yet.** The simulator does
     not send an incident's age, deadline or victims' survival time, so the
-    dashboard cannot show how urgent an incident is in time. It is left out
+    sim page cannot show how urgent a worksite is in time. It is left out
     on purpose (not even a "seen for N ticks" stand-in, which would not be
-    the incident's real age). To do: add the ring once the simulator sends
+    the incident's real age). To do: add it once the simulator sends
     incident age / survival from the causal mission model.
-22. **The 3D pin's progress arc is an estimate.** The simulator sends the work
-    remaining on an incident but not the starting amount, so the arc is
-    measured against the largest value the dashboard has seen for that
-    incident. It starts empty when the dashboard connects to an incident
-    that is already partly worked, and shows nothing when the remaining work
-    is sent as 0.
-23. **Evacuation gateway markers show where an exit is, nothing more.** The
-    simulator sends each gateway's position only (STATICENV `gateways`), so the
-    card has no evacuee counts and nothing says whether a gateway is reachable
-    for a given team. In 2D and 3D the marker stays inside its own edge cell
-    (3D: outside the map, one cell wide); in 2.5D the glyph stands upright on
-    its cell and can cover part of a neighbouring cell on screen. Recordings
-    made before the field existed show no gateways.
-24. **Some evacuation gateways cannot be reached by some teams (world
+22. **Evacuation gateways are not drawn on the sim page.** The simulator
+    sends each gateway's position only (STATICENV `gateways`), and the sim
+    page reads it with the run but does not draw it. Recordings made before
+    the field existed have none.
+23. **Some evacuation gateways cannot be reached by some teams (world
     generation, not changed in v1).** An audit of seeds 1001-1100 (300
     gateways) with the simulator's own pathfinder (`find_path_steps`, the A*
     teams use, at world creation) found every gateway reachable from at least

@@ -759,11 +759,17 @@ Per-team object, new fields:
 Top level: `"vbus": {"sent": …, "delivered": …, "dropped": …, "airtime_ms": …}`
 from `vbus_get_stats()`.
 
-`app.py` passes these through. `templates/index.html` adds:
+`app.py` passes these through. The sim page (`static/shared/rn-run.js` reads
+them, `templates/sim.html` draws them) shows:
 
-- a tier badge per team (grey NONE, amber LOCAL, red ELEVATED, one per class)
-- a vote string such as `M 7F/1C/1A · C 0F/6C/3A`
-- a bus line: airtime per tick and drop %
+- the tiers as a ring round a team in the peer-network view (thin when LOCAL,
+  thick when ELEVATED) and as per-class tier columns in the technical tables
+- the votes per team as fault/clear/abstain counts in the technical tables
+
+`vbus` is read with the run (`rn-run.js`) but the sim page does not show the
+radio counters. (The earlier dashboard, `templates/index.html`, showed a tier badge per team, a
+vote string such as `M 7F/1C/1A · C 0F/6C/3A` and an airtime and drop % line;
+it has been removed.)
 
 **Not in v1:** board mission mode (the DK over USART1, via mission-link status
 v3) does not carry these fields yet. See R8.
@@ -865,7 +871,7 @@ that every roster/map/sites/fault/override message applies locally.
 | `core/recovery_manager.c`, `recovery_manager_config.h` | §4.2 cap and evaluator, named `RM_EVAL_IDX_*` indices. **Delete** `evaluate_consensus_fault()` and `RECOVERY_MANAGER_ENABLE_CONSENSUS_FAULT` (decision D3) |
 | `laptop/snapshot.c` | §5.1 columns, §5.2 writer |
 | `laptop/main.c` | `--vbus-loss=<p>` (default: decision D4), `--peer-log` |
-| `laptop/debug.c`, `laptop/tools/app.py`, `laptop/tools/templates/index.html` | §5.3 |
+| `laptop/debug.c`, `laptop/tools/app.py`, `laptop/tools/templates/sim.html`, `laptop/tools/static/shared/rn-run.js` | §5.3 |
 | `Makefile` | `-DVIRTUAL_BUS_ENABLED=1` in laptop `CFLAGS` and the single-board DK target. Add `check-consensus-selftest`, `check-consensus-scenarios`, `check-consensus-airtime`, `check-consensus-shadow-regression`, `check-consensus-multiboard-untouched` |
 
 ### 6.4 Deliberately not touched

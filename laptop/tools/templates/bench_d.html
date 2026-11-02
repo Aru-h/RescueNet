@@ -466,7 +466,7 @@ let selectedMarker = null; // { type: 'team'|'incident', id } — drives the Ins
 function drawMap() { Bench.renderMapV2(document.getElementById('mapD'), COLORS, 36, selectedMarker); }
 
 // ---- Drag a team marker onto an incident to propose reassigning it. ----
-// Mirrors the original index.html's canvas hit-testing / drag flow, wired to the
+// Mirrors the original (now removed) dashboard's canvas hit-testing / drag flow, wired to the
 // real /api/board/override endpoint (requires an actual connected, handshaked board).
 let dragState = null;
 let pendingOverride = null;

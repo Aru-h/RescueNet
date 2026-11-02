@@ -32,7 +32,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context
 
 # TelemetryBridge is the real-hardware bridge (serial port, handshake,
 # override acks, team status reports, telemetry frames). app.py used to keep
@@ -54,14 +54,14 @@ if not BINARY.is_absolute():
 # Part 2 (replay): every line a live run forwards over SSE (STATICENV
 # once, LIVEFRAME every tick, STATICMAP on change, and OVERRIDE/
 # OVERRIDEACK once Part 4 lands) is also saved here, gzip-compressed,
-# so the dashboard can play a run back later without the simulator or a
+# so the sim page can play a run back later without the simulator or a
 # board in the room. See _RecordingWriter below and /api/recordings*.
 # Gitignored except one curated demo file - see .gitignore.
 #
-# Overridable via DASHBOARD_RECORDINGS_DIR so dashboard_e2e_selftest.py
+# Overridable via DASHBOARD_RECORDINGS_DIR so sim_e2e_selftest.py
 # can point this at a throwaway temp directory instead of littering the
 # real recordings/ folder (and the one curated demo file it holds)
-# with test runs on every check-dashboard-e2e invocation.
+# with test runs on every check-sim-e2e invocation.
 RECORDINGS_DIR = Path(os.environ.get("DASHBOARD_RECORDINGS_DIR", str(TOOLS_DIR / "recordings")))
 RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
 _RECORDING_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.jsonl\.gz$")
@@ -82,8 +82,8 @@ SIM_ONLY = os.environ.get("SIM_ONLY") == "1" or "--no-hardware" in sys.argv[1:]
 # --- Wire format constants (mirrors core/mission_link_override.h) -------
 #
 # Not imported from telemetry_bridge.py: this prompt's file ownership is
-# core/mission_link_override.h/.c plus this file and templates/index.html
-# only (telemetry_bridge.py belongs to an earlier prompt's file set - see
+# core/mission_link_override.h/.c plus this file and the dashboard
+# template (since replaced by templates/sim.html) only (telemetry_bridge.py belongs to an earlier prompt's file set - see
 # that module's own HandshakeCoordinator for the precedent this mirrors).
 # Self-contained here for the same reason pack_handshake_req() is
 # self-contained in telemetry_bridge.py rather than split across files.
@@ -442,7 +442,7 @@ def _read_recording_header(path):
 @app.route("/api/recordings")
 def api_recordings():
     """Lists saved recordings, newest first, with their header fields -
-    what the Replay mode selector in index.html populates itself from."""
+    what the run list (templates/replay.html) populates itself from."""
     items = []
     for path in RECORDINGS_DIR.glob("*.jsonl.gz"):
         header = _read_recording_header(path)
@@ -459,7 +459,7 @@ def api_recordings():
 @app.route("/api/recordings/<name>")
 def api_recording_file(name):
     """The full decompressed recording, for the client to parse ONCE
-    into an in-memory frame array (see static/dashboard/replay.js) -
+    into an in-memory frame array (see static/shared/rn-run.js) -
     every later scrub/play/jump is then array indexing, not a re-fetch.
     `name` is checked against a strict allow-list pattern (no `/`, no
     `..`) before touching the filesystem, so this can't be used to read
@@ -759,7 +759,9 @@ def bench_d():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    """The front page is /landing; the old dashboard that used to live here
+    was replaced by the sim page (/sim)."""
+    return redirect("/landing", code=302)
 
 
 @app.route("/landing")
@@ -1060,8 +1062,8 @@ def api_board_continue_without_nucleo():
 @app.route("/api/board/override", methods=["POST"])
 def api_board_override():
     """The Flask route core/mission_link_override.h's pipeline doc
-    (step 1-2) describes: the dashboard's drag-drop already builds a
-    {team_id, incident_id} pair on confirm (laptop/tools/templates/index.html)
+    (step 1-2) describes: the sim page's drag-drop already builds a
+    {team_id, incident_id} pair on confirm (laptop/tools/templates/sim.html)
     - this route packs it into a MissionLinkOverride_t wire frame and
     writes it to USART1 (bridge.serial_conn), the laptop's only channel.
 
@@ -1293,7 +1295,7 @@ def _live_write_line(text):
     Distinct from _live_signal() above: this writes to a pipe rather
     than sending a process signal, but shares its same "no live run in
     progress" 409 contract so the frontend's existing pause/resume 409-
-    handling code (see index.html's pauseLive()/resumeLive() - a real
+    handling code (the sim page's pause/resume - a real
     bug fix from an earlier pass) doesn't need a second code path for
     this endpoint family."""
     with _live_lock:
