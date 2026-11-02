@@ -187,7 +187,8 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     x.translate((w - W * q) / 2, (h - H * q) / 2);   /* the city sits centred in whatever box it is given */
     var N = RNNotation, lw = small ? .6 : 1;
     (pv.env && pv.env.buildings || []).forEach(function (b) {
-      N.building(x, b.x * q + q * .12, b.y * q + q * .12, (b.w || 1) * q - q * .24, (b.h || 1) * q - q * .24, b.damage, c.mute, lw);
+      var f = N.footprint(b);   /* the recording gives the footprint's centre */
+      N.building(x, f.x * q + q * .12, f.y * q + q * .12, f.w * q - q * .24, f.h * q - q * .24, b.damage, c.mute, lw);
     });
     (pv.safezones || []).forEach(function (s) { N.assembly(x, (s.x + .5) * q, (s.y + .5) * q, Math.max(5, q * 1.5), c.teal, c.bg); });
     (pv.teams || []).forEach(function (t) { N.team(x, (t.x + .5) * q, (t.y + .5) * q, Math.max(2.4, q * .9), c.fg); });

@@ -23,6 +23,11 @@
   /* the simulator's damage levels (core/environment.h ENV_DAMAGE_*): 25 minor, 50 moderate, 75 severe, 100 destroyed */
   function damageClass(d) { return d >= 75 ? 'destroyed' : d >= 50 ? 'moderate' : d >= 25 ? 'slight' : 'none'; }
 
+  /* where a building stands. The recordings (STATICENV) give a building's x, y as the CENTRE of its footprint, rounded
+     down (the generator stores loc_x = x0 + w / 2 in integer maths), not its top-left corner. Reading it as the corner
+     shifts buildings and makes neighbours seem to overlap. RNNotation.footprint(b) -> { x, y, w, h }, x, y the top-left cell. */
+  function footprint(b) { var w = b.w || 1, h = b.h || 1; return { x: b.x - Math.floor(w / 2), y: b.y - Math.floor(h / 2), w: w, h: h }; }
+
   /* sectors: INSARAG letters, skipping I and O so they are never read as 1 and 0 */
   var SECTOR_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 
@@ -107,7 +112,7 @@
   function legendHTML(keys) { return keys.map(legendItem).join(''); }
 
   root.RNNotation = {
-    COLOUR: COLOUR, SECTOR_LETTERS: SECTOR_LETTERS, damageClass: damageClass,
+    COLOUR: COLOUR, SECTOR_LETTERS: SECTOR_LETTERS, damageClass: damageClass, footprint: footprint,
     building: building, star: star, barrier: barrier, assembly: assembly, gathering: gathering, team: team, teamMarker: teamMarker, worksite: worksite, task: task,
     LEGEND: LEGEND, legendHTML: legendHTML
   };
