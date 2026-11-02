@@ -247,7 +247,8 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 .bc aside { flex: 1 1 340px; min-width: 0; }
 .bc .lbl { color: var(--c-mute); margin-top: 14px; }
 .bc input[type=text], .bc select { font-family: var(--mono); font-size: 15px; padding: 11px 12px; min-height: 46px; border: 1.5px solid var(--c-fg); background: transparent; color: var(--c-fg); border-radius: 0; width: 100%; }
-.bc select option { color: #0b0b0b; }
+.bc select { color-scheme: dark; }
+.bc select option { color: var(--c-fg); background: var(--c-bg); }   /* the open list keeps the page's colours at any hour */
 .bc input::placeholder { color: var(--c-faint); }
 .bc input:focus-visible, .bc select:focus-visible, .bc-go:focus-visible, .bc summary:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 2px; }   /* neutral: red here would read as an error */
 .bc .row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
@@ -290,6 +291,18 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 .ms-seg label:first-of-type span { margin-left: 0; }
 .ms-seg input:checked + span { background: var(--c-fg); color: var(--c-bg); }
 .ms-list { display: grid; gap: 0; }
+/* What goes wrong: a list that opens, takes a choice and closes again, showing the choice */
+.bc details.ms-pick { border-top: 0; margin-top: 18px; }
+.bc .ms-pick > summary { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 0; color: var(--c-fg); text-transform: none; letter-spacing: 0; font-size: 15px; }
+.bc .ms-pick > summary::before { content: none; }
+.bc .ms-pick > summary .lbl { margin-top: 0; }
+.ms-chosen { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 46px; padding: 10px 12px; border: 1.5px solid var(--c-fg); }
+.ms-chosen b { font-family: var(--display); font-weight: 800; font-stretch: 112%; text-transform: uppercase; font-size: 15px; margin-right: 10px; }
+.ms-chosen small { color: var(--c-mute); font-size: 13.5px; }
+.ms-chosen::after { content: '\25BE'; color: var(--c-mute); flex: none; }
+.ms-pick[open] .ms-chosen::after { content: '\25B4'; }
+.bc .ms-pick > .ms-list { margin: 8px 0 0; }
+.ms-pick .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .ms-list label { position: relative; cursor: pointer; border-top: 1px solid var(--c-rule); }
 .ms-list label:last-of-type { border-bottom: 1px solid var(--c-rule); }
 .ms-list span { display: grid; grid-template-columns: 9.5em minmax(0, 1fr); gap: 12px; padding: 11px 0 11px 30px; font-size: 14px; line-height: 1.4; color: var(--c-mute); }
@@ -597,8 +610,10 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
         </fieldset>
         <p class="small">Mission time, not waiting time: you choose the playback speed on the next page. One step of the simulation is 36 seconds.</p>
 
+        <details class="ms-pick" id="msFaultBox">
+        <summary><span class="lbl mono">What goes wrong</span><span class="ms-chosen" id="msFaultNow"></span></summary>
         <fieldset class="ms-list">
-          <legend class="lbl mono">What goes wrong</legend>
+          <legend class="sr">What goes wrong</legend>
           <label><input type="radio" name="msFault" value="none"><span><b>Nothing</b>A clean run: no faults injected.</span></label>
           <label><input type="radio" name="msFault" value="mobility"><span><b>Movement</b>Now and then a team slows down or stalls.</span></label>
           <label><input type="radio" name="msFault" value="communication"><span><b>Radio</b>Now and then a team&rsquo;s radio drops out.</span></label>
@@ -606,6 +621,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
           <label><input type="radio" name="msFault" value="combined" checked><span><b>Mixed</b>All five kinds (movement, radio, supplies, surroundings, orders), milder.</span></label>
           <label><input type="radio" name="msFault" value="random"><span><b>Rough</b>All five kinds, more often and stronger.</span></label>
         </fieldset>
+        </details>
         <p class="small">The teams are not told. Watching them notice it from each other is the point of the run; switch on Ground truth on the next page to see what was injected.</p>
 
         <details class="bc-adv">
@@ -1479,7 +1495,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     choiceView.hidden = v !== 'choice'; bcView.hidden = v !== 'board'; msView.hidden = v !== 'setup'; connect.scrollTop = 0;
     $('#backBtn').hidden = v === 'board' || v === 'setup';
     if (v === 'board') { sceneStop(); bcArrive(); }
-    else if (v === 'setup') { sceneStop(); msUpdate(); setTimeout(function () { $('#msSeed').focus({ preventScroll: true }); }, 0); }
+    else if (v === 'setup') { sceneStop(); msUpdate(); if (window.matchMedia && matchMedia('(pointer: fine)').matches) setTimeout(function () { $('#msSeed').focus({ preventScroll: true }); }, 0); }   /* no keyboard popping up on phones */
     else { connect.focus({ preventScroll: true }); sceneStart(); if (focusFirst) setTimeout(function () { choose(focusFirst === optBoard ? 'board' : 'sim', 'key'); }, 0); }
   }
   function timed(url, opt, ms) {
@@ -1512,11 +1528,23 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
       (v.fault === 'none' ? '.' : ', while ' + (v.fault === 'combined' || v.fault === 'random' ? 'faults of every kind' : MS_FAULT[v.fault].toLowerCase() + ' faults') + ' are injected without telling them.');
     $('#msCmd').textContent = './tron ' + v.seed + ' 1 ' + v.ticks + ' --live' + (v.fault !== 'none' ? ' --fault-profile=' + v.fault : '') + (v.loss !== '' ? ' --vbus-loss=' + v.loss : '');
     $('#msAdvSum').innerHTML = 'Advanced &middot; radio loss ' + lossTxt;
+    var fl = document.querySelector('input[name=msFault]:checked').closest('label').querySelector('span');
+    var now = '<span><b>' + fl.querySelector('b').textContent + '</b><small>' + fl.lastChild.textContent + '</small></span>';
+    if ($('#msFaultNow').innerHTML !== now) $('#msFaultNow').innerHTML = now;   /* never swap what is under a finger mid-tap */
   }
   $('#msForm').addEventListener('input', msUpdate); $('#msForm').addEventListener('change', msUpdate);
+  /* picking what goes wrong closes the list again, so the rest of the form stays in view */
+  [].forEach.call(document.querySelectorAll('input[name=msFault]'), function (r) {
+    r.addEventListener('click', function () { setTimeout(function () { $('#msFaultBox').open = false; $('#msFaultBox').querySelector('summary').focus({ preventScroll: true }); }, 120); });
+  });
   $('#msSeed').addEventListener('blur', function () { this.value = msVal().seed; msUpdate(); });
   $('#msNewCity').addEventListener('click', function () { $('#msSeed').value = 1 + Math.floor(Math.random() * 9999); msUpdate(); });
   $('#msBack').addEventListener('click', function () { showView('choice', optSim); });
+  /* #connect: open straight onto "How do you want to connect?" (where Back on the run list leads) */
+  if (location.hash === '#connect') setTimeout(function () {   /* after the rest of this script has set itself up */
+    entering = true; wipe.style.clipPath = 'circle(' + Math.ceil(Math.hypot(innerWidth, innerHeight)) + 'px at 50% 50%)';
+    connect.classList.add('on'); connect.setAttribute('aria-hidden', 'false'); document.body.style.overflow = 'hidden'; showView('choice'); connOpen();
+  }, 0);
   $('#msForm').addEventListener('submit', function (e) {
     e.preventDefault(); var v = msVal();
     /* the sim page reads these; until it exists the app's current page opens */

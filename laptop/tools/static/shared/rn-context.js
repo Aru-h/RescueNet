@@ -1,7 +1,8 @@
 /* RescueNet map context: the city around the simulated area, drawn faded so the edge of the map reads as the edge of
-   the run, not the edge of the city. It is NOT simulated (no teams, no incidents, nothing selectable) and not the
-   simulator's output: it continues what the simulated area shows at its edge, by the same rules, so roads, water and
-   damage carry on across the green line instead of stopping at it.
+   the run, not the edge of the city. It is NOT simulated (no teams, no incidents, nothing selectable).
+   Preferred source: eight more cities from the simulator's own map generator, laid around the run so their streets and
+   water meet it (laptop/tools/map_context.py, step 2 of two); build(run, ring, given) takes them as they are and only
+   colours them. Without them, build(run, ring) falls back to continuing what the run shows at its edge, by these rules:
      - water: a coast along one side continues as open sea beyond that side; a river leaving the map keeps its width and
        meanders on;
      - roads: every road that leaves the map carries on outward at its class (main roads to the edge of the ring, side
@@ -21,9 +22,56 @@
     h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16; return (h >>> 0) / 4294967296;
   }
 
+  function colourByDistance(run, bs, seed) {
+    var W = run.W, H = run.H;
+    /* damage: continues the run's own damage-by-distance curve (city-block distance from the epicentre, as in the
+       simulator's earthquake rule). Mean damage is measured per distance from the run's buildings, kept non-increasing,
+       and carried on past the farthest building at the steeper of its own tail slope and the simulator's 3 per cell;
+       each building then takes the leftover of a run building at a similar distance, so the mix of colours carries on too. */
+    var ep = run.epicentre || { x: W / 2, y: H / 2 }, centre = function (b) { return [b.x + Math.floor(b.w / 2), b.y + Math.floor(b.h / 2)]; };
+    var dist = function (b) { var c = centre(b); return Math.abs(c[0] - ep.x) + Math.abs(c[1] - ep.y); };
+    var clamp = function (v) { return Math.max(0, Math.min(100, v)); };
+    var obs = (run.buildings || []).map(function (b) { return [dist(b), b.damage]; }).sort(function (p, q2) { return p[0] - q2[0]; });
+    var curve = [], dmax = 0;
+    if (obs.length) {
+      dmax = obs[obs.length - 1][0];
+      for (var dd = 0; dd <= dmax; dd++) {   /* mean of the run's buildings within 3 cells of this distance */
+        var sum = 0, cnt = 0; obs.forEach(function (o) { if (Math.abs(o[0] - dd) <= 3) { sum += o[1]; cnt++; } });
+        curve[dd] = cnt ? sum / cnt : (dd ? curve[dd - 1] : 100);
+      }
+      for (dd = 1; dd <= dmax; dd++) curve[dd] = Math.min(curve[dd], curve[dd - 1]);   /* damage never grows with distance */
+    }
+    var tail = dmax > 8 ? Math.max(3, (curve[dmax - 8] - curve[dmax]) / 8) : 3;
+    var meanAt = function (d) { return !obs.length ? 0 : d <= dmax ? curve[d] : curve[dmax] - tail * (d - dmax); };
+    var resid = obs.map(function (o) { return [o[0], o[1] - meanAt(o[0])]; });
+    bs.forEach(function (b) {
+      var d = dist(b), m = meanAt(d), near = resid.filter(function (r) { return Math.abs(r[0] - Math.min(d, dmax)) <= 4; });
+      var r = near.length ? near[Math.floor(hash(b.x, b.y, seed + 31) * near.length)][1] : 0;
+      b.damage = clamp(Math.round(m + r * Math.max(0, Math.min(1, m / 50))));   /* the spread shrinks as the mean nears 0 */
+    });
+
+  }
+
+  /* the surroundings built by the simulator's own generator (laptop/tools/map_context.py, step 2 of two): taken as
+     they are, only coloured here. given: { roads: [[x, y, class]], water: [[x, y]], bridges: [[x, y]], buildings: [[x, y, w, h]] } */
+  function fromGenerator(run, ring, given) {
+    var W = run.W, H = run.H, R = ring || given.ring || 36, GW = W + 2 * R, GH = H + 2 * R, seed = run.seed | 0;
+    var road = new Uint8Array(GW * GH), water = new Uint8Array(GW * GH);
+    var at = function (x, y) { return (y + R) * GW + (x + R); }, inGrid = function (x, y) { return x >= -R && y >= -R && x < W + R && y < H + R; };
+    (run.roads || []).forEach(function (r) { road[at(r[0], r[1])] = r[2] || 2; });
+    (run.water || []).forEach(function (c) { water[at(c[0], c[1])] = 1; });
+    given.roads.forEach(function (r) { if (inGrid(r[0], r[1])) road[at(r[0], r[1])] = r[2]; });
+    given.water.forEach(function (c) { if (inGrid(c[0], c[1])) water[at(c[0], c[1])] = 1; });
+    var bs = given.buildings.map(function (b) { return { x: b[0], y: b[1], w: b[2], h: b[3] }; });
+    colourByDistance(run, bs, seed);
+    return { W: W, H: H, R: R, roads: given.roads, water: given.water, bridges: given.bridges || [], buildings: bs,
+      roadAt: function (x, y) { return inGrid(x, y) ? road[at(x, y)] : 0; }, waterAt: function (x, y) { return inGrid(x, y) ? water[at(x, y)] : 0; } };
+  }
+
   /* run: { W, H, seed, roads: [[x, y, class]], water: [[x, y]], buildings: [{ x, y, w, h, damage }] (top-left cells),
      epicentre: { x, y } }. ring: how many cells the context reaches out on each side (one sector: 36). */
-  function build(run, ring) {
+  function build(run, ring, given) {
+    if (given) return fromGenerator(run, ring, given);
     var W = run.W, H = run.H, R = ring || 36, seed = run.seed | 0, GW = W + 2 * R, GH = H + 2 * R;
     var road = new Uint8Array(GW * GH), water = new Uint8Array(GW * GH), used = new Uint8Array(GW * GH), seaAt = new Uint8Array(GW * GH);
     var at = function (x, y) { return (y + R) * GW + (x + R); };
@@ -145,31 +193,7 @@
       for (xx = bx; xx < bx + bw; xx++) for (yy = by; yy < by + bh; yy++) used[at(xx, yy)] = 1;
       bs.push({ x: bx, y: by, w: bw, h: bh });
     }
-    /* damage: continues the run's own damage-by-distance curve (city-block distance from the epicentre, as in the
-       simulator's earthquake rule). Mean damage is measured per distance from the run's buildings, kept non-increasing,
-       and carried on past the farthest building at the steeper of its own tail slope and the simulator's 3 per cell;
-       each building then takes the leftover of a run building at a similar distance, so the mix of colours carries on too. */
-    var ep = run.epicentre || { x: W / 2, y: H / 2 }, centre = function (b) { return [b.x + Math.floor(b.w / 2), b.y + Math.floor(b.h / 2)]; };
-    var dist = function (b) { var c = centre(b); return Math.abs(c[0] - ep.x) + Math.abs(c[1] - ep.y); };
-    var clamp = function (v) { return Math.max(0, Math.min(100, v)); };
-    var obs = (run.buildings || []).map(function (b) { return [dist(b), b.damage]; }).sort(function (p, q2) { return p[0] - q2[0]; });
-    var curve = [], dmax = 0;
-    if (obs.length) {
-      dmax = obs[obs.length - 1][0];
-      for (var dd = 0; dd <= dmax; dd++) {   /* mean of the run's buildings within 3 cells of this distance */
-        var sum = 0, cnt = 0; obs.forEach(function (o) { if (Math.abs(o[0] - dd) <= 3) { sum += o[1]; cnt++; } });
-        curve[dd] = cnt ? sum / cnt : (dd ? curve[dd - 1] : 100);
-      }
-      for (dd = 1; dd <= dmax; dd++) curve[dd] = Math.min(curve[dd], curve[dd - 1]);   /* damage never grows with distance */
-    }
-    var tail = dmax > 8 ? Math.max(3, (curve[dmax - 8] - curve[dmax]) / 8) : 3;
-    var meanAt = function (d) { return !obs.length ? 0 : d <= dmax ? curve[d] : curve[dmax] - tail * (d - dmax); };
-    var resid = obs.map(function (o) { return [o[0], o[1] - meanAt(o[0])]; });
-    bs.forEach(function (b) {
-      var d = dist(b), m = meanAt(d), near = resid.filter(function (r) { return Math.abs(r[0] - Math.min(d, dmax)) <= 4; });
-      var r = near.length ? near[Math.floor(hash(b.x, b.y, seed + 31) * near.length)][1] : 0;
-      b.damage = clamp(Math.round(m + r * Math.max(0, Math.min(1, m / 50))));   /* the spread shrinks as the mean nears 0 */
-    });
+    colourByDistance(run, bs, seed);
 
     var roads = [], waters = [], bridges = [];
     for (var cy = -R; cy < H + R; cy++) for (var cx = -R; cx < W + R; cx++) {
