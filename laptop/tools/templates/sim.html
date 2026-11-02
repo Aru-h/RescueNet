@@ -240,6 +240,14 @@ select option { background: var(--c-bg); color: var(--c-fg); }
 .markcard .lbl2 { margin-top: 8px; color: var(--c-faint); }
 .markcard .ack { margin-top: 6px; font-size: 13px; }
 .markcard .ack.bad { color: #ffd36b; }
+.draglayer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; }
+.markcard .ask { margin-top: 8px; font-size: 14px; }
+.loading form.board { display: grid; gap: 10px; text-align: left; width: min(420px, 100%); margin: 14px auto 0; }
+.loading form.board label { display: grid; gap: 4px; color: var(--c-mute); font-size: 13px; }
+.loading form.board input, .loading form.board select { font: inherit; color: var(--c-fg); background: var(--c-panel); border: 1px solid var(--c-rule); padding: 7px 9px; }
+.loading form.board button { font: inherit; font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; padding: 10px; background: var(--c-fg); color: var(--c-bg); border: 0; cursor: pointer; }
+.loading form.board button:disabled { opacity: .35; cursor: not-allowed; }
+.loading .bstate { color: var(--c-fg); }
 .loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--c-bg); z-index: 50; text-align: center; padding: 24px; }
 .loading p { max-width: 52ch; color: var(--c-mute); }
 .loading a { color: var(--c-fg); }
@@ -970,6 +978,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   function flagged(id) { var r = rawTeam(id), tr = r && r.consensus_tier || [0, 0]; return !!(r && (r.degraded || tr[0] === 2 || tr[1] === 2)); }
   function sendTeam(teamId, wid) {
     var inc = RUN.incOf[wid]; if (inc == null || !canAct()) return;
+    if (LIVE.board) { boardSend(teamId, wid, inc); return; }
     pending.push({ kind: 'sent', team: teamId, wid: wid, inc: inc });
     ackFor['w' + wid] = { text: 'Sending team ' + (teamId + 1) + '…' }; refreshMark();
     livePost2('override', { team_id: teamId, incident_id: inc }).catch(function (m) { pending.pop(); ackFor['w' + wid] = { bad: true, text: m }; refreshMark(); });
@@ -984,12 +993,41 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     return fetch('/api/run-live/' + what, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw (j.message || 'the app refused (' + r.status + ')'); return j; }); });
   }
+  /* On the boards: POST /api/board/override writes the frame to the board; whether a board applied it comes back
+     as acks the app tracks (/api/board/override/status): sent, relayed, then applied, rejected_not_ready,
+     rejected_bad_team, relay_failed, or unconfirmed when no final answer came in time. */
+  var BOARD_ANSWER = { applied: null, rejected_not_ready: 'the board was not ready', rejected_bad_team: 'the board does not know that team',
+    relay_failed: 'the board could not relay it to the team\'s board', unconfirmed: 'no answer from the board in time' };
+  function boardSend(teamId, wid, inc) {
+    var key = 'w' + wid;
+    ackFor[key] = { text: 'Sending team ' + (teamId + 1) + ' to the board…' }; refreshMark();
+    livePost2b('/api/board/override', { team_id: teamId, incident_id: inc }).then(function () {
+      ackFor[key] = { text: 'Sent to the board; waiting for it to confirm…' }; refreshMark();
+      var tries = 0;
+      (function poll() {
+        fetch('/api/board/override/status?team_id=' + teamId).then(function (r) { return r.json(); }).then(function (j) {
+          var st = j && j.override && (j.override.state || j.override.status);
+          if (st && st in BOARD_ANSWER) {
+            var ok = st === 'applied', tick = D ? D.tick : 0;
+            RUN.addOverride(ok ? 'sent' : 'refused', tick, teamId, inc, ok ? null : BOARD_ANSWER[st]);
+            ackFor[key] = ok ? { text: 'The board applied it: team ' + (teamId + 1) + ' goes there next, once its current job is done.' } : { bad: true, text: 'Not sent: ' + BOARD_ANSWER[st] + '.' };
+            refreshMark(); renderEvents(); if (tab === 'events') renderPane(); return;
+          }
+          if (++tries < 120) setTimeout(poll, 1000);
+        }).catch(function () { if (++tries < 120) setTimeout(poll, 1000); });
+      })();
+    }).catch(function (m) { ackFor[key] = { bad: true, text: m }; refreshMark(); });
+  }
+  function livePost2b(url, body) {
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok || j.status === 'error') throw (j.message || 'the app refused (' + r.status + ')'); return j; }); });
+  }
   function overrideAck(a) {
     var p = pending.shift() || { kind: 'sent', team: a.team_id, inc: a.incident_id };
     var ok = a.result === 'applied', team = a.team_id != null ? a.team_id : p.team;
     RUN.addOverride(ok ? p.kind : 'refused', a.effective_tick, team, p.kind === 'released' ? null : (a.incident_id != null ? a.incident_id : p.inc), ok ? null : a.reason);
     var key = p.kind === 'released' ? 't' + team : 'w' + (p.wid || RUN.seen[p.inc]);
-    ackFor[key] = ok ? { text: p.kind === 'released' ? 'Released: the system assigns it again.' : 'Team ' + (team + 1) + ' goes there next: it finishes what it is doing, then the system must assign it here (until then you can release it).' }
+    ackFor[key] = ok ? { text: p.kind === 'released' ? 'Released: the system assigns it again.' : 'Team ' + (team + 1) + ' goes there next, once its current job is done; what it had lined up after that goes back to the other teams.' }
                      : { bad: true, text: 'Not sent: ' + refusal(a.reason) + '.' };
     if (ok && p.kind === 'sent') ackFor['t' + team] = null;
     refreshMark(); renderEvents(); if (tab === 'events') renderPane();
@@ -1007,7 +1045,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
         (function () {
           var r = rawTeam(t.id), pinned = r && r.override, ack = ackFor['t' + t.id];
           var pinTo = pinned ? (RUN.seen[r.override_incident_id] || 'incident ' + r.override_incident_id) : '';
-          return (pinned ? '<p class="lbl2 mono">Sent by hand to ' + pinTo + '</p>' + (canAct() ? '<div class="acts"><button type="button" class="fly" data-a="release">Release</button></div>' : '') : '') +
+          return (pinned ? '<p class="lbl2 mono">Sent by hand to ' + pinTo + '</p>' + (canAct() && !LIVE.board ? '<div class="acts"><button type="button" class="fly" data-a="release">Release</button></div>' : '') : '') +
             (ack ? '<p class="ack' + (ack.bad ? ' bad' : '') + '">' + ack.text + '</p>' : '');
         })() +
         '<div class="acts">' + (is3d ? '<button type="button" class="fly" data-a="follow">Follow</button>' : '') + '<button type="button" class="fly" data-a="list">Show in Teams</button></div>';
@@ -1018,7 +1056,9 @@ select option { background: var(--c-bg); color: var(--c-fg); }
       '<p class="big">' + what + '</p>' +
       '<dl>' + dd('Kind', i.type) + (s !== 3 ? dd('Live victims', 'L-' + i.st[2]) : '') + dd('Found', tplus(i.w.found)) +
       (s === 3 ? dd('Completed', tplus(i.done)) : dd('Waiting', tplus(D.tick - i.w.found).replace('T+', ''))) + dd('Position', i.w.x + ', ' + i.w.y) + '</dl>' +
-      (s !== 3 && canAct() ? '<p class="lbl2 mono">Send a team</p><div class="send">' + D.teams.map(function (t) {
+      (propose && propose.wid === i.w.id && s === 0 && canAct() ? '<p class="ask">Send team ' + (propose.team + 1) + ' here? It goes after its current job.</p>' +
+        '<div class="acts"><button type="button" class="fly" data-a="confirm">Send team ' + (propose.team + 1) + '</button><button type="button" class="fly" data-a="cancel">Cancel</button></div>' : '') +
+      (s === 0 && canAct() ? '<p class="lbl2 mono">Send a team</p><div class="send">' + D.teams.map(function (t) {
         var busy = flagged(t.id), here = t.site === i.w.id;
         return '<button type="button" data-a="send" data-team="' + t.id + '"' + (busy || here ? ' disabled' : '') + ' title="' +
           (here ? 'Already heading here or working here' : busy ? 'Flagged by the system: the simulator will not reassign it until that clears' : 'Team ' + (t.id + 1) + ': ' + status(t)) + '">' + (t.id + 1) + '</button>';
@@ -1043,16 +1083,19 @@ select option { background: var(--c-bg); color: var(--c-fg); }
         if (a === 'list') { selTeam = mark.ref; var tb = document.querySelector('[data-tab="teams"]'); if (tb && tab !== 'teams') tb.click(); else renderPane(); var r = document.querySelector('#teamList .team[data-id="' + mark.ref + '"]'); if (r) r.scrollIntoView({ block: 'nearest' }); }
         if (a === 'fly') { var w = wsInfo(mark.ref).w; flyTo(w.x + .5, w.y + .5); }
         if (a === 'send') sendTeam(+b.dataset.team, mark.ref);
+        if (a === 'confirm' && propose) { var pr = propose; propose = null; sendTeam(pr.team, pr.wid); }
+        if (a === 'cancel') { propose = null; refreshMark(); }
         if (a === 'release') releaseTeam(mark.ref);
       };
     });
   }
   function showMark(h, px, py) {
+    if (propose && !(h.kind === 'w' && h.ref === propose.wid)) propose = null;
     $('#secCard').hidden = true; mark = { kind: h.kind, ref: h.ref }; var c = $('#markCard'); c.hidden = false; refreshMark();
     var mp = $('#map').getBoundingClientRect();
     c.style.left = Math.min(Math.max(8, px + 14), mp.width - 286) + 'px'; c.style.top = Math.min(Math.max(60, py + 14), mp.height - c.offsetHeight - 8) + 'px';
   }
-  function closeMark() { mark = null; $('#markCard').hidden = true; }
+  function closeMark() { propose = null; mark = null; $('#markCard').hidden = true; }
   function choose(sec, px, py) {
     if (!sec) return;
     if (sec.inner) setFocus();
@@ -1086,7 +1129,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
       if (k !== (hoverSec ? (hoverSec.inner || hoverSec.name) : null)) { hoverSec = s0; draw(); }
     });
     cv.addEventListener('mouseleave', function () { if (hoverSec) { hoverSec = null; draw(); } });
-    cv.addEventListener('click', function (e) { var b = cv.getBoundingClientRect(), m0 = mk(e); if (m0) showMark(m0, e.clientX - b.left, e.clientY - b.top); else { closeMark(); choose(at(e), e.clientX - b.left, e.clientY - b.top); } });
+    cv.addEventListener('click', function (e) { if (suppressClick) return; var b = cv.getBoundingClientRect(), m0 = mk(e); if (m0) showMark(m0, e.clientX - b.left, e.clientY - b.top); else { closeMark(); choose(at(e), e.clientX - b.left, e.clientY - b.top); } });
   })();
   /* pointer in 3D: a ray onto the ground; a click is a press that did not drag the camera */
   (function () {
@@ -1113,6 +1156,61 @@ select option { background: var(--c-bg); color: var(--c-fg); }
       var s0 = m0 ? null : at(e), k = s0 ? (s0.inner || s0.name) : null;
       if (k !== (hoverSec ? (hoverSec.inner || hoverSec.name) : null)) { hoverSec = s0; update3D(); }
     });
+  })();
+
+  /* ---------------- drag a team onto a worksite (live runs, newest tick): the old dashboard's gesture ----------------
+     Press on a team's marker and drag: a dashed line follows the pointer (blue over a worksite it can be sent to);
+     let go on that worksite and its card asks to confirm (Send / Cancel). In 3D the camera holds still while a team
+     is dragged. A press that does not move is a click, as before. */
+  var propose = null, suppressClick = false;   /* { team, wid } waiting for Send or Cancel on the worksite's card */
+  (function () {
+    var stage = $('.stage'), layer = document.createElement('canvas'), drag = null;
+    layer.className = 'draglayer'; layer.setAttribute('aria-hidden', 'true'); stage.appendChild(layer);
+    var in3D = function () { return !!three && $('#map').classList.contains('is3d'); };
+    var hitsNow = function () { return in3D() ? hits3D() : flatHits; };
+    var local = function (e) { var b = stage.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
+    /* only a worksite still waiting for a team: the simulator's pin holds only while its incident is open (on one a team
+       already has, core/cbba.c drops it at once), so a drop anywhere else would promise what will not happen */
+    var droppable = function (wid) { return D.worksites.some(function (w) { return w.id === wid && w.status === 0; }); };
+    function paint() {
+      var d = Math.min(2, window.devicePixelRatio || 1), w = stage.clientWidth, h = stage.clientHeight, x = layer.getContext('2d');
+      if (layer.width !== Math.round(w * d) || layer.height !== Math.round(h * d)) { layer.width = Math.round(w * d); layer.height = Math.round(h * d); }
+      x.setTransform(d, 0, 0, d, 0, 0); x.clearRect(0, 0, w, h);
+      if (!drag || !drag.moved) return;
+      var over = hitAt(hitsNow(), drag.p[0], drag.p[1]), ok = over && over.kind === 'w' && droppable(over.ref);
+      x.strokeStyle = x.fillStyle = ok ? css('--active') : css('--c-fg'); x.lineWidth = 2; x.setLineDash([6, 4]);
+      x.beginPath(); x.moveTo(drag.from[0], drag.from[1]); x.lineTo(drag.p[0], drag.p[1]); x.stroke(); x.setLineDash([]);
+      x.beginPath(); x.arc(drag.p[0], drag.p[1], ok ? 7 : 4, 0, 6.283); x.fill();
+    }
+    stage.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0 || !canAct() || !D) return;
+      var p = local(e), h = hitAt(hitsNow(), p[0], p[1]);
+      if (!h || h.kind !== 't') return;
+      drag = { team: h.ref, from: [(h.l + h.r) / 2, (h.t + h.b) / 2], p: p, moved: false };
+      if (three) three.controls.enabled = false;
+      e.stopPropagation();   /* keep the press from the 3D camera */
+    }, true);
+    window.addEventListener('pointermove', function (e) {
+      if (!drag) return;
+      drag.p = local(e);
+      if (!drag.moved && Math.hypot(drag.p[0] - drag.from[0], drag.p[1] - drag.from[1]) > 6) drag.moved = true;
+      paint();
+    }, true);
+    window.addEventListener('pointerup', function (e) {
+      if (!drag) return;
+      var d0 = drag, p = local(e); drag = null; if (three) three.controls.enabled = true; paint();
+      if (!d0.moved) {   /* a click on the team: in 3D the camera's handler never saw the press, so open its card here */
+        if (in3D()) { var h0 = hitAt(hits3D(), p[0], p[1]); if (h0) showMark(h0, p[0], p[1]); }
+        return;
+      }
+      suppressClick = true; setTimeout(function () { suppressClick = false; }, 0);
+      var h = hitAt(hitsNow(), p[0], p[1]);
+      if (!h || h.kind !== 'w' || !droppable(h.ref)) return;
+      var t = D.teams.filter(function (o) { return o.id === d0.team; })[0];
+      if (t && t.site === h.ref) return;   /* already going there */
+      propose = { team: d0.team, wid: h.ref };
+      showMark({ kind: 'w', ref: h.ref }, p[0], p[1]);
+    }, true);
   })();
 
   /* ---------------- controls ---------------- */
@@ -1144,10 +1242,11 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   function start() {
     var hd = RUN.header || {}, hrs = RUN.length() * TICK_S / 3600, loss = hd.link_loss;
     var demo = /^demo_/.test(RUN_NAME || '');
-    $('#runName').textContent = LIVE ? 'Live run' : demo ? 'Demo mission' : 'Recorded run';
-    $('#runFacts').innerHTML = ['Simulated city', (Math.round(hrs * 10) / 10) + ' h', FAULTS[hd.fault_profile] || (hd.fault_profile ? hd.fault_profile + ' faults' : 'Faults unknown'),
-      (loss == null ? '5%' : Math.round(loss * 100) + '%') + ' radio loss', 'Seed ' + (hd.seed == null ? '?' : hd.seed)].join(' &middot; ');
-    document.title = 'RescueNet · ' + (LIVE ? 'Live run' : demo ? 'Demo mission' : 'Seed ' + hd.seed);
+    $('#runName').textContent = LIVE ? (LIVE.board ? 'Board mission' : 'Live run') : demo ? 'Demo mission' : 'Recorded run';
+    $('#runFacts').innerHTML = [LIVE && LIVE.board ? 'On the boards' : 'Simulated city', (Math.round(hrs * 10) / 10) + ' h', FAULTS[hd.fault_profile] || (hd.fault_profile ? hd.fault_profile + ' faults' : 'Faults unknown'),
+      LIVE && LIVE.board ? (hd.time_scale === 1 ? 'Real time' : hd.time_scale + '\u00d7 real time') : (loss == null ? '5%' : Math.round(loss * 100) + '%') + ' radio loss',
+      'Seed ' + (hd.seed == null ? '?' : hd.seed)].join(' &middot; ');
+    document.title = 'RescueNet · ' + (LIVE ? (LIVE.board ? 'Board mission' : 'Live run') : demo ? 'Demo mission' : 'Seed ' + hd.seed);
     var t0 = LIVE ? NaN : parseInt(PARAMS.get('t'), 10);
     D = RUN.at(isNaN(t0) ? RUN.first() : t0); W = D.W; H = D.H; SZ = W;
     CTX = window.RNContext.build({ W: W, H: H, seed: hd.seed, roads: D.roads, water: D.water, buildings: D.buildings, epicentre: D.epicenter }, 36, CTXDATA);
@@ -1173,19 +1272,24 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   function liveControls() {
     var on = !!LIVE;
     $('#stopBtn').hidden = !on; $('#toLive').hidden = !on || LIVE.follow;
+    $('.tl-row .hint').innerHTML = 'Space ' + (on ? 'pause' : 'play') + ' &middot; &larr;&rarr; step &middot; J next event' + (on ? ' &middot; drag a team onto a worksite to send it' : '');
     $('#speed').disabled = on; $('#speed').title = on ? 'Set when the run starts' : 'Mission time per real second';
     var paused = on && LIVE.state === 'paused';
+    $('#playBtn').disabled = !!(on && LIVE.board);
     $('#playBtn').innerHTML = on && !paused ? '&#10074;&#10074;' : '&#9654;';
-    $('#playBtn').title = on ? (paused ? 'Resume the simulation (Space)' : 'Pause the simulation (Space)') : (playing ? 'Pause (Space)' : 'Play (Space)');
+    $('#playBtn').title = on ? (LIVE.board ? 'A board mission runs at its own pace' : paused ? 'Resume the simulation (Space)' : 'Pause the simulation (Space)') : (playing ? 'Pause (Space)' : 'Play (Space)');
     if (D) $('#clockSub').textContent = clockText();
   }
   function liveToggle() {
-    if (!LIVE || (LIVE.state !== 'running' && LIVE.state !== 'paused')) return;
+    if (!LIVE || LIVE.board || (LIVE.state !== 'running' && LIVE.state !== 'paused')) return;   /* a board mission runs at its own pace */
     livePost(LIVE.state === 'paused' ? 'resume' : 'pause').then(function (r) { return r.json(); }).then(function (b) {
       if (LIVE && b && b.ok) { LIVE.state = b.paused ? 'paused' : 'running'; liveControls(); }
     }).catch(function () { /* the run may have just ended */ });
   }
-  $('#stopBtn').onclick = function () { if (!LIVE) return; LIVE.state = 'stopping'; liveControls(); livePost('stop').catch(function () {}); };
+  $('#stopBtn').onclick = function () {
+    if (!LIVE) return; LIVE.state = 'stopping'; liveControls();
+    (LIVE.board ? fetch('/api/board/mission/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }) : livePost('stop')).catch(function () {});
+  };
   $('#toLive').onclick = function () { if (LIVE) setTick(RUN.last()); };
   function liveFrame() {   /* at most one redraw per screen frame, however fast the ticks come */
     if (drawQueued) return; drawQueued = true;
@@ -1222,6 +1326,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
       } else liveFrame();
     }
     else if (ev.type === 'override_ack') overrideAck(ev);
+    else if (ev.type === 'mission_end') liveEnd(null, 'the board mission ended');
     else if (ev.type === 'done') liveEnd(ev.recording || null, null);
     else if (ev.type === 'error') { if (LIVE.state === 'starting') loadFail(ev.message || 'The simulation did not start.'); else liveEnd(null, ev.message); }
   }
@@ -1248,7 +1353,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   }
   /* POST to the app and read its event stream (data: {...} lines) into liveEvent; fail(message) if it will not start */
   function liveStream(url, body, fail) {
-    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) {
+    fetch(url, body == null ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) {
       if (!r.ok || !r.body) return r.json().catch(function () { return {}; }).then(function (j) { throw new Error(j.message || j.error || 'The app would not start the run (' + r.status + ').'); });
       var rd = r.body.getReader(), dec = new TextDecoder(), buf = '';
       (function pump() {
@@ -1298,9 +1403,59 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   /* for the end-to-end test (dashboard_e2e_selftest.py's sim checks): read the state, open a marker's card */
   window.RNSimTest = {
     view: function () { return D; }, run: function () { return RUN; }, live: function () { return LIVE ? { state: LIVE.state, follow: LIVE.follow } : null; },
-    open: function (kind, ref) { showMark({ kind: kind, ref: ref }, 300, 200); }, release: function (id) { releaseTeam(id); }, flatHits: function () { return flatHits; }, is3d: function () { return !!three && $('#map').classList.contains('is3d'); }
+    open: function (kind, ref) { showMark({ kind: kind, ref: ref }, 300, 200); }, release: function (id) { releaseTeam(id); }, flatHits: function () { return flatHits; }, hits3D: function () { return hits3D(); }, camera: function () { if (!three) return null; var c = three.cam.position; return [+c.x.toFixed(4), +c.y.toFixed(4), +c.z.toFixed(4)]; }, is3d: function () { return !!three && $('#map').classList.contains('is3d'); }
   };
 
+  /* ---------------- board mode: /sim?board ----------------
+     The boards run the teams; the laptop runs the world and the clock (telemetry_bridge.MissionFeed). Connecting
+     to the board happens on the landing page; here: wait for the handshake, start the mission (or follow one that
+     is already running), then the same view as a live run, fed by /api/board/mission/stream. */
+  function boardPanel() {
+    $('#loading').innerHTML = '<div><p class="mono">Board mission</p><p class="bstate" id="bState">Asking the app about the board&hellip;</p>' +
+      '<form class="board" id="bForm"><label>City<input id="bSeed" inputmode="numeric" value="' + (parseInt(PARAMS.get('seed'), 10) || 1041) + '"></label>' +
+      '<label>Length<select id="bTicks"><option value="200">2 h</option><option value="600" selected>6 h</option><option value="1200">12 h</option><option value="2400">24 h</option></select></label>' +
+      '<label>What goes wrong<select id="bFault"><option value="none">Nothing</option><option value="mobility">Movement</option><option value="communication">Radio</option><option value="resource">Supplies</option><option value="combined" selected>Mixed</option><option value="random">Rough</option></select></label>' +
+      '<label>Pace<select id="bPace" title="Real time is one tick per 36 s, as in a real deployment"><option value="1">Real time (36 s a tick)</option><option value="10" selected>10\u00d7 (3.6 s a tick)</option><option value="60">60\u00d7 (0.6 s a tick)</option></select></label>' +
+      '<button type="submit" id="bGo" disabled>Start the board mission</button><button type="button" id="bFollow" hidden>Follow the mission that is running</button></form>' +
+      '<p class="mono" style="margin-top:14px"><a href="/landing#connect">&larr; Connect a board</a></p></div>';
+    var timer = null;
+    function status() {
+      fetch('/api/status').then(function (r) { return r.json(); }).then(function (st) {
+        var b = st.board || {}, m = b.mission, txt;
+        if (!b.connected && !(b.handshake && b.handshake.fake_board)) txt = 'No board connected. Connect one on the landing page first.';
+        else if (m && m.error) txt = 'The mission feed failed: ' + m.error;
+        else if (m && m.running) txt = 'A board mission is running (tick ' + m.last_tick + ').';
+        else if (b.all_ready) txt = 'Boards ready.';
+        else txt = 'Connected; waiting for the board to answer the handshake…';
+        $('#bState').textContent = txt;
+        $('#bGo').disabled = !b.all_ready || !!(m && m.running);
+        $('#bFollow').hidden = !(m && m.running);
+      }).catch(function () { $('#bState').textContent = 'The app did not answer.'; });
+    }
+    status(); timer = setInterval(status, 1000);
+    $('#bForm').onsubmit = function (e) {
+      e.preventDefault(); $('#bGo').disabled = true;
+      var body = { seed: parseInt($('#bSeed').value, 10) || 1, ticks: +$('#bTicks').value, fault_profile: $('#bFault').value, time_scale: +$('#bPace').value };
+      $('#bState').textContent = 'Starting the board mission…';
+      livePost2b('/api/board/launch', body).then(function () { clearInterval(timer); boardFollow(body); })
+        .catch(function (m) { $('#bState').textContent = 'The board mission did not start: ' + m; $('#bGo').disabled = false; });
+    };
+    $('#bFollow').onclick = function () {
+      clearInterval(timer);
+      fetch('/api/status').then(function (r) { return r.json(); }).then(function (st) {
+        var m = (st.board || {}).mission || {};
+        boardFollow({ seed: m.seed, ticks: m.ticks, fault_profile: m.fault_profile, time_scale: m.time_scale });
+      });
+    };
+  }
+  function boardFollow(p) {
+    LIVE = { state: 'starting', follow: true, board: true };
+    RUN = RNRun.create(); RUN.header = { seed: p.seed, ticks: p.ticks, fault_profile: p.fault_profile, time_scale: p.time_scale, link_loss: null };
+    $('#loading').innerHTML = '<p class="mono" id="loadingTxt">Waiting for the board mission&rsquo;s first tick&hellip;</p>';
+    liveStream('/api/board/mission/stream', null, function (msg) { loadFail(msg); });
+  }
+
+  if (!RUN_NAME && PARAMS.get('board') !== null) { boardPanel(); return; }
   if (!RUN_NAME && PARAMS.get('seed') !== null) { liveStart(); return; }
   if (!RUN_NAME) { loadFail('No run chosen.'); return; }
   Promise.all([

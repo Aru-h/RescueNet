@@ -608,7 +608,16 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
           <label><input type="radio" name="msLen" value="1200"><span>12 h</span></label>
           <label><input type="radio" name="msLen" value="2400"><span>24 h</span></label>
         </fieldset>
-        <p class="small">Mission time, not waiting time: you choose the playback speed on the next page. One step of the simulation is 36 seconds.</p>
+        <p class="small">Mission time, not waiting time. One step of the simulation is 36 seconds.</p>
+
+        <fieldset class="ms-seg">
+          <legend class="lbl mono">Speed</legend>
+          <label><input type="radio" name="msSpeed" value="0"><span>36 s / s</span></label>
+          <label><input type="radio" name="msSpeed" value="1" checked><span>3 min / s</span></label>
+          <label><input type="radio" name="msSpeed" value="2"><span>6 min / s</span></label>
+          <label><input type="radio" name="msSpeed" value="3"><span>15 min / s</span></label>
+        </fieldset>
+        <p class="small" id="msSpeedNote">Mission time per real second. Set when the run starts: the simulator keeps this pace until the run ends.</p>
 
         <details class="ms-pick" id="msFaultBox">
         <summary><span class="lbl mono">What goes wrong</span><span class="ms-chosen" id="msFaultNow"></span></summary>
@@ -1518,11 +1527,15 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   function msVal() {
     var seed = parseInt(($('#msSeed').value || '').replace(/[^0-9]/g, ''), 10);
     return { seed: isFinite(seed) ? seed : 1, ticks: +document.querySelector('input[name=msLen]:checked').value,
-      fault: document.querySelector('input[name=msFault]:checked').value, loss: $('#msLoss').value };
+      fault: document.querySelector('input[name=msFault]:checked').value, loss: $('#msLoss').value,
+      speed: +document.querySelector('input[name=msSpeed]:checked').value };
   }
   function msUpdate() {
     var v = msVal(), hrs = v.ticks * 36 / 3600, lossTxt = v.loss === '' ? '5%' : Math.round(v.loss * 100) + '%';
+    var PACE = [36, 180, 360, 900], SPEED = ['36 s / s', '3 min / s', '6 min / s', '15 min / s'];   /* mission seconds per real second (the sim page's speeds) */
+    var watch = v.ticks * 36 / PACE[v.speed], watchTxt = watch >= 3600 ? (Math.round(watch / 360) / 10) + ' h' : Math.max(1, Math.round(watch / 60)) + ' min';
     $('#msSum').innerHTML = '<dt>City</dt><dd>No. ' + v.seed + '</dd><dt>Length</dt><dd>' + hrs + ' h &middot; ' + v.ticks + ' steps</dd>' +
+      '<dt>Speed</dt><dd>' + SPEED[v.speed] + ' &middot; ' + watchTxt + ' to watch</dd>' +
       '<dt>Faults</dt><dd>' + MS_FAULT[v.fault] + '</dd><dt>Radio loss</dt><dd>' + lossTxt + '</dd><dt>Teams</dt><dd>10</dd>';
     $('#msWhat').textContent = 'An earthquake has just hit city No. ' + v.seed + '. Ten teams search it for ' + hrs + ' hours of mission time, sharing what they find over radio' +
       (v.fault === 'none' ? '.' : ', while ' + (v.fault === 'combined' || v.fault === 'random' ? 'faults of every kind' : MS_FAULT[v.fault].toLowerCase() + ' faults') + ' are injected without telling them.');
@@ -1548,7 +1561,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   $('#msForm').addEventListener('submit', function (e) {
     e.preventDefault(); var v = msVal();
     /* the sim page (/sim) starts the run with these and shows it as it runs */
-    var q = '?seed=' + v.seed + '&ticks=' + v.ticks + '&faults=' + v.fault + (v.loss !== '' ? '&loss=' + v.loss : '');
+    var q = '?seed=' + v.seed + '&ticks=' + v.ticks + '&faults=' + v.fault + (v.loss !== '' ? '&loss=' + v.loss : '') + '&speed=' + v.speed;
     appStatus().then(function (st) {
       if (st) { location.href = 'sim' + q; return; }
       var n = $('#msNote'); n.hidden = false;

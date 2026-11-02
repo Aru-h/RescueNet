@@ -837,6 +837,18 @@ static void cbba_apply_override_pin(uint8_t team_id)
     agent->winning_bid[pinned_slot] = CBBA_OVERRIDE_PIN_BID;
 }
 
+uint8_t cbba_override_pin_slot(uint8_t team_id)
+{
+    uint8_t slot;
+
+    if(team_id >= NUM_TEAMS || !g_cbba_agent_state[team_id].override_active)
+        return NO_ASSIGNMENT;
+    slot = cbba_find_incident_slot_by_id(g_cbba_agent_state[team_id].override_incident_id);
+    if(slot == NO_ASSIGNMENT || !g_incidents[slot].slot_occupied || g_incidents[slot].status != INC_OPEN)
+        return NO_ASSIGNMENT;
+    return slot;
+}
+
 void cbba_build_bundle(uint8_t team_id)
 {
     TeamState_t *team=&g_teams[team_id];

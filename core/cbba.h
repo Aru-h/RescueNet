@@ -145,6 +145,11 @@ void cbba_wait_poll(void);
 
 void cbba_build_bundle(uint8_t team_id);
 void cbba_run(void);
+
+/* The incident slot team_id is pinned to by a manual override (override_active, a person's "send this team
+   there"), while the pin is live and that incident is still OPEN; NO_ASSIGNMENT otherwise. Read-only: the pin's
+   own lifecycle stays in cbba_apply_override_pin() (core/cbba.c). */
+uint8_t cbba_override_pin_slot(uint8_t team_id);
 void cbba_improve_routes(void);
 void cbba_sync_mission_execution_twin(void);
 uint32_t cbba_get_two_opt_improvements(void);

@@ -14,6 +14,24 @@ void allocate_all_incidents(void);
 bool team_can_accept_incident(const TeamState_t *team,const IncidentState_t *incident);
 
 /*
+ * A manual override pin makes the pinned incident the team's NEXT job (what a person sending a team somewhere
+ * means), not merely the winner of its next CBBA round: CBBA alone only acts on the pin when the team is free, and
+ * by then a busy team has already moved on to whatever it had queued before the pin. With the team's queue
+ * (current job, then what is lined up after it):
+ *   - the current job stays (on the way to it, or working on it);
+ *   - allocator_apply_override_queues() (start of allocate_all_incidents()): everything lined up after the current
+ *     job goes back to OPEN, unassigned, for the allocator - other teams can take it at once;
+ *   - allocator_override_next(): when the team finishes its current job (core/incident.c's release_team()), the
+ *     pinned incident is its next job. After that the team is free, and the allocator picks what it does next
+ *     from where it then is. Returns 1 when it assigned the pin, 0 when the team cannot take it now (judged as the
+ *     free team it is about to be: stamina, equipment, recovery, exclusions); the pin then wins the team's next
+ *     CBBA round once it can, as before, and nothing lined up before the pin goes first.
+ * Both do nothing without a live pin, so a run without overrides is unchanged.
+ */
+uint8_t allocator_override_next(uint8_t team_id);
+void allocator_apply_override_queues(void);
+
+/*
  * Single source of truth for "how much stamina does this team need to
  * take on new work" - shared with core/recovery_manager.c so its idle-
  * team rest-routing threshold can't silently drift away from the

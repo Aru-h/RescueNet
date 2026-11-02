@@ -271,6 +271,52 @@ else:
     bridge = TelemetryBridge()
 
 
+# TEST ONLY (laptop/tools/sim_e2e_selftest.py's board checks): DASHBOARD_FAKE_BOARD=1
+# attaches a stand-in for the USB serial port and a handshake that has already
+# completed, the same stand-ins mission_feed_selftest.py uses, so the board
+# mission routes (/api/board/launch, the stream, stop, override) run for real
+# against the real simulator with no hardware. Bytes "sent to the board" are
+# kept in memory and nothing is ever read back. Never set in normal use.
+if os.environ.get("DASHBOARD_FAKE_BOARD") == "1" and not SIM_ONLY:
+    class _FakeBoardSerial:
+        is_open = True
+        port = "fake-board"
+
+        def __init__(self):
+            self.written = bytearray()
+
+        def write(self, data):
+            self.written.extend(data)
+            return len(data)
+
+        def flush(self):
+            pass
+
+        def close(self):
+            self.is_open = False
+
+    class _FakeReadyHandshake:
+        can_proceed = True
+
+        def status_dict(self):
+            return {"fake_board": True, "can_proceed": True}
+
+        def feed(self, data):
+            return data
+
+        def due_for_req(self):
+            return False
+
+        def consume_newly_ready(self):
+            return []
+
+        def request_dk_only_override(self):
+            return False
+
+    bridge.serial_conn = _FakeBoardSerial()
+    bridge.handshake = _FakeReadyHandshake()
+
+
 def build_binary():
     """Runs `make` in the project dir. Returns (ok, output)."""
     try:
@@ -935,8 +981,8 @@ def api_board_launch():
 @app.route("/api/board/mission/stream")
 def api_board_mission_stream():
     """Server-sent events for the running board mission, in the same shape
-    /api/run-live streams (static_env, then frame messages), so the Live Ops
-    view renders it unchanged. Each frame is the laptop's world with every
+    /api/run-live streams (static_env, static_map, then frame messages), so
+    the sim page renders it unchanged. Each frame is the laptop's world with every
     team as its board last reported it. Ends when the mission stops."""
     mission = getattr(bridge, "mission", None)
 
@@ -945,6 +991,7 @@ def api_board_mission_stream():
             yield f"data: {json.dumps({'type': 'error', 'message': 'no board mission running'})}\n\n"
             return
         sent_env = None
+        sent_map = None
         last_seq = 0
         idle_since = time.time()
         while getattr(bridge, "mission", None) is mission:
@@ -953,6 +1000,10 @@ def api_board_mission_stream():
             if env is not None and env is not sent_env:
                 sent_env = env
                 yield f"data: {json.dumps({'type': 'static_env', 'env': env})}\n\n"
+            terrain = mission.static_map() if hasattr(mission, "static_map") else None
+            if terrain is not None and terrain is not sent_map:   # the terrain too (water, roads), as /api/run-live sends it
+                sent_map = terrain
+                yield f"data: {json.dumps({'type': 'static_map', 'map': terrain})}\n\n"
             for seq, frame in frames:
                 last_seq = seq
                 yield f"data: {json.dumps({'type': 'frame', 'frame': frame})}\n\n"

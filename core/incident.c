@@ -1147,6 +1147,9 @@ static void release_team(uint8_t team_id)
 
     team->assigned_task_pool = TASK_POOL_NONE;
     team->assigned_task_slot = NO_ASSIGNMENT;
+    /* a manual override pin is the team's next job, before anything it had queued (core/allocator.h) */
+    if(allocator_override_next(team_id))
+        return;
     if(dispatch_next_queued_incident(team))
         return;
 

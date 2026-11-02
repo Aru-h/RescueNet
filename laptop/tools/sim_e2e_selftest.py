@@ -267,12 +267,41 @@ def check_live(page):
           f"when the run ends it is saved and the page carries on as that recording ({clock(page)!r})")
 
 
+def _marker_points(page, which):
+    """Page coordinates of each marker's centre that a press there would hit (the topmost marker at that point)."""
+    hits = page.evaluate("""(w) => { const cv = document.getElementById(w === 'flat' ? 'cv' : 'cv3').getBoundingClientRect();
+      const hs = w === 'flat' ? RNSimTest.flatHits() : RNSimTest.hits3D();
+      return hs.map(h => ({ kind: h.kind, ref: h.ref, l: h.l, t: h.t, r: h.r, b: h.b, ox: cv.left, oy: cv.top })); }""", which)
+    out = []
+    for i, h in enumerate(hits):
+        cx, cy = (h["l"] + h["r"]) / 2, (h["t"] + h["b"]) / 2
+        top = None
+        for g in hits:   # the page's hitAt(): the last marker drawn wins
+            if g["l"] <= cx <= g["r"] and g["t"] <= cy <= g["b"]:
+                top = g
+        if top is h:
+            out.append({"kind": h["kind"], "ref": h["ref"], "x": h["ox"] + cx, "y": h["oy"] + cy})
+    return out
+
+
+def _drag(page, a, b):
+    page.mouse.move(a["x"], a["y"]); page.mouse.down()
+    page.mouse.move((a["x"] + b["x"]) / 2, (a["y"] + b["y"]) / 2, steps=6)
+    page.mouse.move(b["x"], b["y"], steps=6); page.mouse.up()
+
+
 def check_override(page):
     open_sim(page, "seed=1041&ticks=400&faults=none&speed=1")
-    page.wait_for_function("() => { const D = RNSimTest.view(); return D.worksites.some(w => w.status === 0) && D.teams.some(t => t.status === 2 && t.tier[0] < 2 && t.tier[1] < 2); }", timeout=150000)
-    page.click("#playBtn"); page.wait_for_function("() => RNSimTest.live().state === 'paused'", timeout=10000)
-    # chosen after the pause: by then the system may already have assigned the worksite seen waiting a moment ago
-    wid = page.evaluate("() => { const ws = RNSimTest.view().worksites; return (ws.find(w => w.status === 0) || ws[0]).id; }")
+    # paused with a worksite still waiting for a team (the system may assign the one seen a moment before the pause)
+    wid = None
+    for _ in range(12):
+        page.wait_for_function("() => { const D = RNSimTest.view(); return D.worksites.some(w => w.status === 0) && D.teams.some(t => t.status === 2 && t.tier[0] < 2 && t.tier[1] < 2); }", timeout=150000)
+        page.click("#playBtn"); page.wait_for_function("() => RNSimTest.live().state === 'paused'", timeout=10000)
+        wid = page.evaluate("() => { const w = RNSimTest.view().worksites.find(w => w.status === 0); return w ? w.id : null; }")
+        if wid:
+            break
+        page.click("#playBtn"); page.wait_for_timeout(1500)
+    check(wid is not None, "a worksite waiting for a team to send one to")
     page.evaluate("(w) => RNSimTest.open('w', w)", wid)
     buttons = page.evaluate("() => Array.from(document.querySelectorAll('#markCard .send button')).map(b => [+b.dataset.team, b.disabled])")
     flagged = page.evaluate("() => RNSimTest.view().raw_teams.filter(r => r.degraded || (r.consensus_tier || [0, 0]).includes(2)).map(r => r.id)")
@@ -280,10 +309,20 @@ def check_override(page):
           f"a live worksite card offers every team; teams the system has flagged are greyed out "
           f"({'flagged now: ' + str(flagged) if flagged else 'none flagged at this tick, so only the count is checked'})")
     working = page.evaluate("() => RNSimTest.view().teams.filter(t => t.status === 2).map(t => t.id)")
-    team = next((t for t, d in buttons if not d and t in working), None)
+    page.keyboard.press("Escape")
+    # drag a team onto the worksite on the flat map (the old dashboard's gesture), then confirm on the card
+    page.click("#vflat"); page.wait_for_timeout(300)
+    pts = _marker_points(page, "flat")
+    target = next((m for m in pts if m["kind"] == "w" and m["ref"] == wid), None)
+    free = [t for t, d in buttons if not d]
+    team = next((m["ref"] for m in pts if m["kind"] == "t" and m["ref"] in working and m["ref"] in free), None)
     if team is None:
-        team = next(t for t, d in buttons if not d)
-    page.click(f'#markCard .send button[data-team="{team}"]')
+        team = next(m["ref"] for m in pts if m["kind"] == "t" and m["ref"] in free)
+    check(target is not None, f"the worksite's marker can be dropped on ({wid})")
+    _drag(page, next(m for m in pts if m["kind"] == "t" and m["ref"] == team), target)
+    ask = page.evaluate("() => (document.querySelector('#markCard .ask') || {}).textContent || ''")
+    check(f"Send team {team + 1} here?" in ask, f"dragging team {team + 1} onto {wid} opens its card asking to confirm ({ask!r})")
+    page.click('#markCard [data-a="confirm"]')
     page.click("#playBtn")
     page.wait_for_function("() => /goes there next|Not sent/.test((document.querySelector('#markCard .ack') || {}).textContent || '')", timeout=30000)
     ack = page.evaluate("() => document.querySelector('#markCard .ack').textContent")
@@ -299,6 +338,33 @@ def check_override(page):
     page.evaluate("(t) => RNSimTest.release(t)", team)
     page.wait_for_function("() => /Released|Not/.test((document.querySelector('#markCard .ack') || {}).textContent || '')", timeout=30000)
     check("Released" in page.evaluate("() => document.querySelector('#markCard .ack').textContent"), "Release is applied")
+    if page.evaluate("() => !!(window.THREE && window.THREE.OrbitControls)"):
+        # the same gesture in 3D: the camera holds still and the card asks; Cancel sends nothing
+        page.click("#playBtn"); page.wait_for_function("() => RNSimTest.live().state === 'paused'", timeout=10000)
+        page.keyboard.press("Escape"); page.click("#v3d"); page.wait_for_timeout(1200)
+        ws3, tm3 = [], []
+        for _ in range(10):   # a moment with a waiting worksite and a team both clickable on screen
+            pts3 = _marker_points(page, "3d")
+            ws3 = [m for m in pts3 if m["kind"] == "w" and page.evaluate("(w) => RNSimTest.view().worksites.some(x => x.id === w && x.status === 0)", m["ref"])]
+            tm3 = [m for m in pts3 if m["kind"] == "t"]
+            if ws3 and tm3:
+                break
+            page.click("#playBtn"); page.wait_for_timeout(1500); page.click("#playBtn")
+            page.wait_for_function("() => RNSimTest.live().state === 'paused'", timeout=10000); page.wait_for_timeout(600)
+        if ws3 and tm3:
+            cam0 = page.evaluate("() => RNSimTest.camera()")
+            sent0 = page.evaluate("() => RNSimTest.run().events.filter(e => e[1] === 'sent').length")
+            _drag(page, tm3[0], ws3[0])
+            ask3 = page.evaluate("() => (document.querySelector('#markCard .ask') || {}).textContent || ''")
+            check("here?" in ask3 and page.evaluate("() => RNSimTest.camera()") == cam0,
+                  f"in 3D, dragging a team onto a worksite asks to confirm and the camera holds still ({ask3!r})")
+            page.click('#markCard [data-a="cancel"]')
+            page.wait_for_timeout(300)   # the card redraws just after the click (it holds still while a button is pressed)
+            check(page.evaluate("() => !document.querySelector('#markCard .ask')") and
+                  page.evaluate("() => RNSimTest.run().events.filter(e => e[1] === 'sent').length") == sent0, "Cancel sends nothing")
+        else:
+            check(False, f"3D drag: no worksite and team markers to drag between ({len(ws3)}, {len(tm3)})")
+        page.click("#playBtn")
     page.click("#stopBtn")
     page.wait_for_function("() => /run=/.test(location.search)", timeout=30000)
     name = page.evaluate("() => new URLSearchParams(location.search).get('run')")
@@ -314,7 +380,8 @@ def check_links(page):
     page.evaluate("() => document.getElementById('msForm').requestSubmit()")
     page.wait_for_url("**/sim?**", timeout=20000)
     url = page.url
-    check("/sim?seed=1012" in url and "ticks=" in url and "faults=" in url, f"the landing's mission setup opens the sim page with its choices ({url.split('/', 3)[-1]})")
+    check("/sim?seed=1012" in url and "ticks=" in url and "faults=" in url and "speed=1" in url,
+          f"the landing's mission setup opens the sim page with its choices, speed included ({url.split('/', 3)[-1]})")
     page.wait_for_function("() => document.getElementById('loading').hidden || /app/.test(document.getElementById('loadingTxt').textContent)", timeout=90000)
     page.evaluate("() => fetch('/api/run-live/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })")
     page.goto(f"{BASE}/replay")

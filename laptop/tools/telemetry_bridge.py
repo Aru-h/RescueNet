@@ -813,6 +813,7 @@ class MissionFeed:
         self._live_seq = 0
         self._live_frames = []          # [(seq, frame dict)], newest last
         self._static_env = None
+        self._static_map = None          # the latest STATICMAP (terrain: water, roads), for the sim page
         self._proc = None
         self._stdin_lock = threading.Lock()
         self._workdir = None
@@ -823,8 +824,8 @@ class MissionFeed:
 
     def feed_line(self, line: str) -> bool:
         """One simulator stdout line. MLFRAME lines are queued for the
-        boards; LIVEFRAME/STATICENV lines are kept for the dashboard."""
-        if line.startswith("LIVEFRAME ") or line.startswith("STATICENV "):
+        boards; LIVEFRAME/STATICENV/STATICMAP lines are kept for the dashboard."""
+        if line.startswith("LIVEFRAME ") or line.startswith("STATICENV ") or line.startswith("STATICMAP "):
             return self._feed_live_line(line)
         parts = line.strip().split()
         if len(parts) != 3 or parts[0] != "MLFRAME":
@@ -880,6 +881,8 @@ class MissionFeed:
         with self._lock:
             if kind == "STATICENV":
                 self._static_env = data
+            elif kind == "STATICMAP":
+                self._static_map = data
             else:
                 self._live_seq += 1
                 self._live_frames.append((self._live_seq, data))
@@ -890,6 +893,11 @@ class MissionFeed:
         """(static_env or None, [(seq, frame)] newer than after_seq)."""
         with self._lock:
             return self._static_env, [(s, f) for s, f in self._live_frames if s > after_seq]
+
+    def static_map(self):
+        """The latest STATICMAP (the city's terrain grid) or None."""
+        with self._lock:
+            return self._static_map
 
     def pump(self, now=None) -> int:
         """Schedules re-sends that are due and sends at most one frame.

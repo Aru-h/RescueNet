@@ -133,6 +133,81 @@ void assign_incident(uint8_t team_id, uint8_t incident_slot)
     snapshot_record(g_sim_step_tick, EVENT_TEAM_ASSIGNED, team_id);
 }
 
+/* The jobs queued after the team's current one go back to OPEN (assigned to nobody), and the queue is emptied. */
+static void reopen_queued_followups(TeamState_t *team)
+{
+    for(uint8_t q = (uint8_t)(team->incident_queue_index + 1u); q < team->incident_queue_size; q++)
+    {
+        uint8_t slot = team->incident_queue_slot[q];
+        IncidentState_t *incident;
+
+        if(slot >= NUM_INCIDENTS)
+            continue;
+        incident = &g_incidents[slot];
+        if(incident->slot_occupied && incident->incident_id == team->incident_queue_id[q] &&
+           incident->status == INC_ASSIGNED && incident->assigned_team == team->team_id)
+        {
+            incident->status = INC_OPEN;
+            incident->assigned_team = NO_ASSIGNMENT;
+        }
+    }
+    team->incident_queue_size = 0;
+    team->incident_queue_index = 0;
+    for(uint8_t q = 0; q < CBBA_MAX_BUNDLE_SIZE; q++)
+    {
+        team->incident_queue_slot[q] = NO_ASSIGNMENT;
+        team->incident_queue_id[q] = 0;
+    }
+}
+
+/* Assign team_id the pinned incident pin as its one queued job, if it can take it as a free team. */
+static uint8_t assign_pinned(uint8_t team_id, uint8_t pin)
+{
+    TeamState_t *team = &g_teams[team_id];
+    uint8_t was = team->status;
+
+    team->status = STATUS_AVAILABLE;   /* judged as the free team it is about to be */
+    if(!team_can_accept_incident(team, &g_incidents[pin]))
+    {
+        team->status = was;
+        return 0u;
+    }
+    team->incident_queue_slot[0] = pin;
+    team->incident_queue_id[0] = g_incidents[pin].incident_id;
+    team->incident_queue_size = 1u;
+    team->incident_queue_index = 0u;
+    assign_incident(team_id, pin);
+    return 1u;
+}
+
+uint8_t allocator_override_next(uint8_t team_id)
+{
+    uint8_t pin;
+
+    if(team_id >= NUM_TEAMS)
+        return 0u;
+    pin = cbba_override_pin_slot(team_id);
+    if(pin == NO_ASSIGNMENT)
+        return 0u;
+    reopen_queued_followups(&g_teams[team_id]);
+    return assign_pinned(team_id, pin);
+}
+
+void allocator_apply_override_queues(void)
+{
+    for(uint8_t team_id = 0; team_id < NUM_TEAMS; team_id++)
+    {
+        TeamState_t *team = &g_teams[team_id];
+
+        if(cbba_override_pin_slot(team_id) == NO_ASSIGNMENT)
+            continue;
+        /* busy with its current job (on the way, or on scene): that job stays; what was lined up after it goes
+           back to the allocator now, so other teams can take it while this one finishes */
+        if(team->status == STATUS_EN_ROUTE || team->status == STATUS_ON_SCENE)
+            reopen_queued_followups(team);
+    }
+}
+
 void allocate_all_incidents(void)
 {
     /* SimRole_t (simulation.h): a board creates no world tasks of its
@@ -145,6 +220,7 @@ void allocate_all_incidents(void)
         return;
     }
 
+    allocator_apply_override_queues();
     cbba_run();
     if(g_probe.central_alloc)
         probe_central_assign();   /* Step 5 DQ1 */
