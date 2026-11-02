@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "mission_state.h"
 
-#define MAX_ENV_BUILDINGS 192
+#define MAX_ENV_BUILDINGS 256   /* laptop-only storage (the board never builds a world); was 192, which full cities reached */
 #define MAX_ENV_NAV_NODES 1024
 #define MAX_ENV_NAV_EDGES 4096
 #define ENV_NO_BUILDING 0xFFFF

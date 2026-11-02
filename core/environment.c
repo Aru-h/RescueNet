@@ -103,9 +103,18 @@ static EnvironmentNavEdge_t g_nav_edges[MAX_ENV_NAV_EDGES];
 static GatewaySite_t g_gateway_sites[NUM_EVACUATION_GATEWAYS];
 
 #if ENVIRONMENT_HAS_WORLD_STORAGE
-static uint8_t g_coast_orientation = 0;
-static int16_t g_river_center[GRID_WIDTH];
+/* The river. It runs either west-east (centre given per column) or north-south (centre per row), bends gently (the
+   centre moves at most one cell per step) and is 2-4 cells wide. Its course is a function of WORLD position (the
+   sector's offset plus the cell), so a neighbouring sector generated with the same seed carries it on across the edge.
+   There is no coast: every map used to have a 3-5 cell strip of sea along one side, which read as a beach. */
+static int16_t g_river_center[GRID_WIDTH > GRID_HEIGHT ? GRID_WIDTH : GRID_HEIGHT];
+static uint8_t g_river_width[GRID_WIDTH > GRID_HEIGHT ? GRID_WIDTH : GRID_HEIGHT];
 static uint8_t g_has_river = 0;
+static uint8_t g_river_vertical = 0;
+static uint8_t g_river_mask[GRID_WIDTH][GRID_HEIGHT];
+/* Where this sector sits in the world, in cells (0, 0 for a single-sector run). */
+static int32_t g_world_x = 0;
+static int32_t g_world_y = 0;
 
 static uint8_t clamp_u8(int value, uint8_t min, uint8_t max)
 {
@@ -456,6 +465,9 @@ static void reset_generation_state(void)
     memset(g_nav_edges, 0, sizeof(g_nav_edges));
     memset(g_gateway_sites, 0, sizeof(g_gateway_sites));
     clear_pending_hazard_events();
+    memset(g_river_mask, 0, sizeof(g_river_mask));
+    g_has_river = 0;
+    g_river_vertical = 0;
 
     for(uint16_t i = 0; i < MAX_ENV_BUILDINGS; i++)
         g_environment_buildings[i].building_id = ENV_NO_BUILDING;
@@ -463,6 +475,7 @@ static void reset_generation_state(void)
     for(int x = 0; x < GRID_WIDTH; x++)
     {
         g_river_center[x] = -1;
+        g_river_width[x] = 0;
         for(int y = 0; y < GRID_HEIGHT; y++)
         {
             g_environment[x][y].building_id = ENV_NO_BUILDING;
@@ -478,15 +491,20 @@ static void reset_generation_state(void)
     }
 }
 
-static uint8_t distance_to_coast(int x, int y)
+/* Cells from (x, y) to the river's nearest bank (0 on the river); 255 when there is no river. Replaces the old
+   distance-to-coast, which every "near the water" rule used. */
+static uint8_t distance_to_water(int x, int y)
 {
-    switch(g_coast_orientation)
-    {
-        case 0: return (uint8_t)(GRID_HEIGHT - 1 - y);
-        case 1: return (uint8_t)y;
-        case 2: return (uint8_t)(GRID_WIDTH - 1 - x);
-        default:return (uint8_t)x;
-    }
+    if(!g_has_river)
+        return 255;
+    int along = g_river_vertical ? y : x;
+    int across = g_river_vertical ? x : y;
+    if(along < 0 || along >= (g_river_vertical ? GRID_HEIGHT : GRID_WIDTH) || g_river_center[along] < 0)
+        return 255;
+    int half_lo = (g_river_width[along] - 1) / 2, half_hi = g_river_width[along] / 2;
+    int lo = g_river_center[along] - half_lo, hi = g_river_center[along] + half_hi;
+    int d = across < lo ? lo - across : across > hi ? across - hi : 0;
+    return (uint8_t)(d > 255 ? 255 : d);
 }
 
 static void mark_water_cell(int x, int y)
@@ -511,44 +529,62 @@ static void mark_water_cell(int x, int y)
  * meandering river to create operationally relevant slopes and bottlenecks. */
 static void stage_generate_terrain(void)
 {
-    g_coast_orientation = (uint8_t)random_range_stream(STREAM_ENVIRONMENT, 0, 3);
-    g_has_river = (uint8_t)(random_range_stream(STREAM_ENVIRONMENT, 0, 99) < 60);
+    /* the river's shape: drawn once per seed, then evaluated at world positions (no per-column random walk, which
+       used to wander straight into the clamp at rows 6 / 30 and run along it as a ruler-straight line) */
+    g_has_river = (uint8_t)(random_range_stream(STREAM_ENVIRONMENT, 0, 99) < 85);
+    g_river_vertical = (uint8_t)(random_range_stream(STREAM_ENVIRONMENT, 0, 1));
+    int span = g_river_vertical ? GRID_WIDTH : GRID_HEIGHT;     /* the direction the river wanders in */
+    int length = g_river_vertical ? GRID_HEIGHT : GRID_WIDTH;   /* the direction it flows in */
+    int base = (int)random_range_stream(STREAM_ENVIRONMENT, (uint32_t)(span / 3), (uint32_t)((span * 2) / 3));
+    uint32_t bend_salt = random_u32_stream(STREAM_ENVIRONMENT);
+    uint32_t width_salt = random_u32_stream(STREAM_ENVIRONMENT);
+    int32_t world_along = g_river_vertical ? g_world_y : g_world_x;
+    int32_t world_across = g_river_vertical ? g_world_x : g_world_y;
 
-    int coast_depth = (int)random_range_stream(STREAM_ENVIRONMENT, 3, 5);
-    int river_y = (int)random_range_stream(STREAM_ENVIRONMENT, GRID_HEIGHT / 4, (GRID_HEIGHT * 3) / 4);
-    int river_drift = (int)random_range_stream(STREAM_ENVIRONMENT, 0, 1) ? 1 : -1;
+    if(g_has_river)
+    {
+        int prev = INT_MIN;
+        for(int t = 0; t < length; t++)
+        {
+            float wt = (float)(world_along + t);
+            /* two smooth octaves of noise: long bends plus a shorter wiggle, up to about a third of the map either side */
+            float bend = fractal_noise(wt, 7.0f, 0.075f, 2, 0.5f, bend_salt) - 0.5f;
+            int c = base - (int)world_across + (int)(bend * (float)span * 1.5f);
+            c = c < 3 ? 3 : c > span - 4 ? span - 4 : c;   /* keep both banks on the map */
+            if(prev != INT_MIN)   /* a river does not jump: at most one cell sideways per step */
+                c = c > prev + 1 ? prev + 1 : c < prev - 1 ? prev - 1 : c;
+            prev = c;
+            g_river_center[t] = (int16_t)c;
+            float wn = fractal_noise(wt, 3.0f, 0.09f, 1, 0.5f, width_salt);
+            g_river_width[t] = (uint8_t)(wn < 0.36f ? 2 : wn < 0.70f ? 3 : 4);
+            int lo = c - (g_river_width[t] - 1) / 2, hi = c + g_river_width[t] / 2;
+            for(int k = lo; k <= hi; k++)
+            {
+                int x = g_river_vertical ? k : t, y = g_river_vertical ? t : k;
+                if(in_bounds(x, y))
+                    g_river_mask[x][y] = 1;
+            }
+        }
+    }
 
     for(int x = 0; x < GRID_WIDTH; x++)
     {
-        if(g_has_river)
-        {
-            if(x > 0)
-            {
-                int shift = (int)random_range_stream(STREAM_ENVIRONMENT, 0, 2) - 1;
-                river_y = clamp_u16(river_y + shift + river_drift, GRID_HEIGHT / 6, (GRID_HEIGHT * 5) / 6);
-                if(random_range_stream(STREAM_ENVIRONMENT, 0, 99) < 24)
-                    river_drift = -river_drift;
-            }
-            g_river_center[x] = (int16_t)river_y;
-        }
-
         for(int y = 0; y < GRID_HEIGHT; y++)
         {
             EnvironmentCell_t *cell = &g_environment[x][y];
-            float macro = fractal_noise((float)x, (float)y, 0.08f, 4, 0.55f, 101u);
-            float micro = fractal_noise((float)x, (float)y, 0.22f, 3, 0.50f, 211u);
-            int coast_dist = distance_to_coast(x, y);
-            float coastal_ramp = (float)coast_dist / (float)(GRID_WIDTH > GRID_HEIGHT ? GRID_WIDTH : GRID_HEIGHT);
-            int river_dist = g_has_river ? abs_i(y - g_river_center[x]) : GRID_HEIGHT;
+            /* terrain noise at world positions, so neighbouring sectors' hills meet */
+            float wx = (float)(g_world_x + x), wy = (float)(g_world_y + y);
+            float macro = fractal_noise(wx, wy, 0.08f, 4, 0.55f, 101u);
+            float micro = fractal_noise(wx, wy, 0.22f, 3, 0.50f, 211u);
+            int river_dist = distance_to_water(x, y);
             float river_pull = g_has_river ? (1.0f - ((float)river_dist / (float)(GRID_HEIGHT / 3))) : 0.0f;
             if(river_pull < 0.0f)
                 river_pull = 0.0f;
 
             int elevation =
-                12 +
+                24 +
                 (int)(macro * 54.0f) +
-                (int)(micro * 18.0f) +
-                (int)(coastal_ramp * 24.0f) -
+                (int)(micro * 18.0f) -
                 (int)(river_pull * 12.0f);
 
             cell->terrain_elevation = clamp_u8(elevation, 5, 95);
@@ -557,21 +593,8 @@ static void stage_generate_terrain(void)
             cell->base_safety = 80;
             cell->district_density = 50;
 
-            if(coast_dist < coast_depth)
+            if(g_river_mask[x][y])
                 mark_water_cell(x, y);
-        }
-    }
-
-    if(g_has_river)
-    {
-        for(int x = 0; x < GRID_WIDTH; x++)
-        {
-            for(int w = -1; w <= 1; w++)
-            {
-                int ry = g_river_center[x] + w;
-                if(in_bounds(x, ry) && distance_to_coast(x, ry) > 1)
-                    mark_water_cell(x, ry);
-            }
         }
     }
 
@@ -640,11 +663,10 @@ static GridPoint_t find_best_land_cell(int min_x, int max_x, int min_y, int max_
             if(!in_bounds(x, y) || is_water_cell(x, y))
                 continue;
 
-            int coast = distance_to_coast(x, y);
-            int river_dist = g_has_river ? abs_i(y - g_river_center[x]) : GRID_HEIGHT;
+            int river_dist = distance_to_water(x, y);
             int score = prefer_high ? g_environment[x][y].terrain_elevation : (100 - g_environment[x][y].terrain_elevation);
             score += prefer_high ? (100 - g_environment[x][y].terrain_slope) : 0;
-            score += near_water ? ((coast <= 6 || river_dist <= 4) ? 40 : -10) : (coast > 4 ? 10 : 0);
+            score += near_water ? (river_dist <= 3 ? 40 : -10) : (river_dist > 3 ? 10 : 0);
             score += g_environment[x][y].soil_condition / 3;
 
             if(score > best_score)
@@ -701,6 +723,47 @@ static GridPoint_t ensure_unique_anchor(GridPoint_t candidate, const GridPoint_t
        silently producing overlapping districts. */
     g_diag_duplicate_anchor_fallback++;
     return candidate;
+}
+
+/* Extra pull each kind of district has on the land around it (see the district scoring below). Tuned so that, over
+   seeds 1-200, residential is the largest district and the special-purpose ones stay compact. */
+static int district_reach(uint8_t type)
+{
+    switch(type)
+    {
+        case DISTRICT_RESIDENTIAL: return 34;
+        case DISTRICT_MIXED_USE:   return 22;
+        case DISTRICT_COMMERCIAL:  return 20;
+        case DISTRICT_INDUSTRIAL:  return 18;
+        case DISTRICT_EDUCATION:   return 10;
+        case DISTRICT_WATERFRONT:  return 10;
+        case DISTRICT_PARK:        return 10;
+        case DISTRICT_GOVERNMENT:  return 6;
+        case DISTRICT_MEDICAL:     return 4;
+        case DISTRICT_RESCUE_BASE: return 0;
+        default:                   return 10;
+    }
+}
+
+/* How far (city-block cells) a district reaches from its centre. Residential has no limit: it is what the rest of the
+   city is made of. Without a limit the districts split the map between them by distance alone, and whichever anchor
+   sat in the middle of the map (government, medical) took the largest share. */
+static int district_radius(uint8_t type)
+{
+    switch(type)
+    {
+        case DISTRICT_RESIDENTIAL: return GRID_WIDTH + GRID_HEIGHT;
+        case DISTRICT_COMMERCIAL:  return 9;
+        case DISTRICT_INDUSTRIAL:  return 9;
+        case DISTRICT_MIXED_USE:   return 8;
+        case DISTRICT_WATERFRONT:  return 7;
+        case DISTRICT_EDUCATION:   return 6;
+        case DISTRICT_GOVERNMENT:  return 5;
+        case DISTRICT_PARK:        return 5;
+        case DISTRICT_MEDICAL:     return 5;
+        case DISTRICT_RESCUE_BASE: return 5;
+        default:                   return 6;
+    }
 }
 
 /* Stage 2: District generation assigns urban intent from seeded anchors rather than
@@ -762,24 +825,29 @@ static void stage_generate_districts(void)
             {
                 const DistrictRecord_t *district = &g_districts[i];
                 int dist = abs_i(x - district->center_x) + abs_i(y - district->center_y);
+                if(dist > district_radius(district->type))
+                    continue;   /* beyond its reach: the land is homes (residential), as in most of a real city */
                 int score = 140 - (dist * 5);
-                score += district->road_density / 3;
-                score += district->construction_quality / 6;
+                /* How far a district reaches. This used to add road_density / 3 + construction_quality / 6 for every
+                   cell on the map, which made the well-built districts pull in land from everywhere: medical ended up
+                   the largest district (20% of the city) and residential among the smallest (6%). A city is mostly
+                   homes, so residential reaches furthest; the special-purpose districts stay compact. */
+                score += district_reach(district->type);
                 score -= g_environment[x][y].terrain_slope / 5;
 
                 if(district->type == DISTRICT_INDUSTRIAL)
                 {
-                    score += (distance_to_coast(x, y) <= 6 ? 28 : -18);
+                    score += (distance_to_water(x, y) <= 5 ? 28 : -18);
                     score += (cell->soil_condition < 48 ? 12 : -6);
                 }
                 else if(district->type == DISTRICT_WATERFRONT)
                 {
-                    score += (distance_to_coast(x, y) <= 5 ? 36 : -24);
+                    score += (distance_to_water(x, y) <= 3 ? 36 : -24);
                 }
                 else if(district->type == DISTRICT_PARK)
                 {
                     score += (cell->terrain_slope < 24 ? 20 : -10);
-                    score += (distance_to_coast(x, y) <= 7 ? 10 : 0);
+                    score += (distance_to_water(x, y) <= 6 ? 10 : 0);
                 }
                 else if(district->type == DISTRICT_MEDICAL || district->type == DISTRICT_RESCUE_BASE)
                 {
@@ -801,6 +869,8 @@ static void stage_generate_districts(void)
                 }
             }
 
+            if(best_score == INT_MIN)
+                best_district = 1;   /* g_districts[1] is the residential anchor (assignment order above) */
             cell->district = g_districts[best_district].type;
             cell->district_id = best_district;
             cell->district_density = g_districts[best_district].building_density;
@@ -870,6 +940,11 @@ static void paint_road_cell(int x, int y, uint8_t road_class, uint16_t road_id, 
     if(is_water_cell(x, y) && !bridge)
         return;
 
+    /* never through a building: repairs used to carve roads out of the middle of buildings (69% of buildings had a
+       road through them, measured over seeds 1-100) */
+    if(cell->building_id != ENV_NO_BUILDING)
+        return;
+
     cell->road_class = road_class;
     cell->road_id = road_id;
     cell->navigable = 1;
@@ -916,6 +991,9 @@ static uint16_t connection_cost(int x, int y, int tx, int ty, uint8_t road_class
             return UINT16_MAX;
         cost += 80;
     }
+
+    if(cell->building_id != ENV_NO_BUILDING)
+        return UINT16_MAX;   /* roads go round buildings, not through them */
 
     if(cell->road_class != ROAD_NONE)
         cost /= 2u;
@@ -1027,6 +1105,188 @@ static uint8_t carve_path_between(GridPoint_t start, GridPoint_t end, uint8_t ro
     return 1;
 }
 
+/* Bridges. Only the few district-to-district roads could cross water (at a heavy cost, so the planner crossed as
+   rarely as it could and later roads reused the crossing): a median of 2 crossings per river, bunched together, and the
+   street grid simply stopped at the bank. Now a street that reaches the river on both banks, straight across, carries
+   on over it: every main road and collector, and every other side street. */
+unsigned long g_diag_street_bridges = 0;
+static void build_street_bridges(void)
+{
+    if(!g_has_river)
+        return;
+
+    int length = g_river_vertical ? GRID_HEIGHT : GRID_WIDTH;
+    int across_n = g_river_vertical ? GRID_WIDTH : GRID_HEIGHT;
+    int last_local = -100;
+
+    for(int t = 1; t < length - 1; t++)
+    {
+        /* the water across the river at this step, between the two banks */
+        int lo = -1, hi = -1;
+        for(int k = 0; k < across_n; k++)
+        {
+            int x = g_river_vertical ? k : t, y = g_river_vertical ? t : k;
+            if(g_river_mask[x][y])
+            {
+                if(lo < 0)
+                    lo = k;
+                hi = k;
+            }
+        }
+        if(lo <= 1 || hi >= across_n - 2)
+            continue;
+
+        int ax = g_river_vertical ? lo - 1 : t, ay = g_river_vertical ? t : lo - 1;   /* the bank before */
+        int bx = g_river_vertical ? hi + 1 : t, by = g_river_vertical ? t : hi + 1;   /* the bank after */
+        int ax2 = g_river_vertical ? lo - 2 : t, ay2 = g_river_vertical ? t : lo - 2;
+        int bx2 = g_river_vertical ? hi + 2 : t, by2 = g_river_vertical ? t : hi + 2;
+        if(!has_road(ax, ay) || !has_road(bx, by) || is_water_cell(ax, ay) || is_water_cell(bx, by))
+            continue;
+        if(!has_road(ax2, ay2) && !has_road(bx2, by2))
+            continue;   /* a street running along the bank, not up to it */
+
+        uint8_t cls = g_environment[ax][ay].road_class < g_environment[bx][by].road_class ?
+                      g_environment[ax][ay].road_class : g_environment[bx][by].road_class;
+        if(cls < ROAD_COLLECTOR)
+        {
+            if(t - last_local < 4)
+                continue;   /* roughly every other side street */
+            last_local = t;
+        }
+
+        uint16_t rid = next_road_id();
+        for(int k = lo; k <= hi; k++)
+            paint_road_cell(g_river_vertical ? k : t, g_river_vertical ? t : k, cls, rid, 1);
+        g_diag_street_bridges++;
+    }
+}
+
+/* The road network as one piece. Street lines are cut by districts, steep ground and the river, which used to leave
+   dozens of loose pieces. Anything not joined to the main network (the one the rescue base sits on) is joined to it by
+   the shortest road, or removed if it is only a stub of one or two cells or too far to join. */
+unsigned long g_diag_road_fragments_joined = 0;
+unsigned long g_diag_road_fragments_removed = 0;
+static uint8_t g_road_component[GRID_WIDTH][GRID_HEIGHT];
+
+static void unpaint_road_cell(int x, int y)
+{
+    EnvironmentCell_t *cell = &g_environment[x][y];
+    if(cell->road_class == ROAD_NONE || cell->bridge)
+        return;
+    cell->road_class = ROAD_NONE;
+    cell->road_id = ENV_NO_ROAD;
+    cell->road_capacity = 0;
+    cell->travel_cost = 6;
+    cell->navigable = 1;
+}
+
+static int label_road_components(int sizes[], int max_components)
+{
+    memset(g_road_component, 0, sizeof(g_road_component));
+    int n = 0;
+    for(int x = 0; x < GRID_WIDTH; x++)
+    {
+        for(int y = 0; y < GRID_HEIGHT; y++)
+        {
+            if(!has_road(x, y) || g_road_component[x][y])
+                continue;
+            if(n + 1 >= max_components || n + 1 > 254)
+                return n;
+            n++;
+            int head = 0, tail = 0, size = 0;
+            g_road_reachable_queue[tail++] = (GridPoint_t){(int16_t)x, (int16_t)y};
+            g_road_component[x][y] = (uint8_t)n;
+            while(head < tail)
+            {
+                GridPoint_t p = g_road_reachable_queue[head++];
+                static const int dx[4] = {1, -1, 0, 0};
+                static const int dy[4] = {0, 0, 1, -1};
+                size++;
+                for(int d = 0; d < 4; d++)
+                {
+                    int nx = p.x + dx[d], ny = p.y + dy[d];
+                    if(has_road(nx, ny) && !g_road_component[nx][ny])
+                    {
+                        g_road_component[nx][ny] = (uint8_t)n;
+                        g_road_reachable_queue[tail++] = (GridPoint_t){(int16_t)nx, (int16_t)ny};
+                    }
+                }
+            }
+            sizes[n] = size;
+        }
+    }
+    return n;
+}
+
+static uint8_t carve_path_between(GridPoint_t start, GridPoint_t end, uint8_t road_class, int width, uint8_t allow_bridge);
+
+static void join_road_fragments(void)
+{
+    for(int round = 0; round < 96; round++)
+    {
+        int sizes[256] = {0};
+        int n = label_road_components(sizes, 256);
+        if(n <= 1)
+            return;
+
+        int sx = g_districts[0].center_x, sy = g_districts[0].center_y, main = 0;
+        if(in_bounds(sx, sy) && has_road(sx, sy))
+            main = g_road_component[sx][sy];
+        if(!main)
+        {
+            int biggest = 0;
+            for(int i = 1; i <= n; i++)
+                if(sizes[i] > biggest)
+                {
+                    biggest = sizes[i];
+                    main = i;
+                }
+        }
+
+        int target = 0;   /* one loose piece per round, in scan order */
+        for(int i = 1; i <= n && !target; i++)
+            if(i != main)
+                target = i;
+
+        if(sizes[target] > 2)
+        {
+            /* the closest pair of cells between this piece and the main network */
+            GridPoint_t a = {0, 0}, b = {0, 0};
+            int best = INT_MAX;
+            for(int x = 0; x < GRID_WIDTH; x++)
+                for(int y = 0; y < GRID_HEIGHT; y++)
+                {
+                    if(g_road_component[x][y] != target)
+                        continue;
+                    for(int u = 0; u < GRID_WIDTH; u++)
+                        for(int v = 0; v < GRID_HEIGHT; v++)
+                        {
+                            if(g_road_component[u][v] != main)
+                                continue;
+                            int d = abs_i(x - u) + abs_i(y - v);
+                            if(d < best)
+                            {
+                                best = d;
+                                a = (GridPoint_t){(int16_t)x, (int16_t)y};
+                                b = (GridPoint_t){(int16_t)u, (int16_t)v};
+                            }
+                        }
+                }
+            if(best <= 10 && carve_path_between(a, b, ROAD_LOCAL, 0, 1))
+            {
+                g_diag_road_fragments_joined++;
+                continue;
+            }
+        }
+
+        for(int x = 0; x < GRID_WIDTH; x++)
+            for(int y = 0; y < GRID_HEIGHT; y++)
+                if(g_road_component[x][y] == target)
+                    unpaint_road_cell(x, y);
+        g_diag_road_fragments_removed++;
+    }
+}
+
 /* Stage 3 and 4: Arterial and secondary roads are laid as a connected graph that
  * follows terrain and creates district access plus natural bridge bottlenecks. */
 static void stage_generate_roads(void)
@@ -1057,14 +1317,20 @@ static void stage_generate_roads(void)
 
             uint8_t district = g_environment[x][y].district;
             int spacing =
-                district == DISTRICT_RESIDENTIAL ? 4 :
-                district == DISTRICT_INDUSTRIAL ? 6 :
-                district == DISTRICT_MEDICAL ? 4 :
-                district == DISTRICT_PARK ? 7 : 5;
+                district == DISTRICT_RESIDENTIAL ? 6 :
+                district == DISTRICT_INDUSTRIAL ? 7 :
+                district == DISTRICT_MEDICAL ? 5 :
+                district == DISTRICT_PARK ? 8 : 6;   /* blocks of 5 x 5 between streets: every 4th line made roads 39-51% of all land */
 
-            int jitter = (int)(coord_hash(x, y, 411u) % 3u);
-            int hline = ((y + jitter) % spacing) == 0;
-            int vline = ((x + jitter + (district % 3)) % spacing) == 0;
+            /* Each district lays its streets on one grid with its own offset, in WORLD coordinates (so a street
+               carries on into the next sector). The offset used to be re-drawn for every cell, which scattered
+               streets into dotted patches: a median of 34 separate road pieces per city, 15 of them 1-2 cells. */
+            uint16_t did = g_environment[x][y].district_id;
+            int off_h = (int)(coord_hash((int)did, 1, 411u) % (uint32_t)spacing);
+            int off_v = (int)(coord_hash((int)did, 2, 411u) % (uint32_t)spacing);
+            int wy = (int)(((g_world_y + y) % spacing + spacing) % spacing), wx = (int)(((g_world_x + x) % spacing + spacing) % spacing);
+            int hline = ((wy + off_h) % spacing) == 0;
+            int vline = ((wx + off_v) % spacing) == 0;
 
             if(hline || vline)
             {
@@ -1078,6 +1344,9 @@ static void stage_generate_roads(void)
             }
         }
     }
+
+    build_street_bridges();
+    join_road_fragments();
 
     for(int x = 0; x < GRID_WIDTH; x++)
     {
@@ -1350,7 +1619,8 @@ unsigned long g_diag_gateway_repaired = 0;
  * that isn't road-connected yet. */
 static uint8_t road_reachable_map(uint8_t reachable[GRID_WIDTH][GRID_HEIGHT]);
 static uint8_t lot_reachable(const uint8_t reachable[GRID_WIDTH][GRID_HEIGHT], int x, int y);
-static void carve_repair_to_nearest_road(int x, int y);
+static void carve_repair_to_nearest_road(int x, int y, const uint8_t reachable[GRID_WIDTH][GRID_HEIGHT]);
+static uint8_t ensure_site_access(uint8_t reachable[GRID_WIDTH][GRID_HEIGHT], int x, int y);
 
 /* Stage 7: Infrastructure highlights bridges, intersections, and open-space nodes
  * that later become safe-zone or gateway candidates. */
@@ -1404,6 +1674,10 @@ static void stage_generate_infrastructure(void)
         int best_score = INT_MIN;
         gateway->valid = 0;
 
+        /* The exits sit apart from each other (at least 10 cells, city-block), and where a connected road already
+           reaches the edge of the map if there is one: all three used to take the same top score and could land on
+           neighbouring cells of one road. Spacing is relaxed only if nothing else is left. */
+        for(int spacing = 10; spacing >= 0 && !gateway->valid; spacing -= 10)
         for(int x = 0; x < GRID_WIDTH; x++)
         {
             for(int y = 0; y < GRID_HEIGHT; y++)
@@ -1437,7 +1711,16 @@ static void stage_generate_infrastructure(void)
                 if(already_used)
                     continue;
 
+                int too_close = 0;
+                for(uint8_t k = 0; k < i; k++)
+                    if(g_gateway_sites[k].valid &&
+                       abs_i(g_gateway_sites[k].x - x) + abs_i(g_gateway_sites[k].y - y) < spacing)
+                        too_close = 1;
+                if(too_close)
+                    continue;
+
                 int score = (int)g_environment[x][y].road_class * 25
+                            + (has_road(x, y) && gw_reachable[x][y] ? 60 : 0)
                             - g_environment[x][y].terrain_slope;
                 if(score > best_score)
                 {
@@ -1467,7 +1750,7 @@ static void stage_generate_infrastructure(void)
             if(!already_connected)
             {
                 g_diag_gateway_repaired++;
-                carve_repair_to_nearest_road(gateway->x, gateway->y);
+                carve_repair_to_nearest_road(gateway->x, gateway->y, (const uint8_t (*)[GRID_HEIGHT])gw_reachable);
                 road_reachable_map(gw_reachable);
             }
         }
@@ -1632,7 +1915,9 @@ static uint8_t lot_reachable(const uint8_t reachable[GRID_WIDTH][GRID_HEIGHT], i
 unsigned long g_diag_carve_repair_count = 0;
 unsigned long g_diag_carve_repair_failed = 0;   /* carve_path_between() returned 0 */
 
-static void carve_repair_to_nearest_road(int x, int y)
+/* Carve a local road from (x, y) to the nearest road that is part of the connected network (reachable, when given): it
+   used to aim at the nearest road of any kind, which could be a loose piece no one else could reach. */
+static void carve_repair_to_nearest_road(int x, int y, const uint8_t reachable[GRID_WIDTH][GRID_HEIGHT])
 {
     GridPoint_t start = {(int16_t)x, (int16_t)y};
     GridPoint_t best = start;
@@ -1644,7 +1929,7 @@ static void carve_repair_to_nearest_road(int x, int y)
     {
         for(int cy = 0; cy < GRID_HEIGHT; cy++)
         {
-            if(!has_road(cx, cy))
+            if(!has_road(cx, cy) || (reachable != NULL && !reachable[cx][cy]))
                 continue;
             int dist = abs_i(cx - x) + abs_i(cy - y);
             if(dist < best_dist)
@@ -1660,33 +1945,124 @@ static void carve_repair_to_nearest_road(int x, int y)
         g_diag_carve_repair_failed++;
 }
 
-static void ensure_hospital_redundancy(void)
+/* A building's footprint (loc_x, loc_y is its centre: x0 = loc_x - w / 2). */
+static void building_rect(const EnvironmentBuilding_t *b, int *x0, int *y0, int *w, int *h)
+{
+    *w = b->footprint_width ? b->footprint_width : 1;
+    *h = b->footprint_height ? b->footprint_height : 1;
+    *x0 = b->loc_x - (*w / 2);
+    *y0 = b->loc_y - (*h / 2);
+}
+
+/* The cells touching a building's sides (not its corners), outside it. Returns how many were written to out[]. */
+static int building_ring(const EnvironmentBuilding_t *b, GridPoint_t out[], int max_out)
+{
+    int x0, y0, w, h, n = 0;
+    building_rect(b, &x0, &y0, &w, &h);
+    for(int i = 0; i < w && n < max_out; i++)
+    {
+        if(in_bounds(x0 + i, y0 - 1)) out[n++] = (GridPoint_t){(int16_t)(x0 + i), (int16_t)(y0 - 1)};
+        if(n < max_out && in_bounds(x0 + i, y0 + h)) out[n++] = (GridPoint_t){(int16_t)(x0 + i), (int16_t)(y0 + h)};
+    }
+    for(int j = 0; j < h && n < max_out; j++)
+    {
+        if(in_bounds(x0 - 1, y0 + j)) out[n++] = (GridPoint_t){(int16_t)(x0 - 1), (int16_t)(y0 + j)};
+        if(n < max_out && in_bounds(x0 + w, y0 + j)) out[n++] = (GridPoint_t){(int16_t)(x0 + w), (int16_t)(y0 + j)};
+    }
+    return n;
+}
+
+/* Make sure a site can be reached from the road network, carving a road if it cannot. A site inside a building is
+   reached when a connected road touches any side of that building; the old check looked at the four cells around the
+   building's centre, which for anything wider than two cells are the building itself, so nearly every larger building
+   was "repaired" with a road dug out of its middle. Returns 1 if it carved. */
+static uint8_t ensure_site_access(uint8_t reachable[GRID_WIDTH][GRID_HEIGHT], int x, int y)
+{
+    if(!in_bounds(x, y))
+        return 0;
+    uint16_t bid = g_environment[x][y].building_id;
+    if(bid == ENV_NO_BUILDING || bid >= g_environment_summary.building_count)
+    {
+        if((has_road(x, y) && reachable[x][y]) || lot_reachable((const uint8_t (*)[GRID_HEIGHT])reachable, x, y))
+            return 0;
+        carve_repair_to_nearest_road(x, y, (const uint8_t (*)[GRID_HEIGHT])reachable);
+        road_reachable_map(reachable);
+        return 1;
+    }
+
+    GridPoint_t ring[64];
+    int n = building_ring(&g_environment_buildings[bid], ring, 64);
+    for(int i = 0; i < n; i++)
+        if(has_road(ring[i].x, ring[i].y) && reachable[ring[i].x][ring[i].y])
+            return 0;
+
+    /* carve from the free cell beside the building that is closest to the connected network */
+    int best = INT_MAX, bx = -1, by = -1;
+    for(int i = 0; i < n; i++)
+    {
+        int cx = ring[i].x, cy = ring[i].y;
+        if(is_water_cell(cx, cy) || g_environment[cx][cy].building_id != ENV_NO_BUILDING)
+            continue;
+        for(int u = 0; u < GRID_WIDTH; u++)
+            for(int v = 0; v < GRID_HEIGHT; v++)
+                if(reachable[u][v])
+                {
+                    int d = abs_i(u - cx) + abs_i(v - cy);
+                    if(d < best) { best = d; bx = cx; by = cy; }
+                }
+    }
+    if(bx < 0)
+    {
+        g_diag_carve_repair_failed++;   /* boxed in by other buildings and water */
+        return 0;
+    }
+    carve_repair_to_nearest_road(bx, by, (const uint8_t (*)[GRID_HEIGHT])reachable);
+    road_reachable_map(reachable);
+    return 1;
+}
+
+/* Hospitals get two separate ways in. This used to paint a road at (loc_x + 1, loc_y) and (loc_x, loc_y + 1), one cell
+   from the hospital's centre - usually inside the hospital itself - and count both as access. Now it counts the
+   connected roads actually touching the hospital and, if there are fewer than two, opens one on the side farthest from
+   the existing way in and joins it to the network. access_count is what is really there. */
+static void ensure_hospital_redundancy(uint8_t reachable[GRID_WIDTH][GRID_HEIGHT])
 {
     for(uint16_t i = 0; i < g_environment_summary.building_count; i++)
     {
         EnvironmentBuilding_t *building = &g_environment_buildings[i];
-        if(building->building_type != BUILDING_MEDICAL || building->access_count >= 2)
+        if(building->building_type != BUILDING_MEDICAL)
             continue;
 
-        int x = building->loc_x;
-        int y = building->loc_y;
-        /* Bug fix: access_count used to be hardcoded to 2 here
-           regardless of whether either paint_road_cell() call below
-           actually ran - a hospital near the grid's far edge (both
-           guards false) got credited with redundant access it never
-           received, silently misleading any consumer that trusts
-           access_count >= 2 to mean "reachable via 2 independent
-           routes." Only count the roads actually painted. */
-        if(x + 1 < GRID_WIDTH - 1)
+        GridPoint_t ring[64];
+        int n = building_ring(building, ring, 64), have = 0, ax = -1, ay = -1;
+        for(int k = 0; k < n; k++)
+            if(has_road(ring[k].x, ring[k].y) && reachable[ring[k].x][ring[k].y])
+            {
+                have++;
+                if(ax < 0) { ax = ring[k].x; ay = ring[k].y; }
+            }
+        if(have < 2)
         {
-            paint_road_cell(x + 1, y, ROAD_COLLECTOR, next_road_id(), 0);
-            building->access_count++;
+            int best = -1, bx = -1, by = -1;
+            for(int k = 0; k < n; k++)
+            {
+                int cx = ring[k].x, cy = ring[k].y;
+                if(has_road(cx, cy) || is_water_cell(cx, cy) || g_environment[cx][cy].building_id != ENV_NO_BUILDING)
+                    continue;
+                int d = ax < 0 ? 0 : abs_i(cx - ax) + abs_i(cy - ay);
+                if(d > best) { best = d; bx = cx; by = cy; }
+            }
+            if(bx >= 0)
+            {
+                carve_repair_to_nearest_road(bx, by, (const uint8_t (*)[GRID_HEIGHT])reachable);
+                road_reachable_map(reachable);
+            }
+            have = 0;
+            for(int k = 0; k < n; k++)
+                if(has_road(ring[k].x, ring[k].y) && reachable[ring[k].x][ring[k].y])
+                    have++;
         }
-        if(y + 1 < GRID_HEIGHT - 1)
-        {
-            paint_road_cell(x, y + 1, ROAD_COLLECTOR, next_road_id(), 0);
-            building->access_count++;
-        }
+        building->access_count = (uint8_t)(have > 255 ? 255 : have);
     }
 }
 
@@ -1699,25 +2075,12 @@ static void stage_validate_and_build_navigation(void)
     road_reachable_map(reachable);
 
     for(uint16_t i = 0; i < g_environment_summary.building_count; i++)
-    {
-        EnvironmentBuilding_t *building = &g_environment_buildings[i];
-        if(!lot_reachable((const uint8_t (*)[GRID_HEIGHT])reachable, building->loc_x, building->loc_y))
-        {
-            carve_repair_to_nearest_road(building->loc_x, building->loc_y);
-            road_reachable_map(reachable);
-        }
-    }
+        ensure_site_access(reachable, g_environment_buildings[i].loc_x, g_environment_buildings[i].loc_y);
 
     for(uint16_t i = 0; i < g_environment_summary.district_total; i++)
-    {
-        if(!lot_reachable((const uint8_t (*)[GRID_HEIGHT])reachable, g_districts[i].center_x, g_districts[i].center_y))
-        {
-            carve_repair_to_nearest_road(g_districts[i].center_x, g_districts[i].center_y);
-            road_reachable_map(reachable);
-        }
-    }
+        ensure_site_access(reachable, g_districts[i].center_x, g_districts[i].center_y);
 
-    ensure_hospital_redundancy();
+    ensure_hospital_redundancy(reachable);
     road_reachable_map(reachable);
 
     g_environment_summary.nav_node_count = 0;
@@ -2030,11 +2393,7 @@ void environment_validate_hazard_reachability(void)
     for(int i = 0; i < g_num_safe_zones; i++)
     {
         SafeZone_t *zone = &g_safezones[i];
-        if(!lot_reachable((const uint8_t (*)[GRID_HEIGHT])reachable, zone->loc_x, zone->loc_y))
-        {
-            carve_repair_to_nearest_road(zone->loc_x, zone->loc_y);
-            road_reachable_map(reachable);
-        }
+        ensure_site_access(reachable, zone->loc_x, zone->loc_y);
     }
 
     for(uint16_t i = 0; i < NUM_INCIDENTS; i++)
@@ -2042,11 +2401,7 @@ void environment_validate_hazard_reachability(void)
         IncidentState_t *incident = &g_incidents[i];
         if(!incident->slot_occupied || incident->status == INC_RESOLVED)
             continue;
-        if(!lot_reachable((const uint8_t (*)[GRID_HEIGHT])reachable, incident->loc_x, incident->loc_y))
-        {
-            carve_repair_to_nearest_road(incident->loc_x, incident->loc_y);
-            road_reachable_map(reachable);
-        }
+        ensure_site_access(reachable, incident->loc_x, incident->loc_y);   /* an incident in a building: any side will do */
     }
 }
 
