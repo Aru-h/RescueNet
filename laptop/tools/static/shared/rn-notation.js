@@ -52,6 +52,14 @@
   function assembly(x, cx, cy, s, fill, ink) {   /* a planned assembly point (the simulator's safe zone) */
     var h = s / 2; x.fillStyle = fill; x.fillRect(cx - h, cy - h, s, s); x.lineWidth = Math.max(1, s / 12); x.strokeStyle = ink; x.strokeRect(cx - h, cy - h, s, s);
   }
+  /* an evacuation exit (the simulator's gateway, on the map edge, where evacuees are taken off the map): an arrow tag in
+     the assembly points' teal, so the evacuation route reads as one colour; drawn the same way in every view, so it does
+     not have to point at the edge (in 3D markers turn with the camera) */
+  function exit(x, cx, cy, s, fill, ink) {
+    var h = s / 2, b = s * .3; x.beginPath();
+    x.moveTo(cx - h, cy - h * .7); x.lineTo(cx + h - b, cy - h * .7); x.lineTo(cx + h, cy); x.lineTo(cx + h - b, cy + h * .7); x.lineTo(cx - h, cy + h * .7); x.closePath();
+    x.fillStyle = fill; x.fill(); x.lineWidth = Math.max(1, s / 12); x.lineJoin = 'round'; x.strokeStyle = ink; x.stroke();
+  }
   function gathering(x, cx, cy, s) {
     x.beginPath(); x.arc(cx, cy, s / 2, 0, 6.283); x.lineWidth = Math.max(1.5, s / 5); x.strokeStyle = COLOUR.gathering; x.stroke();
   }
@@ -94,6 +102,7 @@
     none: ['Little or no damage', '<rect x="1.5" y="1.5" width="11" height="11" fill="none" stroke="currentColor" stroke-opacity=".7"/>'],
     epicentre: ['Epicentre', '<path d="M7 .8l1.6 4.2 4.5.2-3.5 2.8 1.2 4.4L7 9.9l-3.8 2.5 1.2-4.4L.9 5.2l4.5-.2z" fill="' + COLOUR.star + '" stroke="currentColor" stroke-width=".8"/>'],
     assembly: ['Assembly point', '<rect x="2" y="2" width="10" height="10" fill="var(--c-teal, #4fd1c9)" stroke="currentColor"/>'],
+    exit: ['Exit (evacuees leave the map)', '<path d="M1 3.5h8.6L13 7l-3.4 3.5H1z" fill="var(--c-teal, #4fd1c9)" stroke="currentColor" stroke-linejoin="round"/>'],
     gathering: ['People gathering', '<circle cx="7" cy="7" r="4.5" fill="none" stroke="' + COLOUR.gathering + '" stroke-width="2.2"/>'],
     team: ['Team', '<circle cx="7" cy="7" r="3.5" fill="currentColor"/>'],
     barrier: ['Road blocked', '<path d="M7 .8L13.2 7 7 13.2.8 7z" fill="' + COLOUR.barrier + '"/><rect x="3.9" y="6.1" width="6.2" height="1.8" fill="#fff"/>'],
@@ -113,7 +122,7 @@
 
   root.RNNotation = {
     COLOUR: COLOUR, SECTOR_LETTERS: SECTOR_LETTERS, damageClass: damageClass, footprint: footprint,
-    building: building, star: star, barrier: barrier, assembly: assembly, gathering: gathering, team: team, teamMarker: teamMarker, worksite: worksite, task: task,
+    building: building, star: star, barrier: barrier, assembly: assembly, exit: exit, gathering: gathering, team: team, teamMarker: teamMarker, worksite: worksite, task: task,
     LEGEND: LEGEND, legendHTML: legendHTML
   };
 })(typeof window !== 'undefined' ? window : globalThis);

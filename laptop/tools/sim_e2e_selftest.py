@@ -190,6 +190,13 @@ def check_recorded(page, errors, frames):
     check("12 h" in facts and "Mixed faults" in facts and "City 1041" in facts and "5% radio loss" in facts,
           f"the header comes from the recording ({facts!r})")
     check(page.evaluate("() => document.getElementById('runName').textContent") == "Demo mission", "the bundled demo is named Demo mission")
+    with gzip.open(os.path.join(TOOLS_DIR, "recordings", DEMO), "rt") as fh:
+        env = next(json.loads(l[len("STATICENV "):]) for l in fh if l.startswith("STATICENV "))
+    want_exits = sorted((g["x"], g["y"]) for g in env["gateways"])
+    got_exits = sorted(tuple(g) for g in view(page, "D.gateways.map(g => [g.x, g.y])"))
+    check(len(want_exits) == 3 and got_exits == want_exits, f"the map's exits are the recording's ({got_exits})")
+    check("Exit (evacuees leave the map)" in page.evaluate("() => document.getElementById('legend').textContent"),
+          "the legend explains the exit mark")
     check(clock(page).startswith(f"Tick {T} of 1200"), f"the clock reads tick {T} of 1200 ({clock(page)!r})")
     rows = page.evaluate("() => document.querySelectorAll('#teamList .team').length")
     check(rows == len(frames[T]["teams"]), f"one row per team in the run ({rows})")
