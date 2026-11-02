@@ -153,10 +153,12 @@
       else worksites.push({ id: w.id, x: w.x, y: w.y, victims: st[2], status: st[1], team: st[3] });
     });
     var known = {}; Object.keys(this.seen).forEach(function (k) { var w = self.wsTrack[self.seen[k]]; if (w && w.found <= t) known[k] = self.seen[k]; });
+    var incById = {}; (f.incidents || []).forEach(function (i) { incById[i.id] = i; });
     var teams = (f.teams || []).map(function (m) {
-      var tier = m.consensus_tier || [0, 0];
+      var tier = m.consensus_tier || [0, 0], goal = m.has_dest && incById[m.dest_id] ? incById[m.dest_id].type : null;
       return { id: m.id, x: m.x, y: m.y, stamina: Math.round(m.stamina), status: m.status, spec: m.spec,
         dest: m.has_dest ? [m.dest_x, m.dest_y] : null, site: m.has_dest && known[m.dest_id] !== undefined ? known[m.dest_id] : null,
+        goal: goal,   /* the incident type it is heading for or working at (not a numbered worksite: a safe zone, an exit, ...) */
         tier: tier, fault: m.fault_mask || 0, peers: m.peer_votes || null, heard: m.heard == null ? null : m.heard,
         equip: m.equipment == null ? null : Math.round(m.equipment) };
     });

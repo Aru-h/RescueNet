@@ -503,8 +503,9 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     for (var k = 0; k < 10; k++) { var m = (lo + hi) / 2; list.style.setProperty('--s', m); if (list.offsetHeight <= room) lo = m; else hi = m; }
     list.style.setProperty('--s', lo);
   }
-  /* two labelled meters, stamina and equipment; low (under 30, when the simulator sends a team back to restock or
-     rest) turns the bar dashed */
+  /* two labelled meters, stamina and equipment; under 30 the bar turns dashed. For equipment that is where the
+     simulator sends a team back to restock (TEAM_NEEDS_SAFE_ZONE_EQUIPMENT_THRESHOLD); a team rests at 20, 26 or 40
+     stamina depending on how hard its job is (core/mission_state.h), so for stamina it only means low */
   function meter(name, v, what) {
     if (v == null) return '<span>' + name + '</span><span class="m" title="Not in this recording"></span><b>&ndash;</b>';
     return '<span>' + name + '</span><span class="m' + (v < 30 ? ' low' : '') + '" title="' + name + ' ' + v + '%: ' + what + '"><i style="width:' + v + '%"></i></span><b>' + v + '</b>';
@@ -556,9 +557,9 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     'Heading to': 'The cell the team is travelling to, if any.',
     'Tier move': 'What the other teams concluded about this team\'s movement: none, local (one team unsure) or elevated (three or more agree something is wrong).',
     'Tier radio': 'The same, for this team\'s radio.',
-    'Peers move f/c/a': 'How the nine other teams voted on this team\'s movement: fault / clear / abstain (no opinion).',
+    'Peers move f/c/a': 'How the other teams voted on this team\'s movement: fault / clear / abstain (no opinion).',
     'Peers radio f/c/a': 'The same vote, for its radio.',
-    'Heard': 'How many of the nine other teams it heard on time this tick.',
+    'Heard': 'How many of the other teams it heard on time this tick.',
     'Resolved': 'Incidents this team has finished so far.',
     'Injected fault': 'The fault the simulator deliberately gave this team (ground truth). The teams never see this; it is only for checking the detector.',
     'ID': 'The simulator\'s own number for the incident.',
@@ -583,7 +584,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
         var pv = t.peer_votes || {}, mob = pv.mob || [], com = pv.comm || [];
         return '<tr>' + cell(t.id + 1) + cell(t.x + ',' + t.y) + cell(TSTATUS[t.status] || t.status) + cell(SPEC[t.spec]) + cell(t.stamina.toFixed(1), 1) + cell(t.hours, 1) +
           cell(t.has_dest ? t.dest_x + ',' + t.dest_y : '&ndash;') + cell(TIER[t.consensus_tier[0]] || t.consensus_tier[0]) + cell(TIER[t.consensus_tier[1]] || t.consensus_tier[1]) +
-          cell(mob.join('/')) + cell(com.join('/')) + cell(t.heard.toString(2).split('1').length - 1 + ' of 9') + cell(t.incidents_resolved, 1) +
+          cell(mob.join('/')) + cell(com.join('/')) + cell(t.heard == null ? '&ndash;' : t.heard.toString(2).split('1').length - 1 + ' of ' + (D.teams.length - 1)) + cell(t.incidents_resolved, 1) +
           (truth ? cell(t.fault_mask ? FAULT.filter(function (_, i) { return t.fault_mask & (1 << i); }).join(', ') : 'none', 0, 'truth') : cell('hidden'));
       }).join('') + '</tbody></table></div>';
     var incs = D.raw_incidents.filter(function (i) { return truth || i.discovered; });
@@ -601,10 +602,15 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     if (!$('#rawDlg').open) $('#rawDlg').showModal();
   }
   function teamState(t) { return ['ready', 'moving', 'working', 'resting'][t.status] || 'ready'; }
+  /* where a team is going, in words: its worksite's ID, else what the simulator says is there (the incident types
+     include the errands: restocking, taking people to a safe zone or out of the city, clearing a road) */
+  var GOAL = { 0: 'a reported collapse', 1: 'a reported confined space', 2: 'a reported mass casualty', 3: 'a chemical exposure', 4: 'an unsearched sector', 5: 'a survivor signal',
+    6: 'a gas leak', 7: 'a fire', 8: 'an equipment cache', 9: 'a safe zone', 10: 'an exit, with evacuees', 11: 'a blocked road' };
+  function goalText(t) { return t.site || (t.goal != null && GOAL[t.goal]) || 'a task'; }
   function status(t) {
     if (t.status === 3) return 'Resting';
     if (t.status === 0) return 'Ready';
-    var site = t.site || 'a task';
+    var site = goalText(t);
     return (t.status === 2 ? 'Working at ' : 'On the way to ') + site;
   }
   function detect(t) {
@@ -613,7 +619,8 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     /* a radio alarm can come from the fast path: no other team has heard this one for two ticks running, which
        escalates at once without a vote (consensus.c, evaluate_fast_path) */
     if (lvl >= 2 && t.tier[0] < 2 && t.peers && t.peers.fast) return { cls: 'flag', text: 'Radio silent: no team hears it (elevated)' };
-    if (lvl >= 2) return { cls: 'flag', text: (t.tier[0] >= 2 ? mob + ' of 9 peers flag movement' : comm + ' of 9 peers flag the radio') + ' (elevated)' };
+    var others = D.teams.length - 1;
+    if (lvl >= 2) return { cls: 'flag', text: (t.tier[0] >= 2 ? mob + ' of ' + others + ' peers flag movement' : comm + ' of ' + others + ' peers flag the radio') + ' (elevated)' };
     if (lvl === 1) return { cls: 'flag', text: 'Peers unsure about this team (local)' };
     return { cls: '', text: 'Peers: no problem seen' };
   }
@@ -648,7 +655,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     } else {
       p.innerHTML = '<div class="tech">' +
         '<div class="tech-h"><h3 class="mono">Who hears whom</h3><button type="button" class="howto mono" id="howBtn" aria-haspopup="dialog">How to read this</button></div>' +
-        '<canvas id="ring" aria-label="The ten teams in a ring, linked by the radio beacons they hear"></canvas>' +
+        '<canvas id="ring" aria-label="The ' + D.teams.length + ' teams in a ring, linked by the radio beacons they hear"></canvas>' +
         '<ul class="ring-key mono"><li><i class="k-ok"></i>Heard</li><li><i class="k-miss"></i>Missed</li><li><i class="k-unsure"></i>One peer unsure</li><li><i class="k-flag"></i>3+ peers agree</li></ul>' +
         '<button type="button" class="raw mono" id="rawBtn" aria-haspopup="dialog">Raw team and incident tables &rarr;</button></div>';
       drawRing();
@@ -944,8 +951,8 @@ select option { background: var(--c-bg); color: var(--c-fg); }
       var t = D.teams.filter(function (o) { return o.id === mark.ref; })[0]; if (!t) return ''; var d = detect(t);
       return '<h4><span>Team ' + (t.id + 1) + '</span><button type="button" aria-label="Close">&times;</button></h4>' +
         '<p class="big">' + status(t) + '</p>' +
-        '<dl>' + dd('Role', SPEC[t.spec]) + dd('Stamina', Math.round(t.stamina) + (t.stamina < 30 ? ' · must rest soon' : '')) + (t.equip == null ? '' : dd('Equipment', t.equip + (t.equip < 30 ? ' · must restock' : ''))) +
-        dd('Position', t.x + ', ' + t.y) + (t.dest && t.status === 1 ? dd('Heading to', (t.site || '') + ' (' + t.dest[0] + ', ' + t.dest[1] + ')') : '') + '</dl>' +
+        '<dl>' + dd('Role', SPEC[t.spec]) + dd('Stamina', Math.round(t.stamina) + (t.stamina < 30 ? ' · low' : '')) + (t.equip == null ? '' : dd('Equipment', t.equip + (t.equip < 30 ? ' · must restock' : ''))) +
+        dd('Position', t.x + ', ' + t.y) + (t.dest && t.status === 1 ? dd('Heading to', goalText(t) + ' (' + t.dest[0] + ', ' + t.dest[1] + ')') : '') + '</dl>' +
         '<p class="' + d.cls + '">' + d.text + '</p>' +
         (truth && t.fault ? '<p class="truth">Injected (ground truth): ' + FAULT.filter(function (_, i) { return t.fault & (1 << i); }).join(', ') + ' fault</p>' : '') +
         '<div class="acts">' + (is3d ? '<button type="button" class="fly" data-a="follow">Follow</button>' : '') + '<button type="button" class="fly" data-a="list">Show in Teams</button></div>';
