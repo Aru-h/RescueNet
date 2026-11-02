@@ -480,7 +480,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
         <div class="rung" role="row"><span class="p">4</span><span class="n">Link</span><span class="r">radio and serial frames</span></div>
         <div class="rung" role="row"><span class="p">10</span><span class="n">Simulation</span><span class="r">the tick</span></div>
         <div class="rung" role="row"><span class="p">11</span><span class="n">AI workers</span><span class="r">two, in parallel</span></div>
-        <div class="rung" role="row"><span class="p">12</span><span class="n">Telemetry</span><span class="r">to the dashboard</span></div>
+        <div class="rung" role="row"><span class="p">12</span><span class="n">Telemetry</span><span class="r">to the laptop app</span></div>
         <div class="rung" role="row"><span class="p">20</span><span class="n">Monitor</span><span class="r">watchdog</span></div>
         <div class="rung" role="row"><span class="p">30</span><span class="n">Logger</span><span class="r">last</span></div>
       </div>
@@ -584,7 +584,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
           <li data-step="ready">Board ready</li>
         </ol>
         <div class="mono bc-lines" id="bcLines" role="status" aria-live="polite">Press Connect. The RescueNet app opens the port and waits for the board to answer.</div>
-        <a class="bc-open" id="bcOpen" href="/sim?board" hidden>Open the dashboard &rarr;</a>
+        <a class="bc-open" id="bcOpen" href="sim?board" hidden>Open the board mission &rarr;</a>
       </aside>
     </div>
   </div>
@@ -1967,8 +1967,8 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
               if (frames || ready) { step('data', 'done'); artState('data'); }
               if (!ready && n < 3) return poll();
               if (ready) { step('ready', 'done'); artState('ready'); setState('Board ready'); say('The board answered.', true); }
-              else if (frames) { step('ready', 'wait'); setState('Board talking'); say('Data is arriving. The dashboard finishes the handshake.', true); }
-              else { setState('Waiting'); say('No answer yet. The board may still be starting; the dashboard keeps listening.', true); }
+              else if (frames) { step('ready', 'wait'); setState('Board talking'); say('Data is arriving. The board mission page finishes the handshake.', true); }
+              else { setState('Waiting'); say('No answer yet. The board may still be starting; the app keeps listening.', true); }
               open.hidden = false;
             });
           })();

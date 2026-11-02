@@ -333,8 +333,8 @@ static int live_override_is_system_task(uint32_t incident_id)
  * consensus's ELEVATED tier are both "the system observed and
  * concluded this", the same ground-truth-vs-observed line
  * docs/architecture/CONSENSUS_DESIGN.md draws everywhere else in this project (see e.g.
- * laptop/tools/static/dashboard/timeline.js's top-of-file comment on
- * the exact same distinction for the Detection Timeline panel). */
+ * laptop/tools/static/shared/rn-run.js's spans(), which keeps injected
+ * faults and detection apart for the sim page's Detection detail). */
 static int live_override_team_unavailable(uint8_t team_id)
 {
     const TeamState_t *team = &g_teams[team_id];

@@ -18,9 +18,9 @@
  *
  * End-to-end path this header/mission_link_override.c serve:
  *
- *   1. Dashboard drag-drop (laptop/tools/templates/index.html) already builds
- *      a pendingOverride{team_id, incident_id} object client-side.
- *      confirmPendingOverride() POSTs it to a new Flask route
+ *   1. The sim page's drag-drop (laptop/tools/templates/sim.html: drag a team
+ *      onto a worksite, then Send on its card) builds {team_id, incident_id}
+ *      client-side and POSTs it (in board mode) to the Flask route
  *      (laptop/tools/app.py).
  *   2. That route packs a MissionLinkOverride_t via pack_override()
  *      (laptop/tools/app.py - a Python mirror of mission_link_override_pack()

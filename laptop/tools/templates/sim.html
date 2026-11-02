@@ -1406,7 +1406,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     liveControls(); renderTimeline(); setTick(tk.tick);
   }
 
-  /* for the end-to-end test (dashboard_e2e_selftest.py's sim checks): read the state, open a marker's card */
+  /* for the end-to-end test (laptop/tools/sim_e2e_selftest.py): read the state, open a marker's card */
   window.RNSimTest = {
     view: function () { return D; }, run: function () { return RUN; }, live: function () { return LIVE ? { state: LIVE.state, follow: LIVE.follow } : null; },
     open: function (kind, ref) { showMark({ kind: kind, ref: ref }, 300, 200); }, release: function (id) { releaseTeam(id); }, flatHits: function () { return flatHits; }, hits3D: function () { return hits3D(); }, camera: function () { if (!three) return null; var c = three.cam.position; return [+c.x.toFixed(4), +c.y.toFixed(4), +c.z.toFixed(4)]; }, is3d: function () { return !!three && $('#map').classList.contains('is3d'); }
