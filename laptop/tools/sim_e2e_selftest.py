@@ -242,10 +242,10 @@ def check_recorded(page, errors, frames):
     num = lambda w: int(w.split("-")[1])
     page.click("[data-tab=sites]")
     page.wait_for_selector(".ws[data-id]", timeout=10000)
-    rows = page.evaluate("() => Array.from(document.querySelectorAll('.ws[data-id]')).map(r => [r.dataset.id, r.children[1].textContent])")
-    check([r[0] for r in rows] == sorted(want["open"], key=num) + sorted(want["active"], key=num),
-          f"the Worksites tab lists waiting worksites first, longest waiting first, then those being worked ({[r[0] for r in rows]})")
-    mins = [int(r[1].split("found ")[1].split(" min")[0]) for r in rows if "found " in r[1]]
+    ws_rows = page.evaluate("() => Array.from(document.querySelectorAll('.ws[data-id]')).map(r => [r.dataset.id, r.children[1].textContent])")
+    check([r[0] for r in ws_rows] == sorted(want["open"], key=num) + sorted(want["active"], key=num),
+          f"the Worksites tab lists waiting worksites first, longest waiting first, then those being worked ({[r[0] for r in ws_rows]})")
+    mins = [int(r[1].split("found ")[1].split(" min")[0]) for r in ws_rows if "found " in r[1]]
     check(len(mins) == len(want["open"]) and mins == sorted(mins, reverse=True),
           f"each waiting worksite says how long since it was found ({mins})")
     page.click("[data-tab=teams]")
