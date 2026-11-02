@@ -187,7 +187,7 @@ def check_recorded(page, errors, frames):
     open_sim(page, f"run={DEMO}&t={T}")
     check(view(page, "D.tick") == T, f"a recording opens at the tick in the address (&t={T})")
     facts = page.evaluate("() => document.getElementById('runFacts').textContent")
-    check("12 h" in facts and "Mixed faults" in facts and "Seed 1041" in facts and "5% radio loss" in facts,
+    check("12 h" in facts and "Mixed faults" in facts and "City 1041" in facts and "5% radio loss" in facts,
           f"the header comes from the recording ({facts!r})")
     check(page.evaluate("() => document.getElementById('runName').textContent") == "Demo mission", "the bundled demo is named Demo mission")
     check(clock(page).startswith(f"Tick {T} of 1200"), f"the clock reads tick {T} of 1200 ({clock(page)!r})")
