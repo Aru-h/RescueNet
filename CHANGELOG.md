@@ -1,5 +1,22 @@
 # Changelog
 
+## Sim page
+
+- `/sim` shows one run's city, teams and worksites at any tick, in 3D or flat, with the city around it faded.
+  `/sim?run=<recording>` plays a recording; `/sim?seed=&ticks=&faults=&loss=&speed=` starts a live run (pause and
+  resume the simulation, look back while it carries on, stop; when it ends it is saved and the page carries on as
+  that recording). Take over continues a recording live from the tick on screen.
+- `static/shared/rn-run.js` reads a run (recording lines or the live stream) into what the page draws: worksites
+  numbered in the order teams find them (not shown before they are found), events, and per team the stretches of
+  injected faults (ground truth) and of detection (peer consensus elevated, or degraded) for Detection detail.
+- On a live run, a worksite's card sends a team there by hand (the existing override; teams the system has flagged
+  are greyed out, as the simulator refuses them) and a pinned team's card releases it. The simulator's answer shows
+  on the card; overrides are events, in live runs and in replays.
+- The landing's mission setup and the run list open `/sim`. `/api/context/<seed>` builds the city around a live
+  run. three.js's OrbitControls is vendored (0.186.1, unmodified) for the 3D camera.
+- `make check-sim-e2e`: the sim page end to end in a real browser against a real app and simulator, with expected
+  values read from the recording itself.
+
 ## City generator rebuilt; new demo mission
 
 - City generator (`core/environment.c`) fixed and rebuilt, measured over seeds 1-100: no road through any building

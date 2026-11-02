@@ -1229,6 +1229,19 @@ check-dashboard-e2e:
 	@cd $(TOOLS_DIR) && $(PYTHON) dashboard_e2e_selftest.py
 
 # ---------------------------------------------------------------------
+# The sim page (/sim) end to end: a real app.py (SIM_ONLY) and the real
+# simulator through a real Chromium - a recorded run checked against the
+# recording itself, an older recording, Take over, a live run (pause,
+# looking back, saving), sending a team by hand and releasing it, and the
+# links into the page from the landing's setup and the run list. Same
+# rules as check-dashboard-e2e: Playwright is dev/test-only, nothing is
+# downloaded, and it SKIPS (exit 0) without Playwright or a Chromium.
+# Port 5050 must be free. See laptop/tools/sim_e2e_selftest.py.
+.PHONY: check-sim-e2e
+check-sim-e2e:
+	@cd $(TOOLS_DIR) && $(PYTHON) sim_e2e_selftest.py
+
+# ---------------------------------------------------------------------
 # Board-to-board protocol review fixes (H2 H3 H4 H5) - selftests.
 # Each is built twice, plainly and under ASan/UBSan: several of these
 # tests feed deliberately malformed frames whose only failure mode on
