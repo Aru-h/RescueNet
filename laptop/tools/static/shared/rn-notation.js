@@ -96,6 +96,8 @@
     wsActive: ['Worksite, team working', '<rect x="1.5" y="3" width="11" height="8.5" fill="' + COLOUR.active + '" stroke="currentColor" stroke-width="1.4"/>'],
     wsDone: ['Worksite complete', '<rect x="2.5" y="3" width="9" height="8.5" fill="' + COLOUR.complete + '" stroke="currentColor" stroke-width="1.4"/><path d="M0 7.2h14" stroke="currentColor" stroke-width="1.4"/>'],
     task: ['Other task', '<path d="M7 2.5l5 8.6H2z" fill="none" stroke="currentColor" stroke-width="1.3"/>'],
+    aoi: ['Simulated area', '<rect x="1.5" y="1.5" width="11" height="11" fill="none" stroke="#38a800" stroke-width="2"/>'],   /* Copernicus "area of interest" green */
+    context: ['Outside this run (not simulated)', '<rect x="1.5" y="1.5" width="5" height="5" fill="none" stroke="currentColor" stroke-opacity=".35"/><rect x="7.5" y="7.5" width="5" height="5" fill="none" stroke="currentColor" stroke-opacity=".35"/>'],
     teamReady: ['Team, ready', '<circle cx="7" cy="7" r="4.5" fill="currentColor"/>'],
     teamMoving: ['Team, on the way', '<circle cx="7" cy="7" r="3.6" fill="currentColor"/><circle cx="7" cy="7" r="5.8" fill="none" stroke="' + COLOUR.active + '" stroke-width="1.6"/>'],
     teamWorking: ['Team, working', '<circle cx="7" cy="7" r="4.8" fill="' + COLOUR.active + '" stroke="currentColor"/>'],
