@@ -135,9 +135,19 @@ def write_old_format(src, dst):
 
 # ---------------------------------------------------------------- page helpers
 
+def dismiss_loader(page, timeout=90000):
+    """The loading screen (static/shared/rn-loader.js): on the first run of a visit it waits for a key; after that it
+    goes on its own. Either way, wait until it has gone."""
+    page.wait_for_function("() => !document.querySelector('.rnl') || document.querySelector('.rnl.wait')", timeout=timeout)
+    if page.evaluate("() => !!document.querySelector('.rnl.wait')"):
+        page.keyboard.press("Enter")
+    page.wait_for_function("() => !document.querySelector('.rnl')", timeout=15000)
+
+
 def open_sim(page, query, timeout=90000):
     page.goto(f"{BASE}/sim?{query}")
     page.wait_for_function("() => document.getElementById('loading').hidden", timeout=timeout)
+    dismiss_loader(page, timeout)
 
 
 def clock(page):
@@ -149,6 +159,28 @@ def view(page, expr):
 
 
 # ---------------------------------------------------------------- the checks
+
+def check_loader(page):
+    """The loading screen: the first run of a visit plays through, ends on the city's number and waits for a key; the
+    next one opens on its own."""
+    page.goto(f"{BASE}/sim?run={DEMO}&t=10")
+    page.wait_for_function("() => !!document.querySelector('.rnl')", timeout=20000)
+    steps = page.evaluate("() => Array.from(document.querySelectorAll('.rnl .log div')).map(d => d.textContent)")
+    check(len(steps) == 3 and "Reading the recording" in steps[0], f"opening a recording shows its loading steps ({steps})")
+    page.wait_for_function("() => !!document.querySelector('.rnl.wait')", timeout=60000)
+    title = page.evaluate("() => document.querySelector('.rnl .title').textContent")
+    check("Demo mission" in title and "City 1041" in title, f"the loading screen ends on the run's name and city ({title!r})")
+    check(all("DONE" in t for t in page.evaluate("() => Array.from(document.querySelectorAll('.rnl .log div')).map(d => d.textContent)")), "every step is done before it waits")
+    page.wait_for_timeout(1500)
+    check(page.evaluate("() => !!document.querySelector('.rnl.wait')"), "on the first run of a visit it waits for a key or a click")
+    page.keyboard.press("Enter")
+    page.wait_for_function("() => !document.querySelector('.rnl')", timeout=10000)
+    check(True, "a key opens the page")
+    page.goto(f"{BASE}/sim?run={DEMO}&t=20")
+    page.wait_for_function("() => document.getElementById('loading').hidden", timeout=60000)
+    page.wait_for_function("() => !document.querySelector('.rnl')", timeout=30000)
+    check(True, "the next run of the visit opens on its own once loaded")
+
 
 def check_recorded(page, errors, frames):
     T = 278
@@ -219,7 +251,7 @@ def check_old_format(page, errors):
 
 def check_missing_run(page):
     page.goto(f"{BASE}/sim?run=no_such_run.jsonl.gz")
-    page.wait_for_function("() => /recordings|read/.test(document.getElementById('loadingTxt').textContent)", timeout=20000)
+    page.wait_for_function("() => /recordings|read/.test(((document.querySelector('.rnl .err') || document.getElementById('loadingTxt')) || {}).textContent || '')", timeout=20000)
     check(True, "a run that is not there says so instead of drawing nothing")
 
 
@@ -390,6 +422,7 @@ def check_links(page):
     check(all(h.startswith("/sim?run=") for h in hrefs), f"every run in the run list opens on the sim page ({len(hrefs)} links)")
     page.goto(f"{BASE}/sim?run={DEMO}")
     page.wait_for_function("() => document.getElementById('loading').hidden", timeout=60000)
+    dismiss_loader(page)
     check(page.evaluate("() => document.querySelector('.back').getAttribute('href')") == "/replay", "the sim page's back link goes to the run list")
 
 
@@ -409,6 +442,7 @@ def check_board(page):
     check(page.evaluate("() => !bGo.disabled"), "board mode: the boards are ready and the mission can start")
     page.select_option("#bPace", "60"); page.select_option("#bTicks", "200"); page.click("#bGo")
     page.wait_for_function("() => document.getElementById('loading').hidden", timeout=90000)
+    dismiss_loader(page)
     facts = page.evaluate("() => runName.textContent + ' | ' + runFacts.textContent")
     check(facts.startswith("Board mission") and "On the boards" in facts and "60" in facts, f"the board mission opens with its own header ({facts})")
     page.wait_for_function("() => RNSimTest.view().tick >= 3", timeout=30000)
@@ -488,7 +522,8 @@ def main():
             page = browser.new_page(viewport={"width": 1440, "height": 900})
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.on("console", lambda m: errors.append(m.text) if m.type == "error" and "404" not in m.text and "ERR_INCOMPLETE_CHUNKED_ENCODING" not in m.text else None)
-            for name, fn in (("recorded run", lambda: check_recorded(page, errors, frames)),
+            for name, fn in (("loading screen", lambda: check_loader(page)),
+                             ("recorded run", lambda: check_recorded(page, errors, frames)),
                              ("older recording", lambda: check_old_format(page, errors)),
                              ("missing run", lambda: check_missing_run(page)),
                              ("take over", lambda: check_takeover(page, frames, recordings_dir)),

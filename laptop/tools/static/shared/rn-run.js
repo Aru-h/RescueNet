@@ -231,6 +231,24 @@
     return run;
   }
 
-  root.RNRun = { create: function () { return new Run(); }, fromText: fromText, footprint: footprint, parseMap: parseMap, TICK_S: TICK_S, LIVE: LIVE };
+  /* the same, a slice at a time so the page can show progress (onProgress(fraction, ticks read so far)); resolves to the run */
+  function fromTextAsync(text, onProgress) {
+    var run = new Run(), i = 0, n = text.length, SLICE = 1500000;   /* characters per slice: ~30 frames of a 12-hour run */
+    return new Promise(function (resolve) {
+      (function slice() {
+        var stopAt = Math.min(n, i + SLICE);
+        while (i < n) {
+          var j = text.indexOf('\n', i); if (j < 0) j = n;
+          if (j > i) run.line(text.slice(i, j));
+          i = j + 1;
+          if (i >= stopAt) break;
+        }
+        if (onProgress) onProgress(Math.min(1, i / Math.max(1, n)), run.ticks.length);
+        if (i < n) setTimeout(slice, 0); else resolve(run);
+      })();
+    });
+  }
+
+  root.RNRun = { create: function () { return new Run(); }, fromText: fromText, fromTextAsync: fromTextAsync, footprint: footprint, parseMap: parseMap, TICK_S: TICK_S, LIVE: LIVE };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.RNRun;
 })(typeof window !== 'undefined' ? window : globalThis);

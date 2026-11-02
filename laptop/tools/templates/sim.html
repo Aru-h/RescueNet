@@ -4,11 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RescueNet · Simulation</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/static/fonts/fonts.css">
 <script src="/static/shared/rn-sky.js"></script>
 <script src="/static/shared/rn-notation.js"></script>
 <script src="/static/shared/rn-context.js"></script>
 <script src="/static/shared/rn-run.js"></script>
+<script src="/static/shared/rn-loader.js"></script>
 <!-- three.js and its camera control, from the app's own copy (static/three/, no CDN): a module, so it announces itself -->
 <script type="importmap">{"imports":{"three":"/static/three/three.module.js"}}</script>
 <script type="module">
@@ -1244,15 +1245,27 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   var rz; window.addEventListener('resize', function () { clearTimeout(rz); rz = setTimeout(function () { draw(); fitTeams(); drawRing(); resize3D(); }, 120); });
   if (window.RNSky) RNSky.onChange(function () { draw(); if (three) update3D(); });
   var FAULTS = { none: 'No faults', mobility: 'Movement faults', communication: 'Radio faults', resource: 'Supply faults', combined: 'Mixed faults', random: 'Rough faults' };
-  function loadFail(msg) { $('#loadingTxt').innerHTML = msg + ' <a href="/replay">Choose another run</a>'; }
+  var LOADER = null;   /* the loading screen (static/shared/rn-loader.js) while a run is being opened */
+  function loadFail(msg) {
+    if (LOADER) { LOADER.fail(msg, '/replay'); return; }
+    $('#loadingTxt').innerHTML = msg + ' <a href="/replay">Choose another run</a>';
+  }
+  function openLoader(kind, name, city, steps) {
+    $('#loading').hidden = true;
+    LOADER = window.RNLoader ? window.RNLoader.open({ kind: kind, name: name, city: city, steps: steps }) : null;
+    if (!LOADER) $('#loading').hidden = false;
+    return LOADER;
+  }
+  function loaderStep(k, f, d) { if (LOADER) { if (f >= 1) LOADER.done(k, d); else LOADER.progress(k, f, d); } }
+  function loaderFinish() { if (LOADER) { var L = LOADER; LOADER = null; L.finish(); } }
   function start() {
     var hd = RUN.header || {}, hrs = RUN.length() * TICK_S / 3600, loss = hd.link_loss;
     var demo = /^demo_/.test(RUN_NAME || '');
     $('#runName').textContent = LIVE ? (LIVE.board ? 'Board mission' : 'Live run') : demo ? 'Demo mission' : 'Recorded run';
     $('#runFacts').innerHTML = [LIVE && LIVE.board ? 'On the boards' : 'Simulated city', (Math.round(hrs * 10) / 10) + ' h', FAULTS[hd.fault_profile] || (hd.fault_profile ? hd.fault_profile + ' faults' : 'Faults unknown'),
       LIVE && LIVE.board ? (hd.time_scale === 1 ? 'Real time' : hd.time_scale + '\u00d7 real time') : (loss == null ? '5%' : Math.round(loss * 100) + '%') + ' radio loss',
-      'Seed ' + (hd.seed == null ? '?' : hd.seed)].join(' &middot; ');
-    document.title = 'RescueNet · ' + (LIVE ? (LIVE.board ? 'Board mission' : 'Live run') : demo ? 'Demo mission' : 'Seed ' + hd.seed);
+      'City ' + (hd.seed == null ? '?' : hd.seed)].join(' &middot; ');
+    document.title = 'RescueNet · ' + (LIVE ? (LIVE.board ? 'Board mission' : 'Live run') : demo ? 'Demo mission' : 'City ' + hd.seed);
     var t0 = LIVE ? NaN : parseInt(PARAMS.get('t'), 10);
     D = RUN.at(isNaN(t0) ? RUN.first() : t0); W = D.W; H = D.H; SZ = W;
     CTX = window.RNContext.build({ W: W, H: H, seed: hd.seed, roads: D.roads, water: D.water, buildings: D.buildings, epicentre: D.epicenter }, 36, CTXDATA);
@@ -1318,17 +1331,21 @@ select option { background: var(--c-bg); color: var(--c-fg); }
         liveControls(); return;
       }
     }
-    if (ev.type === 'static_env') RUN.add('STATICENV', ev.env);
+    if (ev.type === 'static_env') { RUN.add('STATICENV', ev.env); if (LIVE.loader === 'live') { loaderStep(0, 1); loaderStep(1, 1, (ev.env.buildings || []).length + ' buildings'); } }
     else if (ev.type === 'static_map') RUN.add('STATICMAP', ev.map);
     else if (ev.type === 'frame') {
       RUN.add('LIVEFRAME', ev.frame);
       if (LIVE.state === 'starting' && !LIVE.takeover) {
         LIVE.state = 'running'; start();
+        var fr = LIVE.loader === 'live' ? 2 : 0, cx = fr + 1;   /* the steps: first tick, then the surroundings */
+        if (LIVE.loader === 'live') { loaderStep(0, 1); loaderStep(1, 1); }
+        loaderStep(fr, 1, 'tick ' + ev.frame.tick);
         fetch('/api/context/' + RUN.header.seed).then(function (r) { return r.ok ? r.json() : null; }).then(function (c) {
+          loaderStep(cx, 1, c ? '8 sectors' : 'none'); loaderFinish();
           if (!c) return; CTXDATA = c;
           CTX = window.RNContext.build({ W: W, H: H, seed: RUN.header.seed, roads: D.roads, water: D.water, buildings: D.buildings, epicentre: D.epicenter }, 36, CTXDATA);
           draw(); if (three) update3D();
-        }).catch(function () { /* no surroundings: the run itself is unaffected */ });
+        }).catch(function () { loaderStep(cx, 1, 'none'); loaderFinish(); /* no surroundings: the run itself is unaffected */ });
       } else liveFrame();
     }
     else if (ev.type === 'override_ack') overrideAck(ev);
@@ -1351,7 +1368,9 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     if (isNaN(seed)) { loadFail('No city chosen.'); return; }
     LIVE = { state: 'starting', follow: true };
     RUN = RNRun.create(); RUN.header = { seed: seed, ticks: ticks, fault_profile: faults, link_loss: loss === null || loss === '' ? null : +loss };
-    $('#loadingTxt').textContent = 'Starting the simulation…';
+    LIVE.loader = 'live';
+    openLoader('Live run', null, seed, [{ label: 'Starting the simulator', weight: 30, worst: 2400 }, { label: 'Generating city ' + seed, weight: 15, worst: 700 },
+      { label: 'Waiting for the first tick', weight: 15, worst: 700 }, { label: 'Building the city around it', weight: 40, worst: 1600 }]);
     var sp = parseInt(PARAMS.get('speed'), 10); if (sp >= 0 && sp < DELAYS.length) $('#speed').selectedIndex = sp;   /* &speed=0..3, as the speed list */
     var body = { seed: seed, ticks: ticks, fault_profile: faults, tick_delay_ms: DELAYS[$('#speed').selectedIndex] || 200 };
     if (RUN.header.link_loss != null) body.link_loss = RUN.header.link_loss;
@@ -1434,7 +1453,8 @@ select option { background: var(--c-bg); color: var(--c-fg); }
         else if (b.all_ready) txt = 'Boards ready.';
         else txt = 'Connected; waiting for the board to answer the handshake…';
         $('#bState').textContent = txt;
-        $('#bGo').disabled = !b.all_ready || !!(m && m.running);
+        var attached = !!(b.connected || (b.handshake && b.handshake.fake_board));
+        $('#bGo').disabled = !attached || !b.all_ready || !!(m && m.running);   /* no board, no start, whatever the handshake says */
         $('#bFollow').hidden = !(m && m.running);
       }).catch(function () { $('#bState').textContent = 'The app did not answer.'; });
     }
@@ -1458,19 +1478,46 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     LIVE = { state: 'starting', follow: true, board: true };
     RUN = RNRun.create(); RUN.header = { seed: p.seed, ticks: p.ticks, fault_profile: p.fault_profile, time_scale: p.time_scale, link_loss: null };
     $('#loading').innerHTML = '<p class="mono" id="loadingTxt">Waiting for the board mission&rsquo;s first tick&hellip;</p>';
+    LIVE.loader = 'board';
+    openLoader('Board mission', null, p.seed, [{ label: 'Waiting for the first report', weight: 45, worst: 1500 }, { label: 'Building the city around it', weight: 55, worst: 1600 }]);
     liveStream('/api/board/mission/stream', null, function (msg) { loadFail(msg); });
   }
 
   if (!RUN_NAME && PARAMS.get('board') !== null) { boardPanel(); return; }
   if (!RUN_NAME && PARAMS.get('seed') !== null) { liveStart(); return; }
   if (!RUN_NAME) { loadFail('No run chosen.'); return; }
-  Promise.all([
-    fetch('/api/recordings/' + encodeURIComponent(RUN_NAME)).then(function (r) { if (!r.ok) throw new Error(r.status === 404 ? 'This run is not in the app\'s recordings.' : 'The app could not read this run (' + r.status + ').'); return r.text(); }),
-    fetch('/api/recordings/' + encodeURIComponent(RUN_NAME) + '/preview').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
-  ]).then(function (got) {
-    RUN = RNRun.fromText(got[0]); CTXDATA = got[1] && got[1].context || null;
+  var cityOf = (/seed(\d+)/.exec(RUN_NAME) || [])[1];
+  openLoader('Recorded run', /^demo_/.test(RUN_NAME) ? 'Demo mission' : null, cityOf == null ? null : +cityOf,
+    [{ label: 'Reading the recording', weight: 35, worst: 2200 }, { label: 'Working out every tick', weight: 40, worst: 1800 }, { label: 'Building the city around it', weight: 25, worst: 1400 }]);
+  function readWithProgress(r) {   /* the recording as text, reporting megabytes as they arrive */
+    var total = +r.headers.get('Content-Length') || 0, got = 0, parts = [], dec = new TextDecoder(), mb = function (b) { return (b / 1048576).toFixed(1); };
+    if (!r.body || !r.body.getReader) return r.text();
+    var rd = r.body.getReader();
+    return (function pump() {
+      return rd.read().then(function (x) {
+        if (x.done) { parts.push(dec.decode()); return parts.join(''); }
+        got += x.value.length; parts.push(dec.decode(x.value, { stream: true }));
+        loaderStep(0, total ? Math.min(.999, got / total) : .5, mb(got) + (total ? ' of ' + mb(total) : '') + ' MB');
+        return pump();
+      });
+    })();
+  }
+  var preview = fetch('/api/recordings/' + encodeURIComponent(RUN_NAME) + '/preview').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+  fetch('/api/recordings/' + encodeURIComponent(RUN_NAME)).then(function (r) {
+    if (!r.ok) throw new Error(r.status === 404 ? 'This run is not in the app\'s recordings.' : 'The app could not read this run (' + r.status + ').');
+    return readWithProgress(r);
+  }).then(function (text) {
+    loaderStep(0, 1, (text.length / 1048576).toFixed(1) + ' MB');
+    return RNRun.fromTextAsync(text, function (f, n) { loaderStep(1, Math.min(.999, f), 'tick ' + n); });
+  }).then(function (run) {
+    RUN = run;
     if (RUN.first() == null) { loadFail('This run has no ticks in it.'); return; }
-    start();
+    loaderStep(1, 1, RUN.ticks.length.toLocaleString('en') + ' ticks');
+    return preview.then(function (pv) {
+      CTXDATA = pv && pv.context || null;
+      loaderStep(2, 1, CTXDATA ? '8 sectors' : 'none for an older run');
+      start(); loaderFinish();
+    });
   }).catch(function (e) { loadFail(e.message || 'The app did not answer.'); });
 })();
 </script>
