@@ -1357,6 +1357,33 @@ def _live_write_line(text):
     return True, None
 
 
+@app.route("/api/run-live/speed", methods=["POST"])
+def api_run_live_speed():
+    """Changes a live run's pace: {"tick_delay_ms": n}, the wall-clock wait
+    between ticks. Sent as a "SPEED <ms>" line on the run's stdin (laptop/
+    debug.c), which the simulator applies from the next tick without an
+    OVERRIDEACK - so, unlike _live_write_line(), it is not added to
+    _live_sent_cmds (the n-th ack must still pair with the n-th override).
+    It changes only how fast the run plays, never what happens in it."""
+    data = request.get_json(silent=True) or {}
+    try:
+        ms = int(data.get("tick_delay_ms"))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "tick_delay_ms must be an integer"}), 400
+    if not 0 <= ms <= 60000:
+        return jsonify({"status": "error", "message": "tick_delay_ms must be 0-60000"}), 400
+    with _live_lock:
+        proc = _live_proc
+        if proc is None or proc.poll() is not None:
+            return jsonify({"status": "error", "message": "no live run in progress"}), 409
+        try:
+            proc.stdin.write(f"SPEED {ms}\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError) as exc:
+            return jsonify({"status": "error", "message": f"failed to write to the live run's stdin: {exc}"}), 409
+    return jsonify({"status": "ok", "tick_delay_ms": ms})
+
+
 @app.route("/api/run-live/override", methods=["POST"])
 def api_run_live_override():
     """Part 4: sim-mode manual override - a team, an incident, sent as a

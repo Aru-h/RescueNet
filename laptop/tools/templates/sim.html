@@ -70,11 +70,22 @@ select option { background: var(--c-bg); color: var(--c-fg); }
 .secmenu span { font-size: 13px; }
 .secmenu small { color: var(--c-mute); font-family: var(--mono); font-size: 10px; letter-spacing: .03em; }
 .secmenu .grp { padding: 8px 12px 4px; color: var(--c-faint); font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; }
+.brief { position: absolute; z-index: 7; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(520px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow-y: auto; background: var(--c-bg); border: 1px solid var(--c-faint); box-shadow: 0 16px 48px rgba(0,0,0,.55); padding: 22px 24px; display: grid; gap: 14px; }
+.brief-k { margin: 0; color: var(--c-mute); }
+.brief h3 { margin: 0; font-size: 24px; font-weight: 600; line-height: 1.2; }
+.brief ul { margin: 10px 0 0; padding-left: 18px; display: grid; gap: 8px; color: var(--c-mute); font-size: 14px; line-height: 1.45; }
+.brief ul b { color: var(--c-fg); font-weight: 600; }
+.brief-go { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.brief-go button { font: inherit; font-size: 15px; font-weight: 600; padding: 11px 18px; background: var(--c-fg); color: var(--c-bg); border: 0; cursor: pointer; }
+.brief-go button:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
+.brief-go span { color: var(--c-faint); }
+.brief.short { top: auto; bottom: 16px; transform: translateX(-50%); grid-template-columns: 1fr auto; align-items: center; width: auto; padding: 12px 14px 12px 18px; }
+.brief.short .brief-go span { display: none; }
 .seccard { position: absolute; z-index: 6; width: 250px; background: var(--c-bg); border: 1px solid var(--c-faint); padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.45); display: grid; gap: 6px; font-size: 13px; }
 .seccard h4 { margin: 0; font-family: var(--mono); font-weight: 600; font-size: 15px; display: flex; justify-content: space-between; }
 .seccard h4 button { background: none; border: 0; color: var(--c-mute); cursor: pointer; font-size: 18px; line-height: 1; }
 .seccard p { margin: 0; color: var(--c-mute); }
-.markcard { width: 270px; }
+.markcard { width: 270px; max-height: calc(100% - 68px); overflow-y: auto; overscroll-behavior: contain; }   /* never runs under Detection detail */
 .markcard .big { color: var(--c-fg); font-size: 15px; }
 .markcard dl { margin: 2px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; }
 .markcard dt { color: var(--c-faint); } .markcard dd { margin: 0; color: var(--c-fg); }
@@ -135,7 +146,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
 .pane { overflow: auto; min-height: 0; }
 /* team rows grow to fill the panel when there are few teams and shrink, down to the compact size, as there are more;
    past that the list scrolls. --s runs from 0 (compact) to 1 (largest); fitTeams() picks it. */
-.teams { --s: 0; }
+.teams { --s: 0; display: grid; grid-auto-rows: minmax(68px, 1fr); min-height: 100%; }   /* equal rows that fill the pane, the same every tick */
 .team { display: grid; grid-template-columns: calc(24px + 14px * var(--s)) minmax(0, 1fr) auto; gap: calc(2px + 3px * var(--s)) calc(10px + 6px * var(--s)); align-items: center; padding: calc(7px + 9px * var(--s)) 16px; border-bottom: 1px solid var(--c-rule); cursor: pointer; }
 .team:hover { background: color-mix(in srgb, var(--c-fg) 5%, transparent); }
 .team.away { opacity: .4; }
@@ -148,8 +159,11 @@ select option { background: var(--c-bg); color: var(--c-fg); }
 .team .what { font-size: calc(13.5px + 4px * var(--s)); line-height: 1.25; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 /* the specialty and the peers' view are two pieces that never break inside: when both do not fit on one line, the
    whole peers' view moves to the next line */
-.team .det { display: flex; flex-wrap: wrap; column-gap: 12px; }
-.team .det .spec, .team .det .peer { white-space: nowrap; }
+.team .det { display: flex; column-gap: 12px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.team .det .peer { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* ground truth: the injected fault as a short tag in its own cell, under the meters */
+.team .det.truth { grid-row: 2; grid-column: 3; justify-self: end; color: #ff9be9; font-family: var(--mono); font-size: calc(9px + 1px * var(--s)); letter-spacing: .06em; text-transform: uppercase; }
+.team .det .spec { flex: none; }
 .team .det .spec { font-weight: 400; color: var(--c-fg); opacity: .8; }
 .team .what small { color: var(--c-mute); font-family: var(--mono); font-size: calc(10.5px + 2px * var(--s)); letter-spacing: .04em; margin-left: 6px; }
 .team .meters { display: grid; grid-template-columns: auto calc(32px + 6px * var(--s)) 3ch; gap: 2px 6px; line-height: 1; align-items: center; grid-row: 1; grid-column: 3; font-family: var(--mono); font-size: calc(9px + 1px * var(--s)); letter-spacing: .06em; text-transform: uppercase; color: var(--c-mute); }
@@ -291,6 +305,19 @@ select option { background: var(--c-bg); color: var(--c-fg); }
       <button type="button" class="drawer-btn mono" id="drawerBtn">Teams</button>
       <div class="seccard" id="secCard" hidden></div>
       <div class="seccard markcard" id="markCard" role="dialog" aria-label="Details" hidden></div>
+      <div class="brief" id="brief" role="dialog" aria-labelledby="briefT" hidden>
+        <p class="mono brief-k" id="briefK"></p>
+        <div id="briefBody">
+          <h3 id="briefT">The earthquake has just hit.</h3>
+          <ul>
+            <li><b>10 teams</b> wait at their safe zones (teal squares). Nobody knows yet where the survivors are.</li>
+            <li>As teams search, each <b>worksite</b> they find gets a number (A-1, A-2&hellip;): a box, blue while a team works it, green once done.</li>
+            <li>There is <b>no dispatcher</b>: each team plans for itself, and the teams agree among themselves over the radio.</li>
+            <li>You can <b>pause</b> (Space), change the <b>speed</b>, and <b>drag a team onto a worksite</b> to send it there.</li>
+          </ul>
+        </div>
+        <div class="brief-go"><button type="button" id="briefGo">Start the mission &#9656;</button><span class="mono">or press Space</span></div>
+      </div>
     </section>
 
     <aside class="side" aria-label="Teams and worksites">
@@ -526,12 +553,12 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   /* ---------------- panels ---------------- */
   function previewTeams() { return D.teams; }
   /* the largest row size at which every team fits; at the compact size and still too many, the list scrolls */
+  /* the size of the team rows comes from the pane's height alone (each row gets an equal share), never from what the
+     rows say, so the list does not jump as statuses change from tick to tick */
   function fitTeams() {
     var list = $('#teamList'), pane = $('#pane'); if (!list) return;
-    var room = pane.clientHeight - 1, lo = 0, hi = 1;
-    list.style.setProperty('--s', 1); if (list.offsetHeight <= room) return;
-    for (var k = 0; k < 10; k++) { var m = (lo + hi) / 2; list.style.setProperty('--s', m); if (list.offsetHeight <= room) lo = m; else hi = m; }
-    list.style.setProperty('--s', lo);
+    var n = list.children.length || 1, row = (pane.clientHeight - 1) / n;
+    list.style.setProperty('--s', Math.max(0, Math.min(1, (row - 72) / 44)).toFixed(3));
   }
   /* two labelled meters, stamina and equipment; under 30 the bar turns dashed. For equipment that is where the
      simulator sends a team back to restock (TEAM_NEEDS_SAFE_ZONE_EQUIPMENT_THRESHOLD); a team rests at 20, 26 or 40
@@ -658,7 +685,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     var p = $('#pane');
     if (tab === 'teams') {
       p.innerHTML = '<div class="teams" id="teamList">' + previewTeams().map(function (t) {
-        var d = detect(t), f = truth && t.fault ? '<span class="det truth">Injected (ground truth): ' + FAULT.filter(function (_, i) { return t.fault & (1 << i); }).join(', ') + ' fault</span>' : '';
+        var d = detect(t), f = truth && t.fault ? '<span class="det truth" title="Ground truth: the fault the simulator injected into this team">Injected: ' + FAULT.filter(function (_, i) { return t.fault & (1 << i); }).join(' + ') + '</span>' : '';
         return '<div class="team' + (selTeam === t.id ? ' sel' : '') + (inFocus(t.x, t.y) ? '' : ' away') + '" data-id="' + t.id + '"><span class="n ' + teamState(t) + '">' + (t.id + 1) + '</span>' +
           '<span class="what">' + status(t) + '</span>' +
           '<span class="meters">' + meter('Stamina', t.stamina, 'energy the team has left before it must rest') + meter('Equipment', t.equip, 'tools and supplies left before the team must restock') + '</span>' +
@@ -811,7 +838,11 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   $('#stepBack').onclick = function () { play(false); setTick(D.tick - 1); };
   $('#stepOn').onclick = function () { play(false); setTick(D.tick + 1); };
   $('#nextEv').onclick = function () { nextEvent(); };
-  $('#speed').onchange = function () { if (playing) play(true); };
+  $('#speed').onchange = function () {
+    if (playing) play(true);
+    /* a live simulator run: the simulator itself goes faster or slower from its next tick */
+    if (LIVE && !LIVE.board) fetch('/api/run-live/speed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tick_delay_ms: DELAYS[this.selectedIndex] || 200 }) });
+  };
   (function () {
     var sc = $('#scrub'), drag = false;
     var at = function (e) { var b = sc.getBoundingClientRect(); setTick((e.clientX - b.left) / b.width * (D.ticks - 1)); };
@@ -822,6 +853,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   document.addEventListener('keydown', function (e) {
     if (e.target.closest && e.target.closest('input, select, textarea') || document.querySelector('dialog[open]')) return;
     if (e.key === 'Escape' && mark) { closeMark(); return; }
+    if (LIVE && LIVE.brief && !$('#brief').hidden && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); startBriefed(); return; }
     if (e.key === ' ') { e.preventDefault(); if (LIVE) liveToggle(); else play(!playing); }
     else if ((e.key === 'l' || e.key === 'L') && LIVE) setTick(RUN.last());
     else if (e.key === 'ArrowRight') { e.preventDefault(); setTick(D.tick + (e.shiftKey ? 10 : 1)); }
@@ -1133,7 +1165,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   function refreshMark() {
     if ((holdCard || cardHover) && !forceCard) { cardDirty = true; return; }
     if (!mark) return; var c = $('#markCard'), h = markHTML(); if (!h) { closeMark(); return; }
-    c.innerHTML = h;
+    c.innerHTML = h; placeCard();
     c.querySelector('h4 button').onclick = closeMark;
     c.querySelectorAll('[data-a]').forEach(function (b) {
       b.onclick = function () {
@@ -1151,8 +1183,15 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   function showMark(h, px, py) {
     if (propose && !(h.kind === 'w' && h.ref === propose.wid)) propose = null;
     $('#secCard').hidden = true; mark = { kind: h.kind, ref: h.ref }; var c = $('#markCard'); c.hidden = false; redrawCard();
+    cardAt = [px, py]; placeCard();
+  }
+  /* inside the map, whatever its height (Detection detail open or not) and whatever the card says now */
+  var cardAt = [0, 0];
+  function placeCard() {
+    var c = $('#markCard'); if (c.hidden) return;
     var mp = $('#map').getBoundingClientRect();
-    c.style.left = Math.min(Math.max(8, px + 14), mp.width - 286) + 'px'; c.style.top = Math.min(Math.max(60, py + 14), mp.height - c.offsetHeight - 8) + 'px';
+    c.style.left = Math.min(Math.max(8, cardAt[0] + 14), mp.width - 286) + 'px';
+    c.style.top = Math.max(60, Math.min(cardAt[1] + 14, mp.height - c.offsetHeight - 8)) + 'px';
   }
   function closeMark() { propose = null; mark = null; $('#markCard').hidden = true; }
   function choose(sec, px, py) {
@@ -1283,7 +1322,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   function showTab(name) { tab = name; document.querySelectorAll('.tabs button').forEach(function (o) { o.setAttribute('aria-selected', o.dataset.tab === name); }); renderPane(); }
   document.querySelectorAll('.tabs button').forEach(function (b) { b.onclick = function () { showTab(b.dataset.tab); }; });
   $('#ticker').onclick = function () { showTab('events'); };
-  $('#tlBtn').onclick = function () { var o = $('#app').classList.toggle('tl-open'); this.setAttribute('aria-expanded', o); this.innerHTML = 'Detection detail ' + (o ? '&#9652;' : '&#9662;'); requestAnimationFrame(function () { draw(); fitTeams(); }); };
+  $('#tlBtn').onclick = function () { var o = $('#app').classList.toggle('tl-open'); this.setAttribute('aria-expanded', o); this.innerHTML = 'Detection detail ' + (o ? '&#9652;' : '&#9662;'); requestAnimationFrame(function () { draw(); fitTeams(); placeCard(); }); };
   $('#drawerBtn').onclick = function () { document.body.classList.toggle('drawer'); };
   $('#legend').innerHTML = N.legendHTML(['destroyed', 'moderate', 'slight', 'none', 'wsOpen', 'wsActive', 'wsDone', 'task', 'assembly', 'exit', 'barrier', 'epicentre', 'teamReady', 'teamMoving', 'teamWorking', 'teamResting', 'roadMain', 'roadStreet', 'bridge', 'water', 'aoi', 'context']);
   $('#rawClose').onclick = function () { $('#rawDlg').close(); };
@@ -1294,7 +1333,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   $('#legendBtn').onclick = function () { dlg.showModal(); };
   $('#legendClose').onclick = function () { dlg.close(); };
   dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
-  var rz; window.addEventListener('resize', function () { clearTimeout(rz); rz = setTimeout(function () { draw(); fitTeams(); drawRing(); resize3D(); }, 120); });
+  var rz; window.addEventListener('resize', function () { clearTimeout(rz); rz = setTimeout(function () { draw(); fitTeams(); drawRing(); resize3D(); placeCard(); }, 120); });
   if (window.RNSky) RNSky.onChange(function () { draw(); if (three) update3D(); });
   var FAULTS = { none: 'No faults', mobility: 'Movement faults', communication: 'Radio faults', resource: 'Supply faults', combined: 'Mixed faults', random: 'Rough faults' };
   var LOADER = null;   /* the loading screen (static/shared/rn-loader.js) while a run is being opened */
@@ -1309,7 +1348,22 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     return LOADER;
   }
   function loaderStep(k, f, d) { if (LOADER) { if (f >= 1) LOADER.done(k, d); else LOADER.progress(k, f, d); } }
-  function loaderFinish() { if (LOADER) { var L = LOADER; LOADER = null; L.finish(); } }
+  function loaderFinish() {
+    var after = function () { if (LIVE && LIVE.brief) showBrief(); };
+    if (LOADER) { var L = LOADER; LOADER = null; var pr = L.finish(); if (pr && pr.then) pr.then(after); else after(); } else after();
+  }
+  /* the briefing before a simulator run starts: in full on the first run of a visit, a one-line bar after that */
+  function showBrief() {
+    var seen = false; try { seen = sessionStorage.getItem('rnBriefSeen') === '1'; sessionStorage.setItem('rnBriefSeen', '1'); } catch (e) { /* storage blocked: show it in full */ }
+    var b = $('#brief'); b.classList.toggle('short', seen); $('#briefBody').hidden = seen;
+    $('#briefK').textContent = 'Live run \u00b7 City ' + RUN.header.seed + ' \u00b7 ' + (seen ? 'ready at T+0' : 'waiting at T+0');
+    b.hidden = false; $('#briefGo').focus({ preventScroll: true });
+  }
+  function startBriefed() {
+    if (!LIVE || !LIVE.brief) return; LIVE.brief = false; $('#brief').hidden = true;
+    if (LIVE.state === 'paused') liveToggle();
+  }
+  $('#briefGo').onclick = startBriefed;
   function start() {
     var hd = RUN.header || {}, hrs = RUN.length() * TICK_S / 3600, loss = hd.link_loss;
     var demo = /^demo_/.test(RUN_NAME || '');
@@ -1344,7 +1398,8 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     var on = !!LIVE;
     $('#stopBtn').hidden = !on; $('#toLive').hidden = !on || LIVE.follow;
     $('.tl-row .hint').innerHTML = 'Space ' + (on ? 'pause' : 'play') + ' &middot; &larr;&rarr; step &middot; J next event' + (on ? ' &middot; drag a team onto a worksite to send it' : '');
-    $('#speed').disabled = on; $('#speed').title = on ? 'Set when the run starts' : 'Mission time per real second';
+    /* a board mission runs at the board's pace: no speed to choose. A simulator run can change it as it runs. */
+    $('#speed').hidden = !!(on && LIVE.board); $('#speed').disabled = false; $('#speed').title = 'Mission time per real second';
     var paused = on && LIVE.state === 'paused';
     $('#playBtn').disabled = !!(on && LIVE.board);
     $('#playBtn').innerHTML = on && !paused ? '&#10074;&#10074;' : '&#9654;';
@@ -1352,6 +1407,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     if (D) $('#clockSub').textContent = clockText();
   }
   function liveToggle() {
+    if (LIVE && LIVE.brief && LIVE.state === 'paused') { LIVE.brief = false; $('#brief').hidden = true; }   /* the play button starts it too */
     if (!LIVE || LIVE.board || (LIVE.state !== 'running' && LIVE.state !== 'paused')) return;   /* a board mission runs at its own pace */
     livePost(LIVE.state === 'paused' ? 'resume' : 'pause').then(function (r) { return r.json(); }).then(function (b) {
       if (LIVE && b && b.ok) { LIVE.state = b.paused ? 'paused' : 'running'; liveControls(); }
@@ -1389,6 +1445,16 @@ select option { background: var(--c-bg); color: var(--c-fg); }
       RUN.add('LIVEFRAME', ev.frame);
       if (LIVE.state === 'starting' && !LIVE.takeover) {
         LIVE.state = 'running'; start();
+        /* a new simulator run waits at its first tick (behind the loading screen) for the briefing's Start */
+        if (LIVE.loader === 'live') {
+          LIVE.brief = true;
+          livePost('pause').then(function (r) { return r.json(); }).then(function (b) {
+            if (!LIVE || !b || !b.ok) return;
+            LIVE.state = b.paused ? 'paused' : 'running';
+            if (!LIVE.brief && LIVE.state === 'paused') liveToggle();   /* Start was pressed before the pause landed */
+            else liveControls();
+          }).catch(function () {});
+        }
         var fr = LIVE.loader === 'live' ? 2 : 0, cx = fr + 1;   /* the steps: first tick, then the surroundings */
         if (LIVE.loader === 'live') { loaderStep(0, 1); loaderStep(1, 1); }
         loaderStep(fr, 1, 'tick ' + ev.frame.tick);

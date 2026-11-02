@@ -146,9 +146,16 @@ main > section:not(.story) { pointer-events: auto; }
 .st-host { color: var(--on-ink-teal2); }
 .st-sim { color: var(--paper); }
 .st-not { color: var(--on-ink-mute); border-style: dashed; }
+.ledger-more { margin: 18px 0 0; font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+.ledger-more a { color: inherit; }
 .st-wd { color: var(--paper); background: var(--red); border-color: var(--red); }
 
-.cta { text-align: left; }
+.cta { text-align: left; min-height: 100vh; min-height: 100svh; box-sizing: border-box; display: flex; flex-direction: column; }
+.cta .enter { margin-top: auto; }
+.cta > footer { margin-top: auto; }
+/* on the last screen only ENTER is in view: the corner navigation steps aside */
+.nav { transition: opacity .45s ease; }
+body.in-cta .nav { opacity: 0; pointer-events: none; }
 .enter { display: block; width: 100%; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: var(--ink); font-family: var(--display); font-weight: 900; font-stretch: 125%; text-transform: uppercase; letter-spacing: -.02em; line-height: .82; font-size: 18vw; -webkit-text-stroke: 3px var(--ink); color: transparent; transition: color .25s, -webkit-text-stroke-color .25s; }
 .enter:hover, .enter:focus-visible { color: var(--red); -webkit-text-stroke-color: var(--red); }
 .cta-row { display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; padding-top: 28px; }
@@ -161,21 +168,6 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 .cur { position: fixed; left: 0; top: 0; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #fff; mix-blend-mode: difference; pointer-events: none; z-index: 80; display: none; }
 .has-cursor, .has-cursor a, .has-cursor button { cursor: none; }
 .has-cursor .cur { display: block; }
-.tune-btn { position: fixed; right: max(var(--gx), env(safe-area-inset-right, 0px)); top: calc(env(safe-area-inset-top, 0px) + 112px); z-index: 65; font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; background: var(--ink); color: var(--paper); border: 0; padding: 8px 12px; cursor: pointer; display: none; }
-.tune-btn.show { display: block; }
-.tune[hidden] { display: none; }
-.tune { position: fixed; right: max(var(--gx), env(safe-area-inset-right, 0px)); top: calc(env(safe-area-inset-top, 0px) + 150px); z-index: 66; width: min(280px, calc(100vw - 32px)); background: var(--paper); border: 1.5px solid var(--ink); padding: 12px 14px; display: grid; gap: 6px; font-family: var(--mono); font-size: 11px; }
-.tune-h { display: flex; justify-content: space-between; align-items: center; font-family: var(--display); font-stretch: 125%; text-transform: uppercase; font-size: 14px; }
-.tune-h button { background: none; border: 0; font-size: 20px; cursor: pointer; color: var(--ink); min-width: 32px; min-height: 32px; }
-.tune label { display: flex; justify-content: space-between; text-transform: uppercase; letter-spacing: .06em; color: var(--mute); margin-top: 6px; }
-.tune output { color: var(--ink); font-variant-numeric: tabular-nums; }
-.tune input { width: 100%; accent-color: var(--ink); }
-.tune output.sky { display: block; color: var(--mute); }
-.tune select { width: 100%; font-family: var(--mono); font-size: 12px; padding: 6px; border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink); min-height: 34px; }
-.tune small { color: var(--mute); font-size: 10px; }
-.tune-row { display: flex; gap: 6px; margin-top: 8px; }
-.tune-row button { flex: 1; font-family: var(--mono); font-size: 11px; text-transform: uppercase; border: 1.5px solid var(--ink); background: var(--paper); color: var(--ink); padding: 7px; cursor: pointer; }
-.tune button:focus-visible, .tune input:focus-visible, .tune-btn:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
 .wipe { position: fixed; inset: 0; z-index: 70; background: var(--ink); clip-path: circle(0 at 50% 50%); pointer-events: none; }
 /* the connect screens stay dark at every hour, in a deep version of the hour's paper colour (RNSky --deep), so they drift with the page */
 #connect { --c-bg: var(--deep, #0b0b0b); --c-fg: var(--deep-fg, #e6e6e3); --c-mute: var(--deep-mute, #b4b4af); --c-faint: var(--deep-faint, #9a9a95); --c-rule: var(--deep-rule, #3a3a38); --c-teal: var(--deep-teal, #4fd1c9); }
@@ -285,6 +277,11 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 .ms-form legend { padding: 0; margin-bottom: 8px; }
 .ms-seg { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .ms-seg legend { grid-column: 1 / -1; }
+.ms-seg5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.ms-custom { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.ms-custom[hidden] { display: none; }
+.ms-custom input { width: 7em; font-family: var(--mono); font-size: 15px; padding: 10px 12px; border: 1.5px solid var(--c-fg); background: transparent; color: var(--c-fg); }
+.ms-custom .small { margin: 0; }
 .ms-seg label { position: relative; cursor: pointer; }
 .ms-seg input, .ms-list input { position: absolute; opacity: 0; pointer-events: none; }
 .ms-seg span { display: block; text-align: center; padding: 12px 6px; min-height: 46px; border: 1.5px solid var(--c-fg); margin-left: -1.5px; font-family: var(--mono); font-size: 15px; }
@@ -424,10 +421,10 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
      down). Once a visit; never on #connect or with reduced motion. At least ~1.6 s, so it reads as a count. -->
 <div class="rni" id="rnIntro" aria-hidden="true"><div class="rni-ctr"><span class="rni-roll"><span id="rniNum">0</span></span></div><div class="rni-bar" id="rniBar"></div></div>
 <style>
-.rni { position: fixed; inset: 0; z-index: 1000; background: var(--paper); transition: opacity .45s ease .3s; }
+.rni { position: fixed; inset: 0; z-index: 1000; background: var(--paper); transition: opacity .8s ease .5s; }
 .rni.out { opacity: 0; pointer-events: none; }
 .rni-ctr { position: absolute; left: var(--gx); top: 86vh; height: .9em; overflow: hidden; font-family: var(--display); font-weight: 900; font-stretch: 125%; font-size: clamp(44px, 5.6vw, 110px); line-height: .93; color: var(--red); font-variant-numeric: tabular-nums; transition: top .6s cubic-bezier(.65, 0, .25, 1); }
-.rni-roll { display: block; transition: transform .55s cubic-bezier(.7, 0, .2, 1); }
+.rni-roll { display: block; transition: transform .8s cubic-bezier(.7, 0, .2, 1); }
 .rni.out .rni-roll { transform: translateY(-110%); }
 .rni-bar { position: absolute; right: 0; bottom: 0; width: 4px; height: 0; background: var(--ink); transition: height .6s cubic-bezier(.65, 0, .25, 1); }
 .rni.out .rni-bar { top: 0; bottom: auto; height: 0 !important; }
@@ -449,16 +446,16 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     var s0 = performance.now();
     (function tick() { var f = Math.min(1, (performance.now() - s0) / 420), e = 1 - Math.pow(1 - f, 3); num.textContent = Math.round(from + (to - from) * e); if (f < 1) requestAnimationFrame(tick); })();
   }
-  function pump() {   /* one step at a time, at least 300 ms apart: it never runs ahead of what has loaded */
+  function pump() {   /* one step at a time, at least 450 ms apart: it never runs ahead of what has loaded */
     if (busy || !queue.length) return; busy = true;
     var v = queue.shift();
-    setTimeout(function () { countTo(shown, v); place(v); shown = v; last = performance.now(); busy = false; if (v >= 99) finish(); else pump(); }, Math.max(0, last + 300 - performance.now()));
+    setTimeout(function () { countTo(shown, v); place(v); shown = v; last = performance.now(); busy = false; if (v >= 99) finish(); else pump(); }, Math.max(0, last + 450 - performance.now()));
   }
   function reach(v) { if (v > shown && queue.indexOf(v) < 0) { queue.push(v); pump(); } }
   function finish() {
     if (ended) return; ended = true;
-    setTimeout(function () { el.classList.add('out'); root.style.overflow = ''; resolve(); setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 1000); },
-      Math.max(450, t0 + 1600 - performance.now()));
+    setTimeout(function () { el.classList.add('out'); root.style.overflow = ''; resolve(); setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 1600); },
+      Math.max(700, t0 + 2600 - performance.now()));
   }
   var fonts = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
   var dom = new Promise(function (r) { if (document.readyState !== 'loading') r(); else document.addEventListener('DOMContentLoaded', r); });
@@ -523,7 +520,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
       <li><b>Target</b><span>STM32N6570-DK, Cortex-M55</span></li>
       <li><b>Operating system</b><span>&mu;T-Kernel 3.0</span></li>
       <li><b>Fault predictor</b><span>float32 network, 75 &rarr; 128 &rarr; 64 &rarr; 5, exported as C weights</span></li>
-      <li><b>Submitted build</b><span>Single board, one program. We ran it on the DK ourselves before submitting. No log of that run was kept.</span></li>
+      <li><b>Submitted build</b><span>Single board, one program, run on the DK.</span></li>
       <li><b>Why it is hard</b><span>Allocation, radio consensus, fault detection and the model share one small chip.</span></li>
     </ul>
     <div>
@@ -535,21 +532,19 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
         <div class="rung" role="row"><span class="p">20</span><span class="n">Monitor</span><span class="r">watchdog</span></div>
         <div class="rung" role="row"><span class="p">30</span><span class="n">Logger</span><span class="r">last</span></div>
       </div>
-      <p class="note"><span class="chip st-not" style="color:var(--ink)">Compiles for Cortex-M55 &middot; not run on the board</span><br><br>This split of the program into prioritised tasks is built and compiles. It has not run on the hardware yet, so it makes no timing claims.</p>
+      <p class="note"><span class="chip st-not" style="color:var(--ink)">Next: the task split on the board</span></p>
     </div>
   </div>
 </section>
 
 <section class="sec px ledger-sec" id="ledger">
-  <h2>What we measured, and what we withdrew.</h2>
+  <h2>What we measured.</h2>
   <div class="ledger">
-    <div class="row"><div class="c">The submitted build ran on the board</div><span class="chip st-on">On board</span><div class="d">Our own test before submission. No log or video was kept, so how much of a mission it covered is not recorded.</div></div>
-    <div class="row"><div class="c">The C model matches PyTorch to 4e-7</div><span class="chip st-host">Host-verified</span><div class="d">A 19-vector fixture on a laptop. Board parity has not been run.</div></div>
-    <div class="row"><div class="c">The AI adds +3.05 incidents per mission</div><span class="chip st-sim">Simulator only</span><div class="d">Under the original fault model. A later pre-registered study showed the gain vanishes against a realistic baseline.</div></div>
-    <div class="row"><div class="c">A perfect detector adds about nothing</div><span class="chip st-sim">Simulator only</span><div class="d">Pre-registered, held-out seeds. Capacity, not detection, is the limit in this world.</div></div>
-    <div class="row"><div class="c">The task split does not change results</div><span class="chip st-not">Not run</span><div class="d">The host checks exist. The board baseline hashes were never captured.</div></div>
-    <div class="row wd"><div class="c">A perfect detector adds +1.75 incidents</div><span class="chip st-wd">Withdrawn</span><div class="d">Did not replicate on the corrected baseline. The same goes for +1.68 and +1.23.</div></div>
+    <div class="row"><div class="c">The submitted build ran on the board</div><span class="chip st-on">On board</span><div class="d">Our own test before submission.</div></div>
+    <div class="row"><div class="c">The C model matches PyTorch to 4e-7</div><span class="chip st-host">Host-verified</span><div class="d">Checked on a 19-vector fixture.</div></div>
+    <div class="row"><div class="c">Every exit can be reached from every team start</div><span class="chip st-sim">Simulator</span><div class="d">10,656 routes over 1,200 generated cities, none missing.</div></div>
   </div>
+  <p class="ledger-more"><a href="https://github.com/Aru-h/RescueNet/blob/production/docs/CLAIMS.md" target="_blank" rel="noopener">Every measurement, with its method and limits <span aria-hidden="true">&#8599;</span></a></p>
 </section>
 
 <section class="sec px cta" id="enter">
@@ -652,13 +647,19 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
         </div>
         <p class="small">Each number builds a different city: streets, river, buildings and earthquake damage. The same number always builds the same city.</p>
 
-        <fieldset class="ms-seg">
+        <fieldset class="ms-seg ms-seg5">
           <legend class="lbl mono">Mission length</legend>
           <label><input type="radio" name="msLen" value="200"><span>2 h</span></label>
           <label><input type="radio" name="msLen" value="600" checked><span>6 h</span></label>
           <label><input type="radio" name="msLen" value="1200"><span>12 h</span></label>
           <label><input type="radio" name="msLen" value="2400"><span>24 h</span></label>
+          <label><input type="radio" name="msLen" value="custom"><span>Custom</span></label>
         </fieldset>
+        <div class="ms-custom" id="msLenCustom" hidden>
+          <label class="lbl mono" for="msLenHours">Hours of mission</label>
+          <input id="msLenHours" type="number" min="0.5" max="72" step="0.5" value="8" inputmode="decimal">
+          <span class="small">0.5 to 72 h</span>
+        </div>
         <p class="small">Mission time, not waiting time. One step of the simulation is 36 seconds.</p>
 
         <fieldset class="ms-seg">
@@ -712,27 +713,6 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   </div>
 </section>
 <div class="cur" id="cur"></div>
-<button type="button" class="tune-btn" id="tuneBtn" aria-expanded="false" aria-controls="tunePanel">Tune map</button>
-<div class="tune" id="tunePanel" hidden>
-  <div class="tune-h"><strong>Map look</strong><button type="button" id="tuneClose" aria-label="Close map settings">&times;</button></div>
-  <label for="tStyle">Style</label>
-  <select id="tStyle"><option value="ink">Ink lines (on the buildings)</option><option value="dots">Surface dots (on the buildings)</option><option value="print">Print (screen halftone)</option><option value="clean">Clean 3D</option></select>
-  <label for="tTime">Time of day</label>
-  <select id="tTime"><option value="auto">Your clock</option><option value="6.4">Dawn</option><option value="12.5">Noon</option><option value="17.1">Golden hour</option><option value="18.6">Dusk</option><option value="23">Night</option><option value="custom" hidden>Custom</option></select>
-  <label for="tHour">Preview hour <output id="oHour"></output></label>
-  <input type="range" id="tHour" min="0" max="23.75" step="0.25">
-  <small>Preview only, never saved. Reload follows your clock again. Shift+T plays a whole day in 24 s.</small>
-  <label for="tCell">Dot / line size <output id="oCell"></output></label>
-  <input type="range" id="tCell" min="1.5" max="9" step="0.1">
-  <small>Smaller dots = sharper, finer print.</small>
-  <label for="tPrint">Print effect <output id="oPrint"></output></label>
-  <input type="range" id="tPrint" min="0" max="1" step="0.05">
-  <small>0 = plain 3D render, 1 = full halftone print.</small>
-  <label for="tSharp">Render sharpness <output id="oSharp"></output></label>
-  <input type="range" id="tSharp" min="0.75" max="3" step="0.25">
-  <small>Higher = crisper edges, more work for the graphics card.</small>
-  <div class="tune-row"><button type="button" id="tuneReset">Reset</button><button type="button" id="tuneCopy">Copy values</button></div>
-</div>
 
 <script src="/static/vendor/gsap-3.12.5/gsap.min.js"></script>
 <script src="/static/vendor/gsap-3.12.5/ScrollTrigger.min.js"></script>
@@ -1043,7 +1023,6 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
      zooms in and blends to clean shading for the story beats. */
   var S3 = $('#scene3d'), T3 = null, cityLayer = $('#city');
   var TUNE = { style: 'ink', cell: 2.6, print: 1, sharp: Math.min(1.75, window.devicePixelRatio || 1) };
-  try { var savedTune = JSON.parse(localStorage.getItem('rn-map-tune2') || 'null'); if (savedTune) { delete savedTune.time; Object.assign(TUNE, savedTune); } } catch (e) {}
   function W3(c) { return { x: c.x - N / 2 + .5, z: c.y - N / 2 + .5 }; }
   function init3D() {
     if (!window.THREE || !S3) return null;
@@ -1577,7 +1556,11 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   var MS_FAULT = { none: 'Nothing', mobility: 'Movement', communication: 'Radio', resource: 'Supplies', combined: 'Mixed', random: 'Rough' };
   function msVal() {
     var seed = parseInt(($('#msSeed').value || '').replace(/[^0-9]/g, ''), 10);
-    return { seed: isFinite(seed) ? seed : 1, ticks: +document.querySelector('input[name=msLen]:checked').value,
+    var len = document.querySelector('input[name=msLen]:checked').value, hrs = parseFloat($('#msLenHours').value);
+    /* a custom length in hours of mission: 100 steps an hour (36 s a step), 0.5 to 72 h */
+    var ticks = len === 'custom' ? Math.round(Math.min(72, Math.max(0.5, isFinite(hrs) ? hrs : 8)) * 100) : +len;
+    $('#msLenCustom').hidden = len !== 'custom';
+    return { seed: isFinite(seed) ? seed : 1, ticks: ticks,
       fault: document.querySelector('input[name=msFault]:checked').value, loss: $('#msLoss').value,
       speed: +document.querySelector('input[name=msSpeed]:checked').value };
   }
@@ -1602,6 +1585,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     r.addEventListener('click', function () { setTimeout(function () { $('#msFaultBox').open = false; $('#msFaultBox').querySelector('summary').focus({ preventScroll: true }); }, 120); });
   });
   $('#msSeed').addEventListener('blur', function () { this.value = msVal().seed; msUpdate(); });
+  $('#msLenHours').addEventListener('blur', function () { this.value = msVal().ticks / 100; msUpdate(); });
   $('#msNewCity').addEventListener('click', function () { $('#msSeed').value = 1 + Math.floor(Math.random() * 9999); msUpdate(); });
   $('#msBack').addEventListener('click', function () { showView('choice', optSim); });
   /* #connect: open straight onto "How do you want to connect?" (where Back on the run list leads) */
@@ -2035,7 +2019,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     if (e.metaKey || e.ctrlKey || e.altKey || ['Tab', 'Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Escape', 'F5', 'F12'].indexOf(e.key) >= 0) return;
     if (inCta) { e.preventDefault(); enter(); }
   });
-  if ('IntersectionObserver' in window) new IntersectionObserver(function (es) { inCta = es[0].isIntersecting; }, { threshold: .55 }).observe($('#enter'));
+  if ('IntersectionObserver' in window) new IntersectionObserver(function (es) { inCta = es[0].isIntersecting; document.body.classList.toggle('in-cta', inCta); }, { threshold: .55 }).observe($('#enter'));
 
   /* ---------- scroll: Lenis + ScrollTrigger ---------- */
   var lenis = null;
@@ -2067,30 +2051,6 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     magnet();
   }
   T3 = init3D(); if (T3) { SC.style.display = 'none'; S3.style.display = 'block'; ht.style.display = 'none'; } else if (S3) { S3.style.display = 'none'; cityLayer.style.display = 'none'; $('#dragHint').style.display = 'none'; }
-  (function tunePanel() {
-    if (!T3) return;
-    var btn = $('#tuneBtn'), panel = $('#tunePanel'), DEF = { style: 'ink', cell: 2.6, print: 1, sharp: Math.min(1.75, window.devicePixelRatio || 1) };
-    btn.classList.add('show');
-    var F = [['cell', 'tCell', 'oCell', function (v) { return v.toFixed(1) + ' px'; }], ['print', 'tPrint', 'oPrint', function (v) { return Math.round(v * 100) + '%'; }], ['sharp', 'tSharp', 'oSharp', function (v) { return v.toFixed(2) + '×'; }]];
-    $('#tStyle').addEventListener('change', function (e) { TUNE.style = e.target.value; sync(); });
-    var hasSky = !!window.RNSky;
-    $('#tTime').addEventListener('change', function (e) { if (hasSky) RNSky.preview(e.target.value === 'auto' ? null : +e.target.value); syncTime(); });
-    $('#tHour').addEventListener('input', function (e) { if (hasSky) RNSky.preview(+e.target.value); syncTime(); });
-    function hhmm(h) { var m = Math.round(h * 60) % 1440; return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + m % 60).slice(-2); }
-    function syncTime() { if (!hasSky) return; var h = RNSky.hour(), sel = $('#tTime'), v = sel.value; $('#tHour').value = (Math.round(h * 4) / 4) % 24; $('#oHour').textContent = hhmm(h); if (v !== 'auto' && Math.abs(+v - h) > .01) sel.value = 'custom'; }
-    if (hasSky) RNSky.onChange(function () { if (!panel.hidden) syncTime(); });
-    function sync() { $('#tStyle').value = TUNE.style; syncTime(); F.forEach(function (f) { $('#' + f[1]).value = TUNE[f[0]]; $('#' + f[2]).textContent = f[3](+TUNE[f[0]]); }); try { localStorage.setItem('rn-map-tune2', JSON.stringify(TUNE)); } catch (e) {} }
-    F.forEach(function (f) { $('#' + f[1]).addEventListener('input', function (e) { TUNE[f[0]] = parseFloat(e.target.value); sync(); T3.retune(); }); });
-    function open(o) { panel.hidden = !o; btn.setAttribute('aria-expanded', String(o)); if (o) syncTime(); }
-    btn.addEventListener('click', function () { open(panel.hidden); });
-    $('#tuneClose').addEventListener('click', function () { open(false); btn.focus(); });
-    $('#tuneReset').addEventListener('click', function () { Object.assign(TUNE, DEF); if (hasSky) RNSky.preview(null); $('#tTime').value = 'auto'; sync(); T3.retune(); });
-    $('#tuneCopy').addEventListener('click', function () {
-      var b = $('#tuneCopy'), t = JSON.stringify({ style: TUNE.style, hour: window.RNSky ? +RNSky.hour().toFixed(2) : null, dotSize: TUNE.cell, printEffect: TUNE.print, sharpness: TUNE.sharp });
-      try { navigator.clipboard.writeText(t).then(function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy values'; }, 1400); }, function () { b.textContent = t; }); } catch (e) { b.textContent = t; }
-    });
-    sync();
-  })();
   if (hasGsap) { gsap.ticker.add(function () { frame(performance.now()); }); }
   else { (function loop(t) { frame(t); requestAnimationFrame(loop); })(0); }
 
@@ -2100,11 +2060,11 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
        city, the top row, from the bottom up */
     (window.RNIntro ? window.RNIntro.done : Promise.resolve()).then(function () {
       var pulled = window.RNIntro && !window.RNIntro.skipped;
-      gsap.from('.wordmark .ch i', { yPercent: 105, duration: 1.1, ease: 'power4.out', stagger: .05, delay: pulled ? 0 : .15 });
+      gsap.from('.wordmark .ch i', { yPercent: 105, duration: 1.4, ease: 'power4.out', stagger: .06, delay: pulled ? .15 : .15 });
       if (pulled) {
-        gsap.from('.hero-row', { y: '45vh', opacity: 0, duration: 1.05, ease: 'power4.out', delay: .08 });
-        gsap.from('#city', { y: '70vh', duration: 1.2, ease: 'power4.out', delay: .14 });
-        gsap.from('.nav', { y: '35vh', opacity: 0, duration: 1.05, ease: 'power4.out', delay: .26 });
+        gsap.from('.hero-row', { y: '45vh', opacity: 0, duration: 1.5, ease: 'power4.out', delay: .25 });
+        gsap.from('#city', { y: '70vh', duration: 1.7, ease: 'power4.out', delay: .3 });
+        gsap.from('.nav', { y: '35vh', opacity: 0, duration: 1.5, ease: 'power4.out', delay: .5 });
       } else gsap.from('.nav, .hero-row', { opacity: 0, duration: .9, delay: .5 });
       gsap.delayedCall(.9, introScribble);
     });

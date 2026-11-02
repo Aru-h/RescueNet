@@ -150,6 +150,14 @@ def open_sim(page, query, timeout=90000):
     dismiss_loader(page, timeout)
 
 
+def start_briefed(page):
+    """A new simulator run waits at its start behind a briefing (full on the first run of a visit, a bar after that):
+    press Start."""
+    page.wait_for_selector("#brief:not([hidden])", timeout=20000)
+    page.click("#briefGo")
+    page.wait_for_function("() => RNSimTest.live() && RNSimTest.live().state === 'running'", timeout=15000)
+
+
 def clock(page):
     return page.evaluate("() => document.getElementById('clockSub').textContent")
 
@@ -321,6 +329,16 @@ def check_takeover(page, frames, recordings_dir):
 def check_live(page):
     open_sim(page, "seed=1012&ticks=150&faults=communication&speed=1")
     check(page.evaluate("() => document.getElementById('runName').textContent") == "Live run", "a live run starts from the address (seed, ticks, faults, speed)")
+    # the run waits at its start behind the briefing until the visitor starts it
+    page.wait_for_selector("#brief:not([hidden])", timeout=20000)
+    page.wait_for_function("() => RNSimTest.live().state === 'paused'", timeout=10000)
+    t0 = page.evaluate("() => RNSimTest.run().last()"); page.wait_for_timeout(1500); t1 = page.evaluate("() => RNSimTest.run().last()")
+    full = page.evaluate("() => !document.getElementById('briefBody').hidden && document.getElementById('brief').textContent")
+    check(t0 == t1 and t0 <= 3 and full and "drag a team onto a worksite" in full,
+          f"a new run waits at its start (tick {t0} -> {t1}) behind a briefing on what happens and what you can do")
+    page.keyboard.press("Space")
+    page.wait_for_function("() => RNSimTest.live().state === 'running' && document.getElementById('brief').hidden", timeout=15000)
+    check(True, "Space starts the mission")
     page.wait_for_function("() => RNSimTest.view().tick >= 10", timeout=60000)
     page.click("#playBtn")
     page.wait_for_function("() => RNSimTest.live().state === 'paused'", timeout=10000)
@@ -366,6 +384,8 @@ def _drag(page, a, b):
 
 def check_override(page):
     open_sim(page, "seed=1041&ticks=400&faults=none&speed=1")
+    start_briefed(page)
+    check(page.evaluate("() => document.getElementById('brief').classList.contains('short')"), "the next run of the visit gets a one-line Start bar, not the whole briefing")
     # paused with a worksite still waiting for a team (the system may assign the one seen a moment before the pause)
     wid = None
     for _ in range(12):

@@ -407,6 +407,9 @@ static void live_override_emit_malformed_ack(uint32_t effective_tick, int tick_k
  * mission_mirror_ingest_line() already uses for its own stdin-line
  * reader, but a reply is always owed here (a human or a UI is waiting
  * on the other end of this one), unlike that fire-and-forget feed. */
+/* the latest pace asked for over stdin ("SPEED <ms>"), or UINT32_MAX for none; laptop/main.c applies and clears it */
+uint32_t g_live_tick_delay_request = UINT32_MAX;
+
 static void live_override_process_line(const char *line, uint32_t tick)
 {
     char cmd[24];
@@ -599,7 +602,16 @@ void debug_live_override_poll(uint32_t tick)
                  * other line - live_override_process_line() itself
                  * resolves that to unknown_command, not a silent drop. */
                 s_override_line[s_override_line_len] = '\0';
-                live_override_process_line(s_override_line, tick);
+                /* "SPEED <ms>": the live run's pace (milliseconds between ticks), changed from the sim page. It only
+                 * changes how fast the run plays on the wall clock, never what happens in it, and it is outside the
+                 * override protocol: no OVERRIDEACK, and the app keeps it out of its replayable command log. */
+                unsigned long speed_ms = 0;
+                char speed_tail = 0;
+                if(strncmp(s_override_line, "SPEED ", 6) == 0 &&
+                   sscanf(s_override_line + 6, "%lu%c", &speed_ms, &speed_tail) == 1 && speed_ms <= 60000UL)
+                    g_live_tick_delay_request = (uint32_t)speed_ms;
+                else
+                    live_override_process_line(s_override_line, tick);
             }
             /* else: an empty line - ignored silently, not an error. */
             s_override_line_len = 0;

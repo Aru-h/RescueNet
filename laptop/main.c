@@ -163,6 +163,8 @@ static int is_number_arg(const char *arg)
     return arg != NULL && arg[0] >= '0' && arg[0] <= '9';
 }
 
+extern uint32_t g_live_tick_delay_request;   /* laptop/debug.c */
+
 static int is_tick_delay_flag(const char *arg)
 {
     return arg != NULL && strncmp(arg, "--tick-delay-ms=", 16) == 0;
@@ -1265,6 +1267,11 @@ int main(int argc, char **argv)
                 debug_live_override_poll(tick);
             }
 
+            if(g_live_tick_delay_request != UINT32_MAX)   /* the sim page changed the pace (laptop/debug.c) */
+            {
+                tick_delay_ms = g_live_tick_delay_request;
+                g_live_tick_delay_request = UINT32_MAX;
+            }
             if(live_mode && !mission_feed_mode && tick_delay_ms > 0)
             {
                 struct timespec delay;

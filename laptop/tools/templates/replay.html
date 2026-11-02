@@ -245,6 +245,8 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     body.append(t, p, fx, go); a.append(cv, body); a.addEventListener('click', sampleClick); $('#featured').appendChild(a); preview(r, cv);
   }
   /* a run that is on its way: a picture if there is one, what it will be, and no way in yet */
+  /* runs in preparation, shown after the recorded ones in Featured (their maps are static images, credited) */
+  var PLANNED = [{"title": "Antakya, February 2023", "image": "/static/replay/planned-antakya.webp", "alt": "Central Antakya, about 2 km across: each building coloured by its radar damage estimate, red severe, orange moderate, yellow slight, outlined undamaged", "blurb": "Central Antakya with its real damage pattern and the network failures rescue teams reported. The night of 6 February, from 04:17.", "facts": ["Real city", "Real damage", "Starts 04:17"], "credit": "Buildings and damage: Liu et al. (2026), CC BY 4.0", "kind": "city"}, {"title": "Kathmandu, April 2015", "image": "/static/replay/planned-kathmandu.webp", "blurb": "Central Kathmandu after the Gorkha earthquake: damage mapped from satellite images two days later, and the open grounds where people gathered.", "facts": ["Real city", "Real damage", "Starts 11:56"], "kind": "city", "alt": "Central Kathmandu, about 2 km across: about 18,000 buildings from OpenStreetMap; red where Copernicus mapped buildings destroyed two days after the quake, yellow where possibly affected; crimson road barriers and magenta rings where people gathered", "credit": "Buildings: © OpenStreetMap contributors (ODbL). Damage: Copernicus EMS, © European Union"}, {"title": "Radio blackout", "image": null, "blurb": "Every radio drops out for two hours in the middle of the night shift. How far does the plan each team carries go?", "facts": ["Simulated city", "Radio faults"], "kind": "sim"}];
   function plannedCard(pl) {
     var a = document.createElement('div'); a.className = 'card planned';
     var pic = document.createElement('div'); pic.className = 'pic';
@@ -276,7 +278,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   }
   var ORDER = { city: 0, sim: 1 };
   function renderFeatured(feat) {
-    var planned = sampleMode && SAMPLE.planned ? SAMPLE.planned : [];
+    var planned = sampleMode && SAMPLE.planned ? SAMPLE.planned : PLANNED;
     var items = feat.map(function (x) { return { kind: x[1].kind || 'sim', title: x[1].title, draw: function () { featuredCard(x[0], x[1]); } }; })
       .concat(planned.map(function (p) { return { kind: p.kind || 'sim', title: p.title, draw: function () { plannedCard(p); } }; }));
     items.sort(function (a, b) { return (ORDER[a.kind] || 0) - (ORDER[b.kind] || 0); });   /* stable: keeps each kind's own order */
