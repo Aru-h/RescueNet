@@ -25,19 +25,19 @@ it, what it is used for, and its license.
 |---|---|---|---|---|
 | Procedural City Generation | Adam Brol (GitHub: Grzybojad) | https://github.com/Grzybojad/ProceduralCityGeneration | The procedural city generation in `core/environment.c` (districts, roads, buildings) is based substantially on this project's C++ (Unreal Engine) algorithms, reimplemented in C for this simulator | MIT (notice below) |
 
-## Laptop only (dashboard, tests, training)
+## Laptop only (app, tests, training)
 
 | Software | Rights holder | How to obtain | Used for | License |
 |---|---|---|---|---|
-| Flask | Pallets | `pip install flask` | Dashboard web server | BSD-3-Clause |
+| Flask | Pallets | `pip install flask` | Web server for the app (landing, run list, sim page) | BSD-3-Clause |
 | pySerial | Chris Liechti | `pip install pyserial` | Serial connection to the board | BSD-3-Clause |
-| Chart.js 4.5.0 (`laptop/tools/static/chart.umd.min.js`) | Chart.js contributors | Included; https://www.chartjs.org | Dashboard charts | MIT |
-| three.js 0.186.1 (`laptop/tools/static/three/`, unmodified `three.module.js` + `three.core.js`, plus the unmodified `examples/jsm` addons listed in its README) | three.js authors | Included; https://threejs.org, npm package `three@0.186.1`; licence text in `laptop/tools/static/three/LICENSE` | Optional WebGL "3D" view of the dashboard's region map (served locally, no CDN) | MIT |
+| Chart.js 4.5.0 (`laptop/tools/static/chart.umd.min.js`) | Chart.js contributors | Included; https://www.chartjs.org | Charts on the bench pages (`/bench/*`) | MIT |
+| three.js 0.186.1 (`laptop/tools/static/three/`, unmodified `three.module.js` + `three.core.js`, plus the unmodified `examples/jsm` addon `OrbitControls.js`) | three.js authors | Included; https://threejs.org, npm package `three@0.186.1`; licence text in `laptop/tools/static/three/LICENSE` | WebGL "3D" view of the sim page (served locally, no CDN) | MIT |
 | NumPy | NumPy developers | `pip install numpy` | Analysis and ML arrays | BSD-3-Clause |
 | pandas | pandas developers | `pip install pandas` | Reading the simulator dataset | BSD-3-Clause |
 | scikit-learn | scikit-learn developers | `pip install scikit-learn` | Data splitting, metrics, scaler base class | BSD-3-Clause |
 | PyTorch | PyTorch project | `pip install torch` | Training the fault-prediction model (development machine only; the board runs the project's own C forward pass) | BSD-3-Clause |
-| Playwright | Microsoft | `pip install -r laptop/tools/requirements-dashboard-dev.txt` | Browser end-to-end test of the dashboard (development only) | Apache-2.0 |
+| Playwright | Microsoft | `pip install -r laptop/tools/requirements-dashboard-dev.txt` | Browser end-to-end test of the sim page, `make check-sim-e2e` (development only) | Apache-2.0 |
 
 ## Rights statement
 

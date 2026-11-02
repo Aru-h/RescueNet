@@ -35,7 +35,7 @@ LDFLAGS ?= -lm
 #                          snapshot writer, printf-based debug sink,
 #                          --live SSE pacing.
 # laptop/tools/            laptop-only offline tooling: snapshot
-#                          labeler, Flask dashboard, dataset comparison
+#                          labeler, Flask app (landing, sim page), dataset comparison
 #                          scripts, board-side selftests. Never built
 #                          for either board target.
 # board/STM32N6570-DK/     STM32N6570-DK entry point + debug/snapshot
@@ -94,7 +94,7 @@ $(TARGET): $(LAPTOP_SOURCES)
 # plus -DFAULT_MODEL_LOADED=1, so evaluate_fault_predictor() runs the trained
 # MLP in core/fault_predictor_weights.h. It changes team behaviour (and so
 # the CSV) - the default $(TARGET) and the dataset generator stay AI-off.
-# Dashboard: TRON_BINARY=./$(TARGET_AI) SIM_ONLY=1 python laptop/tools/app.py
+# App (landing, run list, sim page): TRON_BINARY=./$(TARGET_AI) SIM_ONLY=1 python laptop/tools/app.py
 tron-ai: $(TARGET_AI)
 
 $(TARGET_AI): $(LAPTOP_SOURCES) $(wildcard $(CORE_DIR)/*.h)
@@ -1211,31 +1211,16 @@ check-mission-link-stream-order:
 check-dashboard-csrf-selftest:
 	@cd $(TOOLS_DIR) && $(PYTHON) dashboard_csrf_selftest.py
 
-# End-to-end smoke test for the Live Ops dashboard rework, driven
-# through a real Chromium via Playwright against a real app.py
-# (SIM_ONLY - no board/serial needed) and a real short `tron --live`
-# run: the map camera, the consensus network view, the detection
-# timeline, the side panels and the theme toggle. Playwright is a
-# DEV/TEST-ONLY dependency - see laptop/tools/requirements-dashboard-
-# dev.txt, never the repo root's requirements.txt - and this target
-# never installs or downloads a browser itself: it prefers a
-# preinstalled /opt/pw-browsers/chromium, else whatever Playwright's
-# own launch() already finds, and SKIPS (exit 0) with a clear message
-# when neither Playwright nor a usable Chromium is available, so a dev
-# box without them doesn't fail the rest of a check-* batch.
-# See laptop/tools/dashboard_e2e_selftest.py.
-.PHONY: check-dashboard-e2e
-check-dashboard-e2e:
-	@cd $(TOOLS_DIR) && $(PYTHON) dashboard_e2e_selftest.py
-
 # ---------------------------------------------------------------------
 # The sim page (/sim) end to end: a real app.py (SIM_ONLY) and the real
 # simulator through a real Chromium - a recorded run checked against the
 # recording itself, an older recording, Take over, a live run (pause,
 # looking back, saving), sending a team by hand and releasing it, and the
-# links into the page from the landing's setup and the run list. Same
-# rules as check-dashboard-e2e: Playwright is dev/test-only, nothing is
-# downloaded, and it SKIPS (exit 0) without Playwright or a Chromium.
+# links into the page from the landing's setup and the run list. Playwright
+# is a dev/test-only dependency (laptop/tools/requirements-dashboard-dev.txt,
+# never the repo root's requirements.txt); nothing is installed or
+# downloaded, a preinstalled /opt/pw-browsers/chromium is preferred, and it
+# SKIPS (exit 0) without Playwright or a Chromium.
 # Port 5050 must be free. See laptop/tools/sim_e2e_selftest.py.
 .PHONY: check-sim-e2e
 check-sim-e2e:

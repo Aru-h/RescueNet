@@ -16,6 +16,12 @@
   run. three.js's OrbitControls is vendored (0.186.1, unmodified) for the 3D camera.
 - `make check-sim-e2e`: the sim page end to end in a real browser against a real app and simulator, with expected
   values read from the recording itself.
+- The old dashboard is removed: `templates/index.html`, `static/dashboard/` (camera, map and 3D view, replay, routes,
+  selection, timeline, consensus ring, panels, theme), `dashboard_e2e_selftest.py` and `make check-dashboard-e2e`.
+  `/` now redirects (302) to `/landing`; the board connection on the landing page opens `/sim?board`. The three.js
+  addons only the old 3D view used (Line2 and its parts, BufferGeometryUtils) are removed; `OrbitControls.js` stays.
+  The bench pages keep `chart.umd.min.js` and `bench-common.js`. README, KNOWN_LIMITATIONS and the docs describe the
+  sim page instead (limitations about the old map's pins and progress arc are dropped).
 
 ## City generator rebuilt; new demo mission
 

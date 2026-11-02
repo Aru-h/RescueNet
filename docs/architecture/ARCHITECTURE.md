@@ -122,7 +122,7 @@ flowchart TD
 core/             portable simulator — no stdio/OS/filesystem deps
 laptop/  desktop entry point (CLI, printf debug, CSV writer)
 board/STM32N6570-DK/   STM32N6570-DK entry point (µT-Kernel task, tm_printf)
-laptop/tools/            laptop-only: Flask dashboard, snapshot labeler, compare scripts
+laptop/tools/            laptop-only: Flask app (landing, sim page), snapshot labeler, compare scripts
 vendor/           external BSP dependency notes (not bundled — see below)
 ```
 
@@ -239,11 +239,13 @@ of the telemetry path.
 
 ### `laptop/tools/` — laptop-only, never built for the board
 
-- `app.py` (Flask) + `templates/index.html` — a local dashboard that
-  runs `make` then `./tron <args>`, parsing stdout (`LIVEFRAME`,
-  `STATICENV` JSON lines during `--live`) and stderr (`[DIAG ...]`
-  lines) into a live map, per-team status table, Incident Journal,
-  Recovery/Rest tab, and telemetry charts.
+- `app.py` (Flask) + `templates/` — a local app: the landing page (`/landing`,
+  also `/`), the run list (`/replay`) and the sim page (`/sim`). It runs
+  `./tron --live <args>`, forwards stdout (`LIVEFRAME`, `STATICENV`,
+  `STATICMAP` JSON lines) and stderr (`[DIAG ...]` lines) to the browser and
+  saves each run as a recording; `static/shared/rn-run.js` turns a run (a
+  recording or the live stream) into what the sim page draws. The bench
+  pages (`/bench/a` to `/bench/d`) are separate.
 - `label_snapshots.c` — standalone offline labeler; reads
   `tron_snapshot_dataset.csv`, writes a horizon-labeled copy without
   touching the original schema.

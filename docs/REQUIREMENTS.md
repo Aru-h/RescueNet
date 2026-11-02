@@ -59,7 +59,7 @@ Landing -> How do you want to connect?
 | P1 | Landing page with the Simulation / Board choice and a "Watch a recorded run" link. In the app it opens `/replay`; as a hosted page it opens the published run list. | DONE |
 | P2 | Run list: featured runs (real cities first, then our own scenarios), then "Your runs" (closed by default, live count), maps the same size in both. | DONE |
 | P3 | One sim page, `/sim?run=…`, for replay; live runs and boards later feed the same page. "Take over from here" turns a replay into a live run without leaving the page. | TO DO |
-| P4 | The app's `/` becomes the landing page; the old dashboard is removed once the sim page replaces it. | TO DO |
+| P4 | The app's `/` becomes the landing page; the old dashboard (`templates/index.html`, `static/dashboard/`) is removed, and `/` redirects to `/landing`. | DONE |
 | P5 | Mission setup step after choosing Simulation: city (seed, or another at random), mission length (2, 6, 12 or 24 h), what goes wrong (none, movement, radio, supplies, mixed, rough), radio loss under Advanced; a summary and the matching `./tron` command beside it. Only options the simulator really takes (`/api/run-live`: seed, ticks, fault_profile, link_loss); team count is shown as fixed. | PARTLY (built; Start opens the current dashboard until the sim page reads the choices) |
 
 ## 5. Sim page
@@ -67,7 +67,7 @@ Landing -> How do you want to connect?
 | ID | Requirement | Status |
 |---|---|---|
 | S1 | Two map views: 3D (the default) and flat 2D (the fallback when WebGL is missing). The 2.5D view is removed. | TO DO |
-| S2 | Both views reuse the old dashboard's code (`static/dashboard/`: camera, map model, 3D view, replay, routes, selection, timeline, consensus ring). The change is the look and the notation, not a rewrite. | TO DO |
+| S2 | Both views carry over the old dashboard's behaviour (camera, map model, 3D view, replay, selection, timeline, consensus ring); its code (`static/dashboard/`) is removed, and the sim page (`templates/sim.html`, `static/shared/`) is the only implementation. The change is the look and the notation. | TO DO |
 | S3 | Camera: the old dashboard's controls (drag to rotate, tilt between 15° and straight down, right-drag to pan, wheel to zoom at the cursor, Top, Reset, follow a team, fly to a site, Esc stops), plus a quick return to the standard angle. | TO DO |
 | S4 | Timeline: play, pause, step, speed, scrubber with markers (worksite identified, worksite complete, detections), jump to the next event. Mission clock as "T+2 h 59 min" (one tick is 36 s). | TO DO |
 | S5 | Teams panel: status in words, stamina and equipment as two labelled meters (dashed below 30, where the simulator sends a team to rest or restock), current worksite, what peers detected; injected faults only under ground truth (H3). Rows grow to fill the panel when there are few teams and shrink to a compact size before the list scrolls. | TO DO (frames carry `equipment` since this change; older recordings show "–") |

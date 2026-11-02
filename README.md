@@ -13,7 +13,7 @@ small neural network running on the microcontroller detect it, and the system
 reassigns work so the mission keeps going.
 
 All ten teams, the coordination logic and the AI run on **one STM32N6570-DK
-under μT-Kernel 3.0**. A laptop dashboard shows the mission live, lets an
+under μT-Kernel 3.0**. A laptop app (landing page, run list and sim page) shows the mission live, lets an
 operator overrule the system by dragging a team onto an incident, and can
 replay any recorded mission and take it over from any moment.
 
@@ -37,7 +37,7 @@ No other hardware. (The laptop-only evaluation in §2 needs no board at all.)
 
 | For | Needs |
 |---|---|
-| Laptop simulator and dashboard | macOS or Linux (tested), a C compiler (`cc`/gcc/clang), `make`, Python 3 |
+| Laptop simulator and app | macOS or Linux (tested), a C compiler (`cc`/gcc/clang), `make`, Python 3 |
 | Board | STM32CubeIDE, and the μT-Kernel 3.0 BSP2 from TRON Forum (fetched separately, see §3) |
 | Retraining the AI (optional) | PyTorch (installed by `requirements.txt`) |
 
@@ -47,7 +47,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-For the dashboard alone, `pip install -r laptop/tools/requirements-app.txt`
+For the app alone, `pip install -r laptop/tools/requirements-app.txt`
 installs just Flask and pyserial. Once installed, the app needs no internet:
 its JavaScript libraries and fonts are in `laptop/tools/static/`. To install
 on a laptop with no network at all, see the comments at the top of
@@ -57,7 +57,7 @@ on a laptop with no network at all, see the comments at the top of
 
 The laptop build runs exactly the same `core/` code as the board.
 
-**Build and start the dashboard:**
+**Build and start the app:**
 
 ```
 make                                   # builds ./tron (AI off)
@@ -65,30 +65,37 @@ make tron-ai                           # builds ./tron_ai (AI on)
 TRON_BINARY=./tron_ai SIM_ONLY=1 python laptop/tools/app.py
 ```
 
-Open **http://127.0.0.1:5050** and click **Bypass & Enter Dashboard**. (On
-Windows, which is untested, use `python laptop/tools/app.py --no-hardware`.
-Leave out `TRON_BINARY=./tron_ai` to run with the AI off.)
+Open **http://127.0.0.1:5050**; it goes to the landing page. Go in, choose
+**Simulation**, set the city, the mission length and what goes wrong, and press
+**Start the mission**. (On Windows, which is untested, use
+`python laptop/tools/app.py --no-hardware`. Leave out `TRON_BINARY=./tron_ai`
+to run with the AI off.)
 
 **Things to try:**
 
-1. **A live mission.** Choose a seed and a fault profile (for example
-   `combined`) and press **▶ Live**. The map shows the teams moving, incidents
-   opening and closing, and faults being detected; the side panels show each
-   team's state, the peer votes and the virtual radio traffic.
-2. **Overrule the system.** Drag a team onto an open incident on the map and
-   confirm. The dashboard shows the override's lifecycle: pending → committed
-   → resolved or interrupted.
-3. **Replay.** Switch the mode selector to **Replay**, choose
-   `demo_seed1041_combined_1200ticks.jsonl.gz` (a bundled 12-hour, 1200-tick mission) and
-   press **Load**, then **▶ Play**. Use the scrub bar or **⏭ Next detection**
-   to jump to the next fault detection.
-4. **Take over a replay.** Pause at any tick and press **⏵ Take over from
-   here**. The simulator re-runs the mission to that tick (checking that it
-   matches the recording) and continues live, where you can override again.
-   The bundled demo was recorded with `./tron` (AI off), so start the dashboard
-   without `TRON_BINARY=./tron_ai` to take it over.
+1. **A live mission.** The setup on the landing page opens the sim page
+   (`/sim?seed=…&ticks=…&faults=…&speed=…`). The map (3D or flat) shows the
+   teams moving and worksites being found, worked and finished; the side panels
+   list the teams, worksites and events, and **Detection detail** shows, per
+   team, the injected faults and when its peers noticed. Pause and resume the
+   simulation, or drag the timeline back to look at the past while the run
+   carries on (**Back to live** returns).
+2. **Overrule the system.** In a live run, drag a team onto a worksite (or open
+   the worksite's card) and confirm with **Send team**. The simulator answers
+   on the card, and the team goes there once its current job is done.
+   **Release** on the team's card gives it back to the system. Both are
+   events in the run and in its recording.
+3. **Replay.** Open the run list (`/replay`) and choose
+   `demo_seed1041_combined_1200ticks.jsonl.gz` (a bundled 12-hour, 1200-tick
+   mission), or any run saved from a live one. **▶** plays it; use the timeline,
+   the arrow keys or **Next event** to move through it.
+4. **Take over a replay.** At any tick of a recording press **Take over**.
+   The simulator re-runs the mission to that tick (checking that it matches
+   the recording) and continues live from there, where you can send teams
+   again. The bundled demo was recorded with `./tron` (AI off), so start the
+   app without `TRON_BINARY=./tron_ai` to take it over.
 
-**Batch run without the dashboard:**
+**Batch run without the app:**
 
 ```
 ./tron 1001 1 3000 --fault-profile=combined   # seed 1001, one run, 3000 ticks
@@ -122,14 +129,16 @@ The full checklist, including the exact CubeIDE settings, is
    then **Resume**. The serial console (ST-LINK virtual COM port, 115200 8N1)
    prints `TRON Board is online and ready!` and a `CONFIG` line including
    `model_loaded=1`.
-5. **Start the dashboard in hardware mode:**
+5. **Start the app in hardware mode:**
    ```
    python laptop/tools/app.py
    ```
-   Enter the board's serial port (macOS: `/dev/cu.usbmodem…`, Linux:
-   `/dev/ttyACM0`, Windows: `COMx`), click **Connect to Board**, wait for the
-   handshake, then click **Start board mission**. The laptop sends the city
-   map and the clock; the board runs all ten teams and reports back.
+   Open http://127.0.0.1:5050, go in and choose **Board**. Enter the board's
+   serial port (macOS: `/dev/cu.usbmodem…`, Linux: `/dev/ttyACM0`, Windows:
+   `COMx`) and click **Connect**. When the handshake is done, follow the link
+   to the sim page in board mode (`/sim?board`) and click **Start the board
+   mission**. The laptop sends the city map and the clock; the board runs all
+   ten teams and reports back.
 6. **Reset the board** (CubeIDE Restart, then Resume) **before every new
    mission.**
 
@@ -210,12 +219,12 @@ make check-consensus-shadow-regression      # consensus does not alter pre-exist
 make check-feature-pack-parity              # C feature vector == Python training features
 make check-single-board-dk-harness          # 10 teams + virtual bus + consensus + real board mission-link code, host-side
 make check-cubeide-single-flags             # the CubeIDE project uses the single-board flags
-make check-dashboard-csrf-selftest          # dashboard API hardening
-make check-dashboard-e2e                    # full browser test of the dashboard (needs Playwright, see below)
+make check-dashboard-csrf-selftest          # app API hardening
+make check-sim-e2e                          # browser test of the sim page (needs Playwright, see below)
 make evaluate                               # rules vs +consensus vs +AI, paired seeds, bootstrap CIs
 ```
 
-`check-dashboard-e2e` needs
+`check-sim-e2e` needs
 `pip install -r laptop/tools/requirements-dashboard-dev.txt` and
 `python -m playwright install chromium`. `make check-board-single` also
 cross-compiles the board code and needs `arm-none-eabi-gcc`.
@@ -227,7 +236,7 @@ cross-compiles the board code and needs `arm-none-eabi-gcc`.
 | `core/` | Portable C: simulation, CBBA, virtual bus, consensus, fault injection and detection, recovery, AI forward pass and weights. Built unchanged for the laptop and the board. (Also contains LoRa framing/encryption code from an earlier multi-board design; not used by this build.) |
 | `board/STM32N6570-DK/` | Board-specific code: μT-Kernel entry point and tasks, mission link over USART1, serial debug output. `vendor/` is where the μT-Kernel BSP2 goes. |
 | `tron_board/` | The STM32CubeIDE project (application, FSBL, ST HAL drivers, linker scripts, `DevRam` configuration). |
-| `laptop/` | Laptop simulator entry point and dataset writer; `laptop/tools/` holds the dashboard (`app.py`), the evaluation harness and every test. |
+| `laptop/` | Laptop simulator entry point and dataset writer; `laptop/tools/` holds the app (`app.py`: landing page, run list, sim page), the evaluation harness and every test. |
 | `ml/` | AI pipeline: data preparation, feature contract, training, evaluation, export, trained checkpoint, model report. |
 | `docs/` | Architecture, evaluation results, launch checklist, reports; index in [`docs/README.md`](docs/README.md). |
 | `Makefile` | Every build and check target. |

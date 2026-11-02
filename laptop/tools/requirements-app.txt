@@ -1,4 +1,4 @@
-# Just what the dashboard app (laptop/tools/app.py) needs: the web server
+# Just what the app (laptop/tools/app.py: landing page, run list, sim page) needs: the web server
 # and the serial port for a real board. The repo root's requirements.txt
 # also pulls in the analysis and ML stack (numpy, pandas, scikit-learn,
 # torch), which the app never imports.

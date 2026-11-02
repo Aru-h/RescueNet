@@ -174,7 +174,7 @@ A second layer sits above the flag: an AI flag only produces an action stronger 
 3. Real-world performance (all data is synthetic; fault rate unrealistic).
 4. Environment and mission are OFF; using them needs recovery actions that act on the map or the incident (C13). Whether retraining would then also help is untested.
 5. `make evaluate` still shows the AI's detection as worse than no-AI (communication 32.4% vs 53.2%); it needs per-class AI scores in its CSV to fix (AI build only), not yet implemented.
-6. (Resolved.) `make check-dashboard-e2e` has since been run on the merged code on the owner's Mac and passed in full, including replay take-over.
+6. (Resolved.) The old dashboard's browser test (`make check-dashboard-e2e`, since replaced by `make check-sim-e2e`) was run on the merged code on the owner's Mac and passed in full, including replay take-over.
 
 ## 6. How to reproduce every result
 
