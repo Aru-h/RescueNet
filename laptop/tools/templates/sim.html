@@ -204,7 +204,11 @@ select option { background: var(--c-bg); color: var(--c-fg); }
 .scrub .mk { position: absolute; top: 4px; width: 2px; height: 10px; background: var(--c-mute); }
 .scrub .mk.c { background: var(--complete); top: 20px; }
 .scrub .head { position: absolute; top: 6px; width: 3px; height: 22px; background: var(--c-fg); }
-.scrub .hours { position: absolute; left: 0; right: 0; top: 24px; display: flex; justify-content: space-between; color: var(--c-faint); font-size: 9.5px; }
+.scrub .recv { position: absolute; left: 0; top: 15px; height: 4px; background: color-mix(in srgb, var(--c-fg) 32%, var(--c-rule)); }   /* how far a live run has got */
+.scrub .hours { position: absolute; left: 0; right: 0; top: 24px; height: 12px; color: var(--c-faint); font-size: 9.5px; }
+.scrub .hours span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.scrub .hours span:first-child { transform: none; }
+.scrub .hours span.end { transform: translateX(-100%); }
 .detail { min-height: 0; overflow: hidden; display: none; border-top: 1px solid var(--c-rule); padding-top: 8px; }
 .app.tl-open .detail { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 3px 10px; align-content: start; font-family: var(--mono); font-size: 10px; color: var(--c-mute); }
 .detail .strip { height: 11px; position: relative; background: color-mix(in srgb, var(--c-fg) 4%, transparent); }
@@ -279,11 +283,13 @@ select option { background: var(--c-bg); color: var(--c-fg); }
       <button type="button" id="stepOn" title="One tick on (&rarr;)">&#9654;&#9654;</button>
       <select aria-label="Playback speed: mission time shown per real second" title="Mission time per real second" id="speed"><option>36 s / s</option><option selected>3 min / s</option><option>6 min / s</option><option>15 min / s</option></select>
       <button type="button" id="nextEv" title="Next event (J)">Next event &rarr;</button>
+      <button type="button" id="toLive" title="Back to the newest tick (L)" hidden>Back to live &rarr;</button>
+      <button type="button" id="stopBtn" title="End the run here; what ran so far is kept as a recording" hidden>&#9632; Stop</button>
       <span class="grow"></span>
       <span class="hint">Space play &middot; &larr;&rarr; step &middot; J next event</span>
       <button type="button" id="tlBtn" aria-expanded="false">Detection detail &#9662;</button>
     </div>
-    <div class="scrub mono" id="scrub"><div class="track"></div><div class="done" id="done"></div><div class="head" id="head"></div><div class="hours" id="hours"></div></div>
+    <div class="scrub mono" id="scrub"><div class="track"></div><div class="recv" id="recv"></div><div class="done" id="done"></div><div class="head" id="head"></div><div class="hours" id="hours"></div></div>
     <div class="detail" id="detail"></div>
   </footer>
 </div>
@@ -673,7 +679,11 @@ select option { background: var(--c-bg); color: var(--c-fg); }
       if (e[1] !== 'found' && e[1] !== 'complete') return;
       var m = document.createElement('i'); m.className = 'mk' + (e[1] === 'complete' ? ' c' : ''); m.style.left = (e[0] / (n - 1) * 100) + '%'; m.title = tplus(e[0]) + ' ' + e[2]; sc.appendChild(m);
     });
-    var hrs = ''; for (var h = 0, HN = Math.round(D.ticks * TICK_S / 3600); h <= HN; h++) hrs += '<span>' + h + ' h</span>'; $('#hours').innerHTML = hrs;
+    /* hour marks where those hours really fall (a run need not last a whole number of hours) */
+    var hrs = '', HN = (n - 1) * TICK_S / 3600, step = HN > 16 ? 2 : 1;
+    for (var h = 0; h <= HN + TICK_S / 3600 + 1e-9; h += step) { var at = Math.min(100, h * 3600 / TICK_S / (n - 1) * 100);   /* the last tick may fall a tick short of the whole hour */ hrs += '<span' + (at > 97 ? ' class="end"' : '') + ' style="left:' + at.toFixed(3) + '%">' + h + ' h</span>'; }
+    $('#hours').innerHTML = hrs;
+    $('#recv').style.width = (RUN.last() / Math.max(1, n - 1) * 100) + '%';
     /* detection detail: per team, when a fault was injected (purple, ground truth) and when its peers flagged it
        (amber), as stretches along the same time axis */
     var det = '', spans = RUN.spans(), pc = function (t) { return (t / (n - 1) * 100).toFixed(3) + '%'; };
@@ -689,7 +699,13 @@ select option { background: var(--c-bg); color: var(--c-fg); }
 
   /* ---------------- the clock: any tick of the run ---------------- */
   var playing = false, timer = null, selTeam = -1;
-  function clockText() { return 'Tick ' + D.tick + ' of ' + D.ticks + ' · ' + (playing ? 'playing' : 'paused'); }
+  function clockText() {
+    if (LIVE) {
+      var st = { starting: 'starting', running: 'running', paused: 'paused', stopping: 'stopping' }[LIVE.state] || LIVE.state;
+      return 'Tick ' + D.tick + ' of ' + D.ticks + ' · ' + (LIVE.follow ? st : 'looking back · the run is ' + st);
+    }
+    return 'Tick ' + D.tick + ' of ' + D.ticks + ' · ' + (playing ? 'playing' : 'paused') + (endNote ? ' · ' + endNote : '');
+  }
   function setTick(t) {
     var held = RUN.clamp(Math.max(0, Math.min(D ? D.ticks - 1 : 0, Math.round(t))));
     if (held == null) return;
@@ -701,17 +717,19 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     if (three) update3D();
     if ($('#rawDlg').open) openRaw();
     refreshMark();
-    try { history.replaceState(null, '', location.pathname + '?run=' + encodeURIComponent(RUN_NAME) + '&t=' + D.tick); } catch (e) { /* a sandboxed frame */ }
+    if (LIVE) { LIVE.follow = D.tick >= RUN.last(); $('#toLive').hidden = LIVE.follow; $('#clockSub').textContent = clockText(); }
+    else if (RUN_NAME) { try { history.replaceState(null, '', location.pathname + '?run=' + encodeURIComponent(RUN_NAME) + '&t=' + D.tick); } catch (e) { /* a sandboxed frame */ } }
   }
   function speed() { return [1, 5, 10, 25][$('#speed').selectedIndex] || 5; }   /* ticks a second (one tick is 36 s of mission): 36 s, 3, 6 or 15 min of mission per real second */
   function play(on) {
+    if (LIVE) return;   /* a live run plays at the simulator's pace: the play button pauses the simulation instead (liveToggle) */
     playing = on; clearInterval(timer);
     $('#playBtn').innerHTML = on ? '&#10074;&#10074;' : '&#9654;'; $('#playBtn').title = on ? 'Pause (Space)' : 'Play (Space)';
     if (on) { if (D.tick >= RUN.last()) setTick(RUN.first()); timer = setInterval(function () { if (D.tick >= RUN.last()) { play(false); return; } setTick(D.tick + 1); }, 1000 / speed()); }
     $('#clockSub').textContent = clockText();
   }
   function nextEvent() { var e = D.events.filter(function (e) { return e[0] > D.tick; })[0]; if (e) setTick(e[0]); }
-  $('#playBtn').onclick = function () { play(!playing); };
+  $('#playBtn').onclick = function () { if (LIVE) liveToggle(); else play(!playing); };
   $('#stepBack').onclick = function () { play(false); setTick(D.tick - 1); };
   $('#stepOn').onclick = function () { play(false); setTick(D.tick + 1); };
   $('#nextEv').onclick = function () { nextEvent(); };
@@ -726,7 +744,8 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   document.addEventListener('keydown', function (e) {
     if (e.target.closest && e.target.closest('input, select, textarea') || document.querySelector('dialog[open]')) return;
     if (e.key === 'Escape' && mark) { closeMark(); return; }
-    if (e.key === ' ') { e.preventDefault(); play(!playing); }
+    if (e.key === ' ') { e.preventDefault(); if (LIVE) liveToggle(); else play(!playing); }
+    else if ((e.key === 'l' || e.key === 'L') && LIVE) setTick(RUN.last());
     else if (e.key === 'ArrowRight') { e.preventDefault(); setTick(D.tick + (e.shiftKey ? 10 : 1)); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); setTick(D.tick - (e.shiftKey ? 10 : 1)); }
     else if (e.key === 'j' || e.key === 'J') nextEvent();
@@ -1047,12 +1066,12 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   function loadFail(msg) { $('#loadingTxt').innerHTML = msg + ' <a href="/replay">Choose another run</a>'; }
   function start() {
     var hd = RUN.header || {}, hrs = RUN.length() * TICK_S / 3600, loss = hd.link_loss;
-    var demo = /^demo_/.test(RUN_NAME);
-    $('#runName').textContent = demo ? 'Demo mission' : 'Recorded run';
+    var demo = /^demo_/.test(RUN_NAME || '');
+    $('#runName').textContent = LIVE ? 'Live run' : demo ? 'Demo mission' : 'Recorded run';
     $('#runFacts').innerHTML = ['Simulated city', (Math.round(hrs * 10) / 10) + ' h', FAULTS[hd.fault_profile] || (hd.fault_profile ? hd.fault_profile + ' faults' : 'Faults unknown'),
       (loss == null ? '5%' : Math.round(loss * 100) + '%') + ' radio loss', 'Seed ' + (hd.seed == null ? '?' : hd.seed)].join(' &middot; ');
-    document.title = 'RescueNet · ' + (demo ? 'Demo mission' : 'Seed ' + hd.seed);
-    var t0 = parseInt(PARAMS.get('t'), 10);
+    document.title = 'RescueNet · ' + (LIVE ? 'Live run' : demo ? 'Demo mission' : 'Seed ' + hd.seed);
+    var t0 = LIVE ? NaN : parseInt(PARAMS.get('t'), 10);
     D = RUN.at(isNaN(t0) ? RUN.first() : t0); W = D.W; H = D.H; SZ = W;
     CTX = window.RNContext.build({ W: W, H: H, seed: hd.seed, roads: D.roads, water: D.water, buildings: D.buildings, epicentre: D.epicenter }, 36, CTXDATA);
     $('#loading').hidden = true;
@@ -1061,7 +1080,102 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     if (want3D && window.THREE && window.THREE.OrbitControls) setView(true);
     else { setView(false); if (want3D) window.addEventListener('three-ready', function () { setView(true); }, { once: true }); }
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { draw(); fitTeams(); });   /* text widths change once the fonts arrive */
+    if (LIVE) liveControls();
   }
+
+  /* ---------------- a live run: /sim?seed=..&ticks=..&faults=..&loss=.. ----------------
+     The app runs the simulator (POST /api/run-live) and streams its lines as they come; they go into the same store as a
+     recording's. The view follows the newest tick; scrubbing back looks at the past while the run carries on, and
+     Back to live (L) returns. Play/pause pauses the simulation itself. When the run ends the app has saved it as a
+     recording, and the page carries on as that recording. */
+  var LIVE = null;                       /* { state: starting | running | paused | stopping, follow } while a run is live */
+  var endNote = '';                      /* after a live run: 'saved', or why it ended */
+  var DELAYS = [1000, 200, 100, 40];     /* ms a tick for each speed choice: 36 s, 3, 6 or 15 min of mission a second */
+  var drawQueued = false;
+  function livePost(what) { return fetch('/api/run-live/' + what, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); }
+  function liveControls() {
+    var on = !!LIVE;
+    $('#stopBtn').hidden = !on; $('#toLive').hidden = !on || LIVE.follow;
+    $('#speed').disabled = on; $('#speed').title = on ? 'Set when the run starts' : 'Mission time per real second';
+    var paused = on && LIVE.state === 'paused';
+    $('#playBtn').innerHTML = on && !paused ? '&#10074;&#10074;' : '&#9654;';
+    $('#playBtn').title = on ? (paused ? 'Resume the simulation (Space)' : 'Pause the simulation (Space)') : (playing ? 'Pause (Space)' : 'Play (Space)');
+    if (D) $('#clockSub').textContent = clockText();
+  }
+  function liveToggle() {
+    if (!LIVE || (LIVE.state !== 'running' && LIVE.state !== 'paused')) return;
+    livePost(LIVE.state === 'paused' ? 'resume' : 'pause').then(function (r) { return r.json(); }).then(function (b) {
+      if (LIVE && b && b.ok) { LIVE.state = b.paused ? 'paused' : 'running'; liveControls(); }
+    }).catch(function () { /* the run may have just ended */ });
+  }
+  $('#stopBtn').onclick = function () { if (!LIVE) return; LIVE.state = 'stopping'; liveControls(); livePost('stop').catch(function () {}); };
+  $('#toLive').onclick = function () { if (LIVE) setTick(RUN.last()); };
+  function liveFrame() {   /* at most one redraw per screen frame, however fast the ticks come */
+    if (drawQueued) return; drawQueued = true;
+    requestAnimationFrame(function () {
+      drawQueued = false; if (!D) return;
+      renderTimeline();
+      if (LIVE && LIVE.follow) setTick(RUN.last()); else $('#clockSub').textContent = clockText();
+    });
+  }
+  function liveEvent(ev) {
+    if (ev.type === 'static_env') RUN.add('STATICENV', ev.env);
+    else if (ev.type === 'static_map') RUN.add('STATICMAP', ev.map);
+    else if (ev.type === 'frame') {
+      RUN.add('LIVEFRAME', ev.frame);
+      if (LIVE.state === 'starting') {
+        LIVE.state = 'running'; start();
+        fetch('/api/context/' + RUN.header.seed).then(function (r) { return r.ok ? r.json() : null; }).then(function (c) {
+          if (!c) return; CTXDATA = c;
+          CTX = window.RNContext.build({ W: W, H: H, seed: RUN.header.seed, roads: D.roads, water: D.water, buildings: D.buildings, epicentre: D.epicenter }, 36, CTXDATA);
+          draw(); if (three) update3D();
+        }).catch(function () { /* no surroundings: the run itself is unaffected */ });
+      } else liveFrame();
+    }
+    else if (ev.type === 'done') liveEnd(ev.recording || null, null);
+    else if (ev.type === 'error') { if (LIVE.state === 'starting') loadFail(ev.message || 'The simulation did not start.'); else liveEnd(null, ev.message); }
+  }
+  function liveEnd(recording, msg) {
+    if (!LIVE) return;
+    var wasLive = LIVE.state !== 'starting', follow = LIVE.follow; LIVE = null; liveControls();
+    if (!wasLive) { loadFail(msg || 'The simulation ended before its first tick.'); return; }
+    if (recording) { RUN_NAME = recording; try { history.replaceState(null, '', location.pathname + '?run=' + encodeURIComponent(recording) + '&t=' + D.tick); } catch (e) { /* a sandboxed frame */ } }
+    $('#runName').textContent = recording ? 'Finished run' : 'Run ended';
+    endNote = recording ? 'saved' : msg || '';
+    renderTimeline(); setTick(follow ? RUN.last() : D.tick);
+  }
+  function liveStart() {
+    var seed = parseInt(PARAMS.get('seed'), 10), ticks = parseInt(PARAMS.get('ticks'), 10) || 1200, faults = PARAMS.get('faults') || 'combined', loss = PARAMS.get('loss');
+    if (isNaN(seed)) { loadFail('No city chosen.'); return; }
+    LIVE = { state: 'starting', follow: true };
+    RUN = RNRun.create(); RUN.header = { seed: seed, ticks: ticks, fault_profile: faults, link_loss: loss === null || loss === '' ? null : +loss };
+    $('#loadingTxt').textContent = 'Starting the simulation…';
+    var sp = parseInt(PARAMS.get('speed'), 10); if (sp >= 0 && sp < DELAYS.length) $('#speed').selectedIndex = sp;   /* &speed=0..3, as the speed list */
+    var body = { seed: seed, ticks: ticks, fault_profile: faults, tick_delay_ms: DELAYS[$('#speed').selectedIndex] || 200 };
+    if (RUN.header.link_loss != null) body.link_loss = RUN.header.link_loss;
+    fetch('/api/run-live', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) {
+      if (!r.ok || !r.body) throw new Error('The app would not start the run (' + r.status + ').');
+      var rd = r.body.getReader(), dec = new TextDecoder(), buf = '';
+      (function pump() {
+        rd.read().then(function (got) {
+          if (got.done) { liveEnd(null, 'the app stopped sending'); return; }
+          buf += dec.decode(got.value, { stream: true });
+          var k;
+          while ((k = buf.indexOf('\n\n')) >= 0) {
+            var chunk = buf.slice(0, k); buf = buf.slice(k + 2);
+            chunk.split('\n').forEach(function (ln) {
+              if (ln.indexOf('data: ') !== 0) return;
+              var ev; try { ev = JSON.parse(ln.slice(6)); } catch (e) { return; }   /* not one of ours */
+              liveEvent(ev);
+            });
+          }
+          pump();
+        }).catch(function () { liveEnd(null, 'the connection to the app was lost'); });
+      })();
+    }).catch(function (e) { loadFail(e.message || 'The app did not answer.'); });
+  }
+
+  if (!RUN_NAME && PARAMS.get('seed') !== null) { liveStart(); return; }
   if (!RUN_NAME) { loadFail('No run chosen.'); return; }
   Promise.all([
     fetch('/api/recordings/' + encodeURIComponent(RUN_NAME)).then(function (r) { if (!r.ok) throw new Error(r.status === 404 ? 'This run is not in the app\'s recordings.' : 'The app could not read this run (' + r.status + ').'); return r.text(); }),

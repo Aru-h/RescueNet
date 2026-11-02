@@ -500,6 +500,32 @@ def _recording_context(path, preview):
     return ctx
 
 
+_SEED_CONTEXT_CACHE = {}
+
+
+@app.route("/api/context/<int:seed>")
+def api_seed_context(seed):
+    """The city around a live run's map: the neighbouring sectors the
+    generator builds for this seed (map_context.py, world mode). A live
+    run is made by this same simulator, so no check against a recording
+    is needed (compare _recording_context). Cached per seed and binary."""
+    try:
+        key = (seed, BINARY.stat().st_mtime)
+    except OSError:
+        key = (seed, None)
+    if key not in _SEED_CONTEXT_CACHE:
+        try:
+            import map_context
+            full = map_context.build(seed, str(BINARY), 0, None, "world")
+            _SEED_CONTEXT_CACHE[key] = {k: full[k] for k in ("roads", "water", "bridges", "buildings", "ring")}
+        except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+            _SEED_CONTEXT_CACHE[key] = None
+    ctx = _SEED_CONTEXT_CACHE[key]
+    if ctx is None:
+        return jsonify({"status": "error", "message": "could not build the surroundings"}), 500
+    return jsonify(ctx)
+
+
 def parse_diag(stderr_text):
     rested = []
     transitions = []
