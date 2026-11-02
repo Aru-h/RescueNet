@@ -155,7 +155,7 @@ main > section:not(.story) { pointer-events: auto; }
 .cta > footer { margin-top: auto; }
 /* on the last screen only ENTER is in view: the corner navigation steps aside */
 .nav { transition: opacity .45s ease; }
-body.in-cta .nav { opacity: 0; pointer-events: none; }
+body.in-cta .nav { opacity: 0 !important; pointer-events: none; }   /* !important: the intro animation leaves an inline opacity on it */
 .enter { display: block; width: 100%; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: var(--ink); font-family: var(--display); font-weight: 900; font-stretch: 125%; text-transform: uppercase; letter-spacing: -.02em; line-height: .82; font-size: 18vw; -webkit-text-stroke: 3px var(--ink); color: transparent; transition: color .25s, -webkit-text-stroke-color .25s; }
 .enter:hover, .enter:focus-visible { color: var(--red); -webkit-text-stroke-color: var(--red); }
 .cta-row { display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; padding-top: 28px; }
