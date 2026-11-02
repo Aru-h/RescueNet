@@ -6,6 +6,11 @@ Status values: **ON-BOARD** (ran on the STM32N6570-DK), **HOST-VERIFIED** (a tes
 Rule: a claim's status can only go up with evidence recorded here (command, commit, log). Update this file in the same
 commit that changes a claim. Numbers are per run, paired by seed, 95% bootstrap CIs.
 
+**City generator rebuilt (branch `feature/city-generator`, CHANGELOG "City generator rebuilt").** Every simulated
+city changed: no roads through buildings, one road network, rivers with crossings, no coast, residential the largest
+district. Every SIM-ONLY number below was measured on the OLD cities and has not been re-run on the new ones. They stay
+as records of what was measured then; none of them may be quoted for the current generator until re-run.
+
 ## System and board
 | ID | Claim | Status | Evidence |
 |---|---|---|---|
