@@ -83,8 +83,9 @@ The current map is one 36 × 36 grid. Real cities (Antakya, Kathmandu) are irreg
 
 | ID | Question | Current thinking | Status |
 |---|---|---|---|
-| E1 | How is the edge of the simulated area shown? | Follow Copernicus: draw the area of interest as an outline, and show what lies outside it as faded, unmodelled context, so nobody mistakes the edge for the end of the city. | OPEN |
+| E1 | How is the edge of the simulated area shown? | The area is outlined in green (Copernicus area of interest). Around it, one sector deep on every side, the city carries on faded: `static/shared/rn-context.js` continues the roads, water and damage at the edge (roads leaving the map carry on at their class, a coast stays sea, a river keeps meandering, damage follows the run's own damage-by-distance curve). Drawn on the page, not simulated, not selectable, and never called the simulator's output. | PARTLY (mockup and demo candidates; sim page TO DO) |
 | E2 | How do several zones fit together (e.g. Kathmandu's 19 sectors)? | One simulated grid is one INSARAG sector (A in a single-grid run). A multi-zone city is several grids, one sector each, with its own letter and boundary. | OPEN |
+| E4 | Bigger maps in sim mode (later version). Board mode stays one 36 × 36 sector. Sim mode is sized in whole sectors (1 × 1, 2 × 2, 3 × 3), each sector its own cell of 10 teams running today's consensus (it is written for at most 16 teams), with cross-sector hand-off after. Needs: the grid size as a laptop build option, the generator's building and junction limits scaled (they are laptop-only storage, so the board is unaffected), `check-state-hash` still bit-for-bit for one sector, and a fresh evaluation before any claim about larger maps. | | DEFERRED |
 | E3 | Exit tunnels (evacuation gateways). The old dashboard's tunnels used brute-forced paths and caused problems. | Not carried over. Redesign: exits sit where real roads cross the area's edge, derived from the road network, not searched for. | OPEN; old tunnel code excluded |
 
 ## 7. Platform
