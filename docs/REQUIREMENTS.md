@@ -60,7 +60,7 @@ Landing -> How do you want to connect?
 | P2 | Run list: featured runs (real cities first, then our own scenarios), then "Your runs" (closed by default, live count), maps the same size in both. | DONE |
 | P3 | One sim page, `/sim?run=…`, for replay; live runs and boards later feed the same page. "Take over from here" turns a replay into a live run without leaving the page. | TO DO |
 | P4 | The app's `/` becomes the landing page; the old dashboard is removed once the sim page replaces it. | TO DO |
-| P5 | Mission setup page (seed, fault profile, radio loss) before a live simulation. | TO DO |
+| P5 | Mission setup step after choosing Simulation: city (seed, or another at random), mission length (2, 6, 12 or 24 h), what goes wrong (none, movement, radio, supplies, mixed, rough), radio loss under Advanced; a summary and the matching `./tron` command beside it. Only options the simulator really takes (`/api/run-live`: seed, ticks, fault_profile, link_loss); team count is shown as fixed. | PARTLY (built; Start opens the current dashboard until the sim page reads the choices) |
 
 ## 5. Sim page
 

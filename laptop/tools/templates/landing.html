@@ -277,6 +277,33 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 .bc details > :not(summary) { margin-bottom: 14px; }
 .bc-adv .lbl:first-of-type { margin-top: 0; }
 .bc-form .bc-go { margin-bottom: 18px; }
+/* mission setup: reuses the board view's look */
+.ms-seed { display: flex; gap: 14px; align-items: center; }
+.ms-seed input { flex: 0 1 220px; }
+.ms-form fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.ms-form legend { padding: 0; margin-bottom: 8px; }
+.ms-seg { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ms-seg legend { grid-column: 1 / -1; }
+.ms-seg label { position: relative; cursor: pointer; }
+.ms-seg input, .ms-list input { position: absolute; opacity: 0; pointer-events: none; }
+.ms-seg span { display: block; text-align: center; padding: 12px 6px; min-height: 46px; border: 1.5px solid var(--c-fg); margin-left: -1.5px; font-family: var(--mono); font-size: 15px; }
+.ms-seg label:first-of-type span { margin-left: 0; }
+.ms-seg input:checked + span { background: var(--c-fg); color: var(--c-bg); }
+.ms-list { display: grid; gap: 0; }
+.ms-list label { position: relative; cursor: pointer; border-top: 1px solid var(--c-rule); }
+.ms-list label:last-of-type { border-bottom: 1px solid var(--c-rule); }
+.ms-list span { display: grid; grid-template-columns: 9.5em minmax(0, 1fr); gap: 12px; padding: 11px 0 11px 30px; font-size: 14px; line-height: 1.4; color: var(--c-mute); }
+.ms-list span::before { content: ''; position: absolute; left: 4px; top: 14px; width: 12px; height: 12px; border: 1.5px solid var(--c-fg); border-radius: 50%; }
+.ms-list input:checked + span::before { background: var(--red); border-color: var(--red); box-shadow: inset 0 0 0 2px var(--c-bg); }
+.ms-list b { font-family: var(--display); font-weight: 800; font-stretch: 112%; text-transform: uppercase; color: var(--c-fg); font-size: 15px; }
+.ms-list input:checked + span { color: var(--c-fg); }
+.ms-seg input:focus-visible + span, .ms-list input:focus-visible + span { outline: 2px solid var(--c-fg); outline-offset: 2px; }
+.bc .ms-dl { margin: 0; display: grid; flex-direction: row; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; font-size: 13px; }
+.bc .ms-dl dt { color: var(--c-mute); } .bc .ms-dl dd { margin: 0; color: var(--c-fg); }
+.ms-form fieldset, .ms-form .bc-adv { margin-top: 18px; }
+.ms-form .ms-seed + .small { margin-bottom: 4px; }
+.ms-cmd { display: block; font-family: var(--mono); font-size: 12px; line-height: 1.5; padding: 10px 12px; border: 1px solid var(--c-rule); color: var(--c-fg); overflow-wrap: anywhere; }
+@media (max-width: 520px) { .ms-list span { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
 /* the board from the choice screen, its cable plugging in as the connection comes up */
 .bc-art { width: 100%; height: auto; display: block; overflow: hidden; }
 .bc-plug { transition: transform .6s cubic-bezier(.3, .7, .2, 1); }
@@ -545,6 +572,65 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
         </ol>
         <div class="mono bc-lines" id="bcLines" role="status" aria-live="polite">Press Connect. The RescueNet app opens the port and waits for the board to answer.</div>
         <a class="bc-open" id="bcOpen" href="/" hidden>Open the dashboard &rarr;</a>
+      </aside>
+    </div>
+  </div>
+
+  <div class="bc px" id="msView" hidden>
+    <div><button class="linkbtn" id="msBack" type="button">&larr; Choose again</button></div>
+    <h3>Set up a mission</h3>
+    <div class="bc-grid">
+      <form class="bc-form ms-form" id="msForm" novalidate>
+        <div class="lbl mono" id="msCityLbl">City</div>
+        <div class="ms-seed">
+          <input id="msSeed" type="text" inputmode="numeric" autocomplete="off" aria-labelledby="msCityLbl" value="1002">
+          <button class="linkbtn" id="msNewCity" type="button">Another city &#8635;</button>
+        </div>
+        <p class="small">Each number builds a different city: streets, river, buildings and earthquake damage. The same number always builds the same city.</p>
+
+        <fieldset class="ms-seg">
+          <legend class="lbl mono">Mission length</legend>
+          <label><input type="radio" name="msLen" value="200"><span>2 h</span></label>
+          <label><input type="radio" name="msLen" value="600" checked><span>6 h</span></label>
+          <label><input type="radio" name="msLen" value="1200"><span>12 h</span></label>
+          <label><input type="radio" name="msLen" value="2400"><span>24 h</span></label>
+        </fieldset>
+        <p class="small">Mission time, not waiting time: you choose the playback speed on the next page. One step of the simulation is 36 seconds.</p>
+
+        <fieldset class="ms-list">
+          <legend class="lbl mono">What goes wrong</legend>
+          <label><input type="radio" name="msFault" value="none"><span><b>Nothing</b>A clean run: no faults injected.</span></label>
+          <label><input type="radio" name="msFault" value="mobility"><span><b>Movement</b>Now and then a team slows down or stalls.</span></label>
+          <label><input type="radio" name="msFault" value="communication"><span><b>Radio</b>Now and then a team&rsquo;s radio drops out.</span></label>
+          <label><input type="radio" name="msFault" value="resource"><span><b>Supplies</b>Now and then a team runs short of what it carries.</span></label>
+          <label><input type="radio" name="msFault" value="combined" checked><span><b>Mixed</b>All five kinds (movement, radio, supplies, surroundings, orders), milder.</span></label>
+          <label><input type="radio" name="msFault" value="random"><span><b>Rough</b>All five kinds, more often and stronger.</span></label>
+        </fieldset>
+        <p class="small">The teams are not told. Watching them notice it from each other is the point of the run; switch on Ground truth on the next page to see what was injected.</p>
+
+        <details class="bc-adv">
+          <summary class="mono" id="msAdvSum">Advanced &middot; radio loss 5%</summary>
+          <label class="lbl mono" for="msLoss">Radio messages lost</label>
+          <select id="msLoss">
+            <option value="">5% (the simulator&rsquo;s default)</option>
+            <option value="0">None</option>
+            <option value="0.1">10%</option>
+            <option value="0.2">20%</option>
+            <option value="0.3">30%</option>
+          </select>
+          <p class="small">The share of beacons between two teams that never arrive, on top of any radio fault.</p>
+          <div class="lbl mono">Teams</div>
+          <p class="fixed mono">10 teams, five roles (search, medical, extraction, perimeter, support), fixed in this build</p>
+        </details>
+        <button class="bc-go" id="msGo" type="submit">Start the mission &rarr;</button>
+      </form>
+      <aside class="bc-live ms-sum" aria-label="This mission">
+        <div class="bc-log-h"><span class="mono">This mission</span><span class="mono">Simulated</span></div>
+        <dl class="ms-dl mono" id="msSum"></dl>
+        <p class="small" id="msWhat"></p>
+        <div class="lbl mono">The same run from a terminal</div>
+        <code class="ms-cmd" id="msCmd"></code>
+        <p class="conn-note" id="msNote" role="status" hidden></p>
       </aside>
     </div>
   </div>
@@ -1382,17 +1468,18 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   }
   $('#enterBtn').addEventListener('click', function (e) { enter(e.clientX, e.clientY); });
   document.querySelectorAll('[data-enter]').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); enter(e.clientX, e.clientY); }); });
-  $('#backBtn').addEventListener('click', function () { if (!bcView.hidden) showView('choice'); else leave(); });
+  $('#backBtn').addEventListener('click', function () { if (!bcView.hidden || !msView.hidden) showView('choice'); else leave(); });
 
   /* ---------- connect: choose Simulation or Board; Board opens the connect form ----------
      The page never opens a serial port itself: the RescueNet laptop app (laptop/tools/app.py) does, through /api/board/connect.
      So every action first checks that the app is the one answering; anywhere else (this page on its own) it says how to start it. */
-  var choiceView = $('#choiceView'), bcView = $('#bcView'), optSim = $('#optSim'), optBoard = $('#optBoard'), connNote = $('#connNote');
+  var msView = $('#msView'), choiceView = $('#choiceView'), bcView = $('#bcView'), optSim = $('#optSim'), optBoard = $('#optBoard'), connNote = $('#connNote');
   var APP_CMD = '<code>python laptop/tools/app.py</code>';
   function showView(v, focusFirst) {
-    choiceView.hidden = v !== 'choice'; bcView.hidden = v !== 'board'; connect.scrollTop = 0;
-    $('#backBtn').hidden = v === 'board';
+    choiceView.hidden = v !== 'choice'; bcView.hidden = v !== 'board'; msView.hidden = v !== 'setup'; connect.scrollTop = 0;
+    $('#backBtn').hidden = v === 'board' || v === 'setup';
     if (v === 'board') { sceneStop(); bcArrive(); }
+    else if (v === 'setup') { sceneStop(); msUpdate(); setTimeout(function () { $('#msSeed').focus({ preventScroll: true }); }, 0); }
     else { connect.focus({ preventScroll: true }); sceneStart(); if (focusFirst) setTimeout(function () { choose(focusFirst === optBoard ? 'board' : 'sim', 'key'); }, 0); }
   }
   function timed(url, opt, ms) {
@@ -1409,7 +1496,37 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     connNote.hidden = false;
   }
   function goApp(what, path) { appStatus().then(function (st) { if (st) location.href = path; else needApp(what); }); }
-  optSim.addEventListener('click', function () { goApp('The simulator', './'); });
+  optSim.addEventListener('click', function () { showView('setup'); });
+  /* ---- mission setup: the choices a live simulation takes (POST /api/run-live: seed, ticks, fault_profile, link_loss) ---- */
+  var MS_FAULT = { none: 'Nothing', mobility: 'Movement', communication: 'Radio', resource: 'Supplies', combined: 'Mixed', random: 'Rough' };
+  function msVal() {
+    var seed = parseInt(($('#msSeed').value || '').replace(/[^0-9]/g, ''), 10);
+    return { seed: isFinite(seed) ? seed : 1, ticks: +document.querySelector('input[name=msLen]:checked').value,
+      fault: document.querySelector('input[name=msFault]:checked').value, loss: $('#msLoss').value };
+  }
+  function msUpdate() {
+    var v = msVal(), hrs = v.ticks * 36 / 3600, lossTxt = v.loss === '' ? '5%' : Math.round(v.loss * 100) + '%';
+    $('#msSum').innerHTML = '<dt>City</dt><dd>No. ' + v.seed + '</dd><dt>Length</dt><dd>' + hrs + ' h &middot; ' + v.ticks + ' steps</dd>' +
+      '<dt>Faults</dt><dd>' + MS_FAULT[v.fault] + '</dd><dt>Radio loss</dt><dd>' + lossTxt + '</dd><dt>Teams</dt><dd>10</dd>';
+    $('#msWhat').textContent = 'An earthquake has just hit city No. ' + v.seed + '. Ten teams search it for ' + hrs + ' hours of mission time, sharing what they find over radio' +
+      (v.fault === 'none' ? '.' : ', while ' + (v.fault === 'combined' || v.fault === 'random' ? 'faults of every kind' : MS_FAULT[v.fault].toLowerCase() + ' faults') + ' are injected without telling them.');
+    $('#msCmd').textContent = './tron ' + v.seed + ' 1 ' + v.ticks + ' --live' + (v.fault !== 'none' ? ' --fault-profile=' + v.fault : '') + (v.loss !== '' ? ' --vbus-loss=' + v.loss : '');
+    $('#msAdvSum').innerHTML = 'Advanced &middot; radio loss ' + lossTxt;
+  }
+  $('#msForm').addEventListener('input', msUpdate); $('#msForm').addEventListener('change', msUpdate);
+  $('#msSeed').addEventListener('blur', function () { this.value = msVal().seed; msUpdate(); });
+  $('#msNewCity').addEventListener('click', function () { $('#msSeed').value = 1 + Math.floor(Math.random() * 9999); msUpdate(); });
+  $('#msBack').addEventListener('click', function () { showView('choice', optSim); });
+  $('#msForm').addEventListener('submit', function (e) {
+    e.preventDefault(); var v = msVal();
+    /* the sim page reads these; until it exists the app's current page opens */
+    var q = '?seed=' + v.seed + '&ticks=' + v.ticks + '&faults=' + v.fault + (v.loss !== '' ? '&loss=' + v.loss : '');
+    appStatus().then(function (st) {
+      if (st) { location.href = './' + q; return; }
+      var n = $('#msNote'); n.hidden = false;
+      n.innerHTML = 'The simulation runs in the RescueNet app on your computer. Start it with ' + APP_CMD + ', open the address it prints (usually <code>http://127.0.0.1:5050</code>) and set up the mission there.';
+    });
+  });
   /* Watch a recorded run: the app's own run list when the app answers, otherwise the published run list (a real link,
      so it opens in a new tab from a hosted copy of this page). Checked when the connect screen opens, before any click. */
   var optReplay = $('#optReplay');
@@ -1417,8 +1534,8 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   optBoard.addEventListener('click', function () { showView('board'); });
   $('#bcBack').addEventListener('click', function () { showView('choice', optBoard); });
   function connectKey(e) {
-    if (e.key === 'Escape') { if (!bcView.hidden) showView('choice', optBoard); else leave(); return; }
-    if (!bcView.hidden || e.metaKey || e.ctrlKey || e.altKey || (e.target.closest && e.target.closest('input,select,textarea'))) return;
+    if (e.key === 'Escape') { if (!bcView.hidden) showView('choice', optBoard); else if (!msView.hidden) showView('choice', optSim); else leave(); return; }
+    if (!bcView.hidden || !msView.hidden || e.metaKey || e.ctrlKey || e.altKey || (e.target.closest && e.target.closest('input,select,textarea'))) return;
     if (e.key === '1' || e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); choose('sim', 'key'); }
     else if (e.key === '2' || e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); choose('board', 'key'); }
     else if ((e.key === 'Enter' || e.key === ' ') && scHover && (document.activeElement === optSim || document.activeElement === optBoard || document.activeElement === connect)) { e.preventDefault(); (scHover === 'sim' ? optSim : optBoard).click(); }
