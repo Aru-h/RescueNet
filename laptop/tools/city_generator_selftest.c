@@ -13,6 +13,9 @@
  *   bridges      a map with a river has at least one crossing (4 rivers in 100 had none).
  *   districts    residential is the largest district on at least 90% of maps (was 6% of the city; medical was 20%).
  *   exits        the evacuation gateways are at least 10 cells apart on at least 95% of maps.
+ *   reach        every exit can be reached from every safe zone (where teams start and rest), with the teams' own
+ *                pathfinder, on the map as it stands after the earthquake. On the old cities 7 of 300 exits could
+ *                not be reached from some starts (docs/CLAIMS.md C25).
  *   limits       building and navigation-node counts stay below their storage limits.
  *   seams        (first 30 seeds) sectors generated with the same seed at other world offsets (--world-offset) agree
  *                with this one: a sector shifted by half a map overlaps it, and the river must be identical, cell for
@@ -27,6 +30,7 @@
 
 #include "environment.h"
 #include "mission_state.h"
+#include "path.h"
 #include "simulation.h"
 
 #define MAX_REPORTS 12
@@ -184,6 +188,25 @@ static int exits_spaced(void)
     return 1;
 }
 
+/* reach: route from every safe zone to every exit; returns the number of (zone, exit) pairs with no route */
+static unsigned check_reach(unsigned seed, unsigned *pairs)
+{
+    unsigned missing = 0;
+    for(uint8_t z = 0; z < g_num_safe_zones; z++)
+        for(uint8_t g = 0; g < NUM_EVACUATION_GATEWAYS; g++)
+        {
+            (*pairs)++;
+            int zx = g_safezones[z].loc_x, zy = g_safezones[z].loc_y;
+            int gx = g_evacuation_gateways[g].loc_x, gy = g_evacuation_gateways[g].loc_y;
+            if(find_path_steps(zx, zy, gx, gy) == UINT16_MAX)
+            {
+                missing++;
+                fail(seed, "an exit cannot be reached from a safe zone (zone, exit)", z, g, gx, gy);
+            }
+        }
+    return missing;
+}
+
 /* seams: the edge of this sector against the next one over, same seed */
 static uint8_t g_edge_water[2][GRID_WIDTH > GRID_HEIGHT ? GRID_WIDTH : GRID_HEIGHT];
 static uint8_t g_edge_road[2][GRID_WIDTH > GRID_HEIGHT ? GRID_WIDTH : GRID_HEIGHT];
@@ -247,6 +270,7 @@ int main(int argc, char **argv)
     if(last < first || last - first > 9999)
         return 2;
 
+    unsigned reach_pairs = 0, reach_missing = 0, reach_maps_bad = 0;
     unsigned maps = 0, rivers = 0, residential = 0, spaced = 0, edges = 0, edges_road = 0;
     unsigned long buildings = 0;
     int *blob = calloc(last - first + 1, sizeof(int));
@@ -260,6 +284,11 @@ int main(int argc, char **argv)
         rivers += (unsigned)check_river(seed);
         residential += (unsigned)residential_is_largest();
         spaced += (unsigned)exits_spaced();
+        {
+            unsigned m = check_reach(seed, &reach_pairs);
+            reach_missing += m;
+            reach_maps_bad += m != 0;
+        }
         if(g_environment_summary.building_count >= MAX_ENV_BUILDINGS)
             fail(seed, "building storage full", g_environment_summary.building_count, MAX_ENV_BUILDINGS, -1, -1);
         if(g_environment_summary.nav_node_count >= MAX_ENV_NAV_NODES)
@@ -287,6 +316,8 @@ int main(int argc, char **argv)
     printf("seeds %u-%u: %u maps, %lu buildings, %u with a river; road cells in 2 x 2 blocks: median %d%%; "
            "residential largest on %u; exits spaced on %u; sector edges checked %u, crossed by a road %u\n",
            first, last, maps, buildings, rivers, blob_median, residential, spaced, edges, edges_road);
+    printf("reach: %u safe zone to exit routes checked, %u with no route, on %u maps\n",
+           reach_pairs, reach_missing, reach_maps_bad);
     if(g_failures)
     {
         printf("FAIL: %u problems\n", g_failures);

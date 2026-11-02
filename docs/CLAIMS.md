@@ -37,7 +37,7 @@ as records of what was measured then; none of them may be quoted for the current
 | C22 | Persistent faults cost 2.9 incidents (stress 2) and 9.1 (stress 7) vs the Step 3.5 world | SIM-ONLY (40 seeds) | `docs/PERSISTENT_FAULTS_RESULTS.md` |
 | C23 | The old model's gain disappears in the realistic world; planner and gates do not differ reliably | SIM-ONLY | `docs/RECOVERY_PLANNER_RESULTS.md`, `docs/HEADROOM_MAP.md` |
 | C24 | The grid is 10 m per cell (about 13 ha), so a team moves at 1 km/h; the stamina model is consistent with foot teams at that pace (D15). The causal radio model assumes 100 m per cell, which is inconsistent: v1 communication-fault exposure from distance is overstated (comms faults are about 1% of team-ticks and about 4 ticks long, so the mission effect is small) | AUDITED (owner states the scale; the audit found the inconsistency) | `docs/SCALE_AUDIT.md`, DECISIONS D15 |
-| C25 | 7 of 300 gateways are unreachable from some team starts (seeds 1027, 1034, 1041, 1047, 1050, 1051, 1069) | SIM-ONLY | KNOWN_LIMITATIONS item "Some evacuation gateways cannot be reached by some teams" (dashboard branch) |
+| C25 | On the old cities, 7 of 300 gateways were unreachable from some team starts (seeds 1027, 1034, 1041, 1047, 1050, 1051, 1069). On the current generator every exit is reachable from every safe zone after the earthquake: 0 of 10,656 routes missing over seeds 1-200 and 1001-2000 (checked by `make check-city-generator`, "reach") | SIM-ONLY | laptop/tools/city_generator_selftest.c; a deliberately broken exit is caught (57 missing routes on seeds 1-20) |
 
 ## Step 5 headroom map (100 dev + 100 held-out seeds, Holm over 376 contrasts)
 | ID | Claim | Status | Evidence |

@@ -831,7 +831,8 @@ ZONE_PARITY_DIR = build/zone-parity
 # The city generator (laptop/tools/city_generator_selftest.c, seeds 1-200 by
 # default; CITY_GENERATOR_SEEDS="first last"): no road inside a building and no
 # shared building cells, one road network, few solid blocks of road, a crossing
-# on every river, residential the largest district, exits spaced apart, storage
+# on every river, residential the largest district, exits spaced apart and
+# reachable from every safe zone, storage
 # limits, and sectors at other world offsets agreeing with the home sector.
 CITY_GENERATOR_SEEDS ?= 1 200
 .PHONY: check-city-generator
