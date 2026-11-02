@@ -90,7 +90,19 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 .empty, .error { padding: 18px 0; color: var(--c-mute); max-width: 60ch; }
 .error code, .empty code { font-family: var(--mono); color: var(--c-fg); font-size: .92em; }
 /* one key for every city drawing on the page */
-.legend { list-style: none; margin: -8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--c-mute); }
+.legend-row { margin: -10px 0 0; }
+.legend-btn { background: none; border: 0; padding: 6px 0; color: var(--c-mute); cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+.legend-btn .q { width: 18px; height: 18px; border-radius: 50%; border: 1px solid currentColor; display: inline-grid; place-items: center; font-size: 10px; font-weight: 600; letter-spacing: 0; }
+.legend-btn:hover, .legend-btn:focus-visible { color: var(--c-fg); }
+.legend-dlg { width: min(460px, calc(100vw - 32px)); max-height: 80vh; padding: 0; border: 1px solid var(--c-faint); background: var(--c-bg); color: var(--c-fg); }
+.legend-dlg::backdrop { background: rgba(0, 0, 0, .55); }
+.dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--c-rule); }
+.dlg-head h2 { margin: 0; font-weight: 400; }
+.dlg-x { background: none; border: 0; color: var(--c-mute); font-size: 22px; line-height: 1; cursor: pointer; padding: 0 4px; }
+.dlg-x:hover, .dlg-x:focus-visible { color: var(--c-fg); }
+.dlg-src { margin: 0; padding: 0 16px 16px; color: var(--c-faint); font-size: 12.5px; }
+.legend { list-style: none; margin: 0; padding: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; color: var(--c-mute); }
+@media (max-width: 400px) { .legend { grid-template-columns: minmax(0, 1fr); } }
 .legend li { display: flex; align-items: center; gap: 7px; }
 .legend svg { width: 13px; height: 13px; flex: none; }
 .legend svg { overflow: visible; }
@@ -109,7 +121,12 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   <p class="lede">Pick a run to replay. Scrub through it, follow a team, and take over at any moment to continue it live.</p>
   <p class="note" id="note" role="status" hidden></p>
   <!-- the key comes from the shared notation (static/shared/rn-notation.js), the same code that draws the maps -->
-  <ul class="legend mono" id="legend" aria-label="What the city drawings show"></ul>
+  <div class="legend-row"><button type="button" class="legend-btn mono" id="legendBtn" aria-haspopup="dialog" title="What do the map symbols mean?">Legend <span class="q" aria-hidden="true">?</span></button></div>
+  <dialog class="legend-dlg" id="legendDlg" aria-labelledby="legendTtl">
+    <div class="dlg-head"><h2 class="mono" id="legendTtl">Legend</h2><button type="button" class="dlg-x" id="legendClose" aria-label="Close the legend">&times;</button></div>
+    <ul class="legend mono" id="legend" aria-label="What the city drawings show"></ul>
+    <p class="dlg-src">Damage colours and road blocks as on Copernicus EMS damage maps; the epicentre star as on USGS ShakeMap.</p>
+  </dialog>
 
   <details class="sec" id="featSec" open hidden>
     <summary class="sec-h mono"><span class="ttl" id="featH">01 &middot; Featured</span><span class="cnt" id="featCount"></span><span class="peek" id="featPeek"></span></summary>
@@ -249,6 +266,11 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     $('#runsPeek').textContent = rest.length ? 'Latest ' + when(rest[0]) + (rest.length > 1 ? ' · earliest ' + when(rest[rest.length - 1]) : '') : 'No runs yet';
   }
   $('#legend').innerHTML = RNNotation.legendHTML(['destroyed', 'moderate', 'slight', 'none', 'epicentre', 'assembly', 'gathering', 'team', 'barrier']);
+  /* the legend lives in a pop-up: Esc, the close button or a click outside it closes it */
+  var dlg = $('#legendDlg');
+  $('#legendBtn').addEventListener('click', function () { if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', ''); });
+  $('#legendClose').addEventListener('click', function () { dlg.close ? dlg.close() : dlg.removeAttribute('open'); });
+  dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
   function render(list) { var p = split(list); renderFeatured(p.feat); renderRuns(p.rest); }
   /* keep the count live without polling hard: look again when the section is opened, when the page comes back into
      view, and every 20 s while it is showing. The list is a directory listing, so each look is cheap. */
@@ -275,7 +297,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 
   /* up and down move between runs; Enter opens one (links do that already); Escape goes back */
   document.addEventListener('keydown', function (e) {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || dlg.open) return;   /* the open legend takes Esc for itself */
     if (e.key === 'Escape') { if (!sampleMode) location.href = $('#back').href; return; }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     var items = [].slice.call(document.querySelectorAll('a.card, .run')).filter(function (el) { return el.offsetParent !== null; }); if (!items.length) return;
