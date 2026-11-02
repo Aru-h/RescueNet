@@ -1527,8 +1527,8 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
       n.innerHTML = 'The simulation runs in the RescueNet app on your computer. Start it with ' + APP_CMD + ', open the address it prints (usually <code>http://127.0.0.1:5050</code>) and set up the mission there.';
     });
   });
-  /* Watch a recorded run: the app's own run list when the app answers, otherwise the published run list (a real link,
-     so it opens in a new tab from a hosted copy of this page). Checked when the connect screen opens, before any click. */
+  /* Watch a recorded run: the app's own run list when the app answers, otherwise the copy of the run list that travels
+     with this page (replay.html beside it). Checked when the connect screen opens, before any click. */
   var optReplay = $('#optReplay');
   function replayLink() { appStatus().then(function (st) { if (st) { optReplay.href = 'replay'; optReplay.removeAttribute('target'); optReplay.removeAttribute('rel'); } }); }
   optBoard.addEventListener('click', function () { showView('board'); });
