@@ -518,13 +518,71 @@ def api_recording_preview(name):
 
 
 _CONTEXT_CACHE = {}
+_SURROUND_CACHE = {}
+_SURROUND_LOCKS = {}
+_SURROUND_GUARD = threading.Lock()
+_BINARY_HASH = {}
+
+
+def _binary_id():
+    """A short fingerprint of the simulator binary (its bytes, so a rebuild that changes nothing keeps the cache). The
+    surroundings depend only on the seed and the generator inside the binary. None if the binary is not there."""
+    import hashlib
+    try:
+        st = BINARY.stat()
+        key = (st.st_mtime_ns, st.st_size)
+        if _BINARY_HASH.get("key") != key:
+            _BINARY_HASH["key"], _BINARY_HASH["id"] = key, hashlib.sha1(BINARY.read_bytes()).hexdigest()[:12]
+        return _BINARY_HASH["id"]
+    except OSError:
+        return None
+
+
+def _surroundings(seed):
+    """What the run list needs about a seed: its home sector's water and road cells (to check a recording against) and
+    the city around it (map_context.py, nine ./tron processes). Costs about a quarter of a second, so it is kept in
+    memory and on disk (RECORDINGS_DIR/.context/, one file per seed and generator), and runs of the same seed share it.
+    Raises what map_context raises when the simulator cannot be run."""
+    import map_context
+    bid = _binary_id()
+    key = (seed, bid)
+    with _SURROUND_GUARD:
+        lock = _SURROUND_LOCKS.setdefault(key, threading.Lock())
+    with lock:   # the page asks for every run at once: runs sharing a seed wait for one build instead of making their own
+        if key in _SURROUND_CACHE:
+            return _SURROUND_CACHE[key]
+        disk = RECORDINGS_DIR / ".context" / f"seed{seed}-{bid}.json" if bid else None
+        got = None
+        if disk is not None:
+            try:
+                raw = json.loads(disk.read_text())
+                got = {"water": {tuple(c) for c in raw["water"]}, "road": {(r[0], r[1]) for r in raw["road"]}, "ctx": raw["ctx"]}
+            except (OSError, ValueError, KeyError, TypeError, IndexError):
+                got = None   # not there yet, or not readable: build it again
+        if got is None:
+            home = map_context.generate(str(BINARY), seed)
+            full = map_context.build(seed, str(BINARY), 0, None, "world", run=home)
+            got = {"water": home["water"], "road": set(home["road"]), "ctx": {k: full[k] for k in ("roads", "water", "bridges", "buildings", "ring")}}
+            if disk is not None:
+                try:
+                    disk.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = disk.with_name(disk.name + f".{os.getpid()}.{threading.get_ident()}.tmp")
+                    tmp.write_text(json.dumps({"water": sorted(got["water"]), "road": sorted(got["road"]), "ctx": got["ctx"]}, separators=(",", ":")))
+                    os.replace(tmp, disk)
+                    for old in disk.parent.glob(f"seed{seed}-*.json"):   # the same seed from an older binary
+                        if old != disk:
+                            old.unlink(missing_ok=True)
+                except OSError:
+                    pass   # a read-only folder only costs the next start the build again
+        _SURROUND_CACHE[key] = got
+        return got
 
 
 def _recording_context(path, preview):
     """The city around a recording's map, for the run list (map_context.py: the generator builds the neighbouring
     sectors with the same seed). Only when this simulator still generates the recording's own city - the roads and
     water of its home sector match the recording - so a run made by an older generator never gets surroundings that
-    do not belong to it. None otherwise. Cached per file."""
+    do not belong to it. None otherwise. Cached per file (and per seed, in memory and on disk: see _surroundings)."""
     try:
         key = (path.name, path.stat().st_mtime)
     except OSError:
@@ -533,13 +591,11 @@ def _recording_context(path, preview):
         return _CONTEXT_CACHE[key]
     ctx = None
     try:
-        import map_context
         seed = int((preview.get("header") or {}).get("seed"))
-        home = map_context.generate(str(BINARY), seed)
-        if (home["water"] == {tuple(c) for c in preview.get("water", [])}
-                and set(home["road"]) == {(r[0], r[1]) for r in preview.get("roads", [])}):
-            full = map_context.build(seed, str(BINARY), 0, None, "world")
-            ctx = {k: full[k] for k in ("roads", "water", "bridges", "buildings", "ring")}
+        got = _surroundings(seed)
+        if (got["water"] == {tuple(c) for c in preview.get("water", [])}
+                and got["road"] == {(r[0], r[1]) for r in preview.get("roads", [])}):
+            ctx = got["ctx"]
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
         ctx = None
     _CONTEXT_CACHE[key] = ctx
