@@ -60,6 +60,21 @@
     x.fillRect(l, t, w, h); x.strokeStyle = ink; x.strokeRect(l, t, w, h);
     if (state === 'complete') { x.beginPath(); x.moveTo(l - s * .25, cy); x.lineTo(l + w + s * .25, cy); x.stroke(); }
   }
+  /* a team, by status. There is no common colour standard for team status (ICS gives the words: available, assigned,
+     out of service), so the colour reuses this notation's own meaning: blue is "at work on a worksite", as for the
+     worksite itself. ready: solid ink; moving: solid ink with a blue ring; working: solid blue; resting: hollow. */
+  function teamMarker(x, cx, cy, r, state, label, ink, bg) {
+    x.beginPath(); x.arc(cx, cy, r, 0, 6.283);
+    var text = bg;
+    if (state === 'resting') { x.fillStyle = bg; x.fill(); x.lineWidth = Math.max(1.4, r / 5); x.strokeStyle = ink; x.stroke(); text = ink; }
+    else if (state === 'working') { x.fillStyle = COLOUR.active; x.fill(); x.lineWidth = Math.max(1.2, r / 6); x.strokeStyle = ink; x.stroke(); text = '#ffffff'; }
+    else { x.fillStyle = ink; x.fill(); }
+    if (state === 'moving') { x.beginPath(); x.arc(cx, cy, r + Math.max(2, r * .35), 0, 6.283); x.lineWidth = Math.max(1.6, r / 4); x.strokeStyle = COLOUR.active; x.stroke(); }
+    if (label != null) {
+      x.font = '600 ' + Math.round(r * 1.15) + 'px "JetBrains Mono", ui-monospace, monospace'; x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.fillStyle = text; x.fillText(String(label), cx, cy + .5); x.textAlign = 'start'; x.textBaseline = 'alphabetic';
+    }
+  }
   /* a task that is not a live-rescue worksite (sector assessment, supplies, evacuation, road clearing): a small open triangle */
   function task(x, cx, cy, s, ink) {
     var h = s / 2; x.beginPath(); x.moveTo(cx, cy - h); x.lineTo(cx + h, cy + h * .8); x.lineTo(cx - h, cy + h * .8); x.closePath();
@@ -80,14 +95,18 @@
     wsOpen: ['Worksite, no team yet', '<rect x="1.5" y="3" width="11" height="8.5" fill="none" stroke="currentColor" stroke-width="1.4"/>'],
     wsActive: ['Worksite, team working', '<rect x="1.5" y="3" width="11" height="8.5" fill="' + COLOUR.active + '" stroke="currentColor" stroke-width="1.4"/>'],
     wsDone: ['Worksite complete', '<rect x="2.5" y="3" width="9" height="8.5" fill="' + COLOUR.complete + '" stroke="currentColor" stroke-width="1.4"/><path d="M0 7.2h14" stroke="currentColor" stroke-width="1.4"/>'],
-    task: ['Other task', '<path d="M7 2.5l5 8.6H2z" fill="none" stroke="currentColor" stroke-width="1.3"/>']
+    task: ['Other task', '<path d="M7 2.5l5 8.6H2z" fill="none" stroke="currentColor" stroke-width="1.3"/>'],
+    teamReady: ['Team, ready', '<circle cx="7" cy="7" r="4.5" fill="currentColor"/>'],
+    teamMoving: ['Team, on the way', '<circle cx="7" cy="7" r="3.6" fill="currentColor"/><circle cx="7" cy="7" r="5.8" fill="none" stroke="' + COLOUR.active + '" stroke-width="1.6"/>'],
+    teamWorking: ['Team, working', '<circle cx="7" cy="7" r="4.8" fill="' + COLOUR.active + '" stroke="currentColor"/>'],
+    teamResting: ['Team, resting', '<circle cx="7" cy="7" r="4.3" fill="none" stroke="currentColor" stroke-width="1.4"/>']
   };
   function legendItem(key) { var it = LEGEND[key]; return '<li><svg viewBox="0 0 14 14" aria-hidden="true">' + it[1] + '</svg>' + it[0] + '</li>'; }
   function legendHTML(keys) { return keys.map(legendItem).join(''); }
 
   root.RNNotation = {
     COLOUR: COLOUR, SECTOR_LETTERS: SECTOR_LETTERS, damageClass: damageClass,
-    building: building, star: star, barrier: barrier, assembly: assembly, gathering: gathering, team: team, worksite: worksite, task: task,
+    building: building, star: star, barrier: barrier, assembly: assembly, gathering: gathering, team: team, teamMarker: teamMarker, worksite: worksite, task: task,
     LEGEND: LEGEND, legendHTML: legendHTML
   };
 })(typeof window !== 'undefined' ? window : globalThis);
