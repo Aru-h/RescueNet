@@ -419,6 +419,57 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   </ul>
 </nav>
 
+<!-- intro: a red counter rises up the left edge and a bar climbs the right edge as the page really loads (fonts, the
+     page, everything loaded, the first frame); then it lifts and the page is pulled up into place (the intro further
+     down). Once a visit; never on #connect or with reduced motion. At least ~1.6 s, so it reads as a count. -->
+<div class="rni" id="rnIntro" aria-hidden="true"><div class="rni-ctr"><span class="rni-roll"><span id="rniNum">0</span></span></div><div class="rni-bar" id="rniBar"></div></div>
+<style>
+.rni { position: fixed; inset: 0; z-index: 1000; background: var(--paper); transition: opacity .45s ease .3s; }
+.rni.out { opacity: 0; pointer-events: none; }
+.rni-ctr { position: absolute; left: var(--gx); top: 86vh; height: .9em; overflow: hidden; font-family: var(--display); font-weight: 900; font-stretch: 125%; font-size: clamp(44px, 5.6vw, 110px); line-height: .93; color: var(--red); font-variant-numeric: tabular-nums; transition: top .6s cubic-bezier(.65, 0, .25, 1); }
+.rni-roll { display: block; transition: transform .55s cubic-bezier(.7, 0, .2, 1); }
+.rni.out .rni-roll { transform: translateY(-110%); }
+.rni-bar { position: absolute; right: 0; bottom: 0; width: 4px; height: 0; background: var(--ink); transition: height .6s cubic-bezier(.65, 0, .25, 1); }
+.rni.out .rni-bar { top: 0; bottom: auto; height: 0 !important; }
+</style>
+<script>
+(function () {
+  'use strict';
+  var el = document.getElementById('rnIntro'), skip = false, resolve;
+  try { skip = sessionStorage.getItem('rnIntroSeen') === '1'; } catch (e) { /* storage blocked: show it */ }
+  if (location.hash === '#connect' || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) skip = true;
+  window.RNIntro = { done: new Promise(function (r) { resolve = r; }), skipped: skip };
+  if (skip) { el.parentNode.removeChild(el); resolve(); return; }
+  try { sessionStorage.setItem('rnIntroSeen', '1'); } catch (e) { /* fine */ }
+  var root = document.documentElement, num = document.getElementById('rniNum'), bar = document.getElementById('rniBar'), ctr = el.querySelector('.rni-ctr');
+  var t0 = performance.now(), shown = 0, last = t0, queue = [], busy = false, ended = false;
+  root.style.overflow = 'hidden';
+  function place(v) { ctr.style.top = (86 - 83 * v / 99) + 'vh'; bar.style.height = (v / 99 * 100) + 'vh'; }
+  function countTo(from, to) {
+    var s0 = performance.now();
+    (function tick() { var f = Math.min(1, (performance.now() - s0) / 420), e = 1 - Math.pow(1 - f, 3); num.textContent = Math.round(from + (to - from) * e); if (f < 1) requestAnimationFrame(tick); })();
+  }
+  function pump() {   /* one step at a time, at least 300 ms apart: it never runs ahead of what has loaded */
+    if (busy || !queue.length) return; busy = true;
+    var v = queue.shift();
+    setTimeout(function () { countTo(shown, v); place(v); shown = v; last = performance.now(); busy = false; if (v >= 99) finish(); else pump(); }, Math.max(0, last + 300 - performance.now()));
+  }
+  function reach(v) { if (v > shown && queue.indexOf(v) < 0) { queue.push(v); pump(); } }
+  function finish() {
+    if (ended) return; ended = true;
+    setTimeout(function () { el.classList.add('out'); root.style.overflow = ''; resolve(); setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 1000); },
+      Math.max(450, t0 + 1600 - performance.now()));
+  }
+  var fonts = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+  var dom = new Promise(function (r) { if (document.readyState !== 'loading') r(); else document.addEventListener('DOMContentLoaded', r); });
+  var loaded = new Promise(function (r) { if (document.readyState === 'complete') r(); else window.addEventListener('load', r); });
+  fonts.then(function () { reach(33); return dom; }).then(function () { reach(56); return loaded; }).then(function () { reach(75);
+    requestAnimationFrame(function () { requestAnimationFrame(function () { reach(99); }); });   /* the first frame has been drawn */
+  });
+  setTimeout(function () { reach(99); }, 9000);   /* a resource that never answers must not hold the page */
+})();
+</script>
+
 <div class="city" id="city" aria-hidden="false"><canvas id="scene3d" aria-label="3D map of the district after the earthquake. Drag sideways to turn it; double-click to reset."></canvas></div>
 
 <header class="hero" id="top">
@@ -2045,9 +2096,18 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
 
   /* intro: letters rise, then a first stroke of ink so the page invites the mouse */
   if (hasGsap && !reduce) {
-    gsap.from('.wordmark .ch i', { yPercent: 105, duration: 1.1, ease: 'power4.out', stagger: .05, delay: .15 });
-    gsap.from('.nav, .hero-row', { opacity: 0, duration: .9, delay: .5 });
-    gsap.delayedCall(.9, introScribble);
+    /* after the loading intro (if it ran) the page is pulled up into place: the wordmark's letters, the tagline, the
+       city, the top row, from the bottom up */
+    (window.RNIntro ? window.RNIntro.done : Promise.resolve()).then(function () {
+      var pulled = window.RNIntro && !window.RNIntro.skipped;
+      gsap.from('.wordmark .ch i', { yPercent: 105, duration: 1.1, ease: 'power4.out', stagger: .05, delay: pulled ? 0 : .15 });
+      if (pulled) {
+        gsap.from('.hero-row', { y: '45vh', opacity: 0, duration: 1.05, ease: 'power4.out', delay: .08 });
+        gsap.from('#city', { y: '70vh', duration: 1.2, ease: 'power4.out', delay: .14 });
+        gsap.from('.nav', { y: '35vh', opacity: 0, duration: 1.05, ease: 'power4.out', delay: .26 });
+      } else gsap.from('.nav, .hero-row', { opacity: 0, duration: .9, delay: .5 });
+      gsap.delayedCall(.9, introScribble);
+    });
     gsap.to('#halftone', { yPercent: -8, ease: 'none', scrollTrigger: { trigger: '.hero', start: 'top top', end: 'bottom top', scrub: true } });
     gsap.to('#wordmark', { yPercent: 18, ease: 'none', scrollTrigger: { trigger: '.hero', start: 'top top', end: 'bottom top', scrub: true } });
     gsap.utils.toArray('.sec h2, .row, .rung, .specs li').forEach(function (el) {
