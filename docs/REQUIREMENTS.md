@@ -36,8 +36,8 @@ Follows the INSARAG Guidelines 2020. A new version takes effect on 1 January 202
 | N3 | Epicentre: a star. | USGS ShakeMap | DONE (run list) |
 | N4 | Blocked road: crimson diamond with a white bar. | Copernicus "road barrier" | DONE (symbol) |
 | N5 | Safe zones are "assembly points"; spontaneous gathering (real-city data) is magenta and drawn differently. | OCHA icon name; Copernicus "spontaneous site" | DONE (run list) |
-| N6 | Incidents that could hold a live rescue (collapse, confined space, survivor signal, mass casualty) are worksites with an INSARAG ID: sector letter, hyphen, number in order of discovery (B-3). Numbering is computed over the whole run, so IDs never change while scrubbing. | INSARAG Vol II Man B 5.5 | TO DO |
-| N7 | Sector letters skip I and O. Sectors are a display overlay and the legend says so (the simulator does not sectorise). | INSARAG 5.5.3 | TO DO |
+| N6 | Incidents that could hold a live rescue (collapse, confined space, survivor signal, mass casualty) are worksites with an INSARAG ID: sector letter, hyphen, number in order of discovery (A-3). Numbering is computed over the whole run, so IDs never change while scrubbing. | INSARAG Vol II Man B 5.5 | TO DO |
+| N7 | Sector letters skip I and O. The simulated grid (36 × 36) is one sector, A; the sectors around it are B, C, … the same size, nearest first. Sectors are a display overlay and the legend says so (the simulator does not sectorise). | INSARAG 5.5.3 | TO DO |
 | N8 | Worksite state: outlined (no team yet), blue (team working), green with a line through the whole marking (complete). | ICMS colours; INSARAG 6.2 completion line | DONE (symbol); TO DO (sim) |
 | N9 | Live victims shown as L-n. | INSARAG victim marking | TO DO |
 | N10 | Gas, fire and chemical incidents are hazards written in plain words (GAS, FIRE, CHEM), not worksites. | INSARAG 6.2 | TO DO |
@@ -72,7 +72,7 @@ Landing -> How do you want to connect?
 | S4 | Timeline: play, pause, step, speed, scrubber with markers (worksite identified, worksite complete, detections), jump to the next event. Mission clock as "T+2 h 59 min" (one tick is 36 s). | TO DO |
 | S5 | Teams panel: status in words, stamina and equipment as two labelled meters (dashed below 30, where the simulator sends a team to rest or restock), current worksite, what peers detected; injected faults only under ground truth (H3). Rows grow to fill the panel when there are few teams and shrink to a compact size before the list scrolls. | TO DO (frames carry `equipment` since this change; older recordings show "–") |
 | S6 | Technical panels one click away: detection timeline (injected versus detected), peer-network ring, radio counters, raw tables. | TO DO |
-| S7 | Event list in plain sentences built from the frames ("T+1 h 12 min: B-3 identified, 4 live victims reported"). | TO DO |
+| S7 | Event list in plain sentences built from the frames ("T+1 h 12 min: A-3 identified, 4 live victims reported"). | TO DO |
 | S8 | Links to a moment: `/sim?run=…&t=…&view=flat`. | TO DO |
 | S9 | Keyboard: Space play/pause, ←/→ one tick, Shift+←/→ ten, J next event, 1–0 pick a team, Esc back. | TO DO |
 | S10 | Phone: map and timeline, teams as a drawer. | TO DO |
@@ -84,7 +84,7 @@ The current map is one 36 × 36 grid. Real cities (Antakya, Kathmandu) are irreg
 | ID | Question | Current thinking | Status |
 |---|---|---|---|
 | E1 | How is the edge of the simulated area shown? | Follow Copernicus: draw the area of interest as an outline, and show what lies outside it as faded, unmodelled context, so nobody mistakes the edge for the end of the city. | OPEN |
-| E2 | How do several zones fit together (e.g. Kathmandu's 19 sectors)? | Zones map to INSARAG sectors; each has a letter and its own boundary. | OPEN |
+| E2 | How do several zones fit together (e.g. Kathmandu's 19 sectors)? | One simulated grid is one INSARAG sector (A in a single-grid run). A multi-zone city is several grids, one sector each, with its own letter and boundary. | OPEN |
 | E3 | Exit tunnels (evacuation gateways). The old dashboard's tunnels used brute-forced paths and caused problems. | Not carried over. Redesign: exits sit where real roads cross the area's edge, derived from the road network, not searched for. | OPEN; old tunnel code excluded |
 
 ## 7. Platform
