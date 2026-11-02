@@ -233,6 +233,13 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   .cam { display: none; }
 }
 .drawer-btn { display: none; position: absolute; right: 14px; top: 14px; background: var(--c-fg); color: var(--c-bg); border: 0; padding: 8px 12px; cursor: pointer; }
+.markcard .send { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.markcard .send button { min-width: 30px; padding: 4px 6px; background: transparent; border: 1px solid var(--c-rule); cursor: pointer; }
+.markcard .send button:hover:not(:disabled) { border-color: var(--c-fg); }
+.markcard .send button:disabled { opacity: .35; cursor: not-allowed; }
+.markcard .lbl2 { margin-top: 8px; color: var(--c-faint); }
+.markcard .ack { margin-top: 6px; font-size: 13px; }
+.markcard .ack.bad { color: #ffd36b; }
 .loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--c-bg); z-index: 50; text-align: center; padding: 24px; }
 .loading p { max-width: 52ch; color: var(--c-mute); }
 .loading a { color: var(--c-fg); }
@@ -665,6 +672,9 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   }
   function pastEvents() { return RUN.eventsTo(D.tick); }
   function eventText(e) {
+    if (e[1] === 'sent') return 'Team ' + (e[4] + 1) + ' sent to ' + (e[2] || 'incident ' + e[5]) + ' by hand';
+    if (e[1] === 'released') return 'Team ' + (e[4] + 1) + ' released to the system again';
+    if (e[1] === 'refused') return 'Team ' + (e[4] + 1) + ' could not be sent' + (e[2] ? ' to ' + e[2] : '') + ': ' + refusal(e[6]);
     return e[1] === 'found' ? e[2] + ' identified, ' + e[3] + ' live victim' + (e[3] === 1 ? '' : 's') + ' reported'
       : e[1] === 'complete' ? e[2] + ' complete' : e[1] === 'assigned' ? 'A team assigned to ' + e[2] : e[1] === 'working' ? 'Team at work on ' + e[2] : e[2] + ' waiting for a team again';
   }
@@ -945,6 +955,45 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     var inc = (D.raw_incidents || []).filter(function (r) { return r.x === w.x && r.y === w.y && WSTYPE[r.type]; })[0];
     return { w: w, st: st, done: done, type: inc ? WSTYPE[inc.type] : 'Worksite' };
   }
+  /* ---------------- sending a team by hand (live runs, at the newest tick) ----------------
+     POST /api/run-live/override pins a team to an incident; the simulator answers with an override_ack (applied, or
+     refused with a reason) and the pin shows on every frame after (teams[].override). Release clears it. */
+  var REFUSED = {
+    bad_team: 'the simulator does not know that team', unknown_incident: 'that incident no longer exists', system_task: 'that is a system errand, not a rescue',
+    incident_finished: 'that worksite is already finished', team_unavailable: 'the system has that team flagged (its peers raised an alarm, or it is degraded) until that clears',
+    stale_tick: 'the run had moved on too far', future_tick: 'the request was ahead of the run', bad_format: 'the request was malformed', unknown_command: 'the simulator did not understand it'
+  };
+  function refusal(r) { return REFUSED[r] || r || 'no reason given'; }
+  var pending = [], ackFor = {};   /* requests waiting for an answer, in order; the last answer per card (w<id> or t<id>) */
+  function canAct() { return !!(LIVE && (LIVE.state === 'running' || LIVE.state === 'paused') && LIVE.follow); }
+  function rawTeam(id) { return (D.raw_teams || []).filter(function (r) { return r.id === id; })[0] || null; }
+  function flagged(id) { var r = rawTeam(id), tr = r && r.consensus_tier || [0, 0]; return !!(r && (r.degraded || tr[0] === 2 || tr[1] === 2)); }
+  function sendTeam(teamId, wid) {
+    var inc = RUN.incOf[wid]; if (inc == null || !canAct()) return;
+    pending.push({ kind: 'sent', team: teamId, wid: wid, inc: inc });
+    ackFor['w' + wid] = { text: 'Sending team ' + (teamId + 1) + '…' }; refreshMark();
+    livePost2('override', { team_id: teamId, incident_id: inc }).catch(function (m) { pending.pop(); ackFor['w' + wid] = { bad: true, text: m }; refreshMark(); });
+  }
+  function releaseTeam(teamId) {
+    if (!canAct()) return;
+    pending.push({ kind: 'released', team: teamId });
+    ackFor['t' + teamId] = { text: 'Releasing…' }; refreshMark();
+    livePost2('override/clear', { team_id: teamId }).catch(function (m) { pending.pop(); ackFor['t' + teamId] = { bad: true, text: m }; refreshMark(); });
+  }
+  function livePost2(what, body) {   /* the app writes the line to the simulator; the answer comes later as an override_ack */
+    return fetch('/api/run-live/' + what, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw (j.message || 'the app refused (' + r.status + ')'); return j; }); });
+  }
+  function overrideAck(a) {
+    var p = pending.shift() || { kind: 'sent', team: a.team_id, inc: a.incident_id };
+    var ok = a.result === 'applied', team = a.team_id != null ? a.team_id : p.team;
+    RUN.addOverride(ok ? p.kind : 'refused', a.effective_tick, team, p.kind === 'released' ? null : (a.incident_id != null ? a.incident_id : p.inc), ok ? null : a.reason);
+    var key = p.kind === 'released' ? 't' + team : 'w' + (p.wid || RUN.seen[p.inc]);
+    ackFor[key] = ok ? { text: p.kind === 'released' ? 'Released: the system assigns it again.' : 'Team ' + (team + 1) + ' goes there next: it finishes what it is doing, then the system must assign it here (until then you can release it).' }
+                     : { bad: true, text: 'Not sent: ' + refusal(a.reason) + '.' };
+    if (ok && p.kind === 'sent') ackFor['t' + team] = null;
+    refreshMark(); renderEvents(); if (tab === 'events') renderPane();
+  }
   function markHTML() {
     var dd = function (k, v) { return '<dt>' + k + '</dt><dd>' + v + '</dd>'; }, is3d = three && $('#map').classList.contains('is3d');
     if (mark.kind === 't') {
@@ -955,6 +1004,12 @@ select option { background: var(--c-bg); color: var(--c-fg); }
         dd('Position', t.x + ', ' + t.y) + (t.dest && t.status === 1 ? dd('Heading to', goalText(t) + ' (' + t.dest[0] + ', ' + t.dest[1] + ')') : '') + '</dl>' +
         '<p class="' + d.cls + '">' + d.text + '</p>' +
         (truth && t.fault ? '<p class="truth">Injected (ground truth): ' + FAULT.filter(function (_, i) { return t.fault & (1 << i); }).join(', ') + ' fault</p>' : '') +
+        (function () {
+          var r = rawTeam(t.id), pinned = r && r.override, ack = ackFor['t' + t.id];
+          var pinTo = pinned ? (RUN.seen[r.override_incident_id] || 'incident ' + r.override_incident_id) : '';
+          return (pinned ? '<p class="lbl2 mono">Sent by hand to ' + pinTo + '</p>' + (canAct() ? '<div class="acts"><button type="button" class="fly" data-a="release">Release</button></div>' : '') : '') +
+            (ack ? '<p class="ack' + (ack.bad ? ' bad' : '') + '">' + ack.text + '</p>' : '');
+        })() +
         '<div class="acts">' + (is3d ? '<button type="button" class="fly" data-a="follow">Follow</button>' : '') + '<button type="button" class="fly" data-a="list">Show in Teams</button></div>';
     }
     var i = wsInfo(mark.ref); if (!i) return '';
@@ -963,9 +1018,21 @@ select option { background: var(--c-bg); color: var(--c-fg); }
       '<p class="big">' + what + '</p>' +
       '<dl>' + dd('Kind', i.type) + (s !== 3 ? dd('Live victims', 'L-' + i.st[2]) : '') + dd('Found', tplus(i.w.found)) +
       (s === 3 ? dd('Completed', tplus(i.done)) : dd('Waiting', tplus(D.tick - i.w.found).replace('T+', ''))) + dd('Position', i.w.x + ', ' + i.w.y) + '</dl>' +
+      (s !== 3 && canAct() ? '<p class="lbl2 mono">Send a team</p><div class="send">' + D.teams.map(function (t) {
+        var busy = flagged(t.id), here = t.site === i.w.id;
+        return '<button type="button" data-a="send" data-team="' + t.id + '"' + (busy || here ? ' disabled' : '') + ' title="' +
+          (here ? 'Already heading here or working here' : busy ? 'Flagged by the system: the simulator will not reassign it until that clears' : 'Team ' + (t.id + 1) + ': ' + status(t)) + '">' + (t.id + 1) + '</button>';
+      }).join('') + '</div>' : '') +
+      (ackFor['w' + i.w.id] ? '<p class="ack' + (ackFor['w' + i.w.id].bad ? ' bad' : '') + '">' + ackFor['w' + i.w.id].text + '</p>' : '') +
       (is3d ? '<div class="acts"><button type="button" class="fly" data-a="fly">Fly here</button></div>' : '');
   }
+  /* a live run rebuilds the card every tick: hold it still while a button in it is pressed, or the click is lost */
+  var holdCard = false, cardDirty = false;
+  $('#markCard').addEventListener('pointerdown', function () { holdCard = true; });
+  window.addEventListener('pointerup', function () { if (!holdCard) return; setTimeout(function () { holdCard = false; if (cardDirty) { cardDirty = false; refreshMark(); } }, 0); }, true);
+  window.addEventListener('pointercancel', function () { holdCard = false; }, true);
   function refreshMark() {
+    if (holdCard) { cardDirty = true; return; }
     if (!mark) return; var c = $('#markCard'), h = markHTML(); if (!h) { closeMark(); return; }
     c.innerHTML = h;
     c.querySelector('h4 button').onclick = closeMark;
@@ -975,6 +1042,8 @@ select option { background: var(--c-bg); color: var(--c-fg); }
         if (a === 'follow') { selTeam = mark.ref; three.follow = true; $('#camFollow').setAttribute('aria-pressed', 'true'); renderPane(); }
         if (a === 'list') { selTeam = mark.ref; var tb = document.querySelector('[data-tab="teams"]'); if (tb && tab !== 'teams') tb.click(); else renderPane(); var r = document.querySelector('#teamList .team[data-id="' + mark.ref + '"]'); if (r) r.scrollIntoView({ block: 'nearest' }); }
         if (a === 'fly') { var w = wsInfo(mark.ref).w; flyTo(w.x + .5, w.y + .5); }
+        if (a === 'send') sendTeam(+b.dataset.team, mark.ref);
+        if (a === 'release') releaseTeam(mark.ref);
       };
     });
   }
@@ -1152,6 +1221,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
         }).catch(function () { /* no surroundings: the run itself is unaffected */ });
       } else liveFrame();
     }
+    else if (ev.type === 'override_ack') overrideAck(ev);
     else if (ev.type === 'done') liveEnd(ev.recording || null, null);
     else if (ev.type === 'error') { if (LIVE.state === 'starting') loadFail(ev.message || 'The simulation did not start.'); else liveEnd(null, ev.message); }
   }
@@ -1224,6 +1294,12 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     endNote = 'could not take over: ' + String(msg).replace(/^Cannot take over:\s*/i, '');
     liveControls(); renderTimeline(); setTick(tk.tick);
   }
+
+  /* for the end-to-end test (dashboard_e2e_selftest.py's sim checks): read the state, open a marker's card */
+  window.RNSimTest = {
+    view: function () { return D; }, run: function () { return RUN; }, live: function () { return LIVE ? { state: LIVE.state, follow: LIVE.follow } : null; },
+    open: function (kind, ref) { showMark({ kind: kind, ref: ref }, 300, 200); }, release: function (id) { releaseTeam(id); }, flatHits: function () { return flatHits; }, is3d: function () { return !!three && $('#map').classList.contains('is3d'); }
+  };
 
   if (!RUN_NAME && PARAMS.get('seed') !== null) { liveStart(); return; }
   if (!RUN_NAME) { loadFail('No run chosen.'); return; }

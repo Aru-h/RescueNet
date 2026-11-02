@@ -50,6 +50,7 @@
     this.detTrack = {};       /* tick -> [[fault_mask, detected 0/1]] per team (see spans()) */
     this._spans = null;
     this.seen = {};           /* incident id -> worksite id ('A-1', ...) */
+    this.incOf = {};          /* worksite id -> incident id (what an override names) */
     this.nSeen = 0;
     this.events = [];         /* [tick, kind, worksite id, live victims or null] */
     this.wsTrack = {};        /* worksite id -> { id, x, y, found, states: [[tick, status, victims, team]] } */
@@ -80,7 +81,7 @@
     (f.incidents || []).forEach(function (i) {
       cur[i.id] = i.status;
       if (LIVE[i.type] && i.discovered && self.seen[i.id] === undefined) {
-        var wid = 'A-' + (++self.nSeen); self.seen[i.id] = wid;
+        var wid = 'A-' + (++self.nSeen); self.seen[i.id] = wid; self.incOf[wid] = i.id;
         found.push([t, 'found', wid, i.victims]);
       }
     });
@@ -111,13 +112,20 @@
     });
     this._prev = cur; this._prevOrder = (f.incidents || []).map(function (i) { return i.id; });
   };
+  /* A manual override (a person sent a team somewhere, or released it): an event of its own,
+     [tick, 'sent' | 'released' | 'refused', worksite id or null, null, team id, incident id, reason] */
+  Run.prototype.addOverride = function (kind, tick, team, incident, reason) {
+    var wid = incident == null ? null : this.seen[incident];
+    this.events.push([tick, kind, wid === undefined ? null : wid, null, team, incident, reason || null]);
+  };
   /* one line of a recording or a live stream */
   Run.prototype.line = function (text) {
     var sp = text.indexOf(' '); if (sp < 0) return;
     var tag = text.slice(0, sp);
-    if (tag !== 'LIVEFRAME' && tag !== 'STATICENV' && tag !== 'STATICMAP' && tag !== 'RECORDING') return;
+    if (tag !== 'LIVEFRAME' && tag !== 'STATICENV' && tag !== 'STATICMAP' && tag !== 'RECORDING' && tag !== 'OVERRIDE') return;
     var body = text.slice(sp + 1), obj;
     try { obj = JSON.parse(body); } catch (e) { return; }
+    if (tag === 'OVERRIDE') { this.addOverride(obj.cmd === 'OVERRIDE_CLEAR' ? 'released' : 'sent', obj.effective_tick, obj.team_id, obj.cmd === 'OVERRIDE_CLEAR' ? null : obj.incident_id); return; }
     this.add(tag, obj, tag === 'LIVEFRAME' ? body : undefined);
   };
 
@@ -207,6 +215,9 @@
     out.envs = this.envs.filter(function (e) { return e.from < T; });
     out.maps = this.maps.filter(function (m) { return m.from < T; });
     this.ticks.forEach(function (t) { if (t < T) { var l = self.lines[t]; out.add('LIVEFRAME', JSON.parse(l), l); } });
+    /* the overrides made before T are events too (frames alone do not carry them) */
+    this.events.forEach(function (e) { if (e[0] < T && (e[1] === 'sent' || e[1] === 'released')) out.events.push(e); });
+    out.events.sort(function (a, b) { return a[0] - b[0]; });   /* stable: same-tick events keep their order */
     return out;
   };
 
