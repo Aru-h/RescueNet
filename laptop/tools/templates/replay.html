@@ -219,10 +219,19 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     if (ep && ep.active) N.star(x, (ep.x + .5) * q, (ep.y + .5) * q, Math.max(12, q * 3.4), c.fg);   /* a light edge, so the red star reads over red buildings */
     if (margin) { x.strokeStyle = '#38a800'; x.lineWidth = small ? 1 : 2; x.strokeRect(0, 0, W * q, H * q); }   /* the simulated area (Copernicus area of interest) */
   }
-  var previews = {};
-  function preview(r, canvas) {
-    var p = previews[r.filename] || (previews[r.filename] = sampleMode ? Promise.resolve(SAMPLE.previews[r.filename] || null) : fetch('/api/recordings/' + encodeURIComponent(r.filename) + '/preview').then(function (res) { return res.ok ? res.json() : null; }).catch(function () { return null; }));
-    p.then(function (pv) { if (pv && pv.env) { canvas._pv = pv; drawCity(canvas, pv); } });
+  var previews = {}, ahead = [];
+  function load(r) {
+    return sampleMode ? Promise.resolve(SAMPLE.previews[r.filename] || null) : fetch('/api/recordings/' + encodeURIComponent(r.filename) + '/preview').then(function (res) { return res.ok ? res.json() : null; }).catch(function () { return null; });
+  }
+  /* A run's preview is asked for as soon as its card exists, and its map is drawn the moment it arrives (not when all have).
+     `later` marks the cards in the section that starts closed: they ask only after the featured runs' previews are in, so
+     a first, uncached preview (the server builds the city around the run, about a quarter of a second of CPU each) is not
+     slowed by five others racing it for the processor. */
+  function preview(r, canvas, later) {
+    var p = previews[r.filename] || (previews[r.filename] = later ? Promise.all(ahead).then(function () { return load(r); }) : load(r));
+    if (!later) ahead.push(p);
+    /* a closed section has no size to draw into: its maps are drawn when it opens (see redrawAll) */
+    p.then(function (pv) { if (pv && pv.env) { canvas._pv = pv; if (canvas.clientWidth) drawCity(canvas, pv); } });
   }
 
   function featuredCard(r, f) {
@@ -257,7 +266,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     var sm = document.createElement('small'); sm.textContent = r.filename; w.appendChild(sm);
     var fx = document.createElement('div'); fx.className = 'facts mono'; facts(r).forEach(function (s) { var sp = document.createElement('span'); sp.textContent = s; fx.appendChild(sp); });
     var go = document.createElement('span'); go.className = 'go mono'; go.textContent = 'Watch →';
-    a.append(cv, w, fx, go); a.addEventListener('click', sampleClick); li.appendChild(a); $('#runs').appendChild(li); preview(r, cv);
+    a.append(cv, w, fx, go); a.addEventListener('click', sampleClick); li.appendChild(a); $('#runs').appendChild(li); preview(r, cv, true);
   }
 
   function split(list) {

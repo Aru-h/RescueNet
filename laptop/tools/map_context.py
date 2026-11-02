@@ -27,6 +27,7 @@ Output (cells in the run's coordinates, so they run from -36 to 71):
    "bridges": [[x, y]], "buildings": [[x, y, w, h]]}   (buildings by top-left cell)
 """
 import argparse, json, os, pathlib, subprocess, sys
+from concurrent.futures import ThreadPoolExecutor
 
 N = 36
 POOL_BASE = 700000   # pool cities are seeds POOL_BASE, POOL_BASE + 1, ...: far from any seed a run would use
@@ -133,16 +134,26 @@ def fit(a, side, b):
     return -6 * miss + 2 * meet - (3 if not ra and rb else 0)
 
 
-def build(seed, binary, size, cache, mode='world'):
-    run = generate(binary, seed)
-    placed = {(0, 0): run}
+def build(seed, binary, size, cache, mode='world', run=None):
+    """run: the home sector if the caller already generated it (generate(binary, seed)); otherwise it is generated here."""
+    placed = {}
     tiles, used = [], set()
     if mode == 'world':
-        # the generator builds the neighbouring sectors itself, same seed: rivers, avenues and terrain carry on
-        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)]:
-            placed[(dx, dy)] = generate(binary, seed, (dx * N, dy * N))
-            tiles.append({'dx': dx, 'dy': dy, 'seed': seed, 'offset': [dx * N, dy * N]})
+        # the generator builds the neighbouring sectors itself, same seed: rivers, avenues and terrain carry on. Each is a
+        # separate ./tron process of its own, so they run side by side rather than one after the other.
+        around = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)]
+        with ThreadPoolExecutor(max_workers=max(1, min(len(around) + 1, os.cpu_count() or 1))) as pool_:
+            home = pool_.submit(generate, binary, seed) if run is None else None
+            futures = [pool_.submit(generate, binary, seed, (dx * N, dy * N)) for dx, dy in around]
+            if home is not None:
+                run = home.result()
+            placed[(0, 0)] = run   # first, as before: finish() visits the sectors in this order and the joining depends on it
+            for (dx, dy), fut in zip(around, futures):
+                placed[(dx, dy)] = fut.result()
+                tiles.append({'dx': dx, 'dy': dy, 'seed': seed, 'offset': [dx * N, dy * N]})
         return finish(seed, run, placed, tiles)
+    run = generate(binary, seed) if run is None else run
+    placed[(0, 0)] = run
     cities = pool(binary, size, cache)
     laid = [[turned(c, t) for t in range(8)] for c in cities]   # every city in every way it can be laid down, once
     # the four areas beside the run first, then the corners (which then have two neighbours to meet)
