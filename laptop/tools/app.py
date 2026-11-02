@@ -467,7 +467,37 @@ def api_recording_preview(name):
                     break
     except (OSError, json.JSONDecodeError, EOFError):
         return jsonify({"status": "error", "message": "recording could not be read"}), 500
+    out["context"] = _recording_context(path, out)
     return jsonify({"status": "success", **out})
+
+
+_CONTEXT_CACHE = {}
+
+
+def _recording_context(path, preview):
+    """The city around a recording's map, for the run list (map_context.py: the generator builds the neighbouring
+    sectors with the same seed). Only when this simulator still generates the recording's own city - the roads and
+    water of its home sector match the recording - so a run made by an older generator never gets surroundings that
+    do not belong to it. None otherwise. Cached per file."""
+    try:
+        key = (path.name, path.stat().st_mtime)
+    except OSError:
+        return None
+    if key in _CONTEXT_CACHE:
+        return _CONTEXT_CACHE[key]
+    ctx = None
+    try:
+        import map_context
+        seed = int((preview.get("header") or {}).get("seed"))
+        home = map_context.generate(str(BINARY), seed)
+        if (home["water"] == {tuple(c) for c in preview.get("water", [])}
+                and set(home["road"]) == {(r[0], r[1]) for r in preview.get("roads", [])}):
+            full = map_context.build(seed, str(BINARY), 0, None, "world")
+            ctx = {k: full[k] for k in ("roads", "water", "bridges", "buildings", "ring")}
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+        ctx = None
+    _CONTEXT_CACHE[key] = ctx
+    return ctx
 
 
 def parse_diag(stderr_text):

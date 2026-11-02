@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/static/fonts/fonts.css">
 <script src="/static/shared/rn-sky.js"></script>
 <script src="/static/shared/rn-notation.js"></script>
+<script src="/static/shared/rn-context.js"></script>
 <style>
 /* Choose a run to replay. The same dark surface as the landing page's connect screens (RNSky's --deep colours), so it
    drifts with the visitor's clock like every other page. Featured runs first, then every run this app has saved. */
@@ -182,10 +183,17 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   function drawCity(canvas, pv) {
     var d = Math.min(2, window.devicePixelRatio || 1), w = canvas.clientWidth || 56, h = canvas.clientHeight || w, x = canvas.getContext('2d');
     canvas.width = Math.round(w * d); canvas.height = Math.round(h * d);
-    var c = colours(), W = pv.width || 36, H = pv.height || 36, q = Math.min(w, h) / Math.max(W, H), small = w < 100;
+    var c = colours(), W = pv.width || 36, H = pv.height || 36, small = w < 100, N = RNNotation, lw = small ? .6 : 1;
+    /* with surroundings, the run's area is drawn a little smaller so the city around it shows on every side */
+    var margin = pv.context && window.RNContext ? 6 : 0, q = Math.min(w, h) / (Math.max(W, H) + 2 * margin);
+    var ox = (w - W * q) / 2, oy = (h - H * q) / 2;   /* the run's area sits centred in whatever box it is given */
     x.setTransform(d, 0, 0, d, 0, 0); x.fillStyle = c.bg; x.fillRect(0, 0, w, h);
-    x.translate((w - W * q) / 2, (h - H * q) / 2);   /* the city sits centred in whatever box it is given */
-    var N = RNNotation, lw = small ? .6 : 1;
+    if (margin) {   /* the city around the run: the sectors next to it, built by the same generator, faded, not simulated */
+      if (!pv._ctx) pv._ctx = RNContext.build({ W: W, H: H, seed: (pv.header || {}).seed, roads: pv.roads, water: pv.water, epicentre: pv.env && pv.env.epicenter,
+        buildings: (pv.env && pv.env.buildings || []).map(function (b) { var f = N.footprint(b); return { x: f.x, y: f.y, w: f.w, h: f.h, damage: b.damage }; }) }, 36, pv.context);
+      RNContext.draw(x, pv._ctx, q, ox, oy, { ink: c.fg, mute: c.mute, view: [0, 0, w, h] }, N);
+    }
+    x.translate(ox, oy);
     /* the river and the streets under the buildings (recordings previewed by older apps have neither) */
     x.fillStyle = '#1d4263'; (pv.water || []).forEach(function (cw) { x.fillRect(cw[0] * q, cw[1] * q, q + .5, q + .5); });
     if (pv.roads && pv.roads.length) {
@@ -209,6 +217,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     (pv.teams || []).forEach(function (t) { N.team(x, (t.x + .5) * q, (t.y + .5) * q, Math.max(2.4, q * .9), c.fg); });
     var ep = pv.env && pv.env.epicenter;
     if (ep && ep.active) N.star(x, (ep.x + .5) * q, (ep.y + .5) * q, Math.max(12, q * 3.4), c.fg);   /* a light edge, so the red star reads over red buildings */
+    if (margin) { x.strokeStyle = '#38a800'; x.lineWidth = small ? 1 : 2; x.strokeRect(0, 0, W * q, H * q); }   /* the simulated area (Copernicus area of interest) */
   }
   var previews = {};
   function preview(r, canvas) {
