@@ -237,6 +237,18 @@ def check_recorded(page, errors, frames):
     summary = page.evaluate("() => document.getElementById('sum').textContent")
     check(f"{len(want['complete'])} complete" in summary and f"{len(want['active'])} being worked" in summary and f"{len(want['open'])} waiting" in summary,
           f"the summary counts them ({summary!r})")
+    # the Worksites tab: waiting ones first, longest since found first (all live rescues are critical, so priority ties),
+    # then those being worked; worksites are numbered in the order found
+    num = lambda w: int(w.split("-")[1])
+    page.click("[data-tab=sites]")
+    page.wait_for_selector(".ws[data-id]", timeout=10000)
+    rows = page.evaluate("() => Array.from(document.querySelectorAll('.ws[data-id]')).map(r => [r.dataset.id, r.children[1].textContent])")
+    check([r[0] for r in rows] == sorted(want["open"], key=num) + sorted(want["active"], key=num),
+          f"the Worksites tab lists waiting worksites first, longest waiting first, then those being worked ({[r[0] for r in rows]})")
+    mins = [int(r[1].split("found ")[1].split(" min")[0]) for r in rows if "found " in r[1]]
+    check(len(mins) == len(want["open"]) and mins == sorted(mins, reverse=True),
+          f"each waiting worksite says how long since it was found ({mins})")
+    page.click("[data-tab=teams]")
 
     spans = page.evaluate("() => RNSimTest.run().spans()[0].fault")
     check(spans == expected_fault_spans(frames, 0), f"team 1's injected-fault stretches match fault_mask in the recording ({len(spans)} stretches)")

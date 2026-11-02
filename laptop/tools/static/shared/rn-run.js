@@ -104,8 +104,9 @@
     (f.incidents || []).forEach(function (i) {
       var wid = self.seen[i.id]; if (wid === undefined) return;
       var w = self.wsTrack[wid];
-      if (!w) { w = self.wsTrack[wid] = { id: wid, x: i.x, y: i.y, found: t, states: [[t, i.status, i.victims, i.assigned_team]] }; self.wsOrder.push(wid); }
-      else { var l = w.states[w.states.length - 1]; if (i.status !== l[1] || i.victims !== l[2] || i.assigned_team !== l[3]) w.states.push([t, i.status, i.victims, i.assigned_team]); }
+      var pri = i.priority == null ? null : i.priority;
+      if (!w) { w = self.wsTrack[wid] = { id: wid, x: i.x, y: i.y, found: t, states: [[t, i.status, i.victims, i.assigned_team, pri]] }; self.wsOrder.push(wid); }
+      else { var l = w.states[w.states.length - 1]; if (i.status !== l[1] || i.victims !== l[2] || i.assigned_team !== l[3] || pri !== l[4]) w.states.push([t, i.status, i.victims, i.assigned_team, pri]); }
     });
     if (prev) prevOrder.forEach(function (k) {
       var wid = self.seen[k]; if (wid === undefined || cur[k] !== undefined) return;
@@ -160,7 +161,7 @@
       var w = self.wsTrack[wid]; if (w.found > t) return;
       var st = w.states[0]; w.states.forEach(function (s) { if (s[0] <= t) st = s; });
       if (st[1] === 3) done.push({ id: w.id, x: w.x, y: w.y });
-      else worksites.push({ id: w.id, x: w.x, y: w.y, victims: st[2], status: st[1], team: st[3] });
+      else worksites.push({ id: w.id, x: w.x, y: w.y, victims: st[2], status: st[1], team: st[3], priority: st[4] == null ? null : st[4], found: w.found });
     });
     var known = {}; Object.keys(this.seen).forEach(function (k) { var w = self.wsTrack[self.seen[k]]; if (w && w.found <= t) known[k] = self.seen[k]; });
     var incById = {}; (f.incidents || []).forEach(function (i) { incById[i.id] = i; });
