@@ -138,6 +138,10 @@ void debug_emit_static_environment(void)
         const EnvironmentBuilding_t *b = &g_environment_buildings[i];
         if(b->footprint == 0)
             continue; /* unused slot */
+        /* "x"/"y" is the footprint CENTRE (loc_x = top-left x + w/2,
+         * integer division), not the top-left: the building covers
+         * x - w/2 .. x - w/2 + w - 1 (same for y/h). Footprints never
+         * share a cell - make check-city-generator. */
         printf("%s{\"id\":%u,\"x\":%d,\"y\":%d,\"w\":%u,\"h\":%u,\"type\":%u,"
                "\"floors\":%u,\"damage\":%u,\"risk\":%u,\"hazard_flags\":%u}",
                first_b ? "" : ",",
