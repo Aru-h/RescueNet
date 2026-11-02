@@ -980,14 +980,14 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     var inc = RUN.incOf[wid]; if (inc == null || !canAct()) return;
     if (LIVE.board) { boardSend(teamId, wid, inc); return; }
     pending.push({ kind: 'sent', team: teamId, wid: wid, inc: inc });
-    ackFor['w' + wid] = { text: 'Sending team ' + (teamId + 1) + '…' }; refreshMark();
-    livePost2('override', { team_id: teamId, incident_id: inc }).catch(function (m) { pending.pop(); ackFor['w' + wid] = { bad: true, text: m }; refreshMark(); });
+    ackFor['w' + wid] = { text: 'Sending team ' + (teamId + 1) + '…' }; redrawCard();
+    livePost2('override', { team_id: teamId, incident_id: inc }).catch(function (m) { pending.pop(); ackFor['w' + wid] = { bad: true, text: m }; redrawCard(); });
   }
   function releaseTeam(teamId) {
     if (!canAct()) return;
     pending.push({ kind: 'released', team: teamId });
-    ackFor['t' + teamId] = { text: 'Releasing…' }; refreshMark();
-    livePost2('override/clear', { team_id: teamId }).catch(function (m) { pending.pop(); ackFor['t' + teamId] = { bad: true, text: m }; refreshMark(); });
+    ackFor['t' + teamId] = { text: 'Releasing…' }; redrawCard();
+    livePost2('override/clear', { team_id: teamId }).catch(function (m) { pending.pop(); ackFor['t' + teamId] = { bad: true, text: m }; redrawCard(); });
   }
   function livePost2(what, body) {   /* the app writes the line to the simulator; the answer comes later as an override_ack */
     return fetch('/api/run-live/' + what, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -1000,9 +1000,9 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     relay_failed: 'the board could not relay it to the team\'s board', unconfirmed: 'no answer from the board in time' };
   function boardSend(teamId, wid, inc) {
     var key = 'w' + wid;
-    ackFor[key] = { text: 'Sending team ' + (teamId + 1) + ' to the board…' }; refreshMark();
+    ackFor[key] = { text: 'Sending team ' + (teamId + 1) + ' to the board…' }; redrawCard();
     livePost2b('/api/board/override', { team_id: teamId, incident_id: inc }).then(function () {
-      ackFor[key] = { text: 'Sent to the board; waiting for it to confirm…' }; refreshMark();
+      ackFor[key] = { text: 'Sent to the board; waiting for it to confirm…' }; redrawCard();
       var tries = 0;
       (function poll() {
         fetch('/api/board/override/status?team_id=' + teamId).then(function (r) { return r.json(); }).then(function (j) {
@@ -1011,12 +1011,12 @@ select option { background: var(--c-bg); color: var(--c-fg); }
             var ok = st === 'applied', tick = D ? D.tick : 0;
             RUN.addOverride(ok ? 'sent' : 'refused', tick, teamId, inc, ok ? null : BOARD_ANSWER[st]);
             ackFor[key] = ok ? { text: 'The board applied it: team ' + (teamId + 1) + ' goes there next, once its current job is done.' } : { bad: true, text: 'Not sent: ' + BOARD_ANSWER[st] + '.' };
-            refreshMark(); renderEvents(); if (tab === 'events') renderPane(); return;
+            redrawCard(); renderEvents(); if (tab === 'events') renderPane(); return;
           }
           if (++tries < 120) setTimeout(poll, 1000);
         }).catch(function () { if (++tries < 120) setTimeout(poll, 1000); });
       })();
-    }).catch(function (m) { ackFor[key] = { bad: true, text: m }; refreshMark(); });
+    }).catch(function (m) { ackFor[key] = { bad: true, text: m }; redrawCard(); });
   }
   function livePost2b(url, body) {
     return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -1030,7 +1030,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     ackFor[key] = ok ? { text: p.kind === 'released' ? 'Released: the system assigns it again.' : 'Team ' + (team + 1) + ' goes there next, once its current job is done; what it had lined up after that goes back to the other teams.' }
                      : { bad: true, text: 'Not sent: ' + refusal(a.reason) + '.' };
     if (ok && p.kind === 'sent') ackFor['t' + team] = null;
-    refreshMark(); renderEvents(); if (tab === 'events') renderPane();
+    redrawCard(); renderEvents(); if (tab === 'events') renderPane();
   }
   function markHTML() {
     var dd = function (k, v) { return '<dt>' + k + '</dt><dd>' + v + '</dd>'; }, is3d = three && $('#map').classList.contains('is3d');
@@ -1066,13 +1066,19 @@ select option { background: var(--c-bg); color: var(--c-fg); }
       (ackFor['w' + i.w.id] ? '<p class="ack' + (ackFor['w' + i.w.id].bad ? ' bad' : '') + '">' + ackFor['w' + i.w.id].text + '</p>' : '') +
       (is3d ? '<div class="acts"><button type="button" class="fly" data-a="fly">Fly here</button></div>' : '');
   }
-  /* a live run rebuilds the card every tick: hold it still while a button in it is pressed, or the click is lost */
-  var holdCard = false, cardDirty = false;
+  /* a live run rebuilds the card every tick: hold it still while the pointer is over it (and while a button in it is
+     pressed), or its buttons move away under the pointer; it catches up as soon as the pointer leaves */
+  var holdCard = false, cardHover = false, cardDirty = false;
+  function cardRelease() { if (holdCard || cardHover) return; if (cardDirty) { cardDirty = false; refreshMark(); } }
+  $('#markCard').addEventListener('pointerenter', function () { cardHover = true; });
+  $('#markCard').addEventListener('pointerleave', function () { cardHover = false; cardRelease(); });
   $('#markCard').addEventListener('pointerdown', function () { holdCard = true; });
-  window.addEventListener('pointerup', function () { if (!holdCard) return; setTimeout(function () { holdCard = false; if (cardDirty) { cardDirty = false; refreshMark(); } }, 0); }, true);
-  window.addEventListener('pointercancel', function () { holdCard = false; }, true);
+  window.addEventListener('pointerup', function () { if (!holdCard) return; setTimeout(function () { holdCard = false; cardRelease(); }, 0); }, true);
+  window.addEventListener('pointercancel', function () { holdCard = false; cardRelease(); }, true);
+  var forceCard = false;   /* the card's own actions and the answers to them redraw it at once, pointer or not */
+  function redrawCard() { forceCard = true; try { refreshMark(); } finally { forceCard = false; } }
   function refreshMark() {
-    if (holdCard) { cardDirty = true; return; }
+    if ((holdCard || cardHover) && !forceCard) { cardDirty = true; return; }
     if (!mark) return; var c = $('#markCard'), h = markHTML(); if (!h) { closeMark(); return; }
     c.innerHTML = h;
     c.querySelector('h4 button').onclick = closeMark;
@@ -1084,14 +1090,14 @@ select option { background: var(--c-bg); color: var(--c-fg); }
         if (a === 'fly') { var w = wsInfo(mark.ref).w; flyTo(w.x + .5, w.y + .5); }
         if (a === 'send') sendTeam(+b.dataset.team, mark.ref);
         if (a === 'confirm' && propose) { var pr = propose; propose = null; sendTeam(pr.team, pr.wid); }
-        if (a === 'cancel') { propose = null; refreshMark(); }
+        if (a === 'cancel') { propose = null; redrawCard(); }
         if (a === 'release') releaseTeam(mark.ref);
       };
     });
   }
   function showMark(h, px, py) {
     if (propose && !(h.kind === 'w' && h.ref === propose.wid)) propose = null;
-    $('#secCard').hidden = true; mark = { kind: h.kind, ref: h.ref }; var c = $('#markCard'); c.hidden = false; refreshMark();
+    $('#secCard').hidden = true; mark = { kind: h.kind, ref: h.ref }; var c = $('#markCard'); c.hidden = false; redrawCard();
     var mp = $('#map').getBoundingClientRect();
     c.style.left = Math.min(Math.max(8, px + 14), mp.width - 286) + 'px'; c.style.top = Math.min(Math.max(60, py + 14), mp.height - c.offsetHeight - 8) + 'px';
   }
