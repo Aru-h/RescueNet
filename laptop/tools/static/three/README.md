@@ -3,7 +3,7 @@
 three.js **0.186.1**, MIT licensed (see `LICENSE`), copied unmodified from the
 npm package `three@0.186.1` (`build/three.module.js`, `build/three.core.js`).
 Loaded locally by `static/dashboard/map-view3d.js` for the dashboard's optional
-"3D" map view; nothing is fetched from a CDN at runtime.
+"3D" map view and by the sim page (`templates/sim.html`); nothing is fetched from a CDN at runtime.
 
 To update: `npm pack three@<version>`, replace the two files and `LICENSE`
 from the tarball (`package/build/`, `package/LICENSE`), and update the version
@@ -19,6 +19,8 @@ here and in the repository's `THIRD_PARTY.md`.
   with a real pixel width, used for team routes (plain WebGL lines are 1px).
 - `BufferGeometryUtils.js` (`examples/jsm/utils/`) - merging geometries into
   one draw call, used for the procedural buildings.
+- `OrbitControls.js` (`examples/jsm/controls/`) - drag to rotate, right-drag
+  to pan, scroll to zoom; the sim page's 3D camera (`templates/sim.html`).
 
 They import the bare specifier `three`, which `templates/index.html` maps to
 `/static/three/three.module.js` with an import map (so every file shares one
