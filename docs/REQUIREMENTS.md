@@ -70,7 +70,7 @@ Landing -> How do you want to connect?
 | S2 | Both views reuse the old dashboard's code (`static/dashboard/`: camera, map model, 3D view, replay, routes, selection, timeline, consensus ring). The change is the look and the notation, not a rewrite. | TO DO |
 | S3 | Camera: the old dashboard's controls (drag to rotate, tilt between 15° and straight down, right-drag to pan, wheel to zoom at the cursor, Top, Reset, follow a team, fly to a site, Esc stops), plus a quick return to the standard angle. | TO DO |
 | S4 | Timeline: play, pause, step, speed, scrubber with markers (worksite identified, worksite complete, detections), jump to the next event. Mission clock as "T+2 h 59 min" (one tick is 36 s). | TO DO |
-| S5 | Teams panel: status in words, stamina, current worksite, what peers detected; injected faults only under ground truth (H3). | TO DO |
+| S5 | Teams panel: status in words, stamina and equipment as two labelled meters (dashed below 30, where the simulator sends a team to rest or restock), current worksite, what peers detected; injected faults only under ground truth (H3). Rows grow to fill the panel when there are few teams and shrink to a compact size before the list scrolls. | TO DO (frames carry `equipment` since this change; older recordings show "–") |
 | S6 | Technical panels one click away: detection timeline (injected versus detected), peer-network ring, radio counters, raw tables. | TO DO |
 | S7 | Event list in plain sentences built from the frames ("T+1 h 12 min: B-3 identified, 4 live victims reported"). | TO DO |
 | S8 | Links to a moment: `/sim?run=…&t=…&view=flat`. | TO DO |

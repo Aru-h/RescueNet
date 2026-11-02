@@ -787,7 +787,7 @@ void debug_emit_live_frame(uint32_t tick)
 
         printf("%s{\"id\":%u,\"x\":%d,\"y\":%d,\"stamina\":%.2f,\"status\":%u,"
                "\"spec\":%u,\"pool\":%u,\"slot\":%u,\"fault_mask\":%u,"
-               "\"degraded\":%u,\"hours\":%u,\"has_dest\":%u,\"dest_x\":%d,"
+               "\"degraded\":%u,\"hours\":%u,\"equipment\":%u,\"has_dest\":%u,\"dest_x\":%d,"
                "\"dest_y\":%d,\"dest_id\":%u,\"incidents_resolved\":%u,"
                "\"stage_completions\":%u,\"ticks_resting\":%u,"
                "\"ticks_working\":%u,\"ticks_available\":%u,"
@@ -817,7 +817,7 @@ void debug_emit_live_frame(uint32_t tick)
                team->status, team->specialization,
                team->assigned_task_pool, team->assigned_task_slot,
                team->fault_state.active_mask, team->degraded,
-               team->hours_worked, has_dest, dest_x, dest_y, dest_id,
+               team->hours_worked, team->equipment_level, has_dest, dest_x, dest_y, dest_id,
                g_diag_incidents_resolved[t], g_diag_stage_completions[t],
                g_diag_ticks_resting[t], g_diag_ticks_working[t],
                g_diag_ticks_available[t],
