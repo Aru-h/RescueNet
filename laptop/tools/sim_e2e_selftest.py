@@ -393,6 +393,55 @@ def check_links(page):
     check(page.evaluate("() => document.querySelector('.back').getAttribute('href')") == "/replay", "the sim page's back link goes to the run list")
 
 
+def check_board_absent(page):
+    """/sim?board with no board connected (the SIM_ONLY app): says so, and offers no start."""
+    page.goto(f"{BASE}/sim?board")
+    page.wait_for_function("() => /board|answer/i.test((document.getElementById('bState') || {}).textContent || '') && !/Asking/.test(bState.textContent)", timeout=20000)
+    txt = page.evaluate("() => bState.textContent")
+    check("No board connected" in txt and page.evaluate("() => bGo.disabled"), f"board mode with no board connected says so and cannot start ({txt!r})")
+
+
+def check_board(page):
+    """A board mission against the app's test-only fake board (DASHBOARD_FAKE_BOARD=1: a stand-in serial port and a
+    completed handshake, nothing ever answers): the real launch, stream, override and stop routes."""
+    page.goto(f"{BASE}/sim?board")
+    page.wait_for_function("() => /ready/.test((document.getElementById('bState') || {}).textContent || '')", timeout=20000)
+    check(page.evaluate("() => !bGo.disabled"), "board mode: the boards are ready and the mission can start")
+    page.select_option("#bPace", "60"); page.select_option("#bTicks", "200"); page.click("#bGo")
+    page.wait_for_function("() => document.getElementById('loading').hidden", timeout=90000)
+    facts = page.evaluate("() => runName.textContent + ' | ' + runFacts.textContent")
+    check(facts.startswith("Board mission") and "On the boards" in facts and "60" in facts, f"the board mission opens with its own header ({facts})")
+    page.wait_for_function("() => RNSimTest.view().tick >= 3", timeout=30000)
+    terr = page.evaluate("() => [RNSimTest.view().roads.length, RNSimTest.view().water.length, RNSimTest.view().buildings.length]")
+    check(terr[0] > 0 and terr[2] > 0, f"the board mission's map has its roads, water and buildings (the feed's STATICMAP; {terr})")
+    check(page.evaluate("() => playBtn.disabled"), "pause is off: a board mission runs at its own pace")
+    page.click("#vflat"); page.wait_for_timeout(400)   # the flat view: the test browser's software 3D is too slow to click into
+    page.wait_for_function("() => RNSimTest.view().worksites.some(w => w.status === 0)", timeout=90000)
+    wid = page.evaluate("() => RNSimTest.view().worksites.find(w => w.status === 0).id")
+    page.evaluate("(w) => RNSimTest.open('w', w)", wid)
+    check(page.evaluate("() => document.querySelectorAll('#markCard .send button').length") > 0 and
+          not page.evaluate("() => !!document.querySelector('#markCard [data-a=release]')"),
+          "a board mission's worksite card can send a team (no Release: that is the simulator's own route)")
+    page.click("#markCard .send button:not([disabled])")
+    page.wait_for_function("() => /waiting for it to confirm|Not sent/.test((document.querySelector('#markCard .ack') || {}).textContent || '')", timeout=20000)
+    check(True, "the send goes to the board (POST /api/board/override) and the card waits for its answer")
+    page.wait_for_function("() => /no answer from the board/.test((document.querySelector('#markCard .ack') || {}).textContent || '')", timeout=40000)
+    check(True, "the fake board never answers, and after the app's timeout the card says so instead of claiming it worked")
+    page.click("#stopBtn")
+    page.wait_for_function("() => /ended/.test(document.getElementById('runName').textContent + clockSub.textContent)", timeout=30000)
+    check(True, "Stop ends the board mission")
+
+
+def _start_app(env):
+    proc = subprocess.Popen([sys.executable, "app.py"], cwd=TOOLS_DIR, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(40):
+        if _port_open(HOST, PORT):
+            return proc
+        time.sleep(0.25)
+    proc.kill()
+    return None
+
+
 def main():
     try:
         from playwright.sync_api import sync_playwright
@@ -438,14 +487,15 @@ def main():
             errors = []
             page = browser.new_page(viewport={"width": 1440, "height": 900})
             page.on("pageerror", lambda e: errors.append(str(e)))
-            page.on("console", lambda m: errors.append(m.text) if m.type == "error" and "404" not in m.text else None)
+            page.on("console", lambda m: errors.append(m.text) if m.type == "error" and "404" not in m.text and "ERR_INCOMPLETE_CHUNKED_ENCODING" not in m.text else None)
             for name, fn in (("recorded run", lambda: check_recorded(page, errors, frames)),
                              ("older recording", lambda: check_old_format(page, errors)),
                              ("missing run", lambda: check_missing_run(page)),
                              ("take over", lambda: check_takeover(page, frames, recordings_dir)),
                              ("live run", lambda: check_live(page)),
                              ("sending a team", lambda: check_override(page)),
-                             ("links", lambda: check_links(page))):
+                             ("links", lambda: check_links(page)),
+                             ("board mode without a board", lambda: check_board_absent(page))):
                 try:
                     fn()
                 except Exception as exc:  # noqa: BLE001 - one broken step must not hide the others
@@ -455,6 +505,36 @@ def main():
     finally:
         app_proc.kill()
         app_proc.wait()
+    # board mode: a second app, in hardware mode with the test-only fake board attached
+    for _ in range(40):
+        if not _port_open(HOST, PORT):
+            break
+        time.sleep(0.25)
+    board_proc = _start_app(dict(os.environ, DASHBOARD_FAKE_BOARD="1", DASHBOARD_RECORDINGS_DIR=recordings_dir))
+    try:
+        if board_proc is None:
+            check(False, "board mode: the app with the fake board did not come up")
+        else:
+            with sync_playwright() as p:
+                kwargs = {"args": ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]}
+                exe = _chromium_executable()
+                if exe:
+                    kwargs["executable_path"] = exe
+                browser = p.chromium.launch(**kwargs)
+                errors = []
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                page.on("pageerror", lambda e: errors.append(str(e)))
+                page.on("console", lambda m: errors.append(m.text) if m.type == "error" and "404" not in m.text and "ERR_INCOMPLETE_CHUNKED_ENCODING" not in m.text else None)
+                try:
+                    check_board(page)
+                except Exception as exc:  # noqa: BLE001
+                    check(False, f"board mission: the step itself failed ({type(exc).__name__}: {str(exc).splitlines()[0][:200]})")
+                check(not errors, f"no page errors in the board mission ({errors[:3]})")
+                browser.close()
+    finally:
+        if board_proc is not None:
+            board_proc.kill()
+            board_proc.wait()
         shutil.rmtree(recordings_dir, ignore_errors=True)
         csv = os.path.join(TOOLS_DIR, "tron_snapshot_dataset.csv")   # the simulator's own side file from the runs above
         if os.path.exists(csv) and os.path.getmtime(csv) > time.time() - 3600 and not _tracked(csv):
