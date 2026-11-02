@@ -705,6 +705,14 @@ def replay():
     return render_template("replay.html")
 
 
+@app.route("/sim")
+def sim():
+    """The sim page: one run's city, teams and worksites at any tick.
+    /sim?run=<recording> plays a recorded run (static/shared/rn-run.js
+    reads it in the browser); &t=<tick> opens it at that tick."""
+    return render_template("sim.html")
+
+
 @app.route("/api/status")
 def api_status():
     connected = bridge.serial_conn is not None and bridge.serial_conn.is_open

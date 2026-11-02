@@ -1,0 +1,1077 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RescueNet · Simulation</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;600&display=swap">
+<script src="/static/shared/rn-sky.js"></script>
+<script src="/static/shared/rn-notation.js"></script>
+<script src="/static/shared/rn-context.js"></script>
+<script src="/static/shared/rn-run.js"></script>
+<!-- three.js and its camera control, from the app's own copy (static/three/, no CDN): a module, so it announces itself -->
+<script type="importmap">{"imports":{"three":"/static/three/three.module.js"}}</script>
+<script type="module">
+  import * as T from 'three';
+  import { OrbitControls } from '/static/three/addons/OrbitControls.js';
+  window.THREE = Object.assign({}, T, { OrbitControls: OrbitControls });
+  window.dispatchEvent(new Event('three-ready'));
+</script>
+<style>
+/* The sim page: one run (a recording for now; a live run next), its city, teams and worksites, at any tick.
+   Data: static/shared/rn-run.js turns the run's lines into what is drawn here. One look by design (the dark
+   connect-screen surface that drifts with the clock), like the run list. */
+:root {
+  --display: 'Archivo', 'Helvetica Neue', Arial, sans-serif; --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --c-bg: var(--deep, #101216); --c-fg: var(--deep-fg, #e6e6e3); --c-mute: var(--deep-mute, #b4b4af); --c-faint: var(--deep-faint, #8d8d88);
+  --c-rule: var(--deep-rule, #34353a); --c-teal: var(--deep-teal, #4fd1c9);
+  --c-panel: color-mix(in srgb, var(--c-fg) 4%, var(--c-bg));
+  --active: #2b7de9; --complete: #2ea44f; --red: #ff0000;
+  --top-h: 60px; --side-w: 360px; --tl-h: 128px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--c-bg); color: var(--c-fg); }
+body { font-family: var(--display); font-size: 15px; line-height: 1.4; -webkit-font-smoothing: antialiased; }
+.mono { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+button { font: inherit; color: inherit; }
+/* the clock palette sets a light colour-scheme by day, but this page is always on the dark surface: keep native controls
+   (the speed list, scrollbars) dark, and make the speed list use the page's own colours */
+html { color-scheme: dark !important; }
+select { font: inherit; color: inherit; }
+select option { background: var(--c-bg); color: var(--c-fg); }
+
+/* the frame: the page as it would fill a laptop screen */
+.app { height: 100vh; height: 100dvh; min-height: 560px; display: grid; grid-template-rows: var(--top-h) minmax(0, 1fr) var(--tl-h); }
+.app.tl-open { --tl-h: 300px; }
+
+/* 1. top bar */
+.top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 20px; padding: 0 max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px)); border-bottom: 1px solid var(--c-rule); }
+.back { color: var(--c-mute); text-decoration: none; white-space: nowrap; }
+.back:hover { color: var(--c-fg); }
+.title { min-width: 0; display: flex; align-items: baseline; gap: 14px; overflow: hidden; }
+.title strong { font-size: 20px; font-weight: 900; font-stretch: 125%; text-transform: uppercase; white-space: nowrap; }
+.title .facts { color: var(--c-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.clock { text-align: right; white-space: nowrap; }
+.clock b { font-family: var(--mono); font-size: 20px; font-weight: 600; letter-spacing: .02em; }
+.clock small { display: block; color: var(--c-mute); }
+.ctrls { display: flex; align-items: center; gap: 10px; }
+.seg { display: inline-flex; border: 1px solid var(--c-faint); }
+.seg button { background: none; border: 0; padding: 7px 12px; cursor: pointer; color: var(--c-mute); }
+.seg button[aria-pressed="true"] { background: var(--c-fg); color: var(--c-bg); }
+.chip { background: none; border: 1px solid var(--c-faint); padding: 7px 12px; cursor: pointer; white-space: nowrap; }
+.chip[aria-pressed="true"] { border-color: #ff00c5; color: #ff9be9; }
+.secpick { position: relative; }
+.secmenu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: 300px; max-height: 70vh; overflow: auto; background: var(--c-bg); border: 1px solid var(--c-faint); box-shadow: 0 12px 40px rgba(0,0,0,.45); }
+.secmenu button { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 2px 10px; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--c-rule); padding: 9px 12px; cursor: pointer; color: var(--c-fg); }
+.secmenu button:hover, .secmenu button[aria-selected="true"] { background: color-mix(in srgb, var(--c-fg) 7%, transparent); }
+.secmenu b { font-family: var(--mono); font-size: 15px; grid-row: span 2; align-self: center; }
+.secmenu span { font-size: 13px; }
+.secmenu small { color: var(--c-mute); font-family: var(--mono); font-size: 10px; letter-spacing: .03em; }
+.secmenu .grp { padding: 8px 12px 4px; color: var(--c-faint); font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; }
+.seccard { position: absolute; z-index: 6; width: 250px; background: var(--c-bg); border: 1px solid var(--c-faint); padding: 12px 14px; box-shadow: 0 10px 30px rgba(0,0,0,.45); display: grid; gap: 6px; font-size: 13px; }
+.seccard h4 { margin: 0; font-family: var(--mono); font-weight: 600; font-size: 15px; display: flex; justify-content: space-between; }
+.seccard h4 button { background: none; border: 0; color: var(--c-mute); cursor: pointer; font-size: 18px; line-height: 1; }
+.seccard p { margin: 0; color: var(--c-mute); }
+.markcard { width: 270px; }
+.markcard .big { color: var(--c-fg); font-size: 15px; }
+.markcard dl { margin: 2px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; }
+.markcard dt { color: var(--c-faint); } .markcard dd { margin: 0; color: var(--c-fg); }
+.markcard .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.markcard .flag { color: #ffd36b; } .markcard .truth { color: #ff00c5; }
+.seccard .fly { justify-self: start; background: none; border: 1px solid var(--c-faint); padding: 5px 10px; cursor: pointer; font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--c-fg); }
+.chip.primary { background: var(--c-fg); color: var(--c-bg); border-color: var(--c-fg); }
+
+/* 2. map + 3. side panel */
+.body { display: grid; grid-template-columns: minmax(0, 1fr) var(--side-w); min-height: 0; }
+.map { position: relative; overflow: hidden; border-right: 1px solid var(--c-rule); }
+[hidden] { display: none !important; }
+.stage { position: absolute; inset: 0; display: grid; place-items: center; perspective: 1400px; container-type: size; }
+.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.map.is3d #cv, .map:not(.is3d) #cv3 { visibility: hidden; }
+#cv3 { cursor: grab; } #cv3:active { cursor: grabbing; }
+.over { position: absolute; display: flex; gap: 8px; }
+.sum { top: 14px; left: 14px; flex-wrap: wrap; max-width: calc(100% - 200px); }
+.sum span { background: color-mix(in srgb, var(--c-bg) 82%, transparent); border: 1px solid var(--c-rule); padding: 6px 10px; }
+.sum i { font-style: normal; display: inline-block; width: 9px; height: 7px; margin-right: 7px; border: 1px solid var(--c-fg); vertical-align: 0; }
+.cam { top: 14px; right: 14px; }
+.map:not(.is3d) .cam { display: none; }   /* the camera buttons only work in 3D */
+.cam button { background: color-mix(in srgb, var(--c-bg) 82%, transparent); border: 1px solid var(--c-rule); padding: 6px 10px; cursor: pointer; }
+.legend-btn { right: 14px; bottom: 14px; align-items: center; gap: 8px; background: color-mix(in srgb, var(--c-bg) 82%, transparent); border: 1px solid var(--c-rule); padding: 6px 10px; cursor: pointer; color: var(--c-mute); }
+.legend-btn:hover, .legend-btn:focus-visible { color: var(--c-fg); }
+.legend-dlg { width: min(480px, calc(100vw - 32px)); max-height: 80vh; padding: 0; border: 1px solid var(--c-faint); background: var(--c-bg); color: var(--c-fg); }
+.legend-dlg::backdrop, .raw-dlg::backdrop { background: rgba(0, 0, 0, .55); }
+/* raw tables: every field of the frame, for technical readers; wide tables scroll inside the dialog */
+.raw-dlg { width: min(1100px, calc(100vw - 32px)); max-height: 86vh; padding: 0; border: 1px solid var(--c-faint); background: var(--c-bg); color: var(--c-fg); }
+.raw-body { padding: 4px 16px 16px; overflow: auto; max-height: calc(86vh - 52px); }
+.raw-body h3 { margin: 14px 0 6px; font-weight: 400; color: var(--c-mute); }
+.raw-body p { margin: 0 0 8px; color: var(--c-faint); font-size: 12px; }
+.tbl { overflow-x: auto; border: 1px solid var(--c-rule); }
+.tbl table { border-collapse: collapse; font-family: var(--mono); font-size: 11px; white-space: nowrap; width: 100%; }
+.tbl th { position: sticky; top: 0; background: var(--c-panel); color: var(--c-mute); font-weight: 400; text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--c-rule); letter-spacing: .04em; }
+.tbl td { padding: 5px 10px; border-bottom: 1px solid var(--c-rule); }
+.tbl td.n { text-align: right; }
+.tbl tr:hover td { background: color-mix(in srgb, var(--c-fg) 5%, transparent); }
+.tbl .truth { color: #ff9be9; }
+.tbl th { cursor: help; }
+.gl { margin: 8px 0 4px; }
+.gl summary { cursor: pointer; color: var(--c-mute); font-size: 10px; padding: 4px 0; }
+.gl summary:hover { color: var(--c-fg); }
+.gloss { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; margin: 8px 0 0; font-size: 12.5px; }
+.gloss dt { font-family: var(--mono); font-size: 11px; color: var(--c-fg); }
+.gloss dd { margin: 0; color: var(--c-mute); }
+.dlg-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--c-rule); }
+.dlg-head h2 { margin: 0; font-weight: 400; }
+.dlg-x { background: none; border: 0; color: var(--c-mute); font-size: 22px; line-height: 1; cursor: pointer; padding: 0 4px; }
+.dlg-src { margin: 0; padding: 0 16px 16px; color: var(--c-faint); font-size: 12.5px; }
+.legend { list-style: none; margin: 0; padding: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; color: var(--c-mute); }
+.legend li { display: flex; align-items: center; gap: 8px; }
+.legend svg { width: 13px; height: 13px; flex: none; overflow: visible; color: var(--c-fg); }
+.side { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; background: var(--c-panel); }
+.tabs { display: flex; border-bottom: 1px solid var(--c-rule); }
+.tabs button { flex: 1; background: none; border: 0; border-bottom: 2px solid transparent; padding: 12px 0; cursor: pointer; color: var(--c-mute); }
+.tabs button[aria-selected="true"] { color: var(--c-fg); border-bottom-color: var(--c-fg); }
+.pane { overflow: auto; min-height: 0; }
+/* team rows grow to fill the panel when there are few teams and shrink, down to the compact size, as there are more;
+   past that the list scrolls. --s runs from 0 (compact) to 1 (largest); fitTeams() picks it. */
+.teams { --s: 0; }
+.team { display: grid; grid-template-columns: calc(24px + 14px * var(--s)) minmax(0, 1fr) auto; gap: calc(2px + 3px * var(--s)) calc(10px + 6px * var(--s)); align-items: center; padding: calc(7px + 9px * var(--s)) 16px; border-bottom: 1px solid var(--c-rule); cursor: pointer; }
+.team:hover { background: color-mix(in srgb, var(--c-fg) 5%, transparent); }
+.team.away { opacity: .4; }
+.team.sel { background: color-mix(in srgb, var(--active) 14%, transparent); }
+.cam button[aria-pressed="true"] { border-color: var(--c-fg); }
+.team .n { width: calc(22px + 14px * var(--s)); height: calc(22px + 14px * var(--s)); grid-row: span 2; border-radius: 50%; background: var(--c-fg); color: var(--c-bg); display: grid; place-items: center; font-family: var(--mono); font-size: calc(11px + 5px * var(--s)); font-weight: 600; }
+.team .n.resting { background: none; color: var(--c-fg); border: 1.5px solid var(--c-fg); }
+.team .n.working { background: var(--active); color: #fff; box-shadow: inset 0 0 0 1px var(--c-fg); }
+.team .n.moving { box-shadow: 0 0 0 2px var(--c-panel), 0 0 0 3.6px var(--active); }
+.team .what { font-size: calc(13.5px + 4px * var(--s)); line-height: 1.25; min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+/* the specialty and the peers' view are two pieces that never break inside: when both do not fit on one line, the
+   whole peers' view moves to the next line */
+.team .det { display: flex; flex-wrap: wrap; column-gap: 12px; }
+.team .det .spec, .team .det .peer { white-space: nowrap; }
+.team .det .spec { font-weight: 400; color: var(--c-fg); opacity: .8; }
+.team .what small { color: var(--c-mute); font-family: var(--mono); font-size: calc(10.5px + 2px * var(--s)); letter-spacing: .04em; margin-left: 6px; }
+.team .meters { display: grid; grid-template-columns: auto calc(32px + 6px * var(--s)) 3ch; gap: 2px 6px; line-height: 1; align-items: center; grid-row: 1; grid-column: 3; font-family: var(--mono); font-size: calc(9px + 1px * var(--s)); letter-spacing: .06em; text-transform: uppercase; color: var(--c-mute); }
+.team .meters .m { height: calc(4px + 2px * var(--s)); background: var(--c-rule); position: relative; }
+.team .meters .m i { position: absolute; inset: 0 auto 0 0; background: var(--c-fg); opacity: .85; }
+.team .meters .m.low i { opacity: 1; background: repeating-linear-gradient(90deg, var(--c-fg) 0 3px, transparent 3px 5px); }   /* low: dashed, so it reads without colour */
+.team .meters b { font-weight: 400; color: var(--c-fg); text-align: right; }
+.team .det { grid-row: 2; grid-column: 2 / 4; color: var(--c-mute); font-family: var(--mono); font-size: calc(10px + 2.5px * var(--s)); letter-spacing: .03em; line-height: 1.3; }
+.team .det.flag { color: #ffd36b; }
+.team .det.truth { color: #ff9be9; }
+.ticker { display: flex; align-items: baseline; gap: 10px; width: 100%; border: 0; border-top: 1px solid var(--c-rule); background: none; padding: 10px 16px; text-align: left; cursor: pointer; font-size: 13px; }
+.ticker:hover { background: color-mix(in srgb, var(--c-fg) 5%, transparent); }
+.ticker .lbl { color: var(--c-mute); flex: none; }
+.ticker .txt { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.ticker time, .evlist time { font-family: var(--mono); font-size: 10.5px; color: var(--c-mute); }
+.evlist { list-style: none; margin: 0; padding: 0; }
+.evlist li { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--c-rule); font-size: 13px; }
+.ws { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--c-rule); font-size: 14px; }
+.ws b { font-family: var(--mono); }
+.ws span:last-child { color: var(--c-mute); font-family: var(--mono); font-size: 11px; }
+.ws.older { color: var(--c-mute); font-size: 13px; }
+.tech { padding: 16px; color: var(--c-mute); font-size: 13px; display: grid; gap: 12px; }
+.tech { gap: 10px; }
+.tech h3 { margin: 4px 0 0; color: var(--c-fg); font-weight: 400; }
+.tech-h { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.howto { background: none; border: 0; padding: 0; color: var(--c-mute); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; font-size: 9.5px; }
+.howto:hover { color: var(--c-fg); }
+.dlg-txt { margin: 0; padding: 14px 16px 0; font-size: 14px; line-height: 1.5; color: var(--c-fg); }
+.dlg-txt:last-child { padding-bottom: 18px; }
+.tech p { margin: 0; font-size: 12.5px; line-height: 1.45; }
+.tech canvas { width: 100%; aspect-ratio: 1; max-width: 300px; justify-self: center; }
+.ring-key { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 9.5px; }
+.ring-key li { display: flex; align-items: center; gap: 6px; }
+.ring-key i { display: inline-block; width: 16px; height: 0; border-top: 1.5px solid var(--c-mute); }
+.ring-key .k-miss { border-top: 1.5px dashed #ffd36b; }
+.ring-key .k-unsure, .ring-key .k-flag { width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid #ffd36b; }
+.ring-key .k-flag { border-width: 3.5px; }
+.tech .radio { border-top: 1px solid var(--c-rule); padding-top: 10px; font-size: 13px; color: var(--c-fg); }
+.radio b { font-family: var(--mono); font-weight: 600; }
+.radio span { color: var(--c-mute); }
+.raw { background: none; border: 1px solid var(--c-faint); padding: 8px 12px; cursor: pointer; color: var(--c-mute); justify-self: start; }
+
+/* 4. timeline */
+.tl { border-top: 1px solid var(--c-rule); display: grid; grid-template-rows: auto auto minmax(0, 1fr); padding: 10px max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px)); gap: 8px; }
+.tl-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tl-row button, .tl-row select { background: none; border: 1px solid var(--c-faint); padding: 6px 10px; cursor: pointer; }
+.tl-row .play { background: var(--c-fg); color: var(--c-bg); border-color: var(--c-fg); min-width: 44px; }
+.tl-row .grow { flex: 1; }
+.tl-row .hint { color: var(--c-faint); }
+.scrub { position: relative; height: 34px; cursor: pointer; touch-action: none; }
+.scrub .track { position: absolute; left: 0; right: 0; top: 15px; height: 4px; background: var(--c-rule); }
+.scrub .done { position: absolute; left: 0; top: 15px; height: 4px; background: var(--c-fg); }
+.scrub .mk { position: absolute; top: 4px; width: 2px; height: 10px; background: var(--c-mute); }
+.scrub .mk.c { background: var(--complete); top: 20px; }
+.scrub .head { position: absolute; top: 6px; width: 3px; height: 22px; background: var(--c-fg); }
+.scrub .hours { position: absolute; left: 0; right: 0; top: 24px; display: flex; justify-content: space-between; color: var(--c-faint); font-size: 9.5px; }
+.detail { min-height: 0; overflow: hidden; display: none; border-top: 1px solid var(--c-rule); padding-top: 8px; }
+.app.tl-open .detail { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 3px 10px; align-content: start; font-family: var(--mono); font-size: 10px; color: var(--c-mute); }
+.detail .strip { height: 11px; position: relative; background: color-mix(in srgb, var(--c-fg) 4%, transparent); }
+.detail .strip i { position: absolute; top: 1px; bottom: 5px; }
+.detail .strip u { position: absolute; bottom: 0; height: 3px; background: #ffd36b; text-decoration: none; }
+
+
+
+/* phone: map and timeline; teams become a drawer */
+@media (max-width: 860px) {
+  :root { --top-h: 96px; }
+  .top { grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 1fr 1fr; gap: 4px 12px; padding-block: 6px; }
+  .title .facts, .clock small, .chip.primary { display: none; }
+  .clock { text-align: right; }
+  .ctrls { grid-column: 1 / -1; justify-content: space-between; }
+  .body { grid-template-columns: minmax(0, 1fr); }
+  .side { position: fixed; left: 0; right: 0; bottom: 0; height: 62vh; z-index: 20; transform: translateY(100%); transition: transform .3s; border-top: 1px solid var(--c-faint); }
+  body.drawer .side { transform: none; }
+  .drawer-btn { display: block !important; }
+  .tl-row { flex-wrap: nowrap; } .tl-row .hint, .tl-row .grow, #tlBtn { display: none; }
+  .sum { max-width: calc(100% - 28px); }
+  .cam { display: none; }
+}
+.drawer-btn { display: none; position: absolute; right: 14px; top: 14px; background: var(--c-fg); color: var(--c-bg); border: 0; padding: 8px 12px; cursor: pointer; }
+.loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--c-bg); z-index: 50; text-align: center; padding: 24px; }
+.loading p { max-width: 52ch; color: var(--c-mute); }
+.loading a { color: var(--c-fg); }
+</style>
+</head>
+<body>
+<div class="loading" id="loading"><p class="mono" id="loadingTxt">Loading the run&hellip;</p></div>
+<div class="app" id="app">
+  <header class="top">
+    <a class="back mono" href="/replay">&larr; All runs</a>
+    <div class="title"><strong id="runName">Recorded run</strong><span class="facts mono" id="runFacts"></span></div>
+    <div class="clock"><b id="clockT">T+0 min</b><small class="mono" id="clockSub"></small></div>
+    <div class="ctrls">
+      <div class="secpick"><button type="button" class="chip mono" id="secBtn" aria-haspopup="listbox" aria-expanded="false">Sector &middot; A &#9662;</button><div class="secmenu" id="secMenu" role="listbox" hidden></div></div>
+      <div class="seg" role="group" aria-label="Map view"><button type="button" class="mono" id="vflat" aria-pressed="false">Flat</button><button type="button" class="mono" id="v3d" aria-pressed="true">3D</button></div>
+      <button type="button" class="chip mono" id="truth" aria-pressed="false" title="Show what the teams do not know: injected faults and undiscovered incidents">Ground truth</button>
+      <button type="button" class="chip primary mono" id="takeover" title="Continue this run live from this moment" hidden>Take over</button>
+    </div>
+  </header>
+
+  <div class="body">
+    <section class="map is3d" id="map" aria-label="Map">
+      <div class="stage"><canvas id="cv" aria-label="The run's city, flat"></canvas><canvas id="cv3" aria-label="The run's city in 3D: drag to rotate, right-drag to pan, scroll to zoom"></canvas></div>
+      <div class="over sum mono" id="sum"></div>
+      <div class="over cam mono"><button type="button" id="camReset" title="Back to the standard angle">&#8634; Reset</button><button type="button" id="camTop" title="Look straight down">&#10515; Top</button><button type="button" id="camFollow" aria-pressed="false" title="Follow the selected team (click a team in the list first)">&#9678; Follow</button></div>
+      <button type="button" class="over legend-btn mono" id="legendBtn" aria-haspopup="dialog" title="What do the map symbols mean?">Legend</button>
+      <button type="button" class="drawer-btn mono" id="drawerBtn">Teams</button>
+      <div class="seccard" id="secCard" hidden></div>
+      <div class="seccard markcard" id="markCard" role="dialog" aria-label="Details" hidden></div>
+    </section>
+
+    <aside class="side" aria-label="Teams and worksites">
+      <div class="tabs mono" role="tablist">
+        <button type="button" role="tab" aria-selected="true" data-tab="teams">Teams</button>
+        <button type="button" role="tab" aria-selected="false" data-tab="sites">Worksites</button>
+        <button type="button" role="tab" aria-selected="false" data-tab="events">Events</button>
+        <button type="button" role="tab" aria-selected="false" data-tab="tech">Technical</button>
+      </div>
+      <div class="pane" id="pane"></div>
+      <button type="button" class="ticker" id="ticker" title="See every event"></button>
+    </aside>
+  </div>
+
+  <footer class="tl" aria-label="Timeline">
+    <div class="tl-row mono">
+      <button type="button" id="stepBack" title="One tick back (&larr;)">&#9664;&#9664;</button>
+      <button type="button" class="play" id="playBtn" title="Play (Space)">&#9654;</button>
+      <button type="button" id="stepOn" title="One tick on (&rarr;)">&#9654;&#9654;</button>
+      <select aria-label="Playback speed: mission time shown per real second" title="Mission time per real second" id="speed"><option>36 s / s</option><option selected>3 min / s</option><option>6 min / s</option><option>15 min / s</option></select>
+      <button type="button" id="nextEv" title="Next event (J)">Next event &rarr;</button>
+      <span class="grow"></span>
+      <span class="hint">Space play &middot; &larr;&rarr; step &middot; J next event</span>
+      <button type="button" id="tlBtn" aria-expanded="false">Detection detail &#9662;</button>
+    </div>
+    <div class="scrub mono" id="scrub"><div class="track"></div><div class="done" id="done"></div><div class="head" id="head"></div><div class="hours" id="hours"></div></div>
+    <div class="detail" id="detail"></div>
+  </footer>
+</div>
+
+<dialog class="legend-dlg" id="howDlg" aria-labelledby="howTtl">
+  <div class="dlg-head"><h2 class="mono" id="howTtl">Who hears whom</h2><button type="button" class="dlg-x" id="howClose" aria-label="Close">&times;</button></div>
+  <p class="dlg-txt">Every team listens for the others' radio beacons and judges them by what it hears, with no central computer deciding.</p>
+  <p class="dlg-txt">A line is two teams hearing each other on time; a dashed amber line is a beacon that was missed.</p>
+  <p class="dlg-txt">A ring round a team is what the others concluded about it: thin when one team is unsure, thick once three or more agree that something is wrong. Hover a team to bring its own links forward.</p>
+</dialog>
+<dialog class="raw-dlg" id="rawDlg" aria-labelledby="rawTtl">
+  <div class="dlg-head"><h2 class="mono" id="rawTtl">Raw tables</h2><button type="button" class="dlg-x" id="rawClose" aria-label="Close the tables">&times;</button></div>
+  <div class="raw-body" id="rawBody"></div>
+</dialog>
+<dialog class="legend-dlg" id="legendDlg" aria-labelledby="legendTtl">
+  <div class="dlg-head"><h2 class="mono" id="legendTtl">Legend</h2><button type="button" class="dlg-x" id="legendClose" aria-label="Close the legend">&times;</button></div>
+  <ul class="legend mono" id="legend"></ul>
+  <p class="dlg-src">Damage colours and road blocks as on Copernicus EMS damage maps; worksites as in the INSARAG guidelines (blue working, green complete as in ICMS); the epicentre star as on USGS ShakeMap. Sector letters are a display overlay. The simulated area is outlined in green as Copernicus outlines an area of interest; the city around it is faded because it is not simulated. The faded city around it is built by the same map generator and laid so its streets and rivers meet the run's; nothing there is simulated or selectable. There is no common standard for team status colours, so blue keeps its worksite meaning: at work.</p>
+</dialog>
+
+<script>
+(function () {
+  'use strict';
+  var N = RNNotation, $ = function (s) { return document.querySelector(s); };
+  var RUN = null, D = null, CTXDATA = null, PARAMS = new URLSearchParams(location.search), RUN_NAME = PARAMS.get('run');
+  var SPEC = ['Search', 'Medical', 'Extraction', 'Perimeter', 'Support'], FAULT = ['mobility', 'radio', 'resource', 'environment', 'mission'];
+  var truth = false, tab = 'teams', TICK_S = RNRun.TICK_S, W = 36, H = 36;
+  function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+  function tplus(t) { var m = Math.round(t * TICK_S / 60), h = Math.floor(m / 60); return 'T+' + (h ? h + ' h ' : '') + (m % 60) + ' min'; }
+  /* buildings from RNRun.at() already carry their top-left cell in b.x, b.y (the recording gives the footprint centre) */
+  function drawBuilding(x, b, q, ink) { N.building(x, (b.x + .1) * q, (b.y + .1) * q, (b.w - .2) * q, (b.h - .2) * q, b.damage, ink, 1); }
+  /* keeping markers apart: items are screen boxes {x, y, hw, hh} in order of importance. Each one keeps its true spot
+     if that is free; otherwise it moves to the nearest free spot (straight up first, then up and to the sides, then
+     sideways), and the caller draws a leader line back to where it really is. The boxes already placed never move, so
+     the most important markers (worksites with a team, then waiting, then complete; then teams) stay exactly in place. */
+  var PLACE_DIRS = (function () {
+    var d = [[0, 0]];
+    for (var r = 1; r <= 7; r++) {
+      var ring = []; for (var k = 0; k < 16; k++) { var a = k * Math.PI / 8; ring.push([Math.sin(a) * r, -Math.cos(a) * r, Math.min(a, 2 * Math.PI - a)]); }
+      ring.sort(function (p, q) { return p[2] - q[2]; }); ring.forEach(function (p) { d.push([p[0], p[1]]); });
+    }
+    return d;
+  })();
+  /* An item may carry k, the spot it had last time: it keeps that spot while it is still free (and its true spot is
+     not), so markers do not hop between equally good spots from one tick to the next. */
+  function placeBoxes(items) {
+    var taken = [];
+    return items.map(function (it) {
+      var step = Math.max(it.hw, it.hh) * .6, best = null;
+      var tryK = function (k) {
+        var dx = PLACE_DIRS[k][0] * step, dy = PLACE_DIRS[k][1] * step, l = it.x + dx - it.hw, t = it.y + dy - it.hh, r = it.x + dx + it.hw, b = it.y + dy + it.hh;
+        return taken.some(function (o) { return l < o[2] && r > o[0] && t < o[3] && b > o[1]; }) ? null : [dx, dy, [l, t, r, b], k];
+      };
+      best = tryK(0);
+      if (!best && it.k) best = tryK(it.k);
+      for (var k = 1; k < PLACE_DIRS.length && !best; k++) best = tryK(k);
+      if (!best) best = [0, 0, [it.x - it.hw, it.y - it.hh, it.x + it.hw, it.y + it.hh], 0];
+      taken.push(best[2]); return { dx: best[0], dy: best[1], k: best[3] };
+    });
+  }
+  var flatSpot = {};   /* the spot each marker had in the last flat drawing, by marker key */
+  var flatHits = [];   /* where each marker was drawn on the flat map, for clicks */
+  function hitAt(hits, px, py) { for (var i = hits.length - 1; i >= 0; i--) { var h = hits[i]; if (px >= h.l && px <= h.r && py >= h.t && py <= h.b) return h; } return null; }   /* teams are drawn last, so they win */
+  /* ---------------- the base map: water, roads by class, bridges ----------------
+     As on Copernicus EMS reference maps: water is the one blue area (darker than the bright ICMS blue of a worksite
+     being worked, so the two are never confused), roads are neutral and sit under everything, drawn wider and lighter
+     the more important they are, and a bridge is the road with cased edges where it crosses water.
+     The simulator stores roads as cells; joining each road cell to its road neighbours draws them as a network. */
+  var WATER = '#1d4263', SHORE = '#4f8bbd';
+  var ROADW = [0, .26, .4, .56, .78], ROADA = [0, .2, .3, .4, .55];   /* by class: service, local, collector, arterial */
+  /* the terrain can change during a run (a new STATICMAP): the lookups follow the current one */
+  var ROADAT = {}, WATERAT = {}, baseOf = null;
+  function baseLookups() {
+    if (baseOf === D.roads) return; baseOf = D.roads; ROADAT = {}; WATERAT = {};
+    (D.roads || []).forEach(function (r) { ROADAT[r[0] + ',' + r[1]] = r[2] || 2; });
+    (D.water || []).forEach(function (c) { WATERAT[c[0] + ',' + c[1]] = 1; });
+  }
+  function drawBase(x, q, ink) {
+    baseLookups(); x.save();
+    /* water, and its shoreline */
+    x.fillStyle = WATER; (D.water || []).forEach(function (c) { x.fillRect(c[0] * q, c[1] * q, q + .5, q + .5); });
+    x.strokeStyle = SHORE; x.lineWidth = Math.max(1, q * .08); x.beginPath();
+    (D.water || []).forEach(function (c) {
+      var X = c[0] * q, Y = c[1] * q, w = function (dx, dy) { var nx = c[0] + dx, ny = c[1] + dy; return WATERAT[nx + ',' + ny] || nx < 0 || ny < 0 || nx >= W || ny >= H; };
+      if (!w(0, -1)) { x.moveTo(X, Y); x.lineTo(X + q, Y); } if (!w(0, 1)) { x.moveTo(X, Y + q); x.lineTo(X + q, Y + q); }
+      if (!w(-1, 0)) { x.moveTo(X, Y); x.lineTo(X, Y + q); } if (!w(1, 0)) { x.moveTo(X + q, Y); x.lineTo(X + q, Y + q); }
+    });
+    x.stroke();
+    /* roads: least important first, so main roads run over side streets */
+    x.lineCap = 'round'; x.strokeStyle = ink; x.fillStyle = ink;
+    for (var cls = 1; cls <= 4; cls++) {
+      x.globalAlpha = ROADA[cls]; x.lineWidth = q * ROADW[cls]; x.beginPath();
+      (D.roads || []).forEach(function (r) {
+        if ((r[2] || 2) !== cls) return;
+        var cx = (r[0] + .5) * q, cy = (r[1] + .5) * q, linked = false;
+        [[1, 0], [0, 1], [-1, 0], [0, -1]].forEach(function (d) {
+          var k = ROADAT[(r[0] + d[0]) + ',' + (r[1] + d[1])]; if (!k) return; linked = true;
+          if (Math.min(k, cls) !== cls || (k === cls && (d[0] < 0 || d[1] < 0))) return;   /* each joint drawn once, at the lower class */
+          x.moveTo(cx, cy); x.lineTo(cx + d[0] * q, cy + d[1] * q);
+        });
+        if (!linked) { x.moveTo(cx - .01, cy); x.lineTo(cx + .01, cy); }   /* an isolated cell: a dot */
+      });
+      x.stroke();
+    }
+    x.globalAlpha = 1;
+    /* bridges: the road's two cased edges, with the ends splayed outwards */
+    (D.bridges || []).forEach(function (b) {
+      var cx = (b[0] + .5) * q, cy = (b[1] + .5) * q, horiz = ROADAT[(b[0] - 1) + ',' + b[1]] || ROADAT[(b[0] + 1) + ',' + b[1]];
+      var o = q * (ROADW[ROADAT[b[0] + ',' + b[1]] || 3] / 2 + .14), L = q * .62, sp = q * .18;
+      x.save(); x.translate(cx, cy); if (!horiz) x.rotate(Math.PI / 2);
+      x.strokeStyle = ink; x.globalAlpha = .9; x.lineWidth = Math.max(1, q * .09); x.lineCap = 'butt'; x.beginPath();
+      [-1, 1].forEach(function (sd) { x.moveTo(-L - sp, sd * (o + sp)); x.lineTo(-L, sd * o); x.lineTo(L, sd * o); x.lineTo(L + sp, sd * (o + sp)); });
+      x.stroke(); x.restore();
+    });
+    x.restore();
+  }
+  /* the base map's legend entries, drawn from the same values */
+  N.LEGEND.water = ['River or sea', '<rect x="1" y="1" width="12" height="12" fill="' + WATER + '"/><path d="M1 1h12" stroke="' + SHORE + '" stroke-width="1.2"/>'];
+  N.LEGEND.roadMain = ['Main road', '<path d="M1 7h12" stroke="currentColor" stroke-opacity="' + ROADA[4] + '" stroke-width="4.4" stroke-linecap="round"/>'];
+  N.LEGEND.roadStreet = ['Street', '<path d="M1 7h12" stroke="currentColor" stroke-opacity="' + ROADA[2] + '" stroke-width="2.4" stroke-linecap="round"/>'];
+  N.LEGEND.bridge = ['Bridge', '<rect x="0" y="0" width="14" height="14" fill="' + WATER + '"/><path d="M1 7h12" stroke="currentColor" stroke-opacity=".55" stroke-width="3"/><path d="M1 2.4l1.6 1.6h8.8L13 2.4M1 11.6l1.6-1.6h8.8l1.6 1.6" fill="none" stroke="currentColor" stroke-width="1"/>'];
+
+  /* ---------------- the map placeholder ---------------- */
+  /* the simulated area is one sector, A (the 36 x 36 grid one coordination cell covers). Around it the city carries on,
+     faded and flat in both views (RNContext, below); it is context only. */
+  var SZ = W;
+  function sectorAt(gx, gy) {   /* the sector under a map cell: only A, the simulated area; the faded city around it is not selectable */
+    var sx = Math.floor(gx / SZ), sy = Math.floor(gy / SZ);
+    if (!sx && !sy) return { inner: 'A', sx: 0, sy: 0 };
+    return null;
+  }
+  var hoverSec = null, focusSec = null, LAYOUT = null;
+  function inFocus() { return true; }   /* everything simulated is in sector A */
+  /* the simulated area under the pointer: outline it */
+  function innerFocus(x, q, ink) {
+    if (!hoverSec || !hoverSec.inner) return;
+    x.save(); x.globalAlpha = .9; x.strokeStyle = ink; x.lineWidth = 2; x.strokeRect(1, 1, SZ * q - 2, SZ * q - 2); x.restore();
+  }
+  /* the city around the simulated area: eight more cities from the simulator's own generator, laid so their streets and
+     water meet this one's (laptop/tools/map_context.py), coloured and faded by RNContext; not simulated, not selectable */
+  var CTX = null;   /* built once the run is loaded (start()) */
+  function drawSurroundings(x, w, h, ox, oy, q, ink, rule, bg) {
+    if (CTX) window.RNContext.draw(x, CTX, q, ox, oy, { ink: ink, mute: css('--c-mute'), view: [0, 0, w, h] }, N);
+  }
+  function draw() {
+    var cv = $('#cv'), d = Math.min(2, window.devicePixelRatio || 1), w = cv.clientWidth, h = cv.clientHeight;   /* unaffected by the 3D tilt */
+    if (!w || !h) return;
+    cv.width = Math.round(w * d); cv.height = Math.round(h * d);
+    var ink = css('--c-fg'), mute = css('--c-mute'), bg = css('--c-bg'), rule = css('--c-rule'), teal = css('--c-teal');
+    var A0 = Math.min(w, h) * .66, q = A0 / W, ox = Math.round((w - A0) / 2), oy = Math.round((h - A0) / 2);   /* the simulated area, centred */
+    LAYOUT = { ox: ox, oy: oy, q: q };
+    var x = cv.getContext('2d');
+    x.setTransform(d, 0, 0, d, 0, 0); x.fillStyle = bg; x.fillRect(0, 0, w, h);
+    drawSurroundings(x, w, h, ox, oy, q, ink, rule, bg);
+    x.translate(ox, oy);   /* from here on, cell coordinates of the simulated area */
+    var A = W * q;
+    drawBase(x, q, ink);
+    D.buildings.forEach(function (b) { drawBuilding(x, b, q, mute); });
+    /* the simulated area is sector A (INSARAG letters; a display overlay) */
+    x.font = '600 ' + Math.round(q * 1.4) + 'px "JetBrains Mono", monospace'; x.fillStyle = ink; x.globalAlpha = .5;
+    x.fillText('A', q * .5, q * 1.6); x.globalAlpha = 1;
+    /* the simulated area, outlined as Copernicus outlines an area of interest */
+    x.strokeStyle = '#38a800'; x.lineWidth = Math.max(2, q * .22); x.strokeRect(0, 0, A, A);
+    D.blocked.forEach(function (c) { N.barrier(x, (c[0] + .5) * q, (c[1] + .5) * q, q * 1.1); });
+    D.safezones.forEach(function (z) { N.assembly(x, (z.x + .5) * q, (z.y + .5) * q, q * 1.5, teal, bg); });
+    D.other.forEach(function (o) { N.task(x, (o.x + .5) * q, (o.y + .5) * q, q * .9, mute); });
+    var label = function (txt, cx, cy, sub) {
+      x.font = '600 ' + Math.max(10, Math.round(q * .78)) + 'px "JetBrains Mono", monospace';
+      var w = x.measureText(txt).width; x.fillStyle = bg; x.globalAlpha = .8; x.fillRect(cx - w / 2 - 3, cy - q * 1.75, w + 6, q * .95); x.globalAlpha = 1;
+      x.fillStyle = ink; x.textAlign = 'center'; x.fillText(txt, cx, cy - q * 1); if (sub) { x.fillText(sub, cx, cy + q * 1.75); } x.textAlign = 'start';
+    };
+    /* teams: routes first, under everything */
+    D.teams.forEach(function (t) {
+      if (!t.dest) return; x.save(); x.setLineDash([3, 3]); x.strokeStyle = ink; x.globalAlpha = .7; x.lineWidth = 1.2;
+      x.beginPath(); x.moveTo((t.x + .5) * q, (t.y + .5) * q); x.lineTo((t.dest[0] + .5) * q, (t.dest[1] + .5) * q); x.stroke(); x.restore();
+    });
+    /* worksites and teams, kept apart (placeBoxes): a marker moved off its spot gets a leader line and a dot at the spot */
+    var r0 = Math.max(7, q * .62), marks = [];
+    x.font = '600 ' + Math.max(10, Math.round(q * .78)) + 'px "JetBrains Mono", monospace';
+    var wsMark = function (w, st, sub) { marks.push({ key: 'w' + w.id, kind: 'w', ref: w.id, x: (w.x + .5) * q, y: (w.y + .5) * q + (sub ? 0 : -q * .4), hw: Math.max(q * .9, x.measureText(w.id).width / 2 + 3), hh: sub ? q * 2 : q * 1.6, draw: function (cx, cy) { N.worksite(x, cx, cy, q * 1.5, st, ink, bg); label(w.id, cx, cy, sub); } }); };
+    D.worksites.filter(function (w) { return w.status !== 0 && w.status !== 3; }).forEach(function (w) { wsMark(w, 'active', 'L-' + w.victims); });
+    D.worksites.filter(function (w) { return w.status === 0; }).forEach(function (w) { wsMark(w, 'open', 'L-' + w.victims); });
+    D.worksites.filter(function (w) { return w.status === 3; }).forEach(function (w) { wsMark(w, 'complete', 'L-' + w.victims); });
+    D.done.forEach(function (w) { wsMark(w, 'complete', ''); });
+    D.teams.forEach(function (t) {
+      marks.push({ key: 't' + t.id, kind: 't', ref: t.id, x: (t.x + .5) * q, y: (t.y + .5) * q, hw: r0 + 3, hh: r0 + 3, draw: function (cx, cy) {
+        if (truth && t.fault) { x.beginPath(); x.arc(cx, cy, r0 + 7, 0, 6.283); x.strokeStyle = '#ff00c5'; x.lineWidth = 2; x.setLineDash([3, 2]); x.stroke(); x.setLineDash([]); }
+        N.teamMarker(x, cx, cy, r0, teamState(t), t.id + 1, ink, bg);
+      } });
+    });
+    marks.forEach(function (m) { m.k = flatSpot[m.key] || 0; });
+    var moved = placeBoxes(marks); marks.forEach(function (m, i) { flatSpot[m.key] = moved[i].k; });
+    marks.forEach(function (m, i) {
+      var o = moved[i]; if (!o.dx && !o.dy) return;
+      x.save(); x.strokeStyle = ink; x.globalAlpha = .8; x.lineWidth = 1.2; x.beginPath(); x.moveTo(m.x, m.y); x.lineTo(m.x + o.dx, m.y + o.dy); x.stroke();
+      x.beginPath(); x.arc(m.x, m.y, 2.2, 0, 6.283); x.fillStyle = ink; x.fill(); x.restore();
+    });
+    marks.forEach(function (m, i) { m.draw(m.x + moved[i].dx, m.y + moved[i].dy); });
+    flatHits = marks.map(function (m, i) { var X = ox + m.x + moved[i].dx, Y = oy + m.y + moved[i].dy; return { kind: m.kind, ref: m.ref, l: X - m.hw, t: Y - m.hh, r: X + m.hw, b: Y + m.hh }; });
+    var ep = D.epicenter; if (ep && ep.active) N.star(x, (ep.x + .5) * q, (ep.y + .5) * q, q * 1.9, ink);
+    innerFocus(x, q, ink);
+  }
+
+  /* ---------------- panels ---------------- */
+  function previewTeams() { return D.teams; }
+  /* the largest row size at which every team fits; at the compact size and still too many, the list scrolls */
+  function fitTeams() {
+    var list = $('#teamList'), pane = $('#pane'); if (!list) return;
+    var room = pane.clientHeight - 1, lo = 0, hi = 1;
+    list.style.setProperty('--s', 1); if (list.offsetHeight <= room) return;
+    for (var k = 0; k < 10; k++) { var m = (lo + hi) / 2; list.style.setProperty('--s', m); if (list.offsetHeight <= room) lo = m; else hi = m; }
+    list.style.setProperty('--s', lo);
+  }
+  /* two labelled meters, stamina and equipment; low (under 30, when the simulator sends a team back to restock or
+     rest) turns the bar dashed */
+  function meter(name, v, what) {
+    if (v == null) return '<span>' + name + '</span><span class="m" title="Not in this recording"></span><b>&ndash;</b>';
+    return '<span>' + name + '</span><span class="m' + (v < 30 ? ' low' : '') + '" title="' + name + ' ' + v + '%: ' + what + '"><i style="width:' + v + '%"></i></span><b>' + v + '</b>';
+  }
+  /* the peer-network ring: the old dashboard's consensus view in the new notation. Teams use the same markers as the map;
+     links are faint ink when both teams hear each other on time, dashed amber when a beacon was missed; a ring of amber
+     round a team is what its peers concluded (consensus tier: 1 local, 2 elevated). Hovering a team lifts its links. */
+  var ringHover = -1;
+  function drawRing() {
+    var cv = $('#ring'); if (!cv) return;
+    var w = cv.clientWidth, d = Math.min(2, window.devicePixelRatio || 1); cv.width = w * d; cv.height = w * d;
+    var x = cv.getContext('2d'), ink = css('--c-fg'), bg = css('--c-panel') || css('--c-bg'), n = D.teams.length, c = w / 2, R = w / 2 - 26, r = 13, AMBER = '#ffd36b';
+    x.setTransform(d, 0, 0, d, 0, 0); x.clearRect(0, 0, w, w);
+    var pos = D.teams.map(function (t, i) { var a = i / n * Math.PI * 2 - Math.PI / 2; return [c + Math.cos(a) * R, c + Math.sin(a) * R]; });
+    for (var i = 0; i < n; i++) for (var j = i + 1; j < n; j++) {
+      var ok = (D.teams[i].heard >> j & 1) && (D.teams[j].heard >> i & 1), lit = ringHover < 0 || ringHover === i || ringHover === j;
+      x.beginPath(); x.moveTo(pos[i][0], pos[i][1]); x.lineTo(pos[j][0], pos[j][1]);
+      if (ok) { x.setLineDash([]); x.strokeStyle = ink; x.globalAlpha = lit ? (ringHover < 0 ? .16 : .55) : .05; x.lineWidth = 1; }
+      else { x.setLineDash([4, 3]); x.strokeStyle = AMBER; x.globalAlpha = lit ? .95 : .2; x.lineWidth = 1.6; }
+      x.stroke();
+    }
+    x.setLineDash([]); x.globalAlpha = 1;
+    D.teams.forEach(function (t, i) {
+      var tier = Math.max(t.tier[0], t.tier[1]);
+      if (tier >= 1) { x.beginPath(); x.arc(pos[i][0], pos[i][1], r + 6, 0, 6.283); x.strokeStyle = AMBER; x.lineWidth = tier >= 2 ? 4 : 1.5; x.stroke(); }
+      x.fillStyle = bg; x.beginPath(); x.arc(pos[i][0], pos[i][1], r + 4, 0, 6.283); x.fill();
+      N.teamMarker(x, pos[i][0], pos[i][1], r, teamState(t), t.id + 1, ink, bg);
+    });
+    cv.onmousemove = function (e) {
+      var b = cv.getBoundingClientRect(), mx = e.clientX - b.left, my = e.clientY - b.top, hit = -1;
+      pos.forEach(function (p, i) { if (Math.hypot(p[0] - mx, p[1] - my) < r + 6) hit = i; });
+      if (hit !== ringHover) { ringHover = hit; drawRing(); }
+    };
+    cv.onmouseleave = function () { if (ringHover !== -1) { ringHover = -1; drawRing(); } };
+  }
+  /* raw tables: the frame as the simulator wrote it, one row per team and per incident. Injected faults and incidents no
+     team knows about yet appear only with Ground truth on. */
+  var ITYPE = ['Structural collapse', 'Confined space', 'Mass casualty', 'Chemical exposure', 'Unsearched sector', 'Survivor signal', 'Gas leak', 'Active fire', 'Equipment cache', 'Return to safe zone', 'Evacuee offboard', 'Clear road'];
+  var TSTATUS = ['Ready', 'On the way', 'Working', 'Resting'], ISTATUS = ['Open', 'Assigned', 'In progress', 'Resolved'], TIER = ['none', 'local', 'elevated'];
+  var TCOLS = ['Team', 'Pos', 'Status', 'Specialty', 'Stamina', 'Hours', 'Heading to', 'Tier move', 'Tier radio', 'Peers move f/c/a', 'Peers radio f/c/a', 'Heard', 'Resolved', 'Injected fault'];
+  var ICOLS = ['ID', 'Worksite', 'Type', 'Pos', 'Status', 'Priority', 'Team', 'Live victims', 'Work left', 'Known to teams', 'Floor', 'Building'];
+  var HELP = {
+    'Team': 'The team number, as on the map.',
+    'Pos': 'Where the team or incident is, as map cell x,y (each cell is 10 m).',
+    'Status': 'What the team is doing: ready, on the way, working, or resting.',
+    'Specialty': 'What the team is equipped for: search, medical, extraction, perimeter or support.',
+    'Stamina': 'Energy left before the team must rest, 0 to 100.',
+    'Hours': 'Hours worked in this shift.',
+    'Heading to': 'The cell the team is travelling to, if any.',
+    'Tier move': 'What the other teams concluded about this team\'s movement: none, local (one team unsure) or elevated (three or more agree something is wrong).',
+    'Tier radio': 'The same, for this team\'s radio.',
+    'Peers move f/c/a': 'How the nine other teams voted on this team\'s movement: fault / clear / abstain (no opinion).',
+    'Peers radio f/c/a': 'The same vote, for its radio.',
+    'Heard': 'How many of the nine other teams it heard on time this tick.',
+    'Resolved': 'Incidents this team has finished so far.',
+    'Injected fault': 'The fault the simulator deliberately gave this team (ground truth). The teams never see this; it is only for checking the detector.',
+    'ID': 'The simulator\'s own number for the incident.',
+    'Worksite': 'Its INSARAG worksite ID, for incidents that could hold a live rescue (others have none).',
+    'Type': 'What kind of incident it is.',
+    'Priority': 'P1 most urgent to P4 least.',
+    'Team': 'The team number, as on the map.',
+    'Live victims': 'People alive at the site who still need rescuing.',
+    'Work left': 'Work units left in the current stage of the job. Not hours: how fast it goes depends on the team.',
+    'Known to teams': 'Whether any team has found out about it yet. Unknown ones show only with Ground truth on.',
+    'Floor': 'Which floor of the building the victims are on (0 is ground).',
+    'Building': 'The simulator\'s number for the building.'
+  };
+  function openRaw() {
+    var wsName = {}; D.worksites.forEach(function (w) { wsName[w.x + ',' + w.y] = w.id; });
+    var cell = function (v, num, cls) { return '<td' + (num ? ' class="n"' : '') + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>'; };
+    var th = function (a) { return '<tr>' + a.map(function (h) { return '<th title="' + (HELP[h] || '') + '">' + h + '</th>'; }).join('') + '</tr>'; };
+    var gloss = function (cols) { return '<dl class="gloss">' + cols.map(function (h) { return '<dt>' + h + '</dt><dd>' + HELP[h] + '</dd>'; }).join('') + '</dl>'; };
+    var teams = '<div class="tbl"><table><thead>' + th(TCOLS) + '</thead><tbody>' +
+      D.raw_teams.map(function (t, i) {
+        var now = D.teams[i]; if (now) t = Object.assign({}, t, { x: now.x, y: now.y, status: now.status, stamina: now.stamina });   /* what this tick knows */
+        var pv = t.peer_votes || {}, mob = pv.mob || [], com = pv.comm || [];
+        return '<tr>' + cell(t.id + 1) + cell(t.x + ',' + t.y) + cell(TSTATUS[t.status] || t.status) + cell(SPEC[t.spec]) + cell(t.stamina.toFixed(1), 1) + cell(t.hours, 1) +
+          cell(t.has_dest ? t.dest_x + ',' + t.dest_y : '&ndash;') + cell(TIER[t.consensus_tier[0]] || t.consensus_tier[0]) + cell(TIER[t.consensus_tier[1]] || t.consensus_tier[1]) +
+          cell(mob.join('/')) + cell(com.join('/')) + cell(t.heard.toString(2).split('1').length - 1 + ' of 9') + cell(t.incidents_resolved, 1) +
+          (truth ? cell(t.fault_mask ? FAULT.filter(function (_, i) { return t.fault_mask & (1 << i); }).join(', ') : 'none', 0, 'truth') : cell('hidden'));
+      }).join('') + '</tbody></table></div>';
+    var incs = D.raw_incidents.filter(function (i) { return truth || i.discovered; });
+    var incidents = '<div class="tbl"><table><thead>' + th(ICOLS) + '</thead><tbody>' +
+      incs.map(function (i) {
+        return '<tr' + (i.discovered ? '' : ' class="truth"') + '>' + cell(i.id, 1) + cell(([0, 1, 2, 5].indexOf(i.type) >= 0 && wsName[i.x + ',' + i.y]) || '&ndash;') + cell(ITYPE[i.type] || i.type) + cell(i.x + ',' + i.y) + cell(ISTATUS[i.status] || i.status) + cell('P' + i.priority) +
+          cell(i.assigned_team === 255 ? '&ndash;' : i.assigned_team + 1) + cell(i.victims, 1) + cell(i.work_remaining, 1) + cell(i.discovered ? 'yes' : 'no (ground truth)') + cell(i.floor, 1) + cell(i.building_id, 1) + '</tr>';
+      }).join('') + '</tbody></table></div>';
+    $('#rawTtl').textContent = 'Raw tables · tick ' + D.tick;
+    $('#rawBody').innerHTML = '<p>The frame exactly as the simulator wrote it at ' + tplus(D.tick) + '. ' + (truth ? 'Ground truth is on: injected faults and incidents no team knows about yet are shown in pink.' : 'Injected faults and incidents no team knows about yet are hidden; switch on Ground truth to see them.') + '</p>' +
+      '<h3 class="mono">Teams (' + D.raw_teams.length + ')</h3>' + teams +
+      '<details class="gl"><summary class="mono">What the team columns mean</summary>' + gloss(TCOLS) + '</details>' +
+      '<h3 class="mono">Incidents (' + incs.length + ')</h3>' + incidents +
+      '<details class="gl"><summary class="mono">What the incident columns mean</summary>' + gloss(ICOLS) + '</details>';
+    if (!$('#rawDlg').open) $('#rawDlg').showModal();
+  }
+  function teamState(t) { return ['ready', 'moving', 'working', 'resting'][t.status] || 'ready'; }
+  function status(t) {
+    if (t.status === 3) return 'Resting';
+    if (t.status === 0) return 'Ready';
+    var site = t.site || 'a task';
+    return (t.status === 2 ? 'Working at ' : 'On the way to ') + site;
+  }
+  function detect(t) {
+    var mob = t.peers && t.peers.mob ? t.peers.mob[0] : 0, comm = t.peers && t.peers.comm ? t.peers.comm[0] : 0;
+    var lvl = Math.max(t.tier[0], t.tier[1]);
+    /* a radio alarm can come from the fast path: no other team has heard this one for two ticks running, which
+       escalates at once without a vote (consensus.c, evaluate_fast_path) */
+    if (lvl >= 2 && t.tier[0] < 2 && t.peers && t.peers.fast) return { cls: 'flag', text: 'Radio silent: no team hears it (elevated)' };
+    if (lvl >= 2) return { cls: 'flag', text: (t.tier[0] >= 2 ? mob + ' of 9 peers flag movement' : comm + ' of 9 peers flag the radio') + ' (elevated)' };
+    if (lvl === 1) return { cls: 'flag', text: 'Peers unsure about this team (local)' };
+    return { cls: '', text: 'Peers: no problem seen' };
+  }
+  function renderPane() {
+    var p = $('#pane');
+    if (tab === 'teams') {
+      p.innerHTML = '<div class="teams" id="teamList">' + previewTeams().map(function (t) {
+        var d = detect(t), f = truth && t.fault ? '<span class="det truth">Injected (ground truth): ' + FAULT.filter(function (_, i) { return t.fault & (1 << i); }).join(', ') + ' fault</span>' : '';
+        return '<div class="team' + (selTeam === t.id ? ' sel' : '') + (inFocus(t.x, t.y) ? '' : ' away') + '" data-id="' + t.id + '"><span class="n ' + teamState(t) + '">' + (t.id + 1) + '</span>' +
+          '<span class="what">' + status(t) + '</span>' +
+          '<span class="meters">' + meter('Stamina', t.stamina, 'energy the team has left before it must rest') + meter('Equipment', t.equip, 'tools and supplies left before the team must restock') + '</span>' +
+          '<span class="det ' + d.cls + '"><b class="spec">' + SPEC[t.spec] + '</b><span class="peer">' + d.text + '</span></span>' + f + '</div>';
+      }).join('') + '</div>';
+      fitTeams();
+    } else if (tab === 'sites') {
+      var rows = D.worksites.filter(function (w) { return inFocus(w.x, w.y); }).map(function (w) { return '<div class="ws"><b>' + w.id + '</b><span>' + (w.status === 0 ? 'No team yet' : 'Team ' + (w.team + 1) + ' working') + '</span><span>L-' + w.victims + '</span></div>'; })
+        ;
+      /* completed worksites roll off: those finished in the last hour stay listed, older ones fold into one line
+         (the map keeps every completed marking) */
+      var WINDOW = Math.round(3600 / TICK_S), doneAt = {};
+      D.events.forEach(function (e) { if (e[1] === 'complete' && e[0] <= D.tick && !(e[2] in doneAt)) doneAt[e[2]] = e[0]; });
+      var recent = D.done.filter(function (w) { return inFocus(w.x, w.y) && D.tick - doneAt[w.id] < WINDOW; }).sort(function (a, b) { return doneAt[b.id] - doneAt[a.id]; });
+      var older = D.done.filter(function (w) { return inFocus(w.x, w.y) && D.tick - doneAt[w.id] >= WINDOW; });
+      rows = rows.concat(recent.map(function (w) {
+        var ago = Math.round((D.tick - doneAt[w.id]) * TICK_S / 60);
+        return '<div class="ws"><b><s>' + w.id + '</s></b><span>Complete</span><span>' + ago + ' min ago</span></div>';
+      }));
+      if (older.length) rows.push('<div class="ws older"><span></span><span>' + older.length + ' completed more than an hour ago</span><span>' + older.map(function (w) { return w.id; }).join(' ') + '</span></div>');
+      p.innerHTML = rows.join('');
+    } else if (tab === 'events') {
+      p.innerHTML = '<ol class="evlist">' + pastEvents().map(function (e) { return '<li><time>' + tplus(e[0]) + '</time><span>' + eventText(e) + '</span></li>'; }).join('') + '</ol>';
+    } else {
+      p.innerHTML = '<div class="tech">' +
+        '<div class="tech-h"><h3 class="mono">Who hears whom</h3><button type="button" class="howto mono" id="howBtn" aria-haspopup="dialog">How to read this</button></div>' +
+        '<canvas id="ring" aria-label="The ten teams in a ring, linked by the radio beacons they hear"></canvas>' +
+        '<ul class="ring-key mono"><li><i class="k-ok"></i>Heard</li><li><i class="k-miss"></i>Missed</li><li><i class="k-unsure"></i>One peer unsure</li><li><i class="k-flag"></i>3+ peers agree</li></ul>' +
+        '<button type="button" class="raw mono" id="rawBtn" aria-haspopup="dialog">Raw team and incident tables &rarr;</button></div>';
+      drawRing();
+      $('#rawBtn').onclick = openRaw;
+      $('#howBtn').onclick = function () { $('#howDlg').showModal(); };
+    }
+  }
+  function pastEvents() { return RUN.eventsTo(D.tick); }
+  function eventText(e) {
+    return e[1] === 'found' ? e[2] + ' identified, ' + e[3] + ' live victim' + (e[3] === 1 ? '' : 's') + ' reported'
+      : e[1] === 'complete' ? e[2] + ' complete' : e[1] === 'assigned' ? 'A team assigned to ' + e[2] : e[1] === 'working' ? 'Team at work on ' + e[2] : e[2] + ' waiting for a team again';
+  }
+  /* only the latest event stays in view; the full list is the Events tab, so the teams never get pushed down */
+  function renderEvents() {
+    var e = pastEvents()[0];
+    $('#ticker').innerHTML = '<span class="lbl mono">Latest</span>' + (e ? '<time>' + tplus(e[0]) + '</time><span class="txt">' + eventText(e) + '</span>' : '<span class="txt">Nothing yet</span>') + '<span class="lbl mono">All &rarr;</span>';
+  }
+  function renderSummary() {
+    var ws = D.worksites.filter(function (w) { return inFocus(w.x, w.y); }), dn = D.done.filter(function (w) { return inFocus(w.x, w.y); });
+    var active = ws.filter(function (w) { return w.status === 1 || w.status === 2; }).length, open = ws.filter(function (w) { return w.status === 0; }).length;
+    $('#sum').innerHTML = (focusSec ? '<span>Sector ' + focusSec + '</span>' : '') + '<span><i style="background:var(--complete)"></i>' + dn.length + ' complete</span><span><i style="background:var(--active)"></i>' + active + ' being worked</span><span><i></i>' + open + ' waiting for a team</span>';
+  }
+  function renderTimeline() {
+    var n = D.ticks, sc = $('#scrub');
+    $('#done').style.width = (D.tick / (n - 1) * 100) + '%'; $('#head').style.left = 'calc(' + (D.tick / (n - 1) * 100) + '% - 1px)';
+    sc.querySelectorAll('.mk').forEach(function (m) { m.remove(); });
+    D.events.forEach(function (e) {
+      if (e[1] !== 'found' && e[1] !== 'complete') return;
+      var m = document.createElement('i'); m.className = 'mk' + (e[1] === 'complete' ? ' c' : ''); m.style.left = (e[0] / (n - 1) * 100) + '%'; m.title = tplus(e[0]) + ' ' + e[2]; sc.appendChild(m);
+    });
+    var hrs = ''; for (var h = 0, HN = Math.round(D.ticks * TICK_S / 3600); h <= HN; h++) hrs += '<span>' + h + ' h</span>'; $('#hours').innerHTML = hrs;
+    /* detection detail: per team, when a fault was injected (purple, ground truth) and when its peers flagged it
+       (amber), as stretches along the same time axis */
+    var det = '', spans = RUN.spans(), pc = function (t) { return (t / (n - 1) * 100).toFixed(3) + '%'; };
+    D.teams.forEach(function (t) {
+      var sp = spans[t.id] || { fault: [], flag: [] };
+      det += '<span>Team ' + (t.id + 1) + '</span><span class="strip">' +
+        sp.fault.map(function (r) { return '<i style="left:' + pc(r[0]) + ';width:calc(' + pc(r[1] - r[0] + 1) + ' + 1px);background:#9a7bff" title="Injected fault ' + tplus(r[0]) + ' to ' + tplus(r[1]) + '"></i>'; }).join('') +
+        sp.flag.map(function (r) { return '<u style="left:' + pc(r[0]) + ';width:calc(' + pc(r[1] - r[0] + 1) + ' + 1px)" title="Peers flagged it ' + tplus(r[0]) + ' to ' + tplus(r[1]) + '"></u>'; }).join('') + '</span>';
+    });
+    $('#detail').innerHTML = det;
+  }
+  function render() { draw(); renderPane(); renderEvents(); renderSummary(); }
+
+  /* ---------------- the clock: any tick of the run ---------------- */
+  var playing = false, timer = null, selTeam = -1;
+  function clockText() { return 'Tick ' + D.tick + ' of ' + D.ticks + ' · ' + (playing ? 'playing' : 'paused'); }
+  function setTick(t) {
+    var held = RUN.clamp(Math.max(0, Math.min(D ? D.ticks - 1 : 0, Math.round(t))));
+    if (held == null) return;
+    D = RUN.at(held);
+    $('#clockT').textContent = tplus(D.tick);
+    $('#clockSub').textContent = clockText();
+    $('#done').style.width = (D.tick / Math.max(1, D.ticks - 1) * 100) + '%'; $('#head').style.left = 'calc(' + (D.tick / Math.max(1, D.ticks - 1) * 100) + '% - 1px)';
+    render(); if (tab === 'tech') drawRing();
+    if (three) update3D();
+    if ($('#rawDlg').open) openRaw();
+    refreshMark();
+    try { history.replaceState(null, '', location.pathname + '?run=' + encodeURIComponent(RUN_NAME) + '&t=' + D.tick); } catch (e) { /* a sandboxed frame */ }
+  }
+  function speed() { return [1, 5, 10, 25][$('#speed').selectedIndex] || 5; }   /* ticks a second (one tick is 36 s of mission): 36 s, 3, 6 or 15 min of mission per real second */
+  function play(on) {
+    playing = on; clearInterval(timer);
+    $('#playBtn').innerHTML = on ? '&#10074;&#10074;' : '&#9654;'; $('#playBtn').title = on ? 'Pause (Space)' : 'Play (Space)';
+    if (on) { if (D.tick >= RUN.last()) setTick(RUN.first()); timer = setInterval(function () { if (D.tick >= RUN.last()) { play(false); return; } setTick(D.tick + 1); }, 1000 / speed()); }
+    $('#clockSub').textContent = clockText();
+  }
+  function nextEvent() { var e = D.events.filter(function (e) { return e[0] > D.tick; })[0]; if (e) setTick(e[0]); }
+  $('#playBtn').onclick = function () { play(!playing); };
+  $('#stepBack').onclick = function () { play(false); setTick(D.tick - 1); };
+  $('#stepOn').onclick = function () { play(false); setTick(D.tick + 1); };
+  $('#nextEv').onclick = function () { nextEvent(); };
+  $('#speed').onchange = function () { if (playing) play(true); };
+  (function () {
+    var sc = $('#scrub'), drag = false;
+    var at = function (e) { var b = sc.getBoundingClientRect(); setTick((e.clientX - b.left) / b.width * (D.ticks - 1)); };
+    sc.addEventListener('pointerdown', function (e) { drag = true; sc.setPointerCapture(e.pointerId); at(e); });
+    sc.addEventListener('pointermove', function (e) { if (drag) at(e); });
+    sc.addEventListener('pointerup', function () { drag = false; });
+  })();
+  document.addEventListener('keydown', function (e) {
+    if (e.target.closest && e.target.closest('input, select, textarea') || document.querySelector('dialog[open]')) return;
+    if (e.key === 'Escape' && mark) { closeMark(); return; }
+    if (e.key === ' ') { e.preventDefault(); play(!playing); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); setTick(D.tick + (e.shiftKey ? 10 : 1)); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); setTick(D.tick - (e.shiftKey ? 10 : 1)); }
+    else if (e.key === 'j' || e.key === 'J') nextEvent();
+  });
+  $('#pane').addEventListener('click', function (e) {   /* pick a team for Follow */
+    var row = e.target.closest('.team'); if (!row) return;
+    selTeam = +row.dataset.id; renderPane();
+  });
+
+  /* ---------------- the 3D view: the old dashboard's camera, the new notation ----------------
+     Buildings rise with their floors and wear their damage colour; markers face the screen; the neighbouring sectors stay
+     flat, painted on the ground. Drag to rotate (15 degrees above the ground to straight down), right-drag to pan, scroll to
+     zoom; Reset, Top and Follow as in the old dashboard. */
+  var three = null, M3 = 36, TEXPX = 16, spriteCache = {}, PIN_H = 5.2;   /* pin heads sit above the tallest buildings (6 floors = 4.2) */
+  function init3D() {
+    if (three || !window.THREE || !window.THREE.OrbitControls) return three;
+    var cv = $('#cv3'), renderer;
+    try { renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true }); } catch (e) { return null; }
+    _v = new THREE.Vector3(); _fw = new THREE.Vector3(); _rt = new THREE.Vector3(); _up = new THREE.Vector3();
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    var scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(38, 1, .5, 800), controls = new THREE.OrbitControls(cam, cv);
+    controls.target.set(W / 2, 0, H / 2); controls.enableDamping = true; controls.dampingFactor = .12;
+    controls.addEventListener('change', function () { settle3D(); });
+    controls.minPolarAngle = 0; controls.maxPolarAngle = THREE.MathUtils.degToRad(75); controls.minDistance = 10; controls.maxDistance = 170;
+    controls.screenSpacePanning = false;
+    /* three.js 0.155 on measures light physically: the mockup's (r128) strengths times pi give the same look */
+    scene.add(new THREE.AmbientLight(0xffffff, .62 * Math.PI));
+    var sun = new THREE.DirectionalLight(0xffffff, .7 * Math.PI); sun.position.set(-40, 80, -20); scene.add(sun);
+    var G = W + 2 * M3, gc = document.createElement('canvas'); gc.width = gc.height = G * TEXPX;
+    var tex = new THREE.CanvasTexture(gc); tex.anisotropy = renderer.capabilities.getMaxAnisotropy(); tex.colorSpace = THREE.SRGBColorSpace;
+    var ground = new THREE.Mesh(new THREE.PlaneGeometry(G, G), new THREE.MeshBasicMaterial({ map: tex }));
+    ground.rotation.x = -Math.PI / 2; ground.position.set(W / 2, 0, H / 2); scene.add(ground);
+    var buildings = new THREE.Group(); scene.add(buildings);
+    var sprites = new THREE.Group(); scene.add(sprites);
+    three = { renderer: renderer, scene: scene, cam: cam, controls: controls, gc: gc, tex: tex, bm: [], bset: null, buildings: buildings, sprites: sprites, follow: false };
+    resetCam(); resize3D(); update3D(); loop3D();
+    return three;
+  }
+  /* the buildings, rebuilt when the run's building list changes (a new STATICENV with other buildings) */
+  function buildings3D() {
+    var key = D.buildings.map(function (b) { return b.id + ':' + b.x + ',' + b.y + ',' + b.w + ',' + b.h + ',' + b.floors; }).join('|');
+    if (three.bset === key) return; three.bset = key;
+    var grp = three.buildings; while (grp.children.length) { var c0 = grp.children[0]; grp.remove(c0); c0.geometry.dispose(); }
+    var bm = three.bm = [];
+    D.buildings.forEach(function (b) {
+      var hgt = Math.max(.5, (b.floors || 1) * .7), mat = new THREE.MeshLambertMaterial({ color: 0x45474d });
+      var emat = new THREE.LineBasicMaterial({ color: 0xe6e6e3, transparent: true, opacity: .28 });
+      var geo = new THREE.BoxGeometry(b.w - .24, hgt, b.h - .24), m = new THREE.Mesh(geo, mat);
+      m.position.set(b.x + b.w / 2, hgt / 2, b.y + b.h / 2);
+      m.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), emat)); grp.add(m);
+      bm.push({ m: { material: mat }, id: b.id, edges: { material: emat } });
+    });
+  }
+  function resetCam() { if (!three) return; var c = three.cam, tg = three.controls.target, r = 78, el = THREE.MathUtils.degToRad(40), az = Math.PI / 4;
+    tg.set(W / 2, 0, H / 2); c.position.set(tg.x + r * Math.cos(el) * Math.sin(az), r * Math.sin(el), tg.z + r * Math.cos(el) * Math.cos(az)); three.controls.update(); }
+  function topCam() { if (!three) return; var c = three.cam, tg = three.controls.target, r = c.position.distanceTo(tg); c.position.set(tg.x, r, tg.z + .001); three.controls.update(); }
+  function resize3D() { if (!three) return; var cv = $('#cv3'), w = cv.clientWidth, h = cv.clientHeight; if (!w || !h) return; three.renderer.setSize(w, h, false); three.cam.aspect = w / h; three.cam.updateProjectionMatrix(); }
+  function loop3D() {
+    requestAnimationFrame(loop3D);
+    if (!three || !$('#map').classList.contains('is3d')) return;
+    var ft = selTeam >= 0 ? D.teams.filter(function (o) { return o.id === selTeam; })[0] : null;
+    if (three.follow && ft) { var t = ft, tg = three.controls.target, dx = t.x + .5 - tg.x, dz = t.y + .5 - tg.z; tg.x += dx * .08; tg.z += dz * .08; three.cam.position.x += dx * .08; three.cam.position.z += dz * .08; }
+    three.controls.update(); ease3D(); three.renderer.render(three.scene, three.cam);
+  }
+  function spriteTex(key, px, drawFn) {
+    if (spriteCache[key]) return spriteCache[key];
+    var c = document.createElement('canvas'); c.width = px[0]; c.height = px[1]; drawFn(c.getContext('2d'), px[0], px[1]);
+    var t = new THREE.CanvasTexture(c); t.anisotropy = 4; t.colorSpace = THREE.SRGBColorSpace; return (spriteCache[key] = new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true }));
+  }
+  function addSprite(mat, x, y, z, sw, sh) { var s = new THREE.Sprite(mat); s.position.set(x, y, z); s.scale.set(sw, sh, 1); s.renderOrder = 10; three.sprites.add(s); return s; }
+  function leader(ink) {   /* a line from a marker's true spot to where it is drawn; both ends are set every frame */
+    var l = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: ink, transparent: true, opacity: .9 }));
+    three.sprites.add(l); return l;
+  }
+  /* keeping 3D markers apart. Placing them every frame made them hop about while the camera moved, so instead:
+     - the spots are worked out only when something changes: a new tick, or the camera coming to rest (150 ms after
+       the last movement, so a drag, a zoom or the glide after letting go all count as one move);
+     - each marker's offset is held in world units in the camera's plane, so during a drag the markers ride along
+       with the city as one rigid picture instead of being re-sorted;
+     - when new spots are chosen, markers glide to them over a few frames instead of jumping;
+     - a marker keeps its previous spot while that is still free (placeBoxes' k), so a new tick rarely moves anything. */
+  var _v, _fw, _rt, _up, spot3 = {}, settleT = 0   /* the vectors are made in init3D: three.js arrives as a module, after this script */;
+  function layout3D() {
+    var L = three.decl; if (!L || !L.length) return;
+    var cam = three.cam, el = three.renderer.domElement, Wp = el.clientWidth, Hp = el.clientHeight, tf = Math.tan(cam.fov * Math.PI / 360);
+    cam.updateMatrixWorld(); cam.getWorldDirection(_fw); _rt.setFromMatrixColumn(cam.matrixWorld, 0); _up.setFromMatrixColumn(cam.matrixWorld, 1);
+    var items = L.map(function (it) {
+      var ppu = Hp / (2 * tf * Math.max(.5, _v.copy(it.base).sub(cam.position).dot(_fw))); it.ppu = ppu;
+      _v.copy(it.base).project(cam);
+      return { x: (_v.x + 1) / 2 * Wp, y: (1 - _v.y) / 2 * Hp, hw: it.w * it.fx * ppu + 2, hh: it.h * it.fy * ppu + 2, k: (spot3[it.key] || {}).k || 0 };
+    });
+    placeBoxes(items).forEach(function (o, i) {
+      var it = L[i]; it.target.set(0, 0, 0).addScaledVector(_rt, o.dx / it.ppu).addScaledVector(_up, -o.dy / it.ppu);
+      spot3[it.key] = { k: o.k, off: it.target.clone() };
+    });
+  }
+  function ease3D() {   /* every frame: glide each marker towards its spot, and keep its line attached */
+    var L = three.decl; if (!L) return;
+    L.forEach(function (it) {
+      it.off.lerp(it.target, .22); if (it.off.distanceToSquared(it.target) < 1e-5) it.off.copy(it.target);
+      it.s.position.copy(it.base).add(it.off);
+      if (it.line) {
+        var pa = it.line.geometry.attributes.position; it.line.visible = it.stem || it.off.lengthSq() > .01;
+        pa.setXYZ(0, it.foot.x, it.foot.y, it.foot.z); pa.setXYZ(1, it.s.position.x, it.s.position.y, it.s.position.z); pa.needsUpdate = true;
+      }
+    });
+  }
+  function hits3D() {   /* where each marker is on screen right now */
+    var L = three && three.decl; if (!L) return [];
+    var cam = three.cam, el = three.renderer.domElement, Wp = el.clientWidth, Hp = el.clientHeight;
+    return L.map(function (it) {
+      _v.copy(it.s.position).project(cam); var X = (_v.x + 1) / 2 * Wp, Y = (1 - _v.y) / 2 * Hp, hw = it.w * it.fx * it.ppu, hh = it.h * it.fy * it.ppu;
+      return { kind: it.key[0], ref: it.key[0] === 't' ? +it.key.slice(1) : it.key.slice(1), l: X - hw, t: Y - hh, r: X + hw, b: Y + hh };
+    });
+  }
+  function settle3D() { clearTimeout(settleT); settleT = setTimeout(function () { if (three) layout3D(); }, 150); }
+  function update3D() {
+    if (!three) return;
+    var ink = css('--c-fg'), bg = css('--c-bg'), rule = css('--c-rule'), teal = css('--c-teal'), C = N.COLOUR;
+    three.scene.background = new THREE.Color(bg);
+    /* buildings: their damage colour, or a dark neutral when undamaged */
+    buildings3D();
+    var dmg = {}; D.buildings.forEach(function (b) { dmg[b.id] = b.damage; });
+    three.bm.forEach(function (o) { var k = N.damageClass(dmg[o.id]); o.m.material.color.set(k === 'none' ? '#45474d' : C[k]); o.edges.material.color.set(ink); });
+    /* the ground: streets, sector lines and letters, the green outline, routes, and the flat neighbours around it */
+    var g = three.gc.getContext('2d'), G = three.gc.width, q = TEXPX, o = M3 * q;
+    g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = bg; g.fillRect(0, 0, G, G);
+    drawSurroundings(g, G, G, o, o, q, ink, rule, bg);
+    g.translate(o, o);
+    drawBase(g, q, ink);
+    g.font = '600 ' + Math.round(q * 2) + 'px "JetBrains Mono", monospace'; g.fillStyle = ink; g.globalAlpha = .55;
+    g.fillText('A', q * .6, q * 2.2); g.globalAlpha = 1;
+    innerFocus(g, q, ink);
+    g.strokeStyle = '#38a800'; g.lineWidth = q * .3; g.strokeRect(0, 0, W * q, H * q);
+    /* where each team's pin meets the ground */
+    D.teams.forEach(function (t) { g.beginPath(); g.arc((t.x + .5) * q, (t.y + .5) * q, q * .32, 0, 6.283); g.fillStyle = ink; g.fill(); g.beginPath(); g.arc((t.x + .5) * q, (t.y + .5) * q, q * .55, 0, 6.283); g.strokeStyle = ink; g.globalAlpha = .5; g.lineWidth = q * .08; g.stroke(); g.globalAlpha = 1; });
+    D.teams.forEach(function (t) { if (!t.dest) return; g.save(); g.setLineDash([q * .3, q * .3]); g.strokeStyle = ink; g.globalAlpha = .7; g.lineWidth = q * .12; g.beginPath(); g.moveTo((t.x + .5) * q, (t.y + .5) * q); g.lineTo((t.dest[0] + .5) * q, (t.dest[1] + .5) * q); g.stroke(); g.restore(); });
+    three.tex.needsUpdate = true;
+    /* markers, always facing the screen */
+    var sp = three.sprites; while (sp.children.length) sp.remove(sp.children[0]);
+    var font = function (px) { return '600 ' + px + 'px "JetBrains Mono", monospace'; };
+    var decl = [], rank = { active: 0, open: 1, complete: 2 };
+    D.done.concat(D.worksites).map(function (w) { return [w, w.status === undefined || w.status === 3 ? 'complete' : w.status === 0 ? 'open' : 'active']; })
+      .sort(function (a, b) { return rank[a[1]] - rank[b[1]]; }).forEach(function (pr) {
+      var w = pr[0], st = pr[1], sub = w.victims ? 'L-' + w.victims : '';
+      var mat = spriteTex('ws|' + w.id + '|' + st + '|' + sub + '|' + ink + bg, [128, 128], function (c, cw, ch) {
+        N.worksite(c, 64, 64, 46, st, ink, bg); c.font = font(26); c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillStyle = bg; c.globalAlpha = .85; c.fillRect(24, 4, 80, 28); c.globalAlpha = 1; c.fillStyle = ink; c.fillText(w.id, 64, 19);
+        if (sub) { c.fillStyle = bg; c.globalAlpha = .85; c.fillRect(30, 96, 68, 28); c.globalAlpha = 1; c.fillStyle = ink; c.fillText(sub, 64, 111); }
+      });
+      var s = addSprite(mat, w.x + .5, 5.5, w.y + .5, 3.4, 3.4);
+      decl.push({ key: 'w' + w.id, s: s, base: s.position.clone(), foot: new THREE.Vector3(w.x + .5, 0, w.y + .5), w: 3.4, h: 3.4, fx: .32, fy: sub ? .47 : .34, line: leader(ink), stem: false });
+    });
+    D.teams.forEach(function (t) {
+      var i = t.id, st = teamState(t), mat = spriteTex('tm|' + i + '|' + st + '|' + (selTeam === i) + '|' + ink + bg, [64, 64], function (c) {
+        if (selTeam === i) { c.beginPath(); c.arc(32, 32, 30, 0, 6.283); c.strokeStyle = C.active; c.lineWidth = 3; c.stroke(); }
+        N.teamMarker(c, 32, 32, 19, st, i + 1, ink, bg);
+      });
+      /* a pin: the marker rides above the rooftops on a thin stem down to the team's spot on the street */
+      var s = addSprite(mat, t.x + .5, PIN_H, t.y + .5, 1.9, 1.9);
+      decl.push({ key: 't' + i, s: s, base: s.position.clone(), foot: new THREE.Vector3(t.x + .5, 0, t.y + .5), w: 1.9, h: 1.9, fx: .44, fy: .44, line: leader(ink), stem: true });
+    });
+    decl.forEach(function (it) { var o = spot3[it.key]; it.off = o ? o.off.clone() : new THREE.Vector3(); it.target = it.off.clone(); });
+    three.decl = decl; layout3D(); ease3D();
+    D.safezones.forEach(function (z) { addSprite(spriteTex('az|' + teal + bg, [48, 48], function (c) { N.assembly(c, 24, 24, 34, teal, bg); }), z.x + .5, 1.2, z.y + .5, 1.6, 1.6); });
+    D.blocked.forEach(function (b) { addSprite(spriteTex('bar', [48, 48], function (c) { N.barrier(c, 24, 24, 40); }), b[0] + .5, .9, b[1] + .5, 1.2, 1.2); });
+    var ep = D.epicenter; if (ep && ep.active) addSprite(spriteTex('star|' + ink, [96, 96], function (c) { N.star(c, 48, 48, 80, ink); }), ep.x + .5, 4.6, ep.y + .5, 1.9, 1.9);
+  }
+  $('#camReset').onclick = function () { if (three) { three.follow = false; $('#camFollow').setAttribute('aria-pressed', 'false'); resetCam(); } };
+  $('#camTop').onclick = function () { topCam(); };
+  $('#camFollow').onclick = function () { if (!three || selTeam < 0) return; three.follow = !three.follow; this.setAttribute('aria-pressed', three.follow); };
+
+  /* ---------------- switching sectors: click one on the map, or pick it from the top bar ----------------
+     A is the simulated area: choosing it brings the view back to it. A neighbouring sector is a summary only:
+     choosing it opens its card (and in 3D flies the camera there). */
+  function innerStats() {
+    return D.worksites.length + ' open or active · ' + D.done.length + ' complete · ' + D.teams.length + ' teams';
+  }
+  function setFocus(L) {
+    $('#secCard').hidden = true; $('#secBtn').innerHTML = 'Sector · A &#9662;';
+    if (three && $('#map').classList.contains('is3d')) flyTo(W / 2, H / 2);
+  }
+  /* ---------------- click a marker: what that team or worksite is doing now ----------------
+     The card follows the clock (it is rebuilt every tick while open), so it can stay open during playback. */
+  var mark = null, WSTYPE = { 0: 'Structural collapse', 1: 'Confined space', 2: 'Mass casualty', 5: 'Survivor signal' };
+  function wsInfo(id) {
+    var w = RUN.wsInfo(id); if (!w) return null;
+    var st = w.states[0], done = null; w.states.forEach(function (s) { if (s[0] <= D.tick) st = s; if (s[1] === 3 && done == null) done = s[0]; });
+    var inc = (D.raw_incidents || []).filter(function (r) { return r.x === w.x && r.y === w.y && WSTYPE[r.type]; })[0];
+    return { w: w, st: st, done: done, type: inc ? WSTYPE[inc.type] : 'Worksite' };
+  }
+  function markHTML() {
+    var dd = function (k, v) { return '<dt>' + k + '</dt><dd>' + v + '</dd>'; }, is3d = three && $('#map').classList.contains('is3d');
+    if (mark.kind === 't') {
+      var t = D.teams.filter(function (o) { return o.id === mark.ref; })[0]; if (!t) return ''; var d = detect(t);
+      return '<h4><span>Team ' + (t.id + 1) + '</span><button type="button" aria-label="Close">&times;</button></h4>' +
+        '<p class="big">' + status(t) + '</p>' +
+        '<dl>' + dd('Role', SPEC[t.spec]) + dd('Stamina', Math.round(t.stamina) + (t.stamina < 30 ? ' · must rest soon' : '')) + (t.equip == null ? '' : dd('Equipment', t.equip + (t.equip < 30 ? ' · must restock' : ''))) +
+        dd('Position', t.x + ', ' + t.y) + (t.dest && t.status === 1 ? dd('Heading to', (t.site || '') + ' (' + t.dest[0] + ', ' + t.dest[1] + ')') : '') + '</dl>' +
+        '<p class="' + d.cls + '">' + d.text + '</p>' +
+        (truth && t.fault ? '<p class="truth">Injected (ground truth): ' + FAULT.filter(function (_, i) { return t.fault & (1 << i); }).join(', ') + ' fault</p>' : '') +
+        '<div class="acts">' + (is3d ? '<button type="button" class="fly" data-a="follow">Follow</button>' : '') + '<button type="button" class="fly" data-a="list">Show in Teams</button></div>';
+    }
+    var i = wsInfo(mark.ref); if (!i) return '';
+    var s = i.st[1], what = s === 3 ? 'Complete' : s === 0 ? 'No team yet' : 'Team ' + (i.st[3] + 1) + (s === 2 ? ' working' : ' on the way');
+    return '<h4><span>' + i.w.id + '</span><button type="button" aria-label="Close">&times;</button></h4>' +
+      '<p class="big">' + what + '</p>' +
+      '<dl>' + dd('Kind', i.type) + (s !== 3 ? dd('Live victims', 'L-' + i.st[2]) : '') + dd('Found', tplus(i.w.found)) +
+      (s === 3 ? dd('Completed', tplus(i.done)) : dd('Waiting', tplus(D.tick - i.w.found).replace('T+', ''))) + dd('Position', i.w.x + ', ' + i.w.y) + '</dl>' +
+      (is3d ? '<div class="acts"><button type="button" class="fly" data-a="fly">Fly here</button></div>' : '');
+  }
+  function refreshMark() {
+    if (!mark) return; var c = $('#markCard'), h = markHTML(); if (!h) { closeMark(); return; }
+    c.innerHTML = h;
+    c.querySelector('h4 button').onclick = closeMark;
+    c.querySelectorAll('[data-a]').forEach(function (b) {
+      b.onclick = function () {
+        var a = b.dataset.a;
+        if (a === 'follow') { selTeam = mark.ref; three.follow = true; $('#camFollow').setAttribute('aria-pressed', 'true'); renderPane(); }
+        if (a === 'list') { selTeam = mark.ref; var tb = document.querySelector('[data-tab="teams"]'); if (tb && tab !== 'teams') tb.click(); else renderPane(); var r = document.querySelector('#teamList .team[data-id="' + mark.ref + '"]'); if (r) r.scrollIntoView({ block: 'nearest' }); }
+        if (a === 'fly') { var w = wsInfo(mark.ref).w; flyTo(w.x + .5, w.y + .5); }
+      };
+    });
+  }
+  function showMark(h, px, py) {
+    $('#secCard').hidden = true; mark = { kind: h.kind, ref: h.ref }; var c = $('#markCard'); c.hidden = false; refreshMark();
+    var mp = $('#map').getBoundingClientRect();
+    c.style.left = Math.min(Math.max(8, px + 14), mp.width - 286) + 'px'; c.style.top = Math.min(Math.max(60, py + 14), mp.height - c.offsetHeight - 8) + 'px';
+  }
+  function closeMark() { mark = null; $('#markCard').hidden = true; }
+  function choose(sec, px, py) {
+    if (!sec) return;
+    if (sec.inner) setFocus();
+  }
+  function flyTo(cx, cz) {
+    if (!three) return; var tg = three.controls.target, c = three.cam, dx = cx - tg.x, dz = cz - tg.z, n = 0;
+    three.follow = false; $('#camFollow').setAttribute('aria-pressed', 'false');
+    (function step() { if (n++ > 30) return; tg.x += dx / 30; tg.z += dz / 30; c.position.x += dx / 30; c.position.z += dz / 30; requestAnimationFrame(step); })();
+  }
+  /* the picker: A first, then the sectors around (nearest ring) */
+  function openMenu() {
+    var m = $('#secMenu'), row = function (key, name, txt, sel) { return '<button type="button" role="option" data-k="' + key + '" aria-selected="' + !!sel + '"><b>' + name + '</b><span>' + txt[0] + '</span><small>' + txt[1] + '</small></button>'; };
+    var h = '<div class="grp">Simulated in this run</div>' + row('all', 'A', ['Sector A', innerStats()], true);
+    m.innerHTML = h; m.hidden = false; $('#secBtn').setAttribute('aria-expanded', 'true');
+    m.querySelectorAll('button').forEach(function (b) {
+      b.onclick = function () {
+        var k = b.dataset.k; m.hidden = true; $('#secBtn').setAttribute('aria-expanded', 'false');
+        if (k === 'all') setFocus();
+      };
+    });
+  }
+  $('#secBtn').onclick = function (e) { e.stopPropagation(); if ($('#secMenu').hidden) openMenu(); else { $('#secMenu').hidden = true; this.setAttribute('aria-expanded', 'false'); } };
+  document.addEventListener('click', function (e) { if (!e.target.closest('.secpick')) { $('#secMenu').hidden = true; $('#secBtn').setAttribute('aria-expanded', 'false'); } });
+  /* pointer on the flat map */
+  (function () {
+    var cv = $('#cv'), at = function (e) { var b = cv.getBoundingClientRect(); if (!LAYOUT) return null; return sectorAt(Math.floor((e.clientX - b.left - LAYOUT.ox) / LAYOUT.q), Math.floor((e.clientY - b.top - LAYOUT.oy) / LAYOUT.q)); };
+    var mk = function (e) { var b = cv.getBoundingClientRect(); return hitAt(flatHits, e.clientX - b.left, e.clientY - b.top); };
+    cv.addEventListener('mousemove', function (e) {
+      var m0 = mk(e), s0 = m0 ? null : at(e), k = s0 ? (s0.inner || s0.name) : null;
+      cv.style.cursor = m0 || s0 ? 'pointer' : '';
+      if (k !== (hoverSec ? (hoverSec.inner || hoverSec.name) : null)) { hoverSec = s0; draw(); }
+    });
+    cv.addEventListener('mouseleave', function () { if (hoverSec) { hoverSec = null; draw(); } });
+    cv.addEventListener('click', function (e) { var b = cv.getBoundingClientRect(), m0 = mk(e); if (m0) showMark(m0, e.clientX - b.left, e.clientY - b.top); else { closeMark(); choose(at(e), e.clientX - b.left, e.clientY - b.top); } });
+  })();
+  /* pointer in 3D: a ray onto the ground; a click is a press that did not drag the camera */
+  (function () {
+    var cv = $('#cv3'), down = null, ray = null, plane = null;
+    var at = function (e) {
+      if (!three) return null; ray = ray || new THREE.Raycaster(); plane = plane || new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+      var b = cv.getBoundingClientRect(), v = new THREE.Vector2((e.clientX - b.left) / b.width * 2 - 1, -(e.clientY - b.top) / b.height * 2 + 1), hit = new THREE.Vector3();
+      ray.setFromCamera(v, three.cam); if (!ray.ray.intersectPlane(plane, hit)) return null;
+      return sectorAt(Math.floor(hit.x), Math.floor(hit.z));
+    };
+    cv.addEventListener('pointerdown', function (e) { down = [e.clientX, e.clientY]; });
+    cv.addEventListener('pointerup', function (e) {
+      if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 5 && e.button === 0) {
+        var b = cv.getBoundingClientRect(), px = e.clientX - b.left, py = e.clientY - b.top, m0 = hitAt(hits3D(), px, py);
+        if (m0) showMark(m0, px, py); else { closeMark(); choose(at(e), px, py); }
+      }
+      down = null;
+    });
+    var last = 0;
+    cv.addEventListener('pointermove', function (e) {
+      if (down || performance.now() - last < 80) return; last = performance.now();
+      var b = cv.getBoundingClientRect(), m0 = hitAt(hits3D(), e.clientX - b.left, e.clientY - b.top);
+      cv.style.cursor = m0 ? 'pointer' : '';
+      var s0 = m0 ? null : at(e), k = s0 ? (s0.inner || s0.name) : null;
+      if (k !== (hoverSec ? (hoverSec.inner || hoverSec.name) : null)) { hoverSec = s0; update3D(); }
+    });
+  })();
+
+  /* ---------------- controls ---------------- */
+  function setView(v3) {
+    if (v3 && !init3D()) v3 = false;   /* no WebGL: stay flat */
+    $('#map').classList.toggle('is3d', v3); $('#v3d').setAttribute('aria-pressed', v3); $('#vflat').setAttribute('aria-pressed', !v3);
+    if (v3) { resize3D(); update3D(); } else draw();
+  }
+  $('#v3d').onclick = function () { setView(true); }; $('#vflat').onclick = function () { setView(false); };
+  $('#truth').onclick = function () { truth = !truth; this.setAttribute('aria-pressed', truth); render(); };
+  function showTab(name) { tab = name; document.querySelectorAll('.tabs button').forEach(function (o) { o.setAttribute('aria-selected', o.dataset.tab === name); }); renderPane(); }
+  document.querySelectorAll('.tabs button').forEach(function (b) { b.onclick = function () { showTab(b.dataset.tab); }; });
+  $('#ticker').onclick = function () { showTab('events'); };
+  $('#tlBtn').onclick = function () { var o = $('#app').classList.toggle('tl-open'); this.setAttribute('aria-expanded', o); this.innerHTML = 'Detection detail ' + (o ? '&#9652;' : '&#9662;'); requestAnimationFrame(function () { draw(); fitTeams(); }); };
+  $('#drawerBtn').onclick = function () { document.body.classList.toggle('drawer'); };
+  $('#legend').innerHTML = N.legendHTML(['destroyed', 'moderate', 'slight', 'none', 'wsOpen', 'wsActive', 'wsDone', 'task', 'assembly', 'barrier', 'epicentre', 'teamReady', 'teamMoving', 'teamWorking', 'teamResting', 'roadMain', 'roadStreet', 'bridge', 'water', 'aoi', 'context']);
+  $('#rawClose').onclick = function () { $('#rawDlg').close(); };
+  $('#howClose').onclick = function () { $('#howDlg').close(); };
+  $('#howDlg').addEventListener('click', function (e) { if (e.target === this) this.close(); });
+  $('#rawDlg').addEventListener('click', function (e) { if (e.target === this) this.close(); });
+  var dlg = $('#legendDlg');
+  $('#legendBtn').onclick = function () { dlg.showModal(); };
+  $('#legendClose').onclick = function () { dlg.close(); };
+  dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+  var rz; window.addEventListener('resize', function () { clearTimeout(rz); rz = setTimeout(function () { draw(); fitTeams(); drawRing(); resize3D(); }, 120); });
+  if (window.RNSky) RNSky.onChange(function () { draw(); if (three) update3D(); });
+  var FAULTS = { none: 'No faults', mobility: 'Movement faults', communication: 'Radio faults', resource: 'Supply faults', combined: 'Mixed faults', random: 'Rough faults' };
+  function loadFail(msg) { $('#loadingTxt').innerHTML = msg + ' <a href="/replay">Choose another run</a>'; }
+  function start() {
+    var hd = RUN.header || {}, hrs = RUN.length() * TICK_S / 3600, loss = hd.link_loss;
+    var demo = /^demo_/.test(RUN_NAME);
+    $('#runName').textContent = demo ? 'Demo mission' : 'Recorded run';
+    $('#runFacts').innerHTML = ['Simulated city', (Math.round(hrs * 10) / 10) + ' h', FAULTS[hd.fault_profile] || (hd.fault_profile ? hd.fault_profile + ' faults' : 'Faults unknown'),
+      (loss == null ? '5%' : Math.round(loss * 100) + '%') + ' radio loss', 'Seed ' + (hd.seed == null ? '?' : hd.seed)].join(' &middot; ');
+    document.title = 'RescueNet · ' + (demo ? 'Demo mission' : 'Seed ' + hd.seed);
+    var t0 = parseInt(PARAMS.get('t'), 10);
+    D = RUN.at(isNaN(t0) ? RUN.first() : t0); W = D.W; H = D.H; SZ = W;
+    CTX = window.RNContext.build({ W: W, H: H, seed: hd.seed, roads: D.roads, water: D.water, buildings: D.buildings, epicentre: D.epicenter }, 36, CTXDATA);
+    $('#loading').hidden = true;
+    renderTimeline(); setTick(D.tick);
+    var want3D = !window.matchMedia('(max-width: 860px)').matches;
+    if (want3D && window.THREE && window.THREE.OrbitControls) setView(true);
+    else { setView(false); if (want3D) window.addEventListener('three-ready', function () { setView(true); }, { once: true }); }
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { draw(); fitTeams(); });   /* text widths change once the fonts arrive */
+  }
+  if (!RUN_NAME) { loadFail('No run chosen.'); return; }
+  Promise.all([
+    fetch('/api/recordings/' + encodeURIComponent(RUN_NAME)).then(function (r) { if (!r.ok) throw new Error(r.status === 404 ? 'This run is not in the app\'s recordings.' : 'The app could not read this run (' + r.status + ').'); return r.text(); }),
+    fetch('/api/recordings/' + encodeURIComponent(RUN_NAME) + '/preview').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
+  ]).then(function (got) {
+    RUN = RNRun.fromText(got[0]); CTXDATA = got[1] && got[1].context || null;
+    if (RUN.first() == null) { loadFail('This run has no ticks in it.'); return; }
+    start();
+  }).catch(function (e) { loadFail(e.message || 'The app did not answer.'); });
+})();
+</script>
+</body>
+</html>
