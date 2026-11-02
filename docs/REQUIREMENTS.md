@@ -113,3 +113,19 @@ the fitness tiers' soft floors), so the check only means something once a fault 
 | F4 | A new fault in the simulator that makes a team tire faster (standing in for injury, heat stress or illness), so the check can be measured like the other fault classes: detection rate, false alarms, delay, paired by seed. | TO DO |
 | F5 | Wording: the alert says "tiring faster than expected", never "stamina fault confirmed"; results go into `docs/CLAIMS.md` as SIM-ONLY until tested against real data. | TO DO |
 | F6 | On the sim page: the stamina meter shows the expected band behind the observed value, and the team row says "tiring faster than expected" when the gap stays large. | TO DO (after F1–F4) |
+
+## 9. Open work (the running list)
+
+Everything still to do that is not already a row above. Add to it as things come up; move a row to its section (or
+delete it) when it is done.
+
+| ID | What | Status |
+|---|---|---|
+| W1 | Named replay scenarios: which special runs to build and what to call them. The loading screen already shows a run's name and city (`static/shared/rn-loader.js`). | OPEN (choose them) |
+| W2 | Re-run the detection evaluation on the rebuilt cities and update or withdraw each SIM-ONLY number in `docs/CLAIMS.md` (they were measured on the old cities). | TO DO (next, now the sim page is done) |
+| W3 | Board mode on real hardware: launch, the map, sending a team (`/api/board/override` and its acks), stop. So far only against the test-only fake board (`DASHBOARD_FAKE_BOARD=1`, `make check-sim-e2e`). | TO DO |
+| W4 | On the sim page, not yet shown: the exit gateways on the map; the radio counters (`vbus` in each frame); how long a worksite has waited, as time pressure. | TO DO |
+| W5 | Checks to bring over from the retired dashboard test into `check-sim-e2e` (list in the retirement commit's report; old test at `git show 49d5270:laptop/tools/dashboard_e2e_selftest.py`): stricter take-over comparison (teams, incidents, the new recording's `takeover_from`), run-control edge cases, Release clearing the frame's `override`, no drag-and-drop on a recording, building footprints and damage history from the data, the flat fallback without WebGL, 3D camera (orbit, zoom, Reset, Top, Follow), the page fitting the window. | TO DO |
+| W6 | `KNOWN_LIMITATIONS.md` section D was reworded from the code when the old dashboard was retired: check each item against the running sim page. | TO DO |
+| W7 | The published landing artifact (the copy with the run list) is behind the app: no intro, no speed choice, the old board link. Republish only if that link is shared. | TO DO (if shared) |
+| W8 | City generator follow-ups, including the exits redesign (section 6). | DEFERRED |
