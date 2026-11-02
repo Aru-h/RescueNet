@@ -989,8 +989,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "--probe-road-* options need --probe-roadknow=obs|prior\n");
         return 2;
     }
+#if VIRTUAL_BUS_ENABLED   /* a build without the virtual bus has no consensus to set (it did not link without this) */
     if(g_probe.no_comm_faults)
         consensus_set_link_loss(0.0f);   /* C2: perfect comms also means no vbus loss */
+#endif
     if(g_planner.prevent != 0 &&
        g_planner.p_source != PLANNER_P_HAZARD && g_planner.p_source != PLANNER_P_BOTH)
     {

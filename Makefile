@@ -828,6 +828,21 @@ check-fault-predictor-features-selftest:
 # frames and compares). See zone_parity_test.c's own top-of-file comment.
 ZONE_PARITY_DIR = build/zone-parity
 
+# The city generator (laptop/tools/city_generator_selftest.c, seeds 1-200 by
+# default; CITY_GENERATOR_SEEDS="first last"): no road inside a building and no
+# shared building cells, one road network, few solid blocks of road, a crossing
+# on every river, residential the largest district, exits spaced apart, storage
+# limits, and sectors at other world offsets agreeing with the home sector.
+CITY_GENERATOR_SEEDS ?= 1 200
+.PHONY: check-city-generator
+check-city-generator:
+	@mkdir -p $(SELFTEST_BIN_DIR)
+	@echo "  CC      $(TOOLS_DIR)/city_generator_selftest.c"
+	@$(CC) $(SELFTEST_CFLAGS) -o $(SELFTEST_BIN_DIR)/city_generator_selftest \
+		$(TOOLS_DIR)/city_generator_selftest.c \
+		$(CORE_SOURCES) $(LAPTOP_DIR)/debug.c $(LAPTOP_DIR)/snapshot.c $(LDFLAGS)
+	@cd $(SELFTEST_BIN_DIR) && ./city_generator_selftest $(CITY_GENERATOR_SEEDS)
+
 check-zone-parity:
 	@mkdir -p $(ZONE_PARITY_DIR)
 	@echo "  CC      $(TOOLS_DIR)/zone_parity_test.c (gen)"
@@ -967,17 +982,22 @@ check-consensus-airtime:
 # incident_priority/victim_count are compared after mapping the base's old
 # no-task sentinel (-1) to the candidate's new one (0), so a genuine
 # regression in either still fails (see consensus_shadow_compare.py's
-# EXCLUDED_COLUMNS/REMAPPED_COLUMNS and module docstring). The base is
-# pinned to e37181a, the last submission commit before consensus was
-# merged: the branch tip now contains consensus itself.
-CONSENSUS_BASE_REF ?= e37181a
+# EXCLUDED_COLUMNS/REMAPPED_COLUMNS and module docstring). The base used to be
+# pinned to e37181a, the last submission commit before consensus was merged;
+# that held (checked) up to cd6871c. The city generator was rebuilt after
+# that, so every commit before it builds different cities and the comparison
+# could no longer isolate consensus. The base is now the same code built with
+# no consensus at all (LAPTOP_CONSENSUS_FLAGS=''), which tests the same thing -
+# shadow mode changes nothing - without depending on an old checkout's cities.
+CONSENSUS_BASE_REF ?= HEAD
+CONSENSUS_BASE_FLAGS ?= LAPTOP_CONSENSUS_FLAGS=
 SHADOW_DIR = build/consensus-shadow
 
 check-consensus-shadow-regression:
 	@rm -rf $(SHADOW_DIR)
 	@mkdir -p $(SHADOW_DIR)/base
 	@git archive $(CONSENSUS_BASE_REF) | tar -x -C $(SHADOW_DIR)/base
-	@$(MAKE) --no-print-directory -C $(SHADOW_DIR)/base tron >/dev/null
+	@$(MAKE) --no-print-directory -C $(SHADOW_DIR)/base tron $(CONSENSUS_BASE_FLAGS) >/dev/null
 	@$(CC) $(CFLAGS) -DVIRTUAL_BUS_ENABLED=1 -DCONSENSUS_ENFORCE=0 $(LAPTOP_INCLUDES) \
 		-o $(SHADOW_DIR)/tron_shadow $(LAPTOP_SOURCES) $(LDFLAGS)
 	@$(PYTHON) $(TOOLS_DIR)/consensus_shadow_compare.py $(SHADOW_DIR)/base/$(TARGET) $(SHADOW_DIR)/tron_shadow
@@ -995,7 +1015,11 @@ check-consensus-shadow-regression:
 # outputs), simpler because there's no cross-version float-format or
 # column-set drift to reconcile here - a real difference would be an
 # actual bug, so this is a byte-for-byte diff, not one with a tolerance.
-LIVE_OVERRIDE_BASE_REF ?= d5cb1cf
+# It was byte-identical to d5cb1cf (the commit before Part 4) up to cd6871c. The
+# city generator was rebuilt after that, so every older commit builds different
+# cities; the reference is now 26f038d, the generator rebuild, and the check
+# guards that nothing since changes the dataset with nothing on stdin.
+LIVE_OVERRIDE_BASE_REF ?= 26f038d
 LIVE_OVERRIDE_DIR = build/live-override-noop
 
 check-live-override-noop-regression: $(TARGET)
@@ -1282,7 +1306,10 @@ check-evaluate-determinism:
 # identical hashes on every line; (3) a different seed does not (the hash
 # actually sees the state). Compare board logs with
 # laptop/tools/statehash_compare.py.
-STATE_HASH_C1_MD5 = b248bea72ce2ceb81389762dccc0a749
+# The value is the new generator's (feature/city-generator, CHANGELOG "City generator rebuilt"): the C1 dataset in
+# AI_EVALUATION_BRIEF.md (b248bea72ce2ceb81389762dccc0a749) was made on the old cities, which no longer exist. A plain run
+# without --state-hash gives this same md5, so the flag is still read-only.
+STATE_HASH_C1_MD5 = b3d940050b820554ff6954677e57d294
 .PHONY: check-state-hash
 check-state-hash: $(TARGET)
 	@rm -rf build/state-hash && mkdir -p build/state-hash/a build/state-hash/b build/state-hash/c
