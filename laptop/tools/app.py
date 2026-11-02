@@ -1430,16 +1430,20 @@ def _live_run_response(args, seed, ticks, fault_profile, link_loss, takeover=Non
                                    "The recording was made on a different code version or is not reproducible.")
                             yield f"data: {json.dumps({'type': 'takeover_error', 'message': msg})}\n\n"
                             return
+                        # Pause first: copying the recording's earlier frames
+                        # below can take longer than one tick (a 12 h recording
+                        # holds megabytes before tick T), and the run must not
+                        # get past tick T meanwhile.
+                        paused = False
+                        if takeover["start_paused"] and hasattr(signal, "SIGSTOP"):
+                            _, status = _live_signal("pause")
+                            paused = status == 200
                         recorder = _RecordingWriter(
                             seed, fault_profile, ticks, link_loss,
                             extra={"takeover_from": {"recording": takeover["source"], "tick": takeover["tick"]}})
                         for prefix_line in takeover["prefix_lines"] + held_lines:
                             recorder.write_line(prefix_line)
                         del held_lines[:]
-                        paused = False
-                        if takeover["start_paused"] and hasattr(signal, "SIGSTOP"):
-                            _, status = _live_signal("pause")
-                            paused = status == 200
                         ready = {"type": "takeover_ready", "tick": takeover["tick"], "paused": paused,
                                  "warning": takeover["warning"], "recording": recorder.path.name,
                                  "prior_overrides": takeover["prior_overrides"]}

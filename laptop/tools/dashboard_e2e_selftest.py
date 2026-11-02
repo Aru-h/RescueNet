@@ -34,8 +34,10 @@ or `make check-dashboard-e2e`.
 """
 
 import contextlib
+import gzip
 import json
 import os
+
 import shutil
 import socket
 import subprocess
@@ -526,7 +528,14 @@ def _view3d_motion_check(page, console_errors):
       out.reroutedDashed = map3d.teamInfo(id).dashed;
       // Route validity on the real map: starts at the team, ends at the destination, every hop one cell, every cell navigable.
       drawFrame(mk(T + 60, cell[0], cell[1]), true);
-      drawFrame(mk(T + 61, cell[0], cell[1], { dest_x: 20, dest_y: 20 }), true);
+      // a far destination the planner can really reach on this map (a fixed cell may be a building or the river)
+      let far = null, farD = -1;
+      for (let y = 0; y < 36; y++) for (let x = 0; x < 36; x++) {
+        const d = Math.abs(x - cell[0]) + Math.abs(y - cell[1]);
+        if (d > farD && terr.cells[y * 36 + x].navigable && RoutePlanner.plan(terr, cell[0], cell[1], x, y)) { far = [x, y]; farD = d; }
+      }
+      out.far = far;
+      drawFrame(mk(T + 61, cell[0], cell[1], { dest_x: far[0], dest_y: far[1] }), true);
       const r = map3d.teamInfo(id).route;
       out.routeLen = r ? r.length : 0;
       if (r) {
@@ -548,7 +557,7 @@ def _view3d_motion_check(page, console_errors):
           f"[3d] a team moving east faces east (heading {res['heading']})")
     check(res["dashed"] is False and res["faultDashed"] is True and res["healthyDashed"] is False and res["reroutedDashed"] is True,
           f"[3d] routes are solid when healthy, dashed when faulted or just re-targeted (healthy {res['dashed']}, faulted {res['faultDashed']}, recovered {res['healthyDashed']}, rerouted {res['reroutedDashed']})")
-    check(res["routeLen"] > 2 and res["routeStart"] == res["cell"] and res["routeEnd"] == [20, 20] and res["routeStepsOk"] and res["routeNavigable"],
+    check(res["routeLen"] > 2 and res["routeStart"] == res["cell"] and res["routeEnd"] == res["far"] and res["routeStepsOk"] and res["routeNavigable"],
           f"[3d] the drawn route runs cell to cell over navigable terrain from the team to its destination ({res['routeLen']} cells)")
 
 
@@ -1238,14 +1247,17 @@ def _view3d_pin_depth_check(page, console_errors):
     check(len(real_errors) == 0, f"no UNEXPECTED console/page errors in the pin depth check (got {real_errors[:5]})")
 
 
-GATEWAY_SEED = 1072      # a real world whose gateway 0 (35, 23) is a river-bank cell: water on the cells beside it (found by the placement audit)
+GATEWAY_SEED = 1012      # a real world whose gateway 0 (0, 29) is a river-bank cell: water on the cells beside it, none under it (found by scanning seeds 1000-1199 on the rebuilt generator)
+OLD_FORMAT_RECORDING = "old_format_no_gateways_seed1041.jsonl.gz"   # the demo with STATICENV's "gateways" field taken out (made at test start)
 
 
 def _gateway_check(page, console_errors, recordings_dir):
     """Evacuation gateways. Everything here is REAL simulator output: a short
-    live run of seed 1072 (STATICENV's "gateways" from laptop/debug.c, one of
-    them on a river bank) and the recording that run leaves behind; the
-    bundled demo recording predates the field and is the "old recording".
+    live run of seed 1012 (STATICENV's "gateways" from laptop/debug.c, one of
+    them on a river bank) and the recording that run leaves behind. The "old
+    recording" is the bundled demo with the "gateways" field taken out of its
+    STATICENV lines (OLD_FORMAT_RECORDING, written at test start): the demo was
+    re-recorded on the rebuilt generator and now carries the field.
     The one synthetic fixture (a team moved onto a gateway cell) is labelled
     where it is used."""
     page.evaluate("() => { map3d && map3d.cancelCamera(); hideMapCard(); selectedMarker = null; }")
@@ -1318,8 +1330,8 @@ def _gateway_check(page, console_errors, recordings_dir):
         page.evaluate("() => Replay.seekToIndex(Math.min(8, Replay.frameCount - 1))"); page.wait_for_timeout(300)
         check(page.evaluate("() => Replay.envAt(0).gateways.length") == 3, "the recording keeps the gateways on its STATICENV")
         check_views("replay")
-    # 4. an old recording (the bundled demo predates the field): no gateways, nothing breaks
-    page.select_option("#replaySelect", DEMO_RECORDING); page.click("#replayLoadBtn")
+    # 4. an old recording (the demo with the field taken out): no gateways, nothing breaks
+    page.select_option("#replaySelect", OLD_FORMAT_RECORDING); page.click("#replayLoadBtn")
     page.wait_for_function("() => Replay.frameCount > 0 && Replay.currentIndex === 0", timeout=10000)
     page.evaluate("() => Replay.seekToIndex(150)"); page.wait_for_timeout(300)
     old = {}
@@ -2276,6 +2288,15 @@ def main():
     _demo_src = os.path.join(TOOLS_DIR, "recordings", DEMO_RECORDING)
     if os.path.exists(_demo_src):
         shutil.copy(_demo_src, recordings_tmpdir)
+        # The old-format fixture: the same recording, STATICENV without "gateways"
+        # (what every recording made before the field existed looks like).
+        with gzip.open(_demo_src, "rt") as src, gzip.open(os.path.join(recordings_tmpdir, OLD_FORMAT_RECORDING), "wt") as dst:
+            for line in src:
+                if line.startswith("STATICENV "):
+                    env_obj = json.loads(line[len("STATICENV "):])
+                    env_obj.pop("gateways", None)
+                    line = "STATICENV " + json.dumps(env_obj, separators=(",", ":")) + "\n"
+                dst.write(line)
     if not _port_open(HOST, PORT):
         we_started_it = True
         env = dict(os.environ, SIM_ONLY="1", DASHBOARD_RECORDINGS_DIR=recordings_tmpdir)
@@ -2354,27 +2375,34 @@ def main():
             hit_count = page.evaluate("() => (typeof mapHitTargets !== 'undefined') ? mapHitTargets.length : -1")
             check(hit_count > 0, f"the map produced hit targets for the current frame (got {hit_count})")
 
-            # Regression test for a real bug report: STATICENV's building
-            # x/y is the footprint's CENTRE (core/environment.c's
-            # place_building_rect: loc_x = x + w/2, w/h are the full
-            # footprint), not its top-left - drawBuildings() must derive
-            # the footprint rect by subtracting HALF the footprint from
-            # that centre, or every building renders shifted by half its
-            # own size. Tests the exported pure function directly rather
-            # than inferring centring from rendered pixels.
+            # Regression test for real bug reports: STATICENV's building
+            # x/y is the footprint's centre CELL (core/environment.c:
+            # loc_x = top-left x + w/2, integer division), not its
+            # top-left, so the building covers cells x - floor(w/2) ..
+            # x - floor(w/2) + w - 1; a cell spans c - 0.5 .. c + 0.5 in
+            # world units. x - w/2 (an earlier fix) is half a cell off for
+            # even widths. Checks the exported pure function on EVERY
+            # building: each rect lies on those cell edges, and no two
+            # rects overlap (the simulator never lets footprints share a
+            # cell - make check-city-generator).
             buildings = page.evaluate("() => (staticEnvironment && staticEnvironment.buildings) || []")
             check(len(buildings) > 0, f"static environment produced at least one building (got {len(buildings)})")
             if buildings:
-                b = buildings[0]
-                rect = page.evaluate("(b) => MapRender.buildingFootprintWorldRect(b)", b)
-                w = max(1, b["w"] or 1)
-                h = max(1, b["h"] or 1)
-                expected_x, expected_y = b["x"] - w / 2, b["y"] - h / 2
-                centred = abs(rect["x"] - expected_x) < 1e-6 and abs(rect["y"] - expected_y) < 1e-6
-                check(centred,
-                      "building footprint is centred on STATICENV's x/y, not shifted by half its footprint "
-                      f"(building x={b['x']} y={b['y']} w={b['w']} h={b['h']} -> rect {rect!r}, "
-                      f"expected top-left ({expected_x}, {expected_y}))")
+                rects = page.evaluate("(bs) => bs.map((b) => MapRender.buildingFootprintWorldRect(b))", buildings)
+                off = []
+                for b, r in zip(buildings, rects):
+                    w, h = max(1, b["w"] or 1), max(1, b["h"] or 1)
+                    ex, ey = b["x"] - w // 2 - 0.5, b["y"] - h // 2 - 0.5
+                    if abs(r["x"] - ex) > 1e-6 or abs(r["y"] - ey) > 1e-6 or r["w"] != w or r["h"] != h:
+                        off.append((b["id"], b["x"], b["y"], w, h, r))
+                check(not off, f"every building's footprint rect covers exactly its own cells ({len(buildings)} buildings; wrong: {off[:3]})")
+                clash = []
+                for i in range(len(rects)):
+                    for j in range(i + 1, len(rects)):
+                        a, c = rects[i], rects[j]
+                        if min(a["x"] + a["w"], c["x"] + c["w"]) - max(a["x"], c["x"]) > 1e-6 and min(a["y"] + a["h"], c["y"] + c["h"]) - max(a["y"], c["y"]) > 1e-6:
+                            clash.append((buildings[i]["id"], buildings[j]["id"]))
+                check(not clash, f"no two building footprint rects overlap (got {clash[:5]})")
 
             cam_zoom = page.evaluate("() => mapCamera.state.zoom")
             cam_min = page.evaluate("() => mapCamera.state.minZoom")

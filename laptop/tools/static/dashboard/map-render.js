@@ -272,15 +272,18 @@
     ctx.restore();
   }
 
-  // STATICENV's building x/y IS the footprint's centre, not its
-  // top-left (core/environment.c's place_building_rect: loc_x = x +
-  // w/2, w/h are the full footprint - see dashboard_e2e_selftest.py's
-  // building-footprint-centring check for the regression test this
-  // backs). Exported so that test can call it directly rather than
-  // inferring centring from rendered pixels.
+  // STATICENV's building x/y is the footprint's centre CELL, not its
+  // top-left (core/environment.c: loc_x = top-left x + w/2, integer
+  // division, w/h the full footprint). The building covers cells
+  // x - floor(w/2) .. x - floor(w/2) + w - 1, and a cell spans
+  // c - 0.5 .. c + 0.5 in world units, so the rect starts at
+  // x - floor(w/2) - 0.5. (x - w/2 is the same for odd w but half a
+  // cell off for even w.) See dashboard_e2e_selftest.py's
+  // building-footprint check, which compares this with the cells the
+  // simulator marks as the building's. Exported for that test.
   function buildingFootprintWorldRect(b) {
     const w = Math.max(1, b.w || 1), h = Math.max(1, b.h || 1);
-    return { x: b.x - w / 2, y: b.y - h / 2, w, h };
+    return { x: b.x - Math.floor(w / 2) - 0.5, y: b.y - Math.floor(h / 2) - 0.5, w, h };
   }
 
   // Buildings: a small dot at the true centre, sized by floor count,
