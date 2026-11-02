@@ -273,13 +273,25 @@ def main():
         # rejected up front, not accepted and left to silently self-
         # clear a tick later.
         system_task = next((i for i in frame["incidents"] if i.get("pool") == 1), None)
-        if system_task is not None:
-            send(proc, f"OVERRIDE {current_tick} 1 {system_task['id']}\n")
-            ack = read_ack(proc)
-            check(ack["result"] == "rejected" and ack["reason"] == "system_task",
-                  f"(3b) a system task's id is rejected as system_task, not silently accepted (got {ack})")
-        else:
+        # The rejection must be about the target being a system task, so it is sent for a team the sim would
+        # otherwise accept. Whether a team is free (not degraded, no elevated peer alarm: debug.c's
+        # live_override_team_unavailable()) is decided at the effective tick, a few ticks after this frame, so the
+        # teams are tried in turn and a "team_unavailable" answer moves on to the next. It used to be team 1 only,
+        # which depended on team 1 being free at that tick in one particular city.
+        if system_task is None:
             print("PASS: (3b) no system task existed yet to test against - not a failure of this check")
+        else:
+            ack = None
+            for team_id in range(1, len(frame["teams"])):
+                send(proc, f"OVERRIDE {current_tick} {team_id} {system_task['id']}\n")
+                ack = read_ack(proc)
+                if ack.get("reason") != "team_unavailable":
+                    break
+            if ack is not None and ack.get("reason") == "team_unavailable":
+                print("PASS: (3b) no team was free to test against - not a failure of this check")
+            else:
+                check(ack["result"] == "rejected" and ack["reason"] == "system_task",
+                      f"(3b) a system task's id is rejected as system_task, not silently accepted (got {ack})")
 
         # (4) a recognized command word with the wrong field count -
         # every line the sim reads gets exactly one ack, never silence.
@@ -378,18 +390,35 @@ def main():
         # degraded team "keeps working normally"), not a persistent
         # state, so testing immediately avoids the team recovering
         # before the test gets to it.
+        # The override takes effect a tick after the frame it was sent on, and a team can stop being degraded in
+        # that tick, so: only teams degraded on two frames running are tried, and if one is still "applied", the
+        # next frame says whether it had in fact recovered (then the override is cleared and the scan goes on) or
+        # was still degraded (a real failure).
+        prev_degraded = set()
         while frame["tick"] < TOTAL_TICKS - 5 and degraded_case is None:
             open_now = [i["id"] for i in frame["incidents"] if i["status"] != 3]
-
-            for t in frame["teams"]:
-                if t.get("degraded") and open_now:
-                    degraded_case = (frame["tick"], t["id"])
-                    send(proc, f"OVERRIDE {frame['tick']} {t['id']} {open_now[0]}\n")
-                    ack = read_ack(proc)
-                    check(ack["result"] == "rejected" and ack["reason"] == "team_unavailable",
-                          f"(9) a degraded team (id={t['id']}, tick {frame['tick']}) is rejected as team_unavailable (got {ack})")
-                    break
-
+            now_degraded = {t["id"] for t in frame["teams"] if t.get("degraded")}
+            steady = sorted(now_degraded & prev_degraded)
+            if steady and open_now:
+                tid = steady[0]
+                send(proc, f"OVERRIDE {frame['tick']} {tid} {open_now[0]}\n")
+                ack = read_ack(proc)
+                if ack["result"] == "rejected" and ack["reason"] == "team_unavailable":
+                    degraded_case = (frame["tick"], tid)
+                    check(True, f"(9) a degraded team (id={tid}, tick {frame['tick']}) is rejected as team_unavailable")
+                else:
+                    nxt = read_next_frame(proc)
+                    still = any(t["id"] == tid and t.get("degraded") for t in nxt["teams"])
+                    if still:
+                        degraded_case = (frame["tick"], tid)
+                        check(False, f"(9) a degraded team (id={tid}, tick {frame['tick']}) is rejected as team_unavailable (got {ack})")
+                    else:
+                        send(proc, f"OVERRIDE_CLEAR {nxt['tick']} {tid}\n")
+                        read_ack(proc)
+                    frame = nxt
+                    prev_degraded = {t["id"] for t in frame["teams"] if t.get("degraded")}
+                    continue
+            prev_degraded = now_degraded
             frame = read_next_frame(proc)
 
         if degraded_case is None:

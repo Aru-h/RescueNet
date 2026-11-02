@@ -21,6 +21,14 @@ described, it's every run, by construction. There is no sentinel mapping
 that would make the two run_id schemes agree, so unlike the columns below
 it is skipped outright rather than normalized.
 
+CONSENSUS_OWN_PREFIXES: the columns consensus and the virtual bus write
+themselves (consensus_*, peer_*, beacon_*, vbus_*). They are what shadow mode
+computes without acting on, so they are not compared. With the old base ref
+(e37181a) they lay past the base's own columns and were skipped that way; the
+base is now the same code built with no consensus at all (Makefile
+CONSENSUS_BASE_FLAGS), which writes them too (as zeros), so they are named
+here instead. Every other column - the whole simulation - must still match.
+
 REMAPPED_COLUMNS lists pre-existing columns compared *after* mapping the
 base's old no-task sentinel to the candidate's new one, so a genuine
 regression in either still fails the check - only the documented,
@@ -58,6 +66,7 @@ PROFILES = ["none", "combined", "communication"]
 # See the module docstring.
 EXCLUDED_COLUMNS = {"run_id"}
 REMAPPED_COLUMNS = {"incident_priority", "victim_count"}
+CONSENSUS_OWN_PREFIXES = ("consensus_", "peer_", "beacon_", "vbus_")
 FLOAT_TOLERANCE = 0.01
 
 
@@ -84,7 +93,8 @@ def compare(base_csv, cand_csv):
         n = len(base_header)
         if cand_header[:n] != base_header:
             return f"candidate header does not start with the baseline header"
-        excluded_idx = {i for i, name in enumerate(base_header) if name in EXCLUDED_COLUMNS}
+        excluded_idx = {i for i, name in enumerate(base_header)
+                        if name in EXCLUDED_COLUMNS or name.startswith(CONSENSUS_OWN_PREFIXES)}
         remapped_idx = {i for i, name in enumerate(base_header) if name in REMAPPED_COLUMNS}
         rows = 0
         for line_b, line_c in zip(b, c):
