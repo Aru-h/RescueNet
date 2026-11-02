@@ -331,6 +331,16 @@ int main(int argc, char **argv)
         /* Per-link loss probability on the virtual peer bus
          * (docs/architecture/CONSENSUS_DESIGN.md 3.5, decision D4: default 0.05). Ignored in a
          * build without the virtual bus. */
+        /* Generate this run's city as the sector at (X, Y) cells from the home sector, same seed: used to draw the city
+         * around a run (laptop/tools/map_context.py). Rivers, avenues and the earthquake carry on across sector edges. */
+        if(strncmp(argv[i], "--world-offset=", 15) == 0)
+        {
+            long wx = 0, wy = 0;
+            if(sscanf(argv[i] + 15, "%ld,%ld", &wx, &wy) == 2)
+                environment_set_world_offset((int32_t)wx, (int32_t)wy);
+            continue;
+        }
+
         if(strncmp(argv[i], "--vbus-loss=", 12) == 0)
         {
 #if VIRTUAL_BUS_ENABLED

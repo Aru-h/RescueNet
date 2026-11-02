@@ -230,6 +230,8 @@ void environment_apply_earthquake(uint32_t seed);
 void environment_validate_hazard_reachability(void);
 uint8_t environment_cell_is_navigable(int x, int y);
 uint8_t environment_cell_is_flood(int x, int y);
+/* Where the next generated sector sits in the world, in cells; (0, 0), the default, is the home sector. */
+void environment_set_world_offset(int32_t x, int32_t y);
 uint8_t environment_cell_travel_cost(int x, int y);
 uint8_t environment_cell_base_safety(int x, int y);
 void environment_register_safe_zone(uint8_t safezone_id, int16_t x, int16_t y);

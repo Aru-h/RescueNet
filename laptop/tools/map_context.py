@@ -2,8 +2,14 @@
 
 Step 1 is the run itself: one 36 x 36 city, generated and simulated as always (nothing here changes it). Step 2 builds
 the eight areas around it, one sector deep on every side, so the sim page can draw the city carrying on past the edge of
-the run instead of stopping at it. Each area is a real city from the same generator (`./tron SEED 1 1 --live`, read
-from its STATICMAP and STATICENV lines), picked and turned so that it meets its neighbours well:
+the run instead of stopping at it.
+
+Default (--mode world): the generator builds them itself, as the sectors next to the run with the same seed
+(`./tron SEED 1 1 --live --world-offset=X,Y`): the river, the avenues, the terrain and the earthquake carry on across
+the edges by construction; the joining below only tidies the odd street that stops a cell short.
+
+--mode pool (for generators from before --world-offset): each area is another city from the generator, picked from a
+pool and turned so that it meets its neighbours well:
 
   - water lines up across each edge: a coast strip in the run meets a coast strip in the area beside it, so the two
     form one channel with land on both sides (never open sea), and a river leaving the run carries on;
@@ -26,9 +32,11 @@ N = 36
 POOL_BASE = 700000   # pool cities are seeds POOL_BASE, POOL_BASE + 1, ...: far from any seed a run would use
 
 
-def generate(binary, seed):
-    """One generated city: water cells, road classes and buildings (top-left), from a one-step run."""
-    out = subprocess.run([binary, str(seed), '1', '1', '--live'], capture_output=True, text=True, check=True).stdout
+def generate(binary, seed, offset=None):
+    """One generated city: water cells, road classes and buildings (top-left), from a one-step run. offset: (x, y) cells
+    from the home sector, to generate the sector next to it with the same seed (--world-offset)."""
+    args = [binary, str(seed), '1', '1', '--live'] + ([f'--world-offset={offset[0]},{offset[1]}'] if offset else [])
+    out = subprocess.run(args, capture_output=True, text=True, check=True).stdout
     env = smap = None
     for line in out.splitlines():
         if line.startswith('STATICENV ') and env is None:
@@ -125,12 +133,18 @@ def fit(a, side, b):
     return -6 * miss + 2 * meet - (3 if not ra and rb else 0)
 
 
-def build(seed, binary, size, cache):
+def build(seed, binary, size, cache, mode='world'):
     run = generate(binary, seed)
-    cities = pool(binary, size, cache)
     placed = {(0, 0): run}
-    laid = [[turned(c, t) for t in range(8)] for c in cities]   # every city in every way it can be laid down, once
     tiles, used = [], set()
+    if mode == 'world':
+        # the generator builds the neighbouring sectors itself, same seed: rivers, avenues and terrain carry on
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)]:
+            placed[(dx, dy)] = generate(binary, seed, (dx * N, dy * N))
+            tiles.append({'dx': dx, 'dy': dy, 'seed': seed, 'offset': [dx * N, dy * N]})
+        return finish(seed, run, placed, tiles)
+    cities = pool(binary, size, cache)
+    laid = [[turned(c, t) for t in range(8)] for c in cities]   # every city in every way it can be laid down, once
     # the four areas beside the run first, then the corners (which then have two neighbours to meet)
     for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)]:
         best = None
@@ -149,6 +163,10 @@ def build(seed, binary, size, cache):
         used.add(best[1])
         placed[(dx, dy)] = best[3]
         tiles.append({'dx': dx, 'dy': dy, 'seed': best[1], 'turn': best[2], 'fit': best[0]})
+    return finish(seed, run, placed, tiles)
+
+
+def finish(seed, run, placed, tiles):
 
     # everything in the run's coordinates
     water, road, bld = set(), {}, []
@@ -224,8 +242,11 @@ def main():
     ap.add_argument('--binary', default=str(here.parent.parent / 'tron'))
     ap.add_argument('--pool', type=int, default=400)
     ap.add_argument('--cache', default=str(here / 'cache' / 'map_context'))
+    ap.add_argument('--mode', choices=['world', 'pool'], default='world',
+                    help='world: the generator builds the neighbouring sectors (default); pool: for generators without '
+                         '--world-offset, other cities from a pool laid to fit')
     a = ap.parse_args()
-    json.dump(build(a.seed, a.binary, a.pool, a.cache), sys.stdout, separators=(',', ':'))
+    json.dump(build(a.seed, a.binary, a.pool, a.cache, a.mode), sys.stdout, separators=(',', ':'))
 
 
 if __name__ == '__main__':

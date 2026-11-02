@@ -87,6 +87,15 @@ HazardPropagationConfig_t g_hazard_config =
 static EnvironmentHazardEvent_t g_pending_hazard_events[MAX_ENV_PENDING_HAZARDS];
 static DistrictRecord_t g_districts[NUM_DISTRICT_TYPES];
 
+/* Where the next generated sector sits in the world, in cells (see the river, street and earthquake notes). (0, 0) is
+   the home sector, and the default: a run that never calls this is generated exactly as before. */
+static int32_t g_next_world_x = 0, g_next_world_y = 0;
+void environment_set_world_offset(int32_t x, int32_t y)
+{
+    g_next_world_x = x;
+    g_next_world_y = y;
+}
+
 uint8_t environment_get_district_center(uint8_t district_id, int16_t *x, int16_t *y)
 {
     if(district_id >= NUM_DISTRICT_TYPES || x == NULL || y == NULL)
@@ -543,21 +552,28 @@ static void stage_generate_terrain(void)
 
     if(g_has_river)
     {
-        int prev = INT_MIN;
+        /* The course is a pure function of world position: the same seed gives the same river in every sector, so it
+           runs on across sector edges. Where it swings sideways faster than one cell per step, the water fills the
+           gap between steps, so it stays one connected river (and no step depends on the one before it in THIS sector,
+           which would break the match at a sector edge). It may leave the map and come back. */
         for(int t = 0; t < length; t++)
         {
             float wt = (float)(world_along + t);
             /* two smooth octaves of noise: long bends plus a shorter wiggle, up to about a third of the map either side */
-            float bend = fractal_noise(wt, 7.0f, 0.075f, 2, 0.5f, bend_salt) - 0.5f;
-            int c = base - (int)world_across + (int)(bend * (float)span * 1.5f);
-            c = c < 3 ? 3 : c > span - 4 ? span - 4 : c;   /* keep both banks on the map */
-            if(prev != INT_MIN)   /* a river does not jump: at most one cell sideways per step */
-                c = c > prev + 1 ? prev + 1 : c < prev - 1 ? prev - 1 : c;
-            prev = c;
+            float bend = fractal_noise(wt, 7.0f, 0.06f, 2, 0.5f, bend_salt) - 0.5f;
+            float bend_prev = fractal_noise(wt - 1.0f, 7.0f, 0.06f, 2, 0.5f, bend_salt) - 0.5f;
+            int c = base - (int)world_across + (int)(bend * (float)span * 1.3f);
+            int c_prev = base - (int)world_across + (int)(bend_prev * (float)span * 1.3f);
             g_river_center[t] = (int16_t)c;
             float wn = fractal_noise(wt, 3.0f, 0.09f, 1, 0.5f, width_salt);
             g_river_width[t] = (uint8_t)(wn < 0.36f ? 2 : wn < 0.70f ? 3 : 4);
-            int lo = c - (g_river_width[t] - 1) / 2, hi = c + g_river_width[t] / 2;
+            int a = c < c_prev ? c : c_prev, b = c < c_prev ? c_prev : c;
+            int lo = a - (g_river_width[t] - 1) / 2, hi = b + g_river_width[t] / 2;
+            if(b - a > 1)
+            {
+                lo = a + 1 - (g_river_width[t] - 1) / 2;   /* only the part of the swing beyond the previous step */
+                if(c < c_prev) { lo = c - (g_river_width[t] - 1) / 2; hi = c_prev - 1 + g_river_width[t] / 2; }
+            }
             for(int k = lo; k <= hi; k++)
             {
                 int x = g_river_vertical ? k : t, y = g_river_vertical ? t : k;
@@ -1105,6 +1121,22 @@ static uint8_t carve_path_between(GridPoint_t start, GridPoint_t end, uint8_t ro
     return 1;
 }
 
+static uint8_t completes_road_square(int x, int y)
+{
+    static const int sq[4][2] = {{-1, -1}, {0, -1}, {-1, 0}, {0, 0}};
+    for(int k = 0; k < 4; k++)
+    {
+        int x0 = x + sq[k][0], y0 = y + sq[k][1], n = 0;
+        for(int i = 0; i < 2; i++)
+            for(int j = 0; j < 2; j++)
+                if((x0 + i != x || y0 + j != y) && has_road(x0 + i, y0 + j))
+                    n++;
+        if(n == 3)
+            return 1;
+    }
+    return 0;
+}
+
 /* Bridges. Only the few district-to-district roads could cross water (at a heavy cost, so the planner crossed as
    rarely as it could and later roads reused the crossing): a median of 2 crossings per river, bunched together, and the
    street grid simply stopped at the bank. Now a street that reaches the river on both banks, straight across, carries
@@ -1298,15 +1330,33 @@ static void stage_generate_roads(void)
         anchors[i].y = g_districts[i].center_y;
     }
 
-    carve_path_between(anchors[0], anchors[4], ROAD_ARTERIAL, 1, 1);
-    carve_path_between(anchors[4], anchors[5], ROAD_ARTERIAL, 1, 1);
-    carve_path_between(anchors[5], anchors[2], ROAD_ARTERIAL, 1, 1);
-    carve_path_between(anchors[2], anchors[9], ROAD_ARTERIAL, 1, 1);
-    carve_path_between(anchors[0], anchors[1], ROAD_ARTERIAL, 1, 1);
+    carve_path_between(anchors[0], anchors[4], ROAD_ARTERIAL, 0, 1);   /* one cell wide: three-cell bands merged into blobs where main roads met */
+    carve_path_between(anchors[4], anchors[5], ROAD_ARTERIAL, 0, 1);   /* one cell wide: three-cell bands merged into blobs where main roads met */
+    carve_path_between(anchors[5], anchors[2], ROAD_ARTERIAL, 0, 1);   /* one cell wide: three-cell bands merged into blobs where main roads met */
+    carve_path_between(anchors[2], anchors[9], ROAD_ARTERIAL, 0, 1);   /* one cell wide: three-cell bands merged into blobs where main roads met */
+    carve_path_between(anchors[0], anchors[1], ROAD_ARTERIAL, 0, 1);   /* one cell wide: three-cell bands merged into blobs where main roads met */
     carve_path_between(anchors[1], anchors[7], ROAD_COLLECTOR, 0, 1);
     carve_path_between(anchors[7], anchors[6], ROAD_COLLECTOR, 0, 1);
     carve_path_between(anchors[6], anchors[8], ROAD_COLLECTOR, 0, 1);
     carve_path_between(anchors[8], anchors[9], ROAD_COLLECTOR, 0, 1);
+
+    /* Through roads: a few avenues laid on a WORLD grid (every 24 cells each way, offset by the seed), so every sector
+       has roads that leave it at the same places its neighbours' roads arrive. */
+    {
+        int ax = (int)(coord_hash(0, 0, 913u) % 24u), ay = (int)(coord_hash(0, 0, 914u) % 24u);
+        uint16_t rid_h = next_road_id(), rid_v = next_road_id();
+        for(int x = 0; x < GRID_WIDTH; x++)
+        {
+            for(int y = 0; y < GRID_HEIGHT; y++)
+            {
+                int wx = (int)(((g_world_x + x - ax) % 24 + 24) % 24), wy = (int)(((g_world_y + y - ay) % 24 + 24) % 24);
+                if(wy == 0)
+                    paint_road_cell(x, y, ROAD_COLLECTOR, rid_h, 0);
+                if(wx == 0)
+                    paint_road_cell(x, y, ROAD_COLLECTOR, rid_v, 0);
+            }
+        }
+    }
 
     for(int x = 1; x < GRID_WIDTH - 1; x++)
     {
@@ -1339,7 +1389,9 @@ static void stage_generate_roads(void)
                     district == DISTRICT_PARK ? ROAD_SERVICE :
                     district == DISTRICT_MEDICAL ? ROAD_COLLECTOR : ROAD_LOCAL;
 
-                if(g_environment[x][y].terrain_slope < 48)
+                /* no street cell that would complete a 2 x 2 block of road: where two districts meet along a
+                   straight line each laid its own street on its side, and the two ran side by side as a blob */
+                if(g_environment[x][y].terrain_slope < 48 && !completes_road_square(x, y))
                     paint_road_cell(x, y, road_class, next_road_id(), 0);
             }
         }
@@ -2181,6 +2233,8 @@ void generate_environment(uint32_t seed)
     random_seed_stream(STREAM_ENVIRONMENT, derive_seed(seed, STREAM_ENVIRONMENT));
     reset_generation_state();
     g_environment_summary.seed = seed;
+    g_world_x = g_next_world_x;
+    g_world_y = g_next_world_y;
 
     stage_generate_terrain();
     stage_generate_districts();
@@ -2356,10 +2410,12 @@ void environment_apply_earthquake(uint32_t seed)
 {
     random_seed_stream(STREAM_ENVIRONMENT, derive_seed(seed, STREAM_ENVIRONMENT));
 
+    /* One earthquake for the whole world: drawn inside the home sector (offset 0, 0) and given in this sector's own
+       cells, so it can lie outside a neighbouring sector, whose damage then falls off with distance from it. */
     g_environment_summary.earthquake_epicenter_x =
-        (int16_t)random_range_stream(STREAM_ENVIRONMENT, GRID_WIDTH / 5, (GRID_WIDTH * 4) / 5);
+        (int16_t)((int32_t)random_range_stream(STREAM_ENVIRONMENT, GRID_WIDTH / 5, (GRID_WIDTH * 4) / 5) - g_world_x);
     g_environment_summary.earthquake_epicenter_y =
-        (int16_t)random_range_stream(STREAM_ENVIRONMENT, GRID_HEIGHT / 5, (GRID_HEIGHT * 4) / 5);
+        (int16_t)((int32_t)random_range_stream(STREAM_ENVIRONMENT, GRID_HEIGHT / 5, (GRID_HEIGHT * 4) / 5) - g_world_y);
     g_environment_summary.earthquake_intensity =
         (uint8_t)random_range_stream(STREAM_ENVIRONMENT, 64, 90);
 
