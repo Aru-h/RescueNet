@@ -181,6 +181,18 @@ select option { background: var(--c-bg); color: var(--c-fg); }
 .dlg-txt:last-child { padding-bottom: 18px; }
 .tech p { margin: 0; font-size: 12.5px; line-height: 1.45; }
 .tech canvas { width: 100%; aspect-ratio: 1; max-width: 300px; justify-self: center; }
+.radio-sum { margin: 0; font-size: 11px; color: var(--c-mute); }
+.radio-sum b { color: var(--c-fg); font-weight: 600; }
+.radio { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+.radio th { text-align: left; font-weight: 400; font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--c-mute); padding: 0 6px 6px 0; border-bottom: 1px solid var(--c-rule); cursor: help; }
+.radio td { padding: 4px 6px 4px 0; border-bottom: 1px solid var(--c-rule); color: var(--c-fg); }
+.radio tbody tr:hover td { background: color-mix(in srgb, var(--c-fg) 6%, transparent); }
+.radio td.miss { color: #ffd36b; }
+.radio tr.low td:last-child { color: #ffd36b; }
+.radio .n { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font-size: 10.5px; font-weight: 600; background: var(--c-fg); color: var(--c-bg); }
+.radio .n.resting { background: none; color: var(--c-fg); border: 1.5px solid var(--c-fg); }
+.radio .n.working { background: var(--active); color: #fff; box-shadow: inset 0 0 0 1px var(--c-fg); }
+.radio .n.moving { box-shadow: 0 0 0 2px var(--active); }
 .ring-key { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 9.5px; }
 .ring-key li { display: flex; align-items: center; gap: 6px; }
 .ring-key i { display: inline-block; width: 16px; height: 0; border-top: 1.5px solid var(--c-mute); }
@@ -674,11 +686,40 @@ select option { background: var(--c-bg); color: var(--c-fg); }
         '<div class="tech-h"><h3 class="mono">Who hears whom</h3><button type="button" class="howto mono" id="howBtn" aria-haspopup="dialog">How to read this</button></div>' +
         '<canvas id="ring" aria-label="The ' + D.teams.length + ' teams in a ring, linked by the radio beacons they hear"></canvas>' +
         '<ul class="ring-key mono"><li><i class="k-ok"></i>Heard</li><li><i class="k-miss"></i>Missed</li><li><i class="k-unsure"></i>One peer unsure</li><li><i class="k-flag"></i>3+ peers agree</li></ul>' +
+        radioHTML() +
         '<button type="button" class="raw mono" id="rawBtn" aria-haspopup="dialog">Raw team and incident tables &rarr;</button></div>';
       drawRing();
+      p.querySelectorAll('.radio tbody tr').forEach(function (tr) {
+        var i = +tr.dataset.i;
+        tr.onmouseenter = function () { ringHover = i; drawRing(); };
+        tr.onmouseleave = function () { ringHover = -1; drawRing(); };
+      });
       $('#rawBtn').onclick = openRaw;
       $('#howBtn').onclick = function () { $('#howDlg').showModal(); };
     }
+  }
+  /* the radio, per team: the beacons each team heard on time this tick and how many teams heard its own, then the same
+     over the last hour of mission as a share of what could have been heard; above it, the whole run so far (vbus) */
+  function pct(a, b) { return b ? Math.round(a / b * 100) + '%' : '&ndash;'; }
+  function radioHTML() {
+    var n = D.teams.length, others = n - 1, hr = RUN.radio(D.tick, Math.round(3600 / TICK_S)), v = D.vbus, top = '';
+    if (v && v.delivered + v.dropped > 0) {
+      var tot = v.delivered + v.dropped;
+      top = '<p class="radio-sum mono">Whole run so far: <b>' + pct(v.delivered, tot) + '</b> of beacons sent arrived (' + v.dropped.toLocaleString() + ' of ' + tot.toLocaleString() + ' lost). A team with a radio fault sends none, so the figures below can be lower.</p>';
+    }
+    if (D.teams[0] == null || D.teams[0].heard == null) return top + '<p>This recording does not say which teams heard which.</p>';
+    var rows = D.teams.map(function (t, i) {
+      var hears = 0, by = 0;
+      for (var j = 0; j < n; j++) if (j !== i) { if (t.heard >> j & 1) hears++; if (D.teams[j].heard >> i & 1) by++; }
+      var h = hr && hr[i], low = h && h.of && (h.hears / h.of < .8 || h.heardBy / h.of < .8);
+      return '<tr data-i="' + i + '"' + (low ? ' class="low"' : '') + '><td><span class="n ' + teamState(t) + '">' + (t.id + 1) + '</span></td>' +
+        '<td' + (hears < others ? ' class="miss"' : '') + '>' + hears + ' of ' + others + '</td>' +
+        '<td' + (by < others ? ' class="miss"' : '') + '>' + by + ' of ' + others + '</td>' +
+        '<td>' + (h ? pct(h.hears, h.of) + ' / ' + pct(h.heardBy, h.of) : '&ndash;') + '</td></tr>';
+    }).join('');
+    return top + '<table class="radio mono"><thead><tr><th>Team</th><th title="Other teams whose beacon this team heard on time this tick">Hears</th>' +
+      '<th title="Other teams that heard this team\'s beacon on time this tick">Heard by</th>' +
+      '<th title="Over the last hour of mission: share of the other teams\' beacons it heard on time, and share of the other teams that heard its own. Beacons never sent (a radio fault) count as not heard">Last hour</th></tr></thead><tbody>' + rows + '</tbody></table>';
   }
   function pastEvents() { return RUN.eventsTo(D.tick); }
   function eventText(e) {

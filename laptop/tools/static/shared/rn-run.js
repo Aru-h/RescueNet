@@ -48,6 +48,7 @@
     this.track = {};          /* tick -> [[x, y, status, stamina]] per team */
     this.blockedTrack = {};   /* tick -> [[x, y]] */
     this.detTrack = {};       /* tick -> [[fault_mask, detected 0/1]] per team (see spans()) */
+    this.heardTrack = {};     /* tick -> per team, the bitmask of peers it heard on time that tick (null if not recorded) */
     this._spans = null;
     this.seen = {};           /* incident id -> worksite id ('A-1', ...) */
     this.incOf = {};          /* worksite id -> incident id (what an override names) */
@@ -70,6 +71,7 @@
     this.lines[t] = raw || JSON.stringify(f);
     this.ticks.push(t); this.lastTick = t;
     this.track[t] = (f.teams || []).map(function (m) { return [m.x, m.y, m.status, Math.round(m.stamina)]; });
+    this.heardTrack[t] = (f.teams || []).map(function (m) { return m.heard == null ? null : m.heard; });
     this.blockedTrack[t] = (f.hazard_cells || []).filter(function (c) { return c.blocked; }).map(function (c) { return [c.x, c.y]; });
     this.detTrack[t] = (f.teams || []).map(function (m) {
       var tier = m.consensus_tier || [0, 0];
@@ -207,6 +209,23 @@
   /* events up to tick t, newest first */
   Run.prototype.eventsTo = function (t) { var out = []; for (var i = this.events.length - 1; i >= 0; i--) if (this.events[i][0] <= t) out.push(this.events[i]); return out; };
   Run.prototype.wsInfo = function (wid) { return this.wsTrack[wid] || null; };
+
+  /* the radio over the ticks in (t - span, t]: per team, how many beacons it heard of those it could have (the other
+     teams, every tick) and how many of its own were heard; null where the frames carry no heard masks */
+  Run.prototype.radio = function (t, span) {
+    var out = null, self = this;
+    this.ticks.forEach(function (k) {
+      if (k > t || k <= t - span) return;
+      var h = self.heardTrack[k]; if (!h || !h.length || h[0] == null) return;
+      var n = h.length;
+      if (!out) out = h.map(function () { return { hears: 0, heardBy: 0, of: 0 }; });
+      for (var i = 0; i < n && i < out.length; i++) {
+        out[i].of += n - 1;
+        for (var j = 0; j < n; j++) if (j !== i) { if (h[i] >> j & 1) out[i].hears++; if (h[j] >> i & 1) out[i].heardBy++; }
+      }
+    });
+    return out;
+  };
 
   /* a new run holding this one's ticks before T (a take-over continues live from T); the header is kept */
   Run.prototype.upTo = function (T) {

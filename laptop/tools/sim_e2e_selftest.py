@@ -197,6 +197,29 @@ def check_recorded(page, errors, frames):
     check(len(want_exits) == 3 and got_exits == want_exits, f"the map's exits are the recording's ({got_exits})")
     check("Exit (evacuees leave the map)" in page.evaluate("() => document.getElementById('legend').textContent"),
           "the legend explains the exit mark")
+    # the radio per team (Technical tab), computed here from the frames' heard masks
+    byt = {f["tick"]: f for f in frames}
+    n = len(frames[T]["teams"])
+    def bits(H, i, j): return H[i] >> j & 1
+    H = [t["heard"] for t in byt[T]["teams"]]
+    hs, hb, of = [0] * n, [0] * n, [0] * n
+    for k, f in byt.items():
+        if T - 100 < k <= T:
+            H2 = [t["heard"] for t in f["teams"]]
+            for i in range(n):
+                of[i] += n - 1
+                hs[i] += sum(bits(H2, i, j) for j in range(n) if j != i)
+                hb[i] += sum(bits(H2, j, i) for j in range(n) if j != i)
+    want_radio = [f"{sum(bits(H, i, j) for j in range(n) if j != i)} of {n - 1}|{sum(bits(H, j, i) for j in range(n) if j != i)} of {n - 1}|"
+                  f"{round(hs[i] / of[i] * 100)}% / {round(hb[i] / of[i] * 100)}%" for i in range(n)]
+    page.click("[data-tab=tech]")
+    page.wait_for_selector(".radio tbody tr", timeout=10000)
+    got_radio = page.evaluate("() => Array.from(document.querySelectorAll('.radio tbody tr')).map(r => Array.from(r.cells).slice(1).map(c => c.textContent).join('|'))")
+    check(got_radio == want_radio, f"the Technical tab's radio per team matches the frames (team 1: {got_radio[:1]})")
+    vb = byt[T]["vbus"]
+    check(f"{round(vb['delivered'] / (vb['delivered'] + vb['dropped']) * 100)}%" in page.evaluate("() => document.querySelector('.radio-sum').textContent"),
+          "the whole-run radio line comes from the frame's bus counters")
+    page.click("[data-tab=teams]")
     check(clock(page).startswith(f"Tick {T} of 1200"), f"the clock reads tick {T} of 1200 ({clock(page)!r})")
     rows = page.evaluate("() => document.querySelectorAll('#teamList .team').length")
     check(rows == len(frames[T]["teams"]), f"one row per team in the run ({rows})")
