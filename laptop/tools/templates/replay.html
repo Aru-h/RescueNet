@@ -90,8 +90,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 .empty, .error { padding: 18px 0; color: var(--c-mute); max-width: 60ch; }
 .error code, .empty code { font-family: var(--mono); color: var(--c-fg); font-size: .92em; }
 /* one key for every city drawing on the page */
-.legend-row { margin: -10px 0 0; }
-.legend-btn { background: none; border: 0; padding: 6px 0; color: var(--c-mute); cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+.legend-btn { background: none; border: 1px solid var(--c-faint); padding: 7px 12px; color: var(--c-mute); cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
 .legend-btn:hover, .legend-btn:focus-visible { color: var(--c-fg); }
 .legend-dlg { width: min(460px, calc(100vw - 32px)); max-height: 80vh; padding: 0; border: 1px solid var(--c-faint); background: var(--c-bg); color: var(--c-fg); }
 .legend-dlg::backdrop { background: rgba(0, 0, 0, .55); }
@@ -115,12 +114,12 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
 <main class="page">
   <div class="top">
     <a class="back mono" href="/landing" id="back">&larr; Back</a>
+    <button type="button" class="legend-btn mono" id="legendBtn" aria-haspopup="dialog" title="What do the map symbols mean?">Legend</button>
   </div>
   <h1>Watch a recorded run</h1>
   <p class="lede">Pick a run to replay. Scrub through it, follow a team, and take over at any moment to continue it live.</p>
   <p class="note" id="note" role="status" hidden></p>
   <!-- the key comes from the shared notation (static/shared/rn-notation.js), the same code that draws the maps -->
-  <div class="legend-row"><button type="button" class="legend-btn mono" id="legendBtn" aria-haspopup="dialog" title="What do the map symbols mean?">Legend</button></div>
   <dialog class="legend-dlg" id="legendDlg" aria-labelledby="legendTtl">
     <div class="dlg-head"><h2 class="mono" id="legendTtl">Legend</h2><button type="button" class="dlg-x" id="legendClose" aria-label="Close the legend">&times;</button></div>
     <ul class="legend mono" id="legend" aria-label="What the city drawings show"></ul>
