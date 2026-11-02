@@ -717,8 +717,9 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     if (three) update3D();
     if ($('#rawDlg').open) openRaw();
     refreshMark();
-    if (LIVE) { LIVE.follow = D.tick >= RUN.last(); $('#toLive').hidden = LIVE.follow; $('#clockSub').textContent = clockText(); }
+    if (LIVE) { LIVE.follow = D.tick >= RUN.last(); $('#toLive').hidden = LIVE.follow; if (LIVE.state !== 'starting') $('#clockSub').textContent = clockText(); }
     else if (RUN_NAME) { try { history.replaceState(null, '', location.pathname + '?run=' + encodeURIComponent(RUN_NAME) + '&t=' + D.tick); } catch (e) { /* a sandboxed frame */ } }
+    takeoverShown();
   }
   function speed() { return [1, 5, 10, 25][$('#speed').selectedIndex] || 5; }   /* ticks a second (one tick is 36 s of mission): 36 s, 3, 6 or 15 min of mission per real second */
   function play(on) {
@@ -1119,11 +1120,23 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     });
   }
   function liveEvent(ev) {
+    if (!LIVE) return;
+    if (LIVE.takeover && LIVE.state === 'starting') {
+      if (ev.type === 'ff_progress') { $('#clockSub').textContent = 'Rebuilding the run up to tick ' + ev.target + '… ' + ev.tick; return; }
+      if (ev.type === 'takeover_error' || ev.type === 'error') { takeoverFail(ev.message || 'the app refused'); return; }
+      if (ev.type === 'takeover_ready') {
+        LIVE.state = ev.paused ? 'paused' : 'running'; RUN_NAME = null;
+        $('#runName').textContent = 'Live run';
+        if (ev.warning) $('#runName').title = ev.warning;
+        document.title = 'RescueNet · Live run';
+        liveControls(); return;
+      }
+    }
     if (ev.type === 'static_env') RUN.add('STATICENV', ev.env);
     else if (ev.type === 'static_map') RUN.add('STATICMAP', ev.map);
     else if (ev.type === 'frame') {
       RUN.add('LIVEFRAME', ev.frame);
-      if (LIVE.state === 'starting') {
+      if (LIVE.state === 'starting' && !LIVE.takeover) {
         LIVE.state = 'running'; start();
         fetch('/api/context/' + RUN.header.seed).then(function (r) { return r.ok ? r.json() : null; }).then(function (c) {
           if (!c) return; CTXDATA = c;
@@ -1137,6 +1150,7 @@ select option { background: var(--c-bg); color: var(--c-fg); }
   }
   function liveEnd(recording, msg) {
     if (!LIVE) return;
+    if (LIVE.takeover && LIVE.state === 'starting') { takeoverFail(msg || 'the app stopped before the run was ready'); return; }
     var wasLive = LIVE.state !== 'starting', follow = LIVE.follow; LIVE = null; liveControls();
     if (!wasLive) { loadFail(msg || 'The simulation ended before its first tick.'); return; }
     if (recording) { RUN_NAME = recording; try { history.replaceState(null, '', location.pathname + '?run=' + encodeURIComponent(recording) + '&t=' + D.tick); } catch (e) { /* a sandboxed frame */ } }
@@ -1153,8 +1167,12 @@ select option { background: var(--c-bg); color: var(--c-fg); }
     var sp = parseInt(PARAMS.get('speed'), 10); if (sp >= 0 && sp < DELAYS.length) $('#speed').selectedIndex = sp;   /* &speed=0..3, as the speed list */
     var body = { seed: seed, ticks: ticks, fault_profile: faults, tick_delay_ms: DELAYS[$('#speed').selectedIndex] || 200 };
     if (RUN.header.link_loss != null) body.link_loss = RUN.header.link_loss;
-    fetch('/api/run-live', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) {
-      if (!r.ok || !r.body) throw new Error('The app would not start the run (' + r.status + ').');
+    liveStream('/api/run-live', body, function (msg) { loadFail(msg); });
+  }
+  /* POST to the app and read its event stream (data: {...} lines) into liveEvent; fail(message) if it will not start */
+  function liveStream(url, body, fail) {
+    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) {
+      if (!r.ok || !r.body) return r.json().catch(function () { return {}; }).then(function (j) { throw new Error(j.message || j.error || 'The app would not start the run (' + r.status + ').'); });
       var rd = r.body.getReader(), dec = new TextDecoder(), buf = '';
       (function pump() {
         rd.read().then(function (got) {
@@ -1172,7 +1190,32 @@ select option { background: var(--c-bg); color: var(--c-fg); }
           pump();
         }).catch(function () { liveEnd(null, 'the connection to the app was lost'); });
       })();
-    }).catch(function (e) { loadFail(e.message || 'The app did not answer.'); });
+    }).catch(function (e) { fail(e.message || 'The app did not answer.'); });
+  }
+
+  /* ---------------- Take over: continue a recorded run live from the tick on screen ----------------
+     The app re-runs the simulator up to that tick, checks it matches the recording there, then carries on live
+     (POST /api/replay/takeover). The page keeps the recording's ticks before it and adds the live ones after. */
+  function takeoverShown() {
+    var ok = !LIVE && RUN_NAME && D && D.tick > 0 && D.tick < RUN.length() - 1;
+    $('#takeover').hidden = !ok;
+    if (ok) $('#takeover').title = 'Continue this run live from ' + tplus(D.tick) + ' (tick ' + D.tick + ')';
+  }
+  $('#takeover').onclick = function () {
+    if (LIVE || !RUN_NAME || !D) return;
+    play(false);
+    var T = D.tick, old = RUN, oldName = RUN_NAME;
+    LIVE = { state: 'starting', follow: true, takeover: { tick: T, old: old, oldName: oldName } };
+    RUN = old.upTo(T); endNote = '';
+    liveControls(); takeoverShown();
+    $('#clockSub').textContent = 'Rebuilding the run up to tick ' + T + '…';
+    liveStream('/api/replay/takeover', { recording: oldName, tick: T, tick_delay_ms: DELAYS[$('#speed').selectedIndex] || 200, start_paused: true }, takeoverFail);
+  };
+  function takeoverFail(msg) {
+    if (!LIVE || !LIVE.takeover) return;
+    var tk = LIVE.takeover; LIVE = null; RUN = tk.old; RUN_NAME = tk.oldName;
+    endNote = 'could not take over: ' + String(msg).replace(/^Cannot take over:\s*/i, '');
+    liveControls(); renderTimeline(); setTick(tk.tick);
   }
 
   if (!RUN_NAME && PARAMS.get('seed') !== null) { liveStart(); return; }

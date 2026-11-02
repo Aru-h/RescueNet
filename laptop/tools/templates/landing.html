@@ -1547,10 +1547,10 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   }, 0);
   $('#msForm').addEventListener('submit', function (e) {
     e.preventDefault(); var v = msVal();
-    /* the sim page reads these; until it exists the app's current page opens */
+    /* the sim page (/sim) starts the run with these and shows it as it runs */
     var q = '?seed=' + v.seed + '&ticks=' + v.ticks + '&faults=' + v.fault + (v.loss !== '' ? '&loss=' + v.loss : '');
     appStatus().then(function (st) {
-      if (st) { location.href = './' + q; return; }
+      if (st) { location.href = 'sim' + q; return; }
       var n = $('#msNote'); n.hidden = false;
       n.innerHTML = 'The simulation runs in the RescueNet app on your computer. Start it with ' + APP_CMD + ', open the address it prints (usually <code>http://127.0.0.1:5050</code>) and set up the mission there.';
     });

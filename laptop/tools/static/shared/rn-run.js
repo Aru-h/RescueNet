@@ -198,6 +198,16 @@
   Run.prototype.eventsTo = function (t) { var out = []; for (var i = this.events.length - 1; i >= 0; i--) if (this.events[i][0] <= t) out.push(this.events[i]); return out; };
   Run.prototype.wsInfo = function (wid) { return this.wsTrack[wid] || null; };
 
+  /* a new run holding this one's ticks before T (a take-over continues live from T); the header is kept */
+  Run.prototype.upTo = function (T) {
+    var out = new Run(), self = this;
+    out.header = this.header;
+    out.envs = this.envs.filter(function (e) { return e.from < T; });
+    out.maps = this.maps.filter(function (m) { return m.from < T; });
+    this.ticks.forEach(function (t) { if (t < T) { var l = self.lines[t]; out.add('LIVEFRAME', JSON.parse(l), l); } });
+    return out;
+  };
+
   function fromText(text) {
     var run = new Run(), i = 0, n = text.length;
     while (i < n) {
