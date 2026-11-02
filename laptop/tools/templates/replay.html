@@ -146,7 +146,7 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
   /* runs we chose to show first: matched by file name, with a title and one line of why. `kind` orders them: real cities
      (reconstructions of real earthquakes) before simulated ones, and the first of all leads the page at full width. */
   var FEATURED = [
-    { match: /^demo_/, kind: 'sim', title: 'Demo mission', blurb: 'Ten teams through six hours of breaking equipment and failing radios. The run we show first.' }
+    { match: /^demo_/, kind: 'sim', title: 'Demo mission', blurb: 'Ten teams through twelve hours of breaking equipment and failing radios, in a city split by a river. The run we show first.' }
   ];
   var PROFILES = { none: 'No faults', mobility: 'Mobility faults', communication: 'Radio faults', resource: 'Resource faults', combined: 'Mixed faults', random: 'Random faults' };
   var TICK_S = 36;   /* one simulator tick is 36 seconds (core/mission_state.h) */
@@ -186,6 +186,21 @@ a:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 3px; }
     x.setTransform(d, 0, 0, d, 0, 0); x.fillStyle = c.bg; x.fillRect(0, 0, w, h);
     x.translate((w - W * q) / 2, (h - H * q) / 2);   /* the city sits centred in whatever box it is given */
     var N = RNNotation, lw = small ? .6 : 1;
+    /* the river and the streets under the buildings (recordings previewed by older apps have neither) */
+    x.fillStyle = '#1d4263'; (pv.water || []).forEach(function (cw) { x.fillRect(cw[0] * q, cw[1] * q, q + .5, q + .5); });
+    if (pv.roads && pv.roads.length) {
+      var RD = {}; pv.roads.forEach(function (r) { RD[r[0] + ',' + r[1]] = r[2]; });
+      x.strokeStyle = c.fg; x.lineCap = 'round';
+      [[1, .2, .26], [2, .28, .4], [3, .36, .56], [4, .48, .78]].forEach(function (k) {
+        x.globalAlpha = k[1]; x.lineWidth = q * k[2]; x.beginPath();
+        pv.roads.forEach(function (r) {
+          if (r[2] !== k[0]) return;
+          [[1, 0], [0, 1]].forEach(function (dd) { var n = RD[(r[0] + dd[0]) + ',' + (r[1] + dd[1])]; if (n && n >= k[0]) { x.moveTo((r[0] + .5) * q, (r[1] + .5) * q); x.lineTo((r[0] + .5 + dd[0]) * q, (r[1] + .5 + dd[1]) * q); } });
+        });
+        x.stroke();
+      });
+      x.globalAlpha = 1;
+    }
     (pv.env && pv.env.buildings || []).forEach(function (b) {
       var f = N.footprint(b);   /* the recording gives the footprint's centre */
       N.building(x, f.x * q + q * .12, f.y * q + q * .12, f.w * q - q * .24, f.h * q - q * .24, b.damage, c.mute, lw);

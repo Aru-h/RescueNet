@@ -2008,7 +2008,7 @@ def _replay_check(page, console_errors):
     check(scrub_hidden_again, "switching back to Live mode hides the replay scrub bar again")
 
 
-DEMO_RECORDING = "demo_seed1002_combined_600ticks.jsonl.gz"
+DEMO_RECORDING = "demo_seed1041_combined_1200ticks.jsonl.gz"
 RUN_CONTROL_TICKS = 80      # x 150 ms = 12 s run (see _run_control_check)
 
 

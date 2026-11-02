@@ -1,5 +1,20 @@
 # Changelog
 
+## City generator rebuilt; new demo mission
+
+- City generator (`core/environment.c`) fixed and rebuilt, measured over seeds 1-100: no road through any building
+  (was 69% of buildings: access was checked inside the building and "repaired" by carving out of its middle), one
+  connected road network (was 34 pieces, 15 of them 1-2 cells: the street grid re-drew its offset per cell), roads 32%
+  of land (was 51%), no strip of sea along every map, rivers 2-4 cells wide in either direction with gentle bends and a
+  median of 5 crossings (was always 3 wide, west-east, 4 rivers with no crossing), residential 59% of the city (was 6%;
+  medical was 20%), one-cell main roads (road cells in solid 2 x 2 blocks 48% -> 8%), exits at least 10 cells apart.
+  Building limit 192 -> 256 (laptop-only storage).
+- `--world-offset=X,Y` generates the sector next to the home sector with the same seed; rivers, avenues, terrain and
+  the earthquake meet across sector edges. `laptop/tools/map_context.py` uses it to draw the city around a run.
+- Every city changed. The demo recording is now `demo_seed1041_combined_1200ticks` (12 hours, recorded on Linux);
+  the state-hash baseline and the evaluation results in `docs/CLAIMS.md` were measured on the old cities.
+- Run list thumbnails show the river and streets (`/api/recordings/<name>/preview` returns water and road cells).
+
 ## Trained AI fault predictor integrated; repository tidied for submission
 
 - Trained fault predictor integrated (`core/fault_predictor.c`,

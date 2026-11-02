@@ -66,7 +66,7 @@ Landing -> How do you want to connect?
 
 | ID | Requirement | Status |
 |---|---|---|
-| S1 | Two map views: 3D (default on desktop) and flat 2D (default on phones, and the fallback when WebGL is missing). The 2.5D view is removed. | TO DO |
+| S1 | Two map views: 3D (the default) and flat 2D (the fallback when WebGL is missing). The 2.5D view is removed. | TO DO |
 | S2 | Both views reuse the old dashboard's code (`static/dashboard/`: camera, map model, 3D view, replay, routes, selection, timeline, consensus ring). The change is the look and the notation, not a rewrite. | TO DO |
 | S3 | Camera: the old dashboard's controls (drag to rotate, tilt between 15° and straight down, right-drag to pan, wheel to zoom at the cursor, Top, Reset, follow a team, fly to a site, Esc stops), plus a quick return to the standard angle. | TO DO |
 | S4 | Timeline: play, pause, step, speed, scrubber with markers (worksite identified, worksite complete, detections), jump to the next event. Mission clock as "T+2 h 59 min" (one tick is 36 s). | TO DO |
@@ -75,7 +75,6 @@ Landing -> How do you want to connect?
 | S7 | Event list in plain sentences built from the frames ("T+1 h 12 min: A-3 identified, 4 live victims reported"). | TO DO |
 | S8 | Links to a moment: `/sim?run=…&t=…&view=flat`. | TO DO |
 | S9 | Keyboard: Space play/pause, ←/→ one tick, Shift+←/→ ten, J next event, 1–0 pick a team, Esc back. | TO DO |
-| S10 | Phone: map and timeline, teams as a drawer. | TO DO |
 
 ## 6. Map edge, zones and exits (OPEN)
 
@@ -95,7 +94,7 @@ The current map is one 36 × 36 grid. Real cities (Antakya, Kathmandu) are irreg
 | T1 | Works fully offline: every library and font is served by the app (`laptop/tools/static/`). | DONE (landing, run list) |
 | T2 | Dashboard install: `pip install -r laptop/tools/requirements-app.txt` (Flask, pyserial), with an offline wheelhouse option. | DONE |
 | T3 | Hosted copies (claude.ai artifacts) of the landing page and run list work without the app and say what needs the app. | DONE |
-| T4 | Every page follows the clock palette (`static/shared/rn-sky.js`) and works at phone width without sideways scrolling. | DONE (landing, run list) |
+| T4 | Every page follows the clock palette (`static/shared/rn-sky.js`). Desktop and laptop screens only: the program never runs on a phone, so pages are not designed or tested for phone width. | DONE (landing, run list) |
 | T5 | Respect "reduce motion". | PARTLY (old 3D view has it) |
 
 ## 8. Fatigue estimate: "tiring faster than expected" (OPEN, planned)

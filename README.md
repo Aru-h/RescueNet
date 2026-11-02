@@ -79,7 +79,7 @@ Leave out `TRON_BINARY=./tron_ai` to run with the AI off.)
    confirm. The dashboard shows the override's lifecycle: pending → committed
    → resolved or interrupted.
 3. **Replay.** Switch the mode selector to **Replay**, choose
-   `demo_seed1002_combined_600ticks.jsonl.gz` (a bundled 600-tick mission) and
+   `demo_seed1041_combined_1200ticks.jsonl.gz` (a bundled 12-hour, 1200-tick mission) and
    press **Load**, then **▶ Play**. Use the scrub bar or **⏭ Next detection**
    to jump to the next fault detection.
 4. **Take over a replay.** Pause at any tick and press **⏵ Take over from

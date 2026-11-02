@@ -448,6 +448,15 @@ def api_recording_preview(name):
                 elif line.startswith("STATICMAP ") and out["width"] is None:
                     m = json.loads(line[len("STATICMAP "):])
                     out["width"], out["height"] = m.get("width"), m.get("height")
+                    # water and road cells, so the thumbnail shows the river and the streets: [x, y] and [x, y, class]
+                    out["water"], out["roads"] = [], []
+                    for y, row in enumerate(m.get("rows", [])):
+                        for k in range(0, len(row), 8):
+                            fl = int(row[k:k + 2], 16)
+                            if fl & 2:
+                                out["water"].append([k // 8, y])
+                            if (fl >> 2) & 7:
+                                out["roads"].append([k // 8, y, (fl >> 2) & 7])
                 elif line.startswith("LIVEFRAME "):
                     frame = json.loads(line[len("LIVEFRAME "):])
                     out["teams"] = [{"x": t.get("x"), "y": t.get("y")} for t in frame.get("teams", [])]

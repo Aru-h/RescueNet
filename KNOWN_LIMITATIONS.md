@@ -125,13 +125,13 @@ accepted code-audit findings, implementation notes) is in
     differ slightly between platforms for the same seed.
 20. **The bundled demo recording does not replay exactly on Linux.** The
     simulator is deterministic on a given platform, but not across platforms.
-    `demo_seed1002_combined_600ticks.jsonl.gz` was recorded on macOS (arm64,
-    clang) and replays exactly there. On Linux x86_64 the same seed diverges
-    at frame 88 (team 8 picks a different slot and incident), so "Take over
-    from here" refuses it, and the take-over step of
-    `make check-dashboard-e2e` is expected to fail on Linux. Everything else
-    in that check passes. This is believed to be cross-platform
-    floating-point divergence; the cause has not been confirmed.
+    `demo_seed1041_combined_1200ticks.jsonl.gz` was recorded on Linux
+    (x86_64, gcc) and replays exactly there. A recording made on one platform
+    can diverge on another (the previous demo, recorded on macOS arm64,
+    diverged on Linux at frame 88), so "Take over from here" may refuse the
+    demo on macOS, and the take-over step of `make check-dashboard-e2e` may
+    fail there. This is believed to be cross-platform floating-point
+    divergence; the cause has not been confirmed.
 21. **The 3D incident pin has no time-pressure ring yet.** The simulator does
     not send an incident's age, deadline or victims' survival time, so the
     dashboard cannot show how urgent an incident is in time. It is left out
