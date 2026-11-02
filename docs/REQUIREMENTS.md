@@ -96,3 +96,20 @@ The current map is one 36 × 36 grid. Real cities (Antakya, Kathmandu) are irreg
 | T3 | Hosted copies (claude.ai artifacts) of the landing page and run list work without the app and say what needs the app. | DONE |
 | T4 | Every page follows the clock palette (`static/shared/rn-sky.js`) and works at phone width without sideways scrolling. | DONE (landing, run list) |
 | T5 | Respect "reduce motion". | PARTLY (old 3D view has it) |
+
+## 8. Fatigue estimate: "tiring faster than expected" (OPEN, planned)
+
+Idea: predict how fast each team should tire and recover, learn each team's own rates as it works, and flag a team
+whose observed fatigue keeps running well ahead of that prediction. The same expected-versus-observed check the
+detector already uses for other faults (and the mission execution twin uses for work left), applied to energy.
+In the simulator stamina comes from a fixed formula (`core/team.c`: `change_stamina`, `team_travel_stamina_cost`,
+the fitness tiers' soft floors), so the check only means something once a fault exists that changes it.
+
+| ID | Step | Status |
+|---|---|---|
+| F1 | Research real work and rest data for rescue and fire crews (firefighter rehab standards such as NFPA 1584, USAR field and physiology studies): energy use by activity (heavy work, travel with load, standby), work-before-rest limits, recovery rates, heat and fitness effects. Record sources and numbers in the research doc, with their limits. | TO DO |
+| F2 | Fatigue model: drain per tick by activity (work, travel, carrying load), recovery per tick while resting, starting rates from F1. Each team's rates are learned online (a simple filter on its own history), so a fitter team is not flagged for being fit. | TO DO |
+| F3 | What counts as "observed" outside the simulator: time worked versus rested, slowing down on comparable terrain, optionally wearables (heart rate). Nobody reports a stamina percentage in the field, so the model must work from these. | TO DO |
+| F4 | A new fault in the simulator that makes a team tire faster (standing in for injury, heat stress or illness), so the check can be measured like the other fault classes: detection rate, false alarms, delay, paired by seed. | TO DO |
+| F5 | Wording: the alert says "tiring faster than expected", never "stamina fault confirmed"; results go into `docs/CLAIMS.md` as SIM-ONLY until tested against real data. | TO DO |
+| F6 | On the sim page: the stamina meter shows the expected band behind the observed value, and the team row says "tiring faster than expected" when the gap stays large. | TO DO (after F1–F4) |
