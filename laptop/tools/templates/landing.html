@@ -154,8 +154,8 @@ main > section:not(.story) { pointer-events: auto; }
 .cta .enter { margin-top: auto; }
 .cta > footer { margin-top: auto; }
 /* on the last screen only ENTER is in view: the corner navigation steps aside */
-.nav { transition: opacity .45s ease; }
-body.in-cta .nav { opacity: 0 !important; pointer-events: none; }   /* !important: the intro animation leaves an inline opacity on it */
+.nav { transition: none; }   /* back at once when leaving the ENTER screen: a fade-in can stall while the 3D city draws */
+body.in-cta .nav { opacity: 0 !important; pointer-events: none; transition: opacity .45s ease; }   /* !important: the intro animation leaves an inline opacity on it */
 .enter { display: block; width: 100%; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: var(--ink); font-family: var(--display); font-weight: 900; font-stretch: 125%; text-transform: uppercase; letter-spacing: -.02em; line-height: .82; font-size: 18vw; -webkit-text-stroke: 3px var(--ink); color: transparent; transition: color .25s, -webkit-text-stroke-color .25s; }
 .enter:hover, .enter:focus-visible { color: var(--red); -webkit-text-stroke-color: var(--red); }
 .cta-row { display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; padding-top: 28px; }
@@ -1519,6 +1519,7 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
   }
   function leave() {
     if (!entering) return; inkPointer.has = false; connClose(); connect.classList.remove('on'); connect.setAttribute('aria-hidden', 'true'); document.body.style.overflow = '';
+    if (window.ctaCheck) window.ctaCheck();
     if (hasGsap && !reduce) gsap.to(wipe, { duration: .7, ease: 'power3.inOut', clipPath: 'circle(0px at 50% 50%)', onComplete: function () { entering = false; } }); else { wipe.style.clipPath = 'circle(0 at 50% 50%)'; entering = false; }
   }
   $('#enterBtn').addEventListener('click', function (e) { enter(e.clientX, e.clientY); });
@@ -2020,6 +2021,13 @@ footer { padding-top: 24px; padding-bottom: calc(env(safe-area-inset-bottom, 0px
     if (inCta) { e.preventDefault(); enter(); }
   });
   if ('IntersectionObserver' in window) new IntersectionObserver(function (es) { inCta = es[0].isIntersecting; document.body.classList.toggle('in-cta', inCta); }, { threshold: .55 }).observe($('#enter'));
+  /* and checked again directly (on scroll, and on coming back from the connect screen), so the corner navigation is never
+     left hidden away from the ENTER screen */
+  function ctaCheck() {
+    var r = $('#enter').getBoundingClientRect(), seen = Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0));
+    inCta = seen >= .55 * Math.min(r.height, innerHeight); document.body.classList.toggle('in-cta', inCta);
+  }
+  window.addEventListener('scroll', ctaCheck, { passive: true }); window.ctaCheck = ctaCheck;
 
   /* ---------- scroll: Lenis + ScrollTrigger ---------- */
   var lenis = null;
